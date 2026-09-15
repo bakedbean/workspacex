@@ -72,10 +72,11 @@ impl ResizeDebounce {
 /// The pane size a single-pane attach gives a session on a terminal of
 /// `cols × rows`. Mirrors `ui::attached::layout_chrome` so the on-attach
 /// `resize_pane` matches and stays a no-op in the common case. The chrome is
-/// a fixed three rows (the agent pills share the chip row), so the projection
-/// is exact for any single-pane attach.
-pub fn projected_pane_size(cols: u16, rows: u16) -> (u16, u16) {
-    let (_, _, pane, _) = crate::ui::attached::layout_chrome(Rect::new(0, 0, cols, rows));
+/// a fixed three rows — two without the `rule` under the top bar, which a
+/// bar theme drops — (the agent pills share the chip row), so the
+/// projection is exact for any single-pane attach.
+pub fn projected_pane_size(cols: u16, rows: u16, rule: bool) -> (u16, u16) {
+    let (_, _, pane, _) = crate::ui::attached::layout_chrome(Rect::new(0, 0, cols, rows), rule);
     (pane.width, pane.height)
 }
 
@@ -145,7 +146,9 @@ mod tests {
     fn projected_pane_size_reserves_chrome_rows_and_keeps_full_width() {
         // info + separator + chip rows are reserved;
         // width is the full terminal width.
-        assert_eq!(projected_pane_size(100, 30), (100, 27));
+        assert_eq!(projected_pane_size(100, 30, true), (100, 27));
+        // No rule row under a bar theme: the pane is one row taller.
+        assert_eq!(projected_pane_size(100, 30, false), (100, 28));
     }
 
     #[test]

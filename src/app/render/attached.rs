@@ -259,7 +259,8 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
 
     let data = gather_local(app, focused_target);
 
-    let (info_area, separator_area, pane_area, chip_area) = attached::layout_chrome(area);
+    let (info_area, separator_area, pane_area, chip_area) =
+        attached::layout_chrome(area, !app.theme_active);
 
     let crate::ui::split::LayoutResult { panes, dividers } = state.layout(pane_area);
     let multi_pane = panes.len() > 1;
@@ -382,7 +383,8 @@ pub(super) fn draw_attached_remote(
             .map(|t| format!("{}/{}", t.host_name, t.tmux))
             .unwrap_or_else(|| "remote".to_string());
         let data = gather_remote(app, &label);
-        let (info_area, separator_area, pane_area, chip_area) = attached::layout_chrome(area);
+        let (info_area, separator_area, pane_area, chip_area) =
+            attached::layout_chrome(area, !app.theme_active);
         attached::resize_pane(session, pane_area, false);
         let specs = [crate::ui::attached::PaneSpec {
             session,

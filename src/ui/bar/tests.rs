@@ -1757,6 +1757,75 @@ mod example_theme_tests {
         }
     }
 
+    /// The orange example puts the workspace name and the pr chip on
+    /// orange mode blocks, where the base theme's lifecycle tints wash
+    /// out; both blocks take the file's darker xterm-cube variants through
+    /// their own palettes, and the name drops to the block's black without
+    /// a PR.
+    #[test]
+    fn orange_example_darkens_the_lifecycle_tints_on_its_orange_blocks() {
+        use crate::git::forge::BranchLifecycle;
+        use crate::ui::attached::ChipPr;
+        let theme = Theme::jellybeans();
+        let specs = load(&examples_dir().join("theme-orange.toml"), &theme).unwrap();
+        let orange = Color::Rgb(0xd7, 0x5f, 0x00);
+        let forest = Color::Rgb(0x00, 0x5f, 0x00);
+        let grape = Color::Rgb(0x5f, 0x00, 0x5f);
+        // `header_fg = "black"` is the file's own palette black, not ANSI's.
+        let black = Color::Rgb(0x15, 0x15, 0x15);
+        let render = |pr: Option<ChipPr>| {
+            let inputs = AttachedInputs {
+                repo: "",
+                name: "ws",
+                version: "0.1.0",
+                window_label: "24h",
+                activity: &[],
+                agent: None,
+                attention: None,
+                pinned: &[],
+                procs: 0,
+                diff: None,
+                pr,
+                model_tokens: None,
+                agents: &[],
+                active_agent: None,
+            };
+            let bars = attached_bars(&specs, &theme, inputs, 80, 80);
+            (
+                render_line(&bars.top.line, 80),
+                render_line(&bars.bottom.line, 80),
+            )
+        };
+        let chip = |lifecycle| ChipPr {
+            lifecycle,
+            number: 42,
+            review: None,
+            unresolved: None,
+        };
+        let name_cell = |buf: &ratatui::buffer::Buffer| {
+            let col = (0..80).find(|&x| buf[(x, 0)].symbol() == "w").unwrap();
+            buf[(col, 0)].clone()
+        };
+        let pr_cell = |buf: &ratatui::buffer::Buffer| {
+            let col = (0..80).find(|&x| buf[(x, 0)].symbol() == "#").unwrap();
+            buf[(col, 0)].clone()
+        };
+
+        let (top, bottom) = render(Some(chip(BranchLifecycle::PrOpen)));
+        let (name, pr) = (name_cell(&top), pr_cell(&bottom));
+        assert_eq!((name.fg, name.bg), (forest, orange), "open name");
+        assert_eq!((pr.fg, pr.bg), (forest, orange), "open pr");
+
+        let (top, bottom) = render(Some(chip(BranchLifecycle::PrMerged)));
+        assert_eq!(name_cell(&top).fg, grape, "merged name");
+        assert_eq!(pr_cell(&bottom).fg, grape, "merged pr");
+
+        let (top, _) = render(None);
+        let name = name_cell(&top);
+        assert_eq!((name.fg, name.bg), (black, orange), "no-PR name");
+        assert!(name.modifier.contains(Modifier::BOLD));
+    }
+
     /// The brand tokens are constant across base themes, so one base
     /// (the one the orange and jellybeans files pair with) covers them all.
     #[test]

@@ -254,6 +254,7 @@ mod tests {
             separator: Vec::new(),
             more_format: Vec::new(),
             styles: Vec::new(),
+            palette: Default::default(),
         }
     }
 

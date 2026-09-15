@@ -146,6 +146,11 @@ pub struct Resolver<'a> {
     /// before the palette. `None` marks a name that is known but carries no
     /// colour: its `fg:`/`bg:` token drops out and the run inherits.
     pub colors: HashMap<String, Option<Color>>,
+    /// The rendering segment's own palette, consulted after `colors` and
+    /// before the global palette. Borrowed from the segment config, so
+    /// deriving a per-item resolver copies a pointer, not a map. `None`
+    /// outside a segment.
+    pub overlay: Option<&'a HashMap<String, Color>>,
 }
 
 impl<'a> Resolver<'a> {
@@ -155,6 +160,7 @@ impl<'a> Resolver<'a> {
             theme,
             styles: HashMap::new(),
             colors: HashMap::new(),
+            overlay: None,
         }
     }
 
@@ -165,6 +171,7 @@ impl<'a> Resolver<'a> {
             theme: self.theme,
             styles,
             colors: self.colors.clone(),
+            overlay: self.overlay,
         }
     }
 
@@ -175,13 +182,31 @@ impl<'a> Resolver<'a> {
             theme: self.theme,
             styles: self.styles.clone(),
             colors,
+            overlay: self.overlay,
         }
     }
 
-    /// Palette name, then theme token, then ANSI name.
+    /// Same palette, theme, styles, and colours, with `overlay` shadowing
+    /// the palette: the resolver for one segment's own `[<segment>.palette]`.
+    /// The result lives no longer than `overlay`.
+    pub fn with_overlay<'b>(&self, overlay: &'b HashMap<String, Color>) -> Resolver<'b>
+    where
+        'a: 'b,
+    {
+        Resolver {
+            palette: self.palette,
+            theme: self.theme,
+            styles: self.styles.clone(),
+            colors: self.colors.clone(),
+            overlay: Some(overlay),
+        }
+    }
+
+    /// Segment overlay, then palette name, then theme token, then ANSI name.
     pub fn color(&self, name: &str) -> Option<Color> {
-        self.palette
-            .get(name)
+        self.overlay
+            .and_then(|o| o.get(name))
+            .or_else(|| self.palette.get(name))
             .copied()
             .or_else(|| self.theme.token(name))
             .or_else(|| ansi(name))

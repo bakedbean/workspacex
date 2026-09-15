@@ -128,6 +128,9 @@ replaced:
   first, then the usage graph, instead of overflowing the terminal width.
 - A pinned chip clipped by the right edge keeps its visible portion
   clickable, rather than being dropped in full.
+- The stock attached view draws a dim `─` rule under its top bar to set it
+  off from the pane. With `bar_theme` on, the themed bar's own blocks do
+  that job, so the rule row is dropped and the pane gains a row.
 - The dashboard header's filter echo is capped at 24 characters and never
   shrinks further. The stock header instead budgeted the needle against
   whatever room was left on the line, so the repo/workspace counts always
@@ -231,9 +234,10 @@ base `Theme` fields. `fg:dim` selects a color; `dimmed` is a text modifier.
 Each segment has its own table, such as `[workspace]`, with `format` (its
 layout, using the variables below), `style`, `symbol`, `disabled`,
 `priority` (overflow survival; higher lasts longer; unset defaults to 100,
-which never drops), and, for multi-item segments, `separator` and
-`styles`. A multi-item segment's format describes one item; the items keep
-their existing order.
+which never drops), a `palette` sub-table (see
+[Recolouring one segment](#recolouring-one-segment)), and, for multi-item
+segments, `separator` and `styles`. A multi-item segment's format
+describes one item; the items keep their existing order.
 `separator` is a format too — `"[ │ ](fg:dim)"` draws a dim joiner — but
 it sits between items rather than inside one, so it takes no variables and
 no `$style`. Because it is parsed with the grammar above, a separator that
@@ -310,7 +314,7 @@ other segment is the unset default, 100, and so never drops.
 | `version` | `$version` | |
 | `usage` | `$label $spark` | The activity sparkline. Clickable. |
 | `agent_bar` | `$symbol` | `$style` includes the agent's identity color. Attached only. |
-| `workspace` | `$repo $name` | `$repo` is absent when there is no repo name. |
+| `workspace` | `$repo $name` | `$repo` is absent when there is no repo name. `$style` includes the PR-lifecycle tint (green open, purple merged, red closed), or the header style without a PR. Attached only. |
 | `attention` | `$glyph $repo $name $age` | One item per workspace needing attention. `$glyph` is the entry's dashboard status glyph in its status color; `$style` is the name's PR-lifecycle tint (open, merged, …) or the muted `path` hue. Entries that don't fit fold into `more_format` (`$count`); the first entry always renders, and if it alone would push the tail off the bar its `$name` is shortened with an ellipsis (assuming one `$name` in the format; a format without `$name`, or a very long `$repo`, has nothing to yield and simply clips). Clickable: each entry, and the tail. |
 | `pins` | `$index $label` | One chip per pinned command. Clickable. |
 | `agents` | `$symbol $label $key` | One pill per agent (2+ agents). `$style` includes the agent color. `symbol` is ignored — the pill always uses a filled/hollow dot to show which agent is active. Clickable. |
@@ -388,6 +392,55 @@ style on an inner run can override inherited attributes. Likewise, putting
 not an override of the segment's own foreground. For the PR review mark,
 use `[$mark]($mark_style)` to retain its separate verdict color rather than
 applying the lifecycle style to it.
+
+#### Recolouring one segment
+
+`[palette]` names shadow theme tokens everywhere in the file. A segment
+can carry its own `[<segment>.palette]` too, with the same value grammar
+(plus: a value may name a global `[palette]` entry, so `ok = "green"` is
+the theme's own green rather than ANSI's), that shadows both the global
+palette and the theme tokens **inside that segment only** — for colour names in its `format`, `style`, `styles`,
+`separator`, and `more_format`, and for the tokens behind its
+state-derived `$style`. This is how a theme darkens the lifecycle tints
+on a light block without changing them on a dark one: the same `ok` that
+tints an open PR green on the dark `attention` run is too pale on a bright
+"mode" block, so the segments that sit there take darker greens of their
+own.
+
+```toml
+[palette]
+orange = "#d75f00"
+
+[attached_bottom]
+right_format = "[$pr](bg:orange)"
+
+[pr.palette]
+ok     = "#008700"   # open, darker than the theme's `ok`
+merged = "#870087"
+err    = "#870000"
+warn   = "#878700"   # conflict
+
+[workspace.palette]
+ok     = "#008700"
+merged = "#870087"
+err    = "#870000"
+warn   = "#878700"
+header_fg = "black"  # the no-PR fallback keeps the block's black text
+```
+
+The overlay is only a colour lookup: it cannot add attributes or change
+which token a state uses (`ok` for open, `merged`, `err` for closed,
+`warn` for conflict; `header_fg` for `workspace` without a PR or on a
+draft, `dim` for the `pr` chip on a draft; the six status tokens for
+`attention`'s `$glyph`; `selected_fg`/`selected_bg`/`path` for the
+`group`/`sort` tabs). This is the one place a palette reaches a
+state-derived `$style`: the global `[palette]` shadows tokens only where a
+format names them (`fg:ok`), never the colour a segment derives for its
+own state. A segment palette's values may reference `[palette]` names but
+not each other, so there are no local aliases. A name defined only in a
+segment's palette is unknown outside it, so `wsx theme check` reports a
+bar format that uses one. The six per-item names are reserved here as in
+`[palette]`.
 
 ### A powerline example
 

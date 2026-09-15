@@ -1717,3 +1717,80 @@ mod attention_tests {
         }
     }
 }
+
+/// The shipped example themes under `docs/examples/` must stay loadable,
+/// and the orange one must keep the wordmark in the app's brand colours:
+/// its first cut wrapped `$brand` in a black-on-orange block, which
+/// erased the brand-blue cursor bar and "x".
+#[cfg(test)]
+mod example_theme_tests {
+    use super::*;
+    use crate::config::theme_file::load;
+    use crate::ui::bar::test_util::{plain, render_line};
+    use crate::ui::dashboard::layout::GroupMode;
+    use crate::ui::dashboard::sort::SortMode;
+    use crate::ui::theme::{BRAND_ACCENT, BRAND_WORDMARK};
+    use ratatui::style::{Color, Modifier};
+    use std::path::{Path, PathBuf};
+
+    fn examples_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/examples")
+    }
+
+    #[test]
+    fn every_example_theme_validates() {
+        let mut seen = 0;
+        for entry in std::fs::read_dir(examples_dir()).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+                continue;
+            }
+            seen += 1;
+            if let Err(errors) = load(&path, &Theme::wsx()) {
+                panic!("{} failed to load: {errors:?}", path.display());
+            }
+        }
+        assert!(seen > 0, "no example themes found");
+    }
+
+    #[test]
+    fn orange_example_keeps_the_brand_colours_on_the_wordmark() {
+        let theme = Theme::jellybeans();
+        let specs = load(&examples_dir().join("theme-orange.toml"), &theme).unwrap();
+        let out = dashboard_header(
+            &specs,
+            &theme,
+            &DashboardHeaderInputs {
+                group: GroupMode::Repo,
+                sort: SortMode::Recency,
+                repos: 9,
+                workspaces: 14,
+                filter: None,
+                view: "dashboard",
+            },
+            120,
+        );
+        let text = plain(&out.line);
+        assert!(text.starts_with("▌ workspace x "), "{text:?}");
+        let buf = render_line(&out.line, 120);
+        let cell = |col: u16| buf[(col, 0)].clone();
+
+        let bar = cell(0);
+        assert_eq!(bar.symbol(), "▌");
+        assert_eq!(bar.fg, BRAND_ACCENT, "cursor bar must be brand blue");
+        assert_eq!(
+            bar.bg,
+            Color::Reset,
+            "wordmark sits flat on the bar, not on a block"
+        );
+
+        let name = cell(2);
+        assert_eq!(name.symbol(), "w");
+        assert_eq!(name.fg, BRAND_WORDMARK, "name must be the wordmark cream");
+
+        let mark = cell(12);
+        assert_eq!(mark.symbol(), "x");
+        assert_eq!(mark.fg, BRAND_ACCENT, "the x must be brand blue");
+        assert!(mark.modifier.contains(Modifier::BOLD));
+    }
+}

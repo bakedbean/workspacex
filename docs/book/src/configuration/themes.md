@@ -430,8 +430,14 @@ header_fg = "black"  # the no-PR fallback keeps the block's black text
 
 The overlay is only a colour lookup: it cannot add attributes or change
 which token a state uses (`ok` for open, `merged`, `err` for closed,
-`warn` for conflict; `header_fg` for `workspace` without a PR; the six
-status tokens for `attention`'s `$glyph`). A name defined only in a
+`warn` for conflict; `header_fg` for `workspace` without a PR or on a
+draft, `dim` for the `pr` chip on a draft; the six status tokens for
+`attention`'s `$glyph`; `selected_fg`/`selected_bg`/`path` for the
+`group`/`sort` tabs). This is the one place a palette reaches a
+state-derived `$style`: the global `[palette]` shadows tokens only where a
+format names them (`fg:ok`), never the colour a segment derives for its
+own state. A segment palette's values may reference `[palette]` names but
+not each other, so there are no local aliases. A name defined only in a
 segment's palette is unknown outside it, so `wsx theme check` reports a
 bar format that uses one. The six per-item names are reserved here as in
 `[palette]`.

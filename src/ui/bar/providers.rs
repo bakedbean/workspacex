@@ -221,6 +221,7 @@ pub fn group(
     theme: &Theme,
     resolver: &Resolver,
 ) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
     let tabs = tabs(
         &[
             ("repo", mode == GroupMode::Repo),
@@ -244,6 +245,7 @@ pub fn sort(
     theme: &Theme,
     resolver: &Resolver,
 ) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
     let tabs = tabs(
         &[
             ("recency", mode == SortMode::Recency),
@@ -269,6 +271,7 @@ pub fn filter(
     theme: &Theme,
     resolver: &Resolver,
 ) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
     let needle = needle?;
     eval_segment(
         cfg,
@@ -805,6 +808,30 @@ mod tests {
         };
         let out = workspace(&cfg_ws, "", "ws", None, &theme, &resolver).unwrap();
         assert_eq!(span_style(&out, "ws").fg, Some(Color::Black));
+    }
+
+    /// Every provider that derives a colour from the theme derives it from
+    /// the segment's shadowed theme — the dashboard header's `filter`
+    /// (warn), `group`/`sort` tabs (selected_fg/bg, path) included, not
+    /// only the lifecycle-tinted attached segments.
+    #[test]
+    fn dashboard_header_segments_honour_the_overlay_too() {
+        let theme = Theme::wsx();
+        let palette = HashMap::new();
+        let resolver = Resolver::new(&palette, &theme);
+        let mut cfg = item_cfg("[$needle]($style)", "");
+        cfg.palette.insert("warn".to_string(), Color::Red);
+        let out = filter(&cfg, Some("auth"), &theme, &resolver).unwrap();
+        assert_eq!(span_style(&out, "auth").fg, Some(Color::Red));
+
+        let mut cfg = item_cfg("$tabs", "");
+        cfg.palette.insert("selected_bg".to_string(), Color::Red);
+        cfg.palette.insert("path".to_string(), Color::Blue);
+        let out = group(&cfg, GroupMode::Repo, &theme, &resolver).unwrap();
+        assert_eq!(span_style(&out, "repo").bg, Some(Color::Red));
+        assert_eq!(span_style(&out, "attention").fg, Some(Color::Blue));
+        let out = sort(&cfg, SortMode::Recency, &theme, &resolver).unwrap();
+        assert_eq!(span_style(&out, "recency").bg, Some(Color::Red));
     }
 
     /// The overlay also shadows colour names used directly in the

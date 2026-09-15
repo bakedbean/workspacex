@@ -74,6 +74,7 @@ impl App {
         let Some(path) = self.theme_path.clone() else {
             return;
         };
+        let was_active = self.theme_active;
         if !bar_theme_enabled(&self.store) {
             if self.theme_active {
                 self.theme_active = false;
@@ -81,6 +82,7 @@ impl App {
                 self.bar_specs = crate::config::theme_file::bundled_default(&self.theme);
                 self.theme_notice = None;
                 tracing::info!("bar_theme off; drawing the bundled bars");
+                self.note_chrome_change(now_ms);
             }
             return;
         }
@@ -91,6 +93,21 @@ impl App {
         self.theme_active = true;
         self.theme_fingerprint = fp;
         self.reload_theme(now_ms);
+        if !was_active {
+            self.note_chrome_change(now_ms);
+        }
+    }
+
+    /// The attached chrome just changed height (the rule row under the top
+    /// bar comes and goes with the theme), so backgrounded sessions are
+    /// pre-sized for the wrong pane. Queue a resize at the last drawn frame
+    /// size through the terminal-resize debounce, which excludes visible
+    /// panes (the render path sizes those). Before the first frame there is
+    /// nothing to size against, and no session to have sized.
+    fn note_chrome_change(&mut self, now_ms: u64) {
+        if let Some((cols, rows)) = self.frame_size {
+            self.resize_debounce.note(cols, rows, now_ms);
+        }
     }
 
     /// Load the file unconditionally. Errors keep the last good specs.
@@ -157,6 +174,53 @@ mod tests {
             store.set_setting("bar_theme", v).unwrap();
             assert!(!bar_theme_enabled(&store), "{v:?}");
         }
+    }
+
+    /// Turning `bar_theme` on or off changes the attached chrome by a row
+    /// (the rule under the top bar goes with the theme), so the pane the
+    /// backgrounded sessions are pre-sized for changes too. The toggle
+    /// queues a resize at the last drawn frame size through the same
+    /// debounce a terminal resize uses; a reload that doesn't flip the
+    /// flag queues nothing, and neither does a flip before the first frame.
+    #[test]
+    fn toggling_bar_theme_queues_a_backgrounded_resize() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("theme.toml");
+        std::fs::write(&path, "[dashboard_footer]\nformat = \"$version\"\n").unwrap();
+        let mut app = App::new(
+            Store::open_in_memory().unwrap(),
+            PathBuf::from("/tmp/wsx-theme-reload-test"),
+        )
+        .unwrap();
+        app.set_theme_path(path.clone(), 0);
+        assert!(app.resize_debounce.take_due(u64::MAX).is_none());
+
+        // On, before any frame was drawn: nothing to size against.
+        app.store.set_setting("bar_theme", "on").unwrap();
+        app.tick = 8;
+        app.maybe_reload_theme(0);
+        assert!(app.theme_active);
+        assert!(app.resize_debounce.take_due(u64::MAX).is_none());
+
+        // Off, after a frame: queued at that frame's size.
+        app.frame_size = Some((120, 40));
+        app.store.set_setting("bar_theme", "off").unwrap();
+        app.tick = 16;
+        app.maybe_reload_theme(1_000);
+        assert!(!app.theme_active);
+        assert_eq!(app.resize_debounce.take_due(u64::MAX), Some((120, 40)));
+
+        // On again: queued again.
+        app.store.set_setting("bar_theme", "on").unwrap();
+        app.tick = 24;
+        app.maybe_reload_theme(2_000);
+        assert_eq!(app.resize_debounce.take_due(u64::MAX), Some((120, 40)));
+
+        // A file edit while on reloads but doesn't flip: nothing queued.
+        std::fs::write(&path, "[dashboard_footer]\nformat = \"$keys\"\n").unwrap();
+        app.tick = 32;
+        app.maybe_reload_theme(3_000);
+        assert!(app.resize_debounce.take_due(u64::MAX).is_none());
     }
 
     #[test]

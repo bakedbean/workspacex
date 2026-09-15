@@ -23,6 +23,7 @@ impl App {
             store,
             sessions: SessionManager::new(),
             resize_debounce: Default::default(),
+            frame_size: None,
             view: View::Dashboard,
             modal: None,
             dashboard,
@@ -405,6 +406,10 @@ pub struct App {
     /// Coalesces terminal-resize events so backgrounded sessions are resized
     /// once the resize settles. See `crate::app::resize_sync`.
     pub resize_debounce: crate::app::resize_sync::ResizeDebounce,
+    /// `(cols, rows)` of the last drawn frame; `None` before the first.
+    /// What a chrome change (the bar theme toggling the rule row) sizes
+    /// backgrounded sessions against, since no terminal resize announces it.
+    pub frame_size: Option<(u16, u16)>,
     pub view: View,
     pub modal: Option<Modal>,
     /// Monotonic counter handed out to in-flight workspace creation tasks.

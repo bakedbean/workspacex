@@ -102,6 +102,7 @@ pub(super) fn compute_attention_items(
 
 pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     let area = f.area();
+    app.frame_size = Some((area.width, area.height));
     // Clear chip state at the start of every frame; the attached view and the
     // dashboard detail branch overwrite these with live values when chips render.
     app.chip_rects.clear();

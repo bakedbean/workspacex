@@ -1173,3 +1173,133 @@ mod dashboard_header_tests {
         check(GroupMode::Attention, SortMode::Recency, "attention", "repo");
     }
 }
+
+#[cfg(test)]
+mod attention_tests {
+    use super::*;
+    use crate::config::theme_file::bundled_default;
+    use crate::data::store::WorkspaceId;
+    use crate::git::forge::BranchLifecycle;
+    use crate::ui::bar::segment::HitSpan;
+    use crate::ui::dashboard::status::Status;
+    use crate::ui::updates_bar::AttentionEntry;
+    use ratatui::style::Style;
+    use ratatui::text::{Line, Span};
+
+    fn entry(
+        id: i64,
+        repo: &str,
+        name: &str,
+        status: Status,
+        lc: Option<BranchLifecycle>,
+    ) -> AttentionEntry {
+        AttentionEntry {
+            workspace_id: WorkspaceId(id),
+            repo_name: repo.into(),
+            name: name.into(),
+            age_anchor_ms: 9_000,
+            status,
+            lifecycle: lc,
+        }
+    }
+
+    /// Widths under the stock format: "? a/q (1s)" = 10, "! bb/ss (1s)" = 12.
+    fn three_entries() -> Vec<AttentionEntry> {
+        vec![
+            entry(1, "a", "q", Status::Question, Some(BranchLifecycle::PrOpen)),
+            entry(2, "bb", "ss", Status::Stalled, None),
+            entry(3, "bb", "ss", Status::Stalled, None),
+        ]
+    }
+
+    /// The attention input as the app builds it: `entries` fitted to
+    /// `max_width` at `now_ms`.
+    fn attention_input(
+        entries: &[AttentionEntry],
+        now_ms: i64,
+        max_width: usize,
+        theme: &Theme,
+    ) -> Option<crate::ui::updates_bar::AttentionLine> {
+        crate::ui::updates_bar::format_attention_line_styled(entries, now_ms, max_width, theme)
+    }
+
+    /// Render just the `attention` segment of the attached bars under
+    /// `specs`, with every other input empty.
+    fn render_attention(
+        specs: &crate::config::theme_file::BarSpecs,
+        theme: &Theme,
+        entries: &[AttentionEntry],
+        max_width: usize,
+    ) -> Option<super::super::segment::Segment> {
+        let resolver = specs.resolver(theme);
+        let inputs = AttachedInputs {
+            repo: "wsx",
+            name: "foo",
+            version: "0.1.0",
+            window_label: "24h",
+            activity: &[],
+            agent: None,
+            attention: attention_input(entries, 10_000, max_width, theme),
+            pinned: &[],
+            procs: 0,
+            diff: None,
+            pr: None,
+            model_tokens: None,
+            agents: &[],
+            active_agent: None,
+        };
+        attached_segments(specs, theme, inputs, &resolver).remove("attention")
+    }
+
+    /// Baseline capture: the bundled default renders two entries plus an
+    /// overflow tail exactly as the original span builder did — status-
+    /// styled glyph, a plain space, the name in its lifecycle hue (or the
+    /// muted `path` hue), a dim ` (age)`, dim ` │ ` separators, and a dim
+    /// ` … +N more` tail — with one hit per rendered entry and one over
+    /// the tail. Cell-for-cell, so span boundaries are free to change.
+    #[test]
+    fn bundled_default_renders_the_legacy_attention_line_cell_for_cell() {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        // Budget 36: entries 0+1 (10 + 3 + 12 = 25) fit with the 10-cell
+        // tail; entry 2 folds into it.
+        let seg =
+            render_attention(&specs, &theme, &three_entries(), 36).expect("attention renders");
+        let expected = Line::from(vec![
+            Span::styled("?", theme.status_style(Status::Question)),
+            Span::raw(" "),
+            Span::styled("a/q", theme.ok_style()),
+            Span::styled(" (1s)", theme.dim_style()),
+            Span::styled(" │ ", theme.dim_style()),
+            Span::styled("!", theme.status_style(Status::Stalled)),
+            Span::raw(" "),
+            Span::styled("bb/ss", Style::default().fg(theme.path)),
+            Span::styled(" (1s)", theme.dim_style()),
+            Span::styled(" … +1 more", theme.dim_style()),
+        ]);
+        let actual = Line::from(seg.spans.clone());
+        assert_eq!(test_util::plain(&actual), test_util::plain(&expected));
+        test_util::assert_lines_match(&expected, &actual, 35);
+        assert_eq!(seg.width, 35);
+        assert_eq!(
+            seg.hits,
+            vec![
+                HitSpan {
+                    start_col: 0,
+                    width: 10,
+                    hit: Hit::Attention(WorkspaceId(1))
+                },
+                HitSpan {
+                    start_col: 13,
+                    width: 12,
+                    hit: Hit::Attention(WorkspaceId(2))
+                },
+                HitSpan {
+                    start_col: 25,
+                    width: 10,
+                    hit: Hit::AttentionMore
+                },
+            ]
+        );
+    }
+}

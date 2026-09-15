@@ -165,3 +165,11 @@ priority = 40
 [pr]
 format   = "[$symbol #$number $label]($style)( [$mark]($mark_style))"
 priority = 50
+
+# --- modules ----------------------------------------------------------
+# A [module.<name>] table is a segment you compose yourself from fleet-wide
+# variables (see the book's "Modules" section) and place in any bar as
+# $<name>. Only `format`, `style`, `priority`, `disabled` are accepted.
+
+[module.funnel]
+format = "$working"

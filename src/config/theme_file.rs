@@ -37,6 +37,11 @@ pub struct ThemeFile {
     /// part of the flattened `segments` map, like the other bars.
     #[serde(default)]
     pub dashboard_detail: BarTable,
+    /// User-composed modules, `[module.<name>]`. Declared before the
+    /// flattened `segments` map so serde routes the `module` table here
+    /// rather than treating it as a segment named `module`.
+    #[serde(default)]
+    pub module: BTreeMap<String, ModuleTable>,
     /// Every other top-level table is a `[segment]`.
     #[serde(flatten)]
     pub segments: BTreeMap<String, SegmentTable>,
@@ -67,6 +72,29 @@ pub struct SegmentTable {
     /// tokens inside this segment only. Same value grammar as `[palette]`.
     #[serde(default)]
     pub palette: BTreeMap<String, String>,
+}
+
+/// A `[module.<name>]` table: a segment composed from fleet variables. No
+/// items, so none of the multi-item keys (`separator`, `styles`,
+/// `more_format`) and no `symbol`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModuleTable {
+    pub format: Option<String>,
+    pub style: Option<String>,
+    pub priority: Option<u32>,
+    pub disabled: Option<bool>,
+}
+
+impl ModuleTable {
+    fn merge_over(self, base: ModuleTable) -> ModuleTable {
+        ModuleTable {
+            format: self.format.or(base.format),
+            style: self.style.or(base.style),
+            priority: self.priority.or(base.priority),
+            disabled: self.disabled.or(base.disabled),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,6 +171,10 @@ impl ThemeFile {
             let mine = self.segments.remove(&name).unwrap_or_default();
             self.segments.insert(name, mine.merge_over(tbl));
         }
+        for (name, tbl) in base.module {
+            let mine = self.module.remove(&name).unwrap_or_default();
+            self.module.insert(name, mine.merge_over(tbl));
+        }
         self
     }
 }
@@ -157,6 +189,9 @@ pub struct BarSpecs {
     pub attached_bottom: BarSpec,
     pub dashboard_detail: BarSpec,
     pub segments: HashMap<String, SegmentConfig>,
+    /// Names of every `[module.<name>]`, in table order. Each has its
+    /// `SegmentConfig` in `segments` under the same name.
+    pub modules: Vec<String>,
 }
 
 impl BarSpecs {
@@ -400,6 +435,47 @@ fn resolve_segment(
     })
 }
 
+/// Validate one `[module.<name>]` table: its `format` may reference only
+/// `registry::FLEET_VARS` (plus `$style`), and its name may not shadow a
+/// built-in segment. Returns the module's `SegmentConfig`.
+fn resolve_module(
+    name: &str,
+    tbl: &ModuleTable,
+    resolver: &Resolver,
+    errors: &mut Vec<ThemeError>,
+) -> Option<SegmentConfig> {
+    if segment_def(name).is_some() {
+        errors.push(error(
+            format!("[module.{name}]"),
+            "name collides with a built-in segment; pick another",
+        ));
+        return None;
+    }
+    let loc = format!("[module.{name}].format");
+    let nodes = parse_format(&loc, tbl.format.as_deref().unwrap_or(""), errors);
+    let allowed = crate::ui::bar::registry::fleet_var_names();
+    let seg_resolver = resolver.with_styles(placeholder_styles(&["style"]));
+    validate(&loc, &nodes, &allowed, &seg_resolver, errors);
+    let style = styled(
+        &format!("[module.{name}].style"),
+        tbl.style.as_deref(),
+        resolver,
+        errors,
+    );
+    Some(SegmentConfig {
+        style,
+        symbol: None,
+        format: nodes,
+        disabled: tbl.disabled.unwrap_or(false),
+        priority: tbl
+            .priority
+            .unwrap_or(crate::ui::bar::render::DEFAULT_PRIORITY),
+        separator: Vec::new(),
+        more_format: Vec::new(),
+        styles: Vec::new(),
+    })
+}
+
 /// Validate one bar's `format`/`right_format` (may reference only segment
 /// names) plus its `style` and `fill_style`, and build its `BarSpec`.
 fn resolve_bar(
@@ -533,39 +609,49 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
         }
     }
 
-    let segment_names: Vec<&str> = SEGMENTS.iter().map(|d| d.name).collect();
+    let mut modules = Vec::new();
+    for (name, tbl) in &file.module {
+        if let Some(cfg) = resolve_module(name, tbl, &resolver, &mut errors) {
+            segments.insert(name.clone(), cfg);
+            modules.push(name.clone());
+        }
+    }
+
+    // Bars may place any segment or any module.
+    let mut allowed_names: Vec<&str> = SEGMENTS.iter().map(|d| d.name).collect();
+    allowed_names.extend(modules.iter().map(String::as_str));
     let dashboard_footer = resolve_bar(
         "dashboard_footer",
         &file.dashboard_footer,
-        &segment_names,
+        &allowed_names,
         &resolver,
         &mut errors,
     );
     let dashboard_header = resolve_bar(
         "dashboard_header",
         &file.dashboard_header,
-        &segment_names,
+        &allowed_names,
         &resolver,
         &mut errors,
     );
     let attached_top = resolve_bar(
         "attached_top",
         &file.attached_top,
-        &segment_names,
+        &allowed_names,
         &resolver,
         &mut errors,
     );
     let attached_bottom = resolve_bar(
         "attached_bottom",
         &file.attached_bottom,
-        &segment_names,
+        &allowed_names,
         &resolver,
         &mut errors,
     );
     let dashboard_detail = resolve_bar(
         "dashboard_detail",
         &file.dashboard_detail,
-        &segment_names,
+        &allowed_names,
         &resolver,
         &mut errors,
     );
@@ -588,6 +674,7 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
             attached_bottom,
             dashboard_detail,
             segments,
+            modules,
         })
     } else {
         Err(errors)
@@ -1083,5 +1170,105 @@ mod tests {
         );
         std::fs::write(&path, "[dashboard_footer]\nformat = \"$nope\"\n").unwrap();
         assert!(load(&path, &Theme::wsx()).is_err());
+    }
+
+    #[test]
+    fn module_table_resolves_into_segments_and_modules() {
+        let specs = ok(
+            "[module.pipe]\nformat = \"([$pr_open open](fg:ok) )($mergeable ready)\"\npriority = 40\n[dashboard_footer]\nright_format = \"$pipe\"\n",
+        );
+        assert_eq!(
+            specs.modules,
+            vec!["funnel".to_string(), "pipe".to_string()]
+        );
+        assert_eq!(specs.segments["pipe"].priority, 40);
+        assert_eq!(
+            specs.segments["pipe"].format,
+            format::parse("([$pr_open open](fg:ok) )($mergeable ready)").unwrap()
+        );
+        assert_eq!(
+            specs.dashboard_footer.right_format,
+            format::parse("$pipe").unwrap()
+        );
+    }
+
+    #[test]
+    fn module_format_may_only_use_fleet_vars() {
+        let e = errs("[module.pipe]\nformat = \"$label $pr_open\"\n");
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(e[0].location, "[module.pipe].format");
+        assert!(
+            e[0].message.contains("unknown `$label`"),
+            "{}",
+            e[0].message
+        );
+        assert!(
+            e[0].message.contains("pr_open"),
+            "hint lists fleet vars: {}",
+            e[0].message
+        );
+    }
+
+    #[test]
+    fn module_name_may_not_collide_with_a_segment() {
+        let e = errs("[module.keys]\nformat = \"$working\"\n");
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(e[0].location, "[module.keys]");
+        assert!(
+            e[0].message.contains("built-in segment"),
+            "{}",
+            e[0].message
+        );
+    }
+
+    #[test]
+    fn module_table_rejects_segment_only_keys() {
+        let e = ThemeFile::parse("[module.pipe]\nseparator = \"x\"\n").unwrap_err();
+        assert!(e.message.contains("separator"), "{}", e.message);
+        let e = ThemeFile::parse("[module.pipe]\nstyles = [\"x\"]\n").unwrap_err();
+        assert!(e.message.contains("styles"), "{}", e.message);
+    }
+
+    #[test]
+    fn module_is_placeable_in_every_bar() {
+        let specs = ok(
+            "[module.pipe]\nformat = \"$working\"\n[attached_bottom]\nright_format = \"$pipe\"\n[dashboard_header]\nright_format = \"$pipe\"\n[dashboard_detail]\nformat = \"$pipe\"\n[attached_top]\nformat = \"$pipe\"\n",
+        );
+        assert_eq!(
+            specs.attached_bottom.right_format,
+            format::parse("$pipe").unwrap()
+        );
+        assert_eq!(
+            specs.dashboard_detail.format,
+            format::parse("$pipe").unwrap()
+        );
+    }
+
+    #[test]
+    fn bar_referencing_an_undefined_module_is_an_error_listing_modules() {
+        let e = errs("[dashboard_footer]\nright_format = \"$nope\"\n");
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(e[0].message.contains("unknown `$nope`"), "{}", e[0].message);
+        assert!(
+            e[0].message.contains("funnel"),
+            "hint lists modules: {}",
+            e[0].message
+        );
+    }
+
+    #[test]
+    fn user_module_table_merges_per_field_over_the_default() {
+        let specs = ok("[module.funnel]\npriority = 7\n");
+        assert_eq!(specs.segments["funnel"].priority, 7);
+        assert!(
+            !specs.segments["funnel"].format.is_empty(),
+            "unset format keeps the bundled default's"
+        );
+    }
+
+    #[test]
+    fn module_style_forms_dollar_style() {
+        let specs = ok("[module.pipe]\nformat = \"[$working]($style)\"\nstyle = \"fg:ok bold\"\n");
+        assert!(specs.segments.contains_key("pipe"));
     }
 }

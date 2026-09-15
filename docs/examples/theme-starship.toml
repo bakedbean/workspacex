@@ -29,7 +29,7 @@ deleted  = "#FFA7A4"   # git_metrics deleted_style
 # usage graph, `second` blending into the darker `first` at the edge.
 [dashboard_footer]
 format       = "[ $keys ](bg:first)[](fg:first)"
-right_format = "[](fg:second)[( $version )](bg:second fg:label)[](fg:first bg:second)[ $usage ](bg:first fg:amber)"
+right_format = "[](fg:second)[( $version )](bg:second fg:label)[](fg:first bg:second)[ $funnel ](bg:first fg:amber)"
 fill         = " "
 
 # ----------------------------------------------------------------- header
@@ -85,8 +85,13 @@ format = "[$repos repos · $workspaces workspaces](fg:label)"
 [version]
 format = "[$version]()"
 
-[usage]
-format = "[$label $spark]()"
+# The funnel module on the elsa palette; the block's bg (first, dark grey)
+# comes from the bar format, so items set only fg. working/blocked reuse the
+# git_metrics added/deleted hues; the palette has no purple, so ready
+# borrows the theme's merged token.
+[module.funnel]
+format   = "([$working working](fg:added)  )([$blocked blocked](fg:deleted)  )([$review_required review](fg:amber)  )([$changes_requested changes](fg:orange)  )([$mergeable ready](fg:merged))"
+priority = 60
 
 [keys]
 # Key in amber like starship's `code` colour, label muted; no per-pill

@@ -48,7 +48,7 @@ fill         = " "
 
 [dashboard_footer]
 format       = "[ $keys ](bg:nord8 fg:nord0)[](fg:nord8)"
-right_format = "[](fg:nord1)[( $version )](bg:nord1 fg:nord4)[](fg:nord10 bg:nord1)[ $usage ](bg:nord10 fg:nord6)"
+right_format = "[](fg:nord1)[( $version )](bg:nord1 fg:nord4)[](fg:nord10 bg:nord1)[ $funnel ](bg:nord10 fg:nord6)"
 fill         = " "
 
 [attached_top]
@@ -79,8 +79,11 @@ format = "[$repos repos · $workspaces workspaces]()"
 [version]
 format = "[$version]()"
 
-[usage]
-format = "[$label $spark]()"
+# The funnel module on the aurora accents; the block's bg (nord10, frost)
+# comes from the bar format, so items set only fg.
+[module.funnel]
+format   = "([$working working](fg:nord14)  )([$blocked blocked](fg:nord11)  )([$review_required review](fg:nord13)  )([$changes_requested changes](fg:nord12)  )([$mergeable ready](fg:nord15))"
+priority = 60
 
 [keys]
 format    = "[$key](fg:nord0 bold) [$label]()"

@@ -54,7 +54,7 @@ fill         = " "
 # so the footer chain reads like the header's brand -> view step.
 [dashboard_footer]
 format       = "[  ](bg:orange)[](fg:orange bg:smoke)[ $keys ](bg:smoke fg:orange)[](fg:smoke)"
-right_format = "[](fg:smoke)[( $version )](bg:smoke fg:orange)[](fg:orange bg:smoke)[ $usage ](bg:orange fg:black)"
+right_format = "[](fg:smoke)[( $version )](bg:smoke fg:orange)[](fg:orange bg:smoke)[ $funnel ](bg:orange fg:black)"
 fill         = " "
 
 # The attention entries are graded blocks (see [attention]). The orange
@@ -103,8 +103,13 @@ format = "[ $repos repos ](bg:smoke fg:orange)[](fg:orange bg:smoke)[ $worksp
 [version]
 format = "[$version]()"
 
-[usage]
-format = "[$label $spark]()"
+# The funnel module on the orange palette; the block's bg (orange) comes
+# from the bar format, so items set only fg. The local palette has no
+# yellow or purple, so review and ready borrow the jellybeans-derived
+# theme tokens (waiting, merged) this theme pairs with.
+[module.funnel]
+format   = "([$working working](fg:green)  )([$blocked blocked](fg:blood)  )([$review_required review](fg:waiting)  )([$changes_requested changes](fg:cream)  )([$mergeable ready](fg:merged))"
+priority = 60
 
 [keys]
 format    = "[$key](fg:cream bold) [$label]()"

@@ -1277,4 +1277,18 @@ mod tests {
         let specs = ok("[module.pipe]\nformat = \"[$working]($style)\"\nstyle = \"fg:ok bold\"\n");
         assert!(specs.segments.contains_key("pipe"));
     }
+
+    #[test]
+    fn every_example_theme_resolves() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/examples");
+        let mut n = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "toml") {
+                load(&path, &Theme::wsx()).unwrap_or_else(|e| panic!("{}: {e:?}", path.display()));
+                n += 1;
+            }
+        }
+        assert!(n >= 7, "expected the example themes, found {n}");
+    }
 }

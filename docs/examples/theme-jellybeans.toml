@@ -38,7 +38,7 @@ fill         = " "
 
 [dashboard_footer]
 format       = "[ $keys ](bg:blue fg:bg)[](fg:blue)"
-right_format = "[](fg:mid)[( $version )](bg:mid fg:fg)[](fg:green bg:mid)[ $usage ](bg:green fg:bg)"
+right_format = "[](fg:mid)[( $version )](bg:mid fg:fg)[](fg:green bg:mid)[ $funnel ](bg:green fg:bg)"
 fill         = " "
 
 [attached_top]
@@ -69,8 +69,13 @@ format = "[$repos repos · $workspaces workspaces]()"
 [version]
 format = "[$version]()"
 
-[usage]
-format = "[$label $spark]()"
+# The funnel module on the jellybeans palette; the block's bg comes from the
+# bar format (green), so items set only fg — working can't be green like the
+# rest of the theme's "ok" color, so it inherits the block's own bg (dark)
+# instead.
+[module.funnel]
+format   = "([$working working](fg:bg bold)  )([$blocked blocked](fg:red)  )([$review_required review](fg:yellow)  )([$changes_requested changes](fg:orange)  )([$mergeable ready](fg:purple))"
+priority = 60
 
 [keys]
 format    = "[$key](fg:bg bold) [$label]()"

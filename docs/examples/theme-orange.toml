@@ -55,7 +55,7 @@ fill         = " "
 # trailing wedge, the last one blending back into ash. With nothing to
 # show, the run collapses to its wedge like the other bars' blocks.
 [attached_top]
-format       = "[($agent_bar )$workspace ](bg:orange fg:black bold)[\ue0b0](fg:orange bg:ash)[( [\ue0b0](fg:ash bg:smoke)$attention )](bg:ash fg:orange)[\ue0b0](fg:ash)"
+format       = "[($agent_bar )$workspace ](bg:orange fg:black bold)[\ue0b0](fg:orange bg:ash)[([\ue0b0](fg:ash bg:smoke)$attention )](bg:ash fg:orange)[\ue0b0](fg:ash)"
 fill         = " "
 
 # Left chain as in the footer: orange stub, key hints on smoke, then pinned

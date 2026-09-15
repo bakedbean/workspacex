@@ -29,6 +29,7 @@ mod attention_budget_tests {
             model_tokens: None,
             agents: &[],
             active_agent: None,
+            fleet: crate::ui::bar::fleet::empty(),
         }
     }
 
@@ -237,6 +238,7 @@ mod attached_bars_tests {
                 model_tokens: None,
                 agents: &[],
                 active_agent: None,
+                fleet: crate::ui::bar::fleet::empty(),
             },
             60,
             60,
@@ -270,6 +272,7 @@ mod footer_tests {
                 version: "0.1.0",
                 window_label: label,
                 workspace_selected: selected,
+                fleet: crate::ui::bar::fleet::empty(),
             },
             width,
         )
@@ -510,6 +513,7 @@ mod bottom_tests {
             model_tokens: mt(),
             agents,
             active_agent: Some(AgentInstanceId(1)),
+            fleet: crate::ui::bar::fleet::empty(),
         }
     }
     fn present(out: &Rendered) -> Vec<&'static str> {
@@ -712,6 +716,7 @@ mod bottom_tests {
             model_tokens: None,
             agents: &agents,
             active_agent: None,
+            fleet: crate::ui::bar::fleet::empty(),
         };
         let out = attached_bars(&specs, &theme, inputs, 120, 120).bottom;
         let t = plain(&out.line);
@@ -766,7 +771,7 @@ mod dashboard_detail_parity_tests {
         let theme = Theme::wsx();
         let specs = bundled_default(&theme);
         let pinned = cmds(&[("PR", "/pr"), ("feedback", "/fb")]);
-        let out = dashboard_detail(&specs, &theme, &pinned, 80);
+        let out = dashboard_detail(&specs, &theme, &pinned, crate::ui::bar::fleet::empty(), 80);
         assert_eq!(
             plain(&out.line),
             " 1  PR   2  feedback  ──────────────────────────────────────────────────────────"
@@ -781,7 +786,7 @@ mod dashboard_detail_parity_tests {
     fn no_pins_is_a_full_width_rule_like_the_legacy_painter() {
         let theme = Theme::wsx();
         let specs = bundled_default(&theme);
-        let out = dashboard_detail(&specs, &theme, &[], 80);
+        let out = dashboard_detail(&specs, &theme, &[], crate::ui::bar::fleet::empty(), 80);
         assert_eq!(
             plain(&out.line),
             "────────────────────────────────────────────────────────────────────────────────"
@@ -804,7 +809,7 @@ mod dashboard_detail_parity_tests {
             ("eight", "/8"),
             ("nine", "/9"),
         ]);
-        let out = dashboard_detail(&specs, &theme, &nine, 200);
+        let out = dashboard_detail(&specs, &theme, &nine, crate::ui::bar::fleet::empty(), 200);
         assert_eq!(
             plain(&out.line),
             " 1  one   2  two   3  three   4  four   5  five   6  six   7  seven   8  eight   9  nine  ──────────────────────────────────────────────────────────────────────────────────────────────────────────────"
@@ -915,6 +920,7 @@ mod segment_registry_drift_tests {
             }),
             agents: &agents,
             active_agent: Some(AgentInstanceId(1)),
+            fleet: crate::ui::bar::fleet::empty(),
         };
 
         let segments = attached_segments(&specs, &theme, inputs, &resolver);
@@ -996,6 +1002,7 @@ mod dashboard_header_tests {
                 workspaces: 14,
                 filter,
                 view: "dashboard",
+                fleet: crate::ui::bar::fleet::empty(),
             },
             width,
         )
@@ -1264,6 +1271,7 @@ mod attention_tests {
             model_tokens: None,
             agents: &[],
             active_agent: None,
+            fleet: crate::ui::bar::fleet::empty(),
         };
         attached_segments(specs, theme, inputs, &resolver).remove("attention")
     }
@@ -1843,6 +1851,7 @@ mod example_theme_tests {
                     workspaces: 14,
                     filter: None,
                     view: "dashboard",
+                    fleet: crate::ui::bar::fleet::empty(),
                 },
                 120,
             );
@@ -1875,5 +1884,142 @@ mod example_theme_tests {
             assert_eq!(mark.fg, BRAND_ACCENT, "{name}: the x must be brand blue");
             assert!(mark.modifier.contains(Modifier::BOLD), "{name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod module_tests {
+    use super::*;
+    use crate::config::theme_file::{ThemeFile, resolve};
+    use crate::ui::bar::fleet::{FleetRow, FleetStats};
+    use crate::ui::bar::segment::SegmentMap;
+    use test_util::plain;
+
+    fn specs_with(src: &str) -> crate::config::theme_file::BarSpecs {
+        resolve(ThemeFile::parse(src).unwrap(), &Theme::wsx()).unwrap()
+    }
+
+    fn fleet(working: u32, mergeable: u32) -> SegmentMap {
+        let rows = (0..working).map(|_| FleetRow {
+            reported: Some(crate::data::store::ReportedState::Working),
+            ..Default::default()
+        });
+        let ready = (0..mergeable).map(|_| FleetRow {
+            lifecycle: Some(crate::git::forge::BranchLifecycle::PrOpen),
+            review: Some(crate::git::forge::ReviewDecision::Approved),
+            ..Default::default()
+        });
+        FleetStats::from_rows(rows.chain(ready), 1, 0).to_vars()
+    }
+
+    #[test]
+    fn module_renders_in_the_dashboard_footer_and_drops_zero_items() {
+        let specs = specs_with(
+            "[module.pipe]\nformat = \"([$working wrk](fg:ok)  )([$mergeable rdy](fg:merged))\"\n[dashboard_footer]\nright_format = \"$pipe\"\n",
+        );
+        let theme = Theme::wsx();
+        let out = dashboard_footer(
+            &specs,
+            &theme,
+            &DashboardFooterInputs {
+                activity: &[],
+                version: "0.1.0",
+                window_label: "24h",
+                workspace_selected: false,
+                fleet: &fleet(3, 0),
+            },
+            80,
+        );
+        let text = plain(&out.line);
+        assert!(text.ends_with("3 wrk  "), "{text:?}");
+        assert!(
+            !text.contains("rdy"),
+            "zero mergeable drops its group: {text:?}"
+        );
+        assert!(
+            out.hits.iter().all(|h| matches!(h.hit, Hit::Key(_))),
+            "modules carry no hit"
+        );
+    }
+
+    #[test]
+    fn module_renders_in_the_attached_bottom_bar() {
+        let specs = specs_with(
+            "[module.pipe]\nformat = \"$working working\"\n[attached_bottom]\nright_format = \"$pipe\"\n",
+        );
+        let theme = Theme::wsx();
+        let f = fleet(2, 0);
+        let bars = attached_bars(
+            &specs,
+            &theme,
+            AttachedInputs {
+                repo: "wsx",
+                name: "foo",
+                version: "0.1.0",
+                window_label: "24h",
+                activity: &[],
+                agent: None,
+                attention: None,
+                pinned: &[],
+                procs: 0,
+                diff: None,
+                pr: None,
+                model_tokens: None,
+                agents: &[],
+                active_agent: None,
+                fleet: &f,
+            },
+            80,
+            80,
+        );
+        assert!(
+            plain(&bars.bottom.line).ends_with("2 working"),
+            "{:?}",
+            plain(&bars.bottom.line)
+        );
+    }
+
+    #[test]
+    fn module_priority_drops_before_keys_when_narrow() {
+        let specs = specs_with(
+            "[module.pipe]\nformat = \"$working working across the whole fleet right now\"\npriority = 10\n[dashboard_footer]\nformat = \"$keys\"\nright_format = \"$pipe\"\n",
+        );
+        let theme = Theme::wsx();
+        let f = fleet(2, 0);
+        let render = |w: u16| {
+            plain(
+                &dashboard_footer(
+                    &specs,
+                    &theme,
+                    &DashboardFooterInputs {
+                        activity: &[],
+                        version: "0.1.0",
+                        window_label: "24h",
+                        workspace_selected: false,
+                        fleet: &f,
+                    },
+                    w,
+                )
+                .line,
+            )
+        };
+        assert!(render(160).contains("2 working"));
+        let narrow = render(60);
+        assert!(!narrow.contains("2 working"), "{narrow:?}");
+        assert!(narrow.contains("nav"), "keys survive: {narrow:?}");
+    }
+
+    #[test]
+    fn dashboard_detail_renders_a_module() {
+        let specs = specs_with(
+            "[module.pipe]\nformat = \"$working w\"\n[dashboard_detail]\nformat = \"$pipe\"\n",
+        );
+        let theme = Theme::wsx();
+        let out = dashboard_detail(&specs, &theme, &[], &fleet(1, 0), 40);
+        assert!(
+            plain(&out.line).starts_with("1 w"),
+            "{:?}",
+            plain(&out.line)
+        );
     }
 }

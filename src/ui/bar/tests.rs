@@ -1759,20 +1759,19 @@ mod example_theme_tests {
 
     /// The orange example puts the workspace name and the pr chip on
     /// orange mode blocks, where the base theme's lifecycle tints wash
-    /// out; both blocks take the file's darker xterm-cube variants through
-    /// their own palettes, and the name drops to the block's black without
+    /// out; both blocks take the file's pale xterm-cube variants through
+    /// their own palettes, and the name drops to the file's chalk without
     /// a PR.
     #[test]
-    fn orange_example_darkens_the_lifecycle_tints_on_its_orange_blocks() {
+    fn orange_example_lightens_the_lifecycle_tints_on_its_orange_blocks() {
         use crate::git::forge::BranchLifecycle;
         use crate::ui::attached::ChipPr;
         let theme = Theme::jellybeans();
         let specs = load(&examples_dir().join("theme-orange.toml"), &theme).unwrap();
         let orange = Color::Rgb(0xd7, 0x5f, 0x00);
-        let forest = Color::Rgb(0x00, 0x5f, 0x00);
-        let grape = Color::Rgb(0x5f, 0x00, 0x5f);
-        // `header_fg = "black"` is the file's own palette black, not ANSI's.
-        let black = Color::Rgb(0x15, 0x15, 0x15);
+        let mint = Color::Rgb(0xd7, 0xff, 0xaf);
+        let lilac = Color::Rgb(0xd7, 0xaf, 0xff);
+        let chalk = Color::Rgb(0xee, 0xee, 0xee);
         let render = |pr: Option<ChipPr>| {
             let inputs = AttachedInputs {
                 repo: "",
@@ -1813,16 +1812,16 @@ mod example_theme_tests {
 
         let (top, bottom) = render(Some(chip(BranchLifecycle::PrOpen)));
         let (name, pr) = (name_cell(&top), pr_cell(&bottom));
-        assert_eq!((name.fg, name.bg), (forest, orange), "open name");
-        assert_eq!((pr.fg, pr.bg), (forest, orange), "open pr");
+        assert_eq!((name.fg, name.bg), (mint, orange), "open name");
+        assert_eq!((pr.fg, pr.bg), (mint, orange), "open pr");
 
         let (top, bottom) = render(Some(chip(BranchLifecycle::PrMerged)));
-        assert_eq!(name_cell(&top).fg, grape, "merged name");
-        assert_eq!(pr_cell(&bottom).fg, grape, "merged pr");
+        assert_eq!(name_cell(&top).fg, lilac, "merged name");
+        assert_eq!(pr_cell(&bottom).fg, lilac, "merged pr");
 
         let (top, _) = render(None);
         let name = name_cell(&top);
-        assert_eq!((name.fg, name.bg), (black, orange), "no-PR name");
+        assert_eq!((name.fg, name.bg), (chalk, orange), "no-PR name");
         assert!(name.modifier.contains(Modifier::BOLD));
     }
 

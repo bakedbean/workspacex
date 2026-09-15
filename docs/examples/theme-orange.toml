@@ -34,10 +34,11 @@ smoke    = "#3a3a3a"   # cterm 237, one step above soot
 cream    = "#ffd7af"   # ctermBrightYellow 223
 green    = "#008700"   # cterm0B 28
 blood    = "#870000"   # ctermBlood 88
-plum     = "#870087"   # cterm 90
-forest   = "#005f00"   # cterm 22, a step below green
-grape    = "#5f005f"   # cterm 53, a step below plum
-olive    = "#878700"   # cterm 100
+mint     = "#d7ffaf"   # cterm 193, PR open on orange
+lilac    = "#d7afff"   # cterm 189, PR merged
+rose     = "#ffd7d7"   # cterm 224, PR closed
+butter   = "#ffffaf"   # cterm 229, PR conflicted
+chalk    = "#eeeeee"   # cterm 255, PR draft
 
 # The wordmark keeps the app's branding (brand-blue bar and "x", cream
 # name) flat on the bar background, so the header's left edge is the app
@@ -120,19 +121,23 @@ symbol = ""
 
 # The name carries the branch's PR-lifecycle tint like the pr block does.
 # The base theme's tints are picked for the dark background and wash out
-# on orange, so this block takes darker ones from the same xterm cube:
-# forest 22, grape 53, blood 88, olive 100 (the diff block keeps green 28,
-# which reads fine on smoke). Without a PR the tint falls back to
-# header_fg, shadowed here to the block's black.
+# on orange, and darker ones of the same hue do no better: the orange sits
+# at mid luminance, so a green dark enough to read is a hair from black
+# (forest 22 is 2.1:1 against it, olive 100 is invisible at 1.0:1). Pale
+# tints from the same xterm cube keep the hue and clear 3:1 instead: mint
+# 193, lilac 189, rose 224, butter 229. The diff block keeps green 28,
+# which reads fine on smoke. Without a PR, and on a draft, the tint falls
+# back to header_fg, shadowed here to chalk so it reads as greyed out
+# against the block's black text.
 [workspace]
 format = "[($repo/)$name]($style bold)"
 
 [workspace.palette]
-ok        = "forest"
-merged    = "grape"
-err       = "blood"
-warn      = "olive"
-header_fg = "black"
+ok        = "mint"
+merged    = "lilac"
+err       = "rose"
+warn      = "butter"
+header_fg = "chalk"
 
 # Attention entries as graded airline blocks: the first on the run's own
 # ash, every one after on black, the base background (styles clamp to the
@@ -160,16 +165,16 @@ format = "([$model](bold) )[$tokens]($style)"
 [diff]
 format = "[+$added](fg:green bold) [−$removed](fg:blood)"
 
-# Keep the lifecycle tint ($style: forest open, grape merged, blood closed)
+# Keep the lifecycle tint ($style: mint open, lilac merged, rose closed)
 # on top of the block's orange, instead of the block's black text — the
-# same darker variants as the workspace block, since both sit on orange.
-# A draft PR has no tint and falls back to dim, shadowed to black here.
+# same pale variants as the workspace block, since both sit on orange.
+# A draft PR has no tint and falls back to dim, shadowed to chalk here.
 [pr]
 format = "[$symbol #$number $label]($style bold)( [$mark]($mark_style))"
 
 [pr.palette]
-ok     = "forest"
-merged = "grape"
-err    = "blood"
-warn   = "olive"
-dim    = "black"
+ok     = "mint"
+merged = "lilac"
+err    = "rose"
+warn   = "butter"
+dim    = "chalk"

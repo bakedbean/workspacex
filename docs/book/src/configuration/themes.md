@@ -233,9 +233,17 @@ which never drops), and, for multi-item segments, `separator`. A multi-item
 segment's format describes one item; the items keep their existing order.
 `separator` is a format too — `"[ │ ](fg:dim)"` draws a dim joiner — but
 it sits between items rather than inside one, so it takes no variables and
-no `$style`. `attention` alone also takes `more_format`, the tail drawn
-when entries don't fit the bar; its one variable is `$count`, the number
-of entries folded into it.
+no `$style`. Because it is parsed with the grammar above, a separator that
+wants a literal `$`, `[`, `(`, or backslash must escape it (`$$`, `\[`,
+`\(`, `\\`), and a bare `(x)` is a conditional group that renders nothing;
+a plain run of spaces or box-drawing characters needs no change. `attention`
+alone also takes `more_format`, the tail drawn when entries don't fit the
+bar; its one variable is `$count`, the number of entries folded into it,
+and setting it on any other segment is an error.
+
+An item whose `format` renders empty — an empty `format`, or one whose
+variables are all absent for that item — is dropped as if it were never in
+the list: no separator, no click target, and not counted in the tail.
 The bundled default sets `priority` on the segments that compete for room:
 `model_tokens` 10, `agents` 20, `procs` 30, `diff` 40, `pr` 50 (the
 attached chip row's right side); `version` 50, `usage` 60 (the dashboard
@@ -254,7 +262,7 @@ other segment is the unset default, 100, and so never drops.
 | `usage` | `$label $spark` | The activity sparkline. Clickable. |
 | `agent_bar` | `$symbol` | `$style` includes the agent's identity color. Attached only. |
 | `workspace` | `$repo $name` | `$repo` is absent when there is no repo name. |
-| `attention` | `$glyph $repo $name $age` | One item per workspace needing attention. `$glyph` is the entry's dashboard status glyph in its status color; `$style` is the name's PR-lifecycle tint (open, merged, …) or the muted `path` hue. Entries that don't fit fold into `more_format` (`$count`); the first entry always renders, its `$name` shortened with an ellipsis if it alone would push the tail off the bar. Clickable: each entry, and the tail. |
+| `attention` | `$glyph $repo $name $age` | One item per workspace needing attention. `$glyph` is the entry's dashboard status glyph in its status color; `$style` is the name's PR-lifecycle tint (open, merged, …) or the muted `path` hue. Entries that don't fit fold into `more_format` (`$count`); the first entry always renders, and if it alone would push the tail off the bar its `$name` is shortened with an ellipsis (assuming one `$name` in the format; a format without `$name`, or a very long `$repo`, has nothing to yield and simply clips). Clickable: each entry, and the tail. |
 | `pins` | `$index $label` | One chip per pinned command. Clickable. |
 | `agents` | `$symbol $label $key` | One pill per agent (2+ agents). `$style` includes the agent color. `symbol` is ignored — the pill always uses a filled/hollow dot to show which agent is active. Clickable. |
 | `model_tokens` | `$model $tokens` | `$style` includes `ok`, or `warn` near the context limit. |
@@ -298,6 +306,10 @@ them:
   must be escaped. The stock `attention` item format writes its age as
   `[ \($age\)](fg:dim)` in a TOML literal string for exactly this reason;
   an unescaped `($age)` renders the age without the parentheses.
+- Upgrading a theme written before `attention` became multi-item: its
+  old `[attention] format = "$items"` is now rejected as an unknown
+  variable — delete the table to take the stock item format, or rewrite it
+  with the variables above. There is no `$items` alias.
 - `symbol` is substituted into `format`, but the literal spacing around it
   stays. Emptying one (`[pr]` `symbol = ""`) leaves the space that follows
   `$symbol` in the stock format; delete that space in `format` too if you

@@ -378,4 +378,32 @@ mod tests {
         assert!(fleet_var("nope").is_none());
         assert!(fleet_var_names().contains(&"workspaces"));
     }
+
+    /// Every `FLEET_VARS` name must be documented in both places a user
+    /// would look: the bundled default's modules comment block (as `$name`)
+    /// and the book's fleet-variable table (as `` `name` ``). Catches a
+    /// fleet var added to the registry but never wired into the docs.
+    #[test]
+    fn every_fleet_var_is_documented_in_the_default_toml_and_the_book() {
+        const DEFAULT_TOML: &str = include_str!("default_theme.toml");
+        let book = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/docs/book/src/configuration/themes.md"
+        ))
+        .expect("book page exists");
+        for v in FLEET_VARS {
+            let in_toml = DEFAULT_TOML.contains(&format!("${}", v.name));
+            assert!(
+                in_toml,
+                "{} missing from default_theme.toml's modules comment block",
+                v.name
+            );
+            let in_book = book.contains(&format!("`{}`", v.name));
+            assert!(
+                in_book,
+                "{} missing from docs/book/src/configuration/themes.md",
+                v.name
+            );
+        }
+    }
 }

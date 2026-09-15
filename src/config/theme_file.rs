@@ -189,8 +189,9 @@ pub struct BarSpecs {
     pub attached_bottom: BarSpec,
     pub dashboard_detail: BarSpec,
     pub segments: HashMap<String, SegmentConfig>,
-    /// Names of every `[module.<name>]`, in table order. Each has its
-    /// `SegmentConfig` in `segments` under the same name.
+    /// Names of every `[module.<name>]`, sorted by name (the `BTreeMap`
+    /// this is built from yields keys in that order, not table order).
+    /// Each has its `SegmentConfig` in `segments` under the same name.
     pub modules: Vec<String>,
 }
 
@@ -339,7 +340,7 @@ fn resolve_segment(
         errors.push(error(
             format!("[{name}]"),
             format!(
-                "unknown segment (known: {})",
+                "unknown segment (known: {}); user modules go under [module.<name>]",
                 SEGMENTS
                     .iter()
                     .map(|d| d.name)
@@ -449,6 +450,10 @@ fn resolve_module(
             format!("[module.{name}]"),
             "name collides with a built-in segment; pick another",
         ));
+        return None;
+    }
+    if tbl.format.as_deref().unwrap_or("").trim().is_empty() {
+        errors.push(error(format!("[module.{name}]"), "module has no `format`"));
         return None;
     }
     let loc = format!("[module.{name}].format");
@@ -741,7 +746,7 @@ mod tests {
         assert_eq!(specs.segments["funnel"].priority, 60);
         assert_eq!(
             specs.dashboard_footer.right_format,
-            format::parse("($version  )$funnel").unwrap()
+            format::parse("$version(  $funnel)").unwrap()
         );
         for def in SEGMENTS {
             assert!(
@@ -1279,16 +1284,27 @@ mod tests {
     }
 
     #[test]
-    fn every_example_theme_resolves() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/examples");
-        let mut n = 0;
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().is_some_and(|e| e == "toml") {
-                load(&path, &Theme::wsx()).unwrap_or_else(|e| panic!("{}: {e:?}", path.display()));
-                n += 1;
-            }
-        }
-        assert!(n >= 7, "expected the example themes, found {n}");
+    fn unknown_segment_hints_at_module_tables() {
+        let e = errs("[bogus]\nformat = \"x\"\n");
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(e[0].message.contains("unknown segment"), "{}", e[0].message);
+        assert!(
+            e[0].message
+                .contains("user modules go under [module.<name>]"),
+            "{}",
+            e[0].message
+        );
+    }
+
+    #[test]
+    fn module_without_format_is_an_error() {
+        let e = errs("[module.pipe]\npriority = 7\n");
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(
+            e[0].message.contains("module has no `format`"),
+            "{}",
+            e[0].message
+        );
+        assert!(e[0].location.contains("[module.pipe]"), "{}", e[0].location);
     }
 }

@@ -1,7 +1,7 @@
 # Dashboard footer modules — design
 
 **Date:** 2026-09-15
-**Status:** approved, awaiting implementation plan
+**Status:** approved; plan at `docs/superpowers/plans/2026-09-15-footer-modules.md`
 
 ## Problem
 
@@ -55,9 +55,9 @@ A module is a top-level TOML table under the reserved `module` namespace:
 
 ```toml
 [module.funnel]
-format   = "[$working ⚙](fg:ok) ([$blocked ✋](fg:err) )([$review_required 👀](fg:waiting) )([$changes_requested ✎](fg:warn) )([$mergeable ✓](fg:merged) )"
+format   = "([$working working](fg:ok)  )([$blocked blocked](fg:err)  )([$review_required review](fg:waiting)  )([$changes_requested changes](fg:warn)  )([$mergeable ready](fg:merged))"
 style    = ""        # optional; forms $style exactly as for a segment
-priority = 50        # optional; default 100 (never drops)
+priority = 60        # optional; default 100 (never drops)
 disabled = false     # optional
 
 [dashboard_footer]
@@ -99,7 +99,7 @@ the same in-memory maps the dashboard rows read.
 |---|---|---|
 | `working` `waiting` `blocked` `done` `busy` | `app.pushed_status[ws].state` (`ReportedState`) | workspaces whose last `wsx status set` (or Stop-hook inference, for `busy`) is that state |
 | `unreported` | absence of `pushed_status` entry | workspaces with no reported status |
-| `attention` | `app.workspace_needs_attention` | unacknowledged attention alerts |
+| `alerts` | `app.workspace_needs_attention` | unacknowledged attention alerts (named `alerts`, not `attention`, because `attention` is a segment) |
 | `awaiting` `stalled` `active` `idle` | `app.workspace_activity[ws]` (`ActivityState`) | live transcript classification; `awaiting` = `AwaitingAnswer` |
 | `live_agents` | same predicate `run.rs:290` uses for the sparkline bucket | workspaces whose primary status is `Thinking` or `Waiting` |
 | `pr_none` `pr_draft` `pr_open` `pr_conflicted` `pr_merged` `pr_closed` | `app.pr_lifecycle[ws]` (`BranchLifecycle`) | PR lifecycle counts; a workspace never polled counts in none of them |
@@ -123,11 +123,11 @@ of its own; `$style` is the module's `style` patched over the bar style.
 App state ──► FleetStats::collect(&App)   (src/ui/bar/fleet.rs, once per frame)
                     │
                     ▼  to_vars() -> SegmentMap  (variable name -> Segment)
-theme.toml ──► BarSpecs.modules: HashMap<String, SegmentConfig>
+theme.toml ──► BarSpecs.modules: Vec<String>  (+ SegmentConfig per name in BarSpecs.segments)
                     │
                     ▼
-bars.rs composers: for each (name, cfg) in specs.modules
-        put(segments, name, providers::module(cfg, &fleet_vars, &resolver))
+bars.rs composers: for name in &specs.modules
+        put(segments, name, providers::module(cfg(specs, name), &fleet_vars, &resolver))
                     │
                     ▼
 render_bar(...)  — unchanged: priority drop, groups, fill, right_format
@@ -139,21 +139,26 @@ render_bar(...)  — unchanged: priority drop, groups, fill, right_format
 `pub const FLEET_VARS`. Add `pub fn fleet_var(name) -> Option<&FleetVar>`.
 The doc string is the single source for the book table.
 
-**`src/ui/bar/fleet.rs` (new)** — `pub struct FleetStats { … u32 fields … }`
-with `pub fn collect(app: &App, msgs_queued: u32) -> FleetStats` and
-`pub fn to_vars(&self) -> SegmentMap`. Pure over `App`'s maps; no I/O.
-`msgs_queued` is passed in so `collect` stays I/O-free and testable — the
-app reads `undelivered_messages()` on its existing refresh tick (the same
-tick that drains the queue) and caches the count on `App`.
+**`src/ui/bar/fleet.rs` (new)** — `pub struct FleetRow { … }` (one
+workspace's already-looked-up inputs), `pub struct FleetStats { … u32
+fields … }` with `pub fn from_rows(rows, repos, msgs_queued) -> FleetStats`
+(the pure, store-free core the unit tests exercise), `pub fn collect(app:
+&App) -> FleetStats` (builds the rows from `App`'s maps), `pub fn
+to_vars(&self) -> SegmentMap`, and `pub fn empty() -> &'static SegmentMap`
+for tests and preview renders. `App.msgs_queued` is set by
+`drain_agent_messages` from the `undelivered_messages()` read it already
+performs, so `collect` stays I/O-free.
 
 **`src/config/theme_file.rs`** — `ThemeFile.module: BTreeMap<String,
 ModuleTable>` (`#[serde(default)]`), `ModuleTable::merge_over`,
 `resolve_module(name, tbl, resolver, errors) -> Option<SegmentConfig>`
 mirroring `resolve_segment` but validating against `FLEET_VARS` and
-`placeholder_styles(&["style"])`. `BarSpecs.modules: HashMap<String,
-SegmentConfig>`. `resolve()` builds `allowed_names = SEGMENTS ∪ modules`
-and passes it to every `resolve_bar` call in place of `segment_names`.
-Collision check runs before `resolve_module`.
+`placeholder_styles(&["style"])`. Each module's `SegmentConfig` is stored
+in `BarSpecs.segments` under the module's name (so `render_bar`'s priority
+lookup and `bars::cfg` work unchanged) and its name is recorded in
+`BarSpecs.modules: Vec<String>`. `resolve()` builds `allowed_names =
+SEGMENTS ∪ modules` and passes it to every `resolve_bar` call in place of
+`segment_names`. Collision check runs inside `resolve_module`.
 
 Because `segments` is a flattened map of *every other* top-level table,
 `module` must be a named field declared before the `#[serde(flatten)]`
@@ -176,8 +181,8 @@ sites identical.
 the frame and pass it to each composer's inputs.
 
 **`src/ui/bar/default_theme.toml`** — add `[module.funnel]` (format above,
-`priority = 50` so it drops before `$keys` on narrow terminals, matching
-today's `$usage` behaviour) and change `[dashboard_footer].right_format` to
+`priority = 60` — the same slot `$usage` had, so `$version` (50) still
+drops first on a narrow footer) and change `[dashboard_footer].right_format` to
 `"($version  )$funnel"`. Comment block documents the `[module.*]` grammar
 and lists `FLEET_VARS` by name.
 

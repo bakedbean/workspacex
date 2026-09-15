@@ -265,24 +265,32 @@ neighbours. `separator` sees `prev_*` and `next_*` (the items on each side
 of it); `more_format` sees `prev_*` (the last rendered entry). A colour
 that does not exist — the first item's `prev`, the last rendered item's
 `next` even when a tail follows, or a grade that never set that colour —
-carries nothing, so the token drops out and the run inherits the bar's
-own style. That is what lets the last block's trailing wedge blend into
-the bar without the theme knowing how many entries there are:
+carries nothing: that token sets nothing, whatever `$style` or an
+enclosing run already set stays, and where nothing set it the bar's own
+style shows through. That is what lets the last block's trailing wedge
+blend into the bar without the theme knowing how many entries there are,
+provided the wedge sits outside the graded background run (as below),
+not inside it:
 
 ```toml
 [attention]
 styles      = ["bg:charcoal fg:orange", "bg:slate fg:cream", "bg:grey fg:cream"]
-format      = '[ $glyph $repo/$name \($age\) ]($style)[\ue0b0](fg:item_bg bg:next_bg)'
+format      = "[ $glyph $repo/$name \\($age\\) ]($style)[\ue0b0](fg:item_bg bg:next_bg)"
 separator   = ""
 more_format = "[\ue0b0](fg:prev_bg bg:orange)[ +$count more ](bg:orange fg:black)[\ue0b0](fg:orange)"
 ```
 
 Here each entry carries its own trailing wedge, coloured from its block
 into the next; the first block's leading cap belongs in the bar format,
-where `styles[0]` is known. `styles` entries may not use the six names
-themselves (a grade cannot depend on the neighbours that depend on it),
-and `wsx theme check` rejects `styles` and the six names on a single-item
-segment.
+where `styles[0]` is known. The formats are TOML double-quoted strings so
+that `\ue0b0` decodes to the wedge glyph and `\\(` reaches the grammar as
+`\(`; in a single-quoted literal string `\ue0b0` would stay as typed and
+render as the five characters `ue0b0`. `styles` entries may not use the
+six names themselves (a grade cannot depend on the neighbours that depend
+on it), `wsx theme check` rejects `styles` and the six names on a
+single-item segment, and the six names are reserved: a `[palette]` entry
+by one of them is an error, since inside a multi-item segment it would be
+shadowed by the per-item colour.
 The bundled default sets `priority` on the segments that compete for room:
 `model_tokens` 10, `agents` 20, `procs` 30, `diff` 40, `pr` 50 (the
 attached chip row's right side); `version` 50, `usage` 60 (the dashboard

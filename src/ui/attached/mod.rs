@@ -103,7 +103,8 @@ fn route_hits(area: Rect, hits: &[crate::ui::bar::segment::HitSpan], out: &mut P
 ///
 /// Layout (top to bottom):
 ///   - one row of focused workspace label + cross-workspace attention status,
-///   - a `─` separator rule beneath it,
+///   - a `─` separator rule beneath it (when `separator_area` has a row;
+///     `layout_chrome` gives it none under a bar theme),
 ///   - the pane area, subdivided per `panes[i].rect` (which the caller
 ///     pre-computed from `SplitTree::layout`),
 ///   - one row of pinned-command chips / `^x` menu hint, with the agent
@@ -178,7 +179,7 @@ pub(crate) fn render_panes(
     );
     f.render_widget(Paragraph::new(bars.top.line), info_area);
     route_hits(info_area, &bars.top.hits, &mut out);
-    if separator_area.width > 0 {
+    if separator_area.width > 0 && separator_area.height > 0 {
         let rule = "─".repeat(separator_area.width as usize);
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(rule, theme.dim_style()))),
@@ -278,18 +279,21 @@ fn render_dividers(f: &mut Frame, dividers: &[Divider], theme: &Theme) {
 
 /// Carve the attached view's `area` into info-line / separator / pane / chip
 /// sub-areas. The info line hosts the focused workspace label + attention
-/// items and sits at the TOP, with a 1-cell `─` separator rule beneath it to
-/// set it off from the pane content. The chip row is the bottom row; the agent
-/// pills share it, so the chrome is always three rows.
+/// items and sits at the TOP, with — when `rule` — a 1-cell `─` separator
+/// rule beneath it to set it off from the pane content. A bar theme's
+/// coloured blocks set the bar off on their own, so the caller drops the
+/// rule then (`rule = false`): its row collapses to height 0 and the pane
+/// takes it. The chip row is the bottom row; the agent pills share it, so
+/// the chrome is three rows with the rule and two without.
 /// Returns `(info, separator, pane, chip)`.
-pub fn layout_chrome(area: Rect) -> (Rect, Rect, Rect, Rect) {
+pub fn layout_chrome(area: Rect, rule: bool) -> (Rect, Rect, Rect, Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // info line (label + attention)
-            Constraint::Length(1), // separator rule
-            Constraint::Min(1),    // pane area
-            Constraint::Length(1), // chip row
+            Constraint::Length(1),               // info line (label + attention)
+            Constraint::Length(u16::from(rule)), // separator rule
+            Constraint::Min(1),                  // pane area
+            Constraint::Length(1),               // chip row
         ])
         .split(area);
     (chunks[0], chunks[1], chunks[2], chunks[3])
@@ -448,7 +452,7 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
         let mut out_result = None;
         term.draw(|f| {
-            let (info, sep, _pane, chip) = layout_chrome(Rect::new(0, 0, w, h));
+            let (info, sep, _pane, chip) = layout_chrome(Rect::new(0, 0, w, h), true);
             out_result = Some(render_panes(
                 f,
                 &[],
@@ -511,7 +515,7 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
         let mut out_result = None;
         term.draw(|f| {
-            let (info, sep, _pane, chip) = layout_chrome(Rect::new(0, 0, w, h));
+            let (info, sep, _pane, chip) = layout_chrome(Rect::new(0, 0, w, h), true);
             out_result = Some(render_panes(
                 f,
                 &[],
@@ -564,7 +568,7 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
         let mut out_result = None;
         term.draw(|f| {
-            let (info, sep, _pane, chip) = layout_chrome(Rect::new(0, 0, w, h));
+            let (info, sep, _pane, chip) = layout_chrome(Rect::new(0, 0, w, h), true);
             out_result = Some(render_panes(
                 f,
                 &[],
@@ -712,7 +716,7 @@ mod tests {
     #[test]
     fn layout_chrome_puts_info_line_on_top_with_separator() {
         let area = Rect::new(0, 0, 80, 24);
-        let (info, separator, pane, chip) = layout_chrome(area);
+        let (info, separator, pane, chip) = layout_chrome(area, true);
         assert_eq!(info.y, 0);
         assert_eq!(info.height, 1);
         assert_eq!(separator.y, 1);
@@ -726,17 +730,30 @@ mod tests {
         );
     }
 
+    /// With a bar theme active the top bar's coloured blocks already set
+    /// it off from the pane, so the rule row collapses and the pane takes
+    /// it: two chrome rows instead of three, the chip row still last.
     #[test]
-    fn render_panes_draws_info_on_top_and_full_width_separator() {
+    fn layout_chrome_without_the_rule_gives_its_row_to_the_pane() {
+        let area = Rect::new(0, 0, 80, 24);
+        let (info, separator, pane, chip) = layout_chrome(area, false);
+        assert_eq!((info.y, info.height), (0, 1));
+        assert_eq!(separator.height, 0);
+        assert_eq!((pane.y, pane.height), (1, 22));
+        assert_eq!((chip.y, chip.height), (23, 1));
+    }
+
+    /// Draw only the chrome rows (no live Session) into a `w × h`
+    /// terminal, with or without the rule row, and return the buffer.
+    fn draw_chrome(w: u16, h: u16, rule: bool) -> ratatui::buffer::Buffer {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
         let theme = Theme::wsx();
         let specs = crate::config::theme_file::bundled_default(&theme);
-        let (w, h) = (40u16, 10u16);
         let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
         term.draw(|f| {
             let area = Rect::new(0, 0, w, h);
-            let (info, separator, _pane, chip) = layout_chrome(area);
+            let (info, separator, _pane, chip) = layout_chrome(area, rule);
             // Empty pane slice → renders only the chrome rows (no live Session).
             render_panes(
                 f,
@@ -764,13 +781,45 @@ mod tests {
             );
         })
         .unwrap();
-        let buf = term.backend().buffer();
+        term.backend().buffer().clone()
+    }
+
+    fn row(buf: &ratatui::buffer::Buffer, y: u16) -> String {
+        (0..buf.area.width)
+            .map(|x| buf[(x, y)].symbol().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn render_panes_draws_info_on_top_and_full_width_separator() {
+        let (w, h) = (40u16, 10u16);
+        let buf = draw_chrome(w, h, true);
         // Row 0 starts with the workspace label.
-        let row0: String = (0..w).map(|x| buf[(x, 0)].symbol().to_string()).collect();
-        assert!(row0.starts_with("wsx/foo"), "row0={row0:?}");
+        assert!(
+            row(&buf, 0).starts_with("wsx/foo"),
+            "row0={:?}",
+            row(&buf, 0)
+        );
         // Row 1 is the full-width separator rule.
-        let row1: String = (0..w).map(|x| buf[(x, 1)].symbol().to_string()).collect();
-        assert_eq!(row1, "─".repeat(w as usize), "separator spans the width");
+        assert_eq!(
+            row(&buf, 1),
+            "─".repeat(w as usize),
+            "separator spans the width"
+        );
+    }
+
+    /// Without the rule (a bar theme is active) nothing is drawn under
+    /// the top bar: row 1 belongs to the pane and stays blank here.
+    #[test]
+    fn render_panes_draws_no_rule_when_the_layout_has_none() {
+        let (w, h) = (40u16, 10u16);
+        let buf = draw_chrome(w, h, false);
+        assert!(
+            row(&buf, 0).starts_with("wsx/foo"),
+            "row0={:?}",
+            row(&buf, 0)
+        );
+        assert_eq!(row(&buf, 1).trim(), "", "no rule under the top bar");
     }
 
     /// The attention width budget's complement is exactly where the items

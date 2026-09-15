@@ -393,7 +393,7 @@ impl App {
     /// stale dimensions. Visible panes are handled by the render path and left
     /// untouched here.
     pub fn apply_backgrounded_resize(&self, cols: u16, rows: u16) {
-        let (w, h) = crate::app::resize_sync::projected_pane_size(cols, rows);
+        let (w, h) = crate::app::resize_sync::projected_pane_size(cols, rows, !self.theme_active);
         let visible = crate::app::resize_sync::visible_instances(&self.view);
         self.sessions.resize_backgrounded(w, h, &visible);
     }

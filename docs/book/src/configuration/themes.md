@@ -128,6 +128,9 @@ replaced:
   first, then the usage graph, instead of overflowing the terminal width.
 - A pinned chip clipped by the right edge keeps its visible portion
   clickable, rather than being dropped in full.
+- The stock attached view draws a dim `─` rule under its top bar to set it
+  off from the pane. With `bar_theme` on, the themed bar's own blocks do
+  that job, so the rule row is dropped and the pane gains a row.
 - The dashboard header's filter echo is capped at 24 characters and never
   shrinks further. The stock header instead budgeted the needle against
   whatever room was left on the line, so the repo/workspace counts always

@@ -28,8 +28,12 @@ iris     = "#c4a7e7"
 hl_med   = "#44415a"
 hl_high  = "#56526e"
 
+# The wordmark keeps the app's branding (the bundled default: brand-blue
+# bar and "x", cream name, dimmed view) flat on the bar background, so
+# the header's left edge is the app rather than a mode block; the chain
+# starts at the group block, which opens with a left cap.
 [dashboard_header]
-format       = "[ $brand ](bg:rose fg:base)[](fg:rose bg:hl_med)[ $group ](bg:hl_med fg:text)[](fg:hl_med bg:surface)[( $sort )](bg:surface fg:subtle)[](fg:surface)(  $filter)"
+format       = "$brand [](fg:hl_med)[ $group ](bg:hl_med fg:text)[](fg:hl_med bg:surface)[( $sort )](bg:surface fg:subtle)[](fg:surface)(  $filter)"
 right_format = "[](fg:hl_high)[ $counts ](bg:hl_high fg:text)"
 fill         = " "
 
@@ -48,9 +52,6 @@ right_format = "[](fg:surface)[( $agents )( $model_tokens )](bg:surface fg:su
 fill         = " "
 
 # --- segments (unset fields keep the bundled defaults) -------------------
-
-[brand]
-format = "[$symbol](fg:iris) [$name](bold)[ $mark](fg:iris bold)[ · $view]()"
 
 [group]
 format = "[$label ]()$tabs"

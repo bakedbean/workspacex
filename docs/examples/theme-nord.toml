@@ -30,8 +30,12 @@ nord13   = "#ebcb8b"
 nord14   = "#a3be8c"
 nord15   = "#b48ead"
 
+# The wordmark keeps the app's branding (the bundled default: brand-blue
+# bar and "x", cream name, dimmed view) flat on the bar background, so
+# the header's left edge is the app rather than a mode block; the chain
+# starts at the group block, which opens with a left cap.
 [dashboard_header]
-format       = "[ $brand ](bg:nord8 fg:nord1)[](fg:nord8 bg:nord2)[ $group ](bg:nord2 fg:nord4)[](fg:nord2 bg:nord1)[( $sort )](bg:nord1 fg:nord4)[](fg:nord1)(  $filter)"
+format       = "$brand [](fg:nord2)[ $group ](bg:nord2 fg:nord4)[](fg:nord2 bg:nord1)[( $sort )](bg:nord1 fg:nord4)[](fg:nord1)(  $filter)"
 right_format = "[](fg:nord2)[ $counts ](bg:nord2 fg:nord4)"
 fill         = " "
 
@@ -50,9 +54,6 @@ right_format = "[](fg:nord1)[( $agents )( $model_tokens )](bg:nord1 fg:nord4)
 fill         = " "
 
 # --- segments (unset fields keep the bundled defaults) -------------------
-
-[brand]
-format = "[$symbol](fg:nord9) [$name](bold)[ $mark](fg:nord9 bold)[ · $view]()"
 
 [group]
 format = "[$label ]()$tabs"

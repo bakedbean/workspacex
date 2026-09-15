@@ -27,8 +27,12 @@ green    = "#99ad6a"
 purple   = "#c6b6ee"
 cyan     = "#8fbfdc"
 
+# The wordmark keeps the app's branding (the bundled default: brand-blue
+# bar and "x", cream name, dimmed view) flat on the bar background, so
+# the header's left edge is the app rather than a mode block; the chain
+# starts at the group block, which opens with a left cap.
 [dashboard_header]
-format       = "[ $brand ](bg:blue fg:bg)[](fg:blue bg:plum)[ $group ](bg:plum fg:fg)[](fg:plum bg:dark)[( $sort )](bg:dark fg:grey)[](fg:dark)(  $filter)"
+format       = "$brand [](fg:plum)[ $group ](bg:plum fg:fg)[](fg:plum bg:dark)[( $sort )](bg:dark fg:grey)[](fg:dark)(  $filter)"
 right_format = "[](fg:mid)[ $counts ](bg:mid fg:fg)"
 fill         = " "
 
@@ -47,9 +51,6 @@ right_format = "[](fg:dark)[( $agents )( $model_tokens )](bg:dark fg:grey)[�
 fill         = " "
 
 # --- segments (unset fields keep the bundled defaults) -------------------
-
-[brand]
-format = "[$symbol](fg:orange) [$name](bold)[ $mark](fg:orange bold)[ · $view]()"
 
 [group]
 format = "[$label ]()$tabs"

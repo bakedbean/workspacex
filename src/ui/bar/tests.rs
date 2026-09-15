@@ -843,7 +843,7 @@ mod segment_registry_drift_tests {
     use crate::ui::attached::ChipPr;
     use crate::ui::bar::registry::SEGMENTS;
     use crate::ui::detail_modules::session_summary::ChipModelTokens;
-    use crate::ui::updates_bar::AttentionLine;
+    use crate::ui::updates_bar::{AttentionEntry, AttentionItems};
     use std::collections::BTreeSet;
 
     /// Every input present at once: two agents, a PR with a review
@@ -875,10 +875,17 @@ mod segment_registry_drift_tests {
             ),
         ];
         let activity: Vec<u32> = (0..24).collect();
-        let attention = Some(AttentionLine {
-            line: ratatui::text::Line::from("x"),
-            segments: Vec::new(),
-            more: None,
+        let attention = Some(AttentionItems {
+            entries: vec![AttentionEntry {
+                workspace_id: crate::data::store::WorkspaceId(1),
+                repo_name: "a".into(),
+                name: "q".into(),
+                age_anchor_ms: 9_000,
+                status: crate::ui::dashboard::status::Status::Question,
+                lifecycle: None,
+            }],
+            now_ms: 10_000,
+            max_width: 40,
         });
 
         let inputs = AttachedInputs {
@@ -1177,12 +1184,12 @@ mod dashboard_header_tests {
 #[cfg(test)]
 mod attention_tests {
     use super::*;
-    use crate::config::theme_file::bundled_default;
+    use crate::config::theme_file::{BarSpecs, ThemeFile, bundled_default, resolve};
     use crate::data::store::WorkspaceId;
     use crate::git::forge::BranchLifecycle;
-    use crate::ui::bar::segment::HitSpan;
+    use crate::ui::bar::segment::{HitSpan, Segment};
     use crate::ui::dashboard::status::Status;
-    use crate::ui::updates_bar::AttentionEntry;
+    use crate::ui::updates_bar::{AttentionEntry, AttentionItems};
     use ratatui::style::Style;
     use ratatui::text::{Line, Span};
 
@@ -1203,6 +1210,11 @@ mod attention_tests {
         }
     }
 
+    /// A Question entry with no PR: the plainest possible item.
+    fn q(id: i64, repo: &str, name: &str) -> AttentionEntry {
+        entry(id, repo, name, Status::Question, None)
+    }
+
     /// Widths under the stock format: "? a/q (1s)" = 10, "! bb/ss (1s)" = 12.
     fn three_entries() -> Vec<AttentionEntry> {
         vec![
@@ -1212,25 +1224,30 @@ mod attention_tests {
         ]
     }
 
-    /// The attention input as the app builds it: `entries` fitted to
-    /// `max_width` at `now_ms`.
-    fn attention_input(
-        entries: &[AttentionEntry],
-        now_ms: i64,
-        max_width: usize,
-        theme: &Theme,
-    ) -> Option<crate::ui::updates_bar::AttentionLine> {
-        crate::ui::updates_bar::format_attention_line_styled(entries, now_ms, max_width, theme)
+    /// The bundled default with `src` merged over it.
+    fn specs_with(src: &str, theme: &Theme) -> BarSpecs {
+        resolve(ThemeFile::parse(src).unwrap(), theme).unwrap()
+    }
+
+    /// The attention input as the app builds it: `entries` to be fitted to
+    /// `max_width` at `now_ms` (every entry is anchored at 9_000, so the
+    /// age reads `1s`).
+    fn attention_input(entries: &[AttentionEntry], max_width: usize) -> Option<AttentionItems> {
+        Some(AttentionItems {
+            entries: entries.to_vec(),
+            now_ms: 10_000,
+            max_width,
+        })
     }
 
     /// Render just the `attention` segment of the attached bars under
     /// `specs`, with every other input empty.
     fn render_attention(
-        specs: &crate::config::theme_file::BarSpecs,
+        specs: &BarSpecs,
         theme: &Theme,
         entries: &[AttentionEntry],
         max_width: usize,
-    ) -> Option<super::super::segment::Segment> {
+    ) -> Option<Segment> {
         let resolver = specs.resolver(theme);
         let inputs = AttachedInputs {
             repo: "wsx",
@@ -1239,7 +1256,7 @@ mod attention_tests {
             window_label: "24h",
             activity: &[],
             agent: None,
-            attention: attention_input(entries, 10_000, max_width, theme),
+            attention: attention_input(entries, max_width),
             pinned: &[],
             procs: 0,
             diff: None,
@@ -1251,6 +1268,36 @@ mod attention_tests {
         attached_segments(specs, theme, inputs, &resolver).remove("attention")
     }
 
+    fn stock(entries: &[AttentionEntry], max_width: usize) -> Segment {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        render_attention(&specs, &theme, entries, max_width).expect("attention renders")
+    }
+
+    fn hits(seg: &Segment) -> Vec<(u16, u16, Hit)> {
+        seg.hits
+            .iter()
+            .map(|h| (h.start_col, h.width, h.hit))
+            .collect()
+    }
+
+    fn more(seg: &Segment) -> Option<(u16, u16)> {
+        seg.hits
+            .iter()
+            .find(|h| h.hit == Hit::AttentionMore)
+            .map(|h| (h.start_col, h.width))
+    }
+
+    fn entry_hits(seg: &Segment) -> Vec<(u16, u16, WorkspaceId)> {
+        seg.hits
+            .iter()
+            .filter_map(|h| match h.hit {
+                Hit::Attention(id) => Some((h.start_col, h.width, id)),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Baseline capture: the bundled default renders two entries plus an
     /// overflow tail exactly as the original span builder did — status-
     /// styled glyph, a plain space, the name in its lifecycle hue (or the
@@ -1260,11 +1307,9 @@ mod attention_tests {
     #[test]
     fn bundled_default_renders_the_legacy_attention_line_cell_for_cell() {
         let theme = Theme::wsx();
-        let specs = bundled_default(&theme);
         // Budget 36: entries 0+1 (10 + 3 + 12 = 25) fit with the 10-cell
         // tail; entry 2 folds into it.
-        let seg =
-            render_attention(&specs, &theme, &three_entries(), 36).expect("attention renders");
+        let seg = stock(&three_entries(), 36);
         let expected = Line::from(vec![
             Span::styled("?", theme.status_style(Status::Question)),
             Span::raw(" "),
@@ -1301,5 +1346,220 @@ mod attention_tests {
                 },
             ]
         );
+    }
+
+    /// A theme lays out each entry, the separator, and the tail itself:
+    /// `format` is one item (with `$style` the entry's name style),
+    /// `separator` joins them, `more_format` renders the fold with
+    /// `$count`. Each carries its own style and its own hit.
+    #[test]
+    fn a_custom_format_renders_each_entry_separator_and_tail_as_its_own_block() {
+        let theme = Theme::wsx();
+        let specs = specs_with(
+            "[attention]\nformat = \"[$glyph $name]($style)\"\nseparator = \"[>](fg:ok)\"\nmore_format = \"[+$count](fg:warn)\"\n",
+            &theme,
+        );
+        let all = render_attention(&specs, &theme, &three_entries(), 200).unwrap();
+        assert_eq!(all.plain_text(), "? q>! ss>! ss");
+        assert_eq!(
+            hits(&all),
+            vec![
+                (0, 3, Hit::Attention(WorkspaceId(1))),
+                (4, 4, Hit::Attention(WorkspaceId(2))),
+                (9, 4, Hit::Attention(WorkspaceId(3))),
+            ]
+        );
+        let span = |text: &str| {
+            all.spans
+                .iter()
+                .find(|s| s.content.as_ref() == text)
+                .unwrap_or_else(|| panic!("span {text:?} in {:?}", all.plain_text()))
+                .style
+        };
+        assert_eq!(span(">").fg, Some(theme.ok), "separator keeps its style");
+        assert_eq!(span("q").fg, Some(theme.ok), "$style is the PR-open tint");
+        assert_eq!(span("ss").fg, Some(theme.path), "$style falls back to path");
+        assert_eq!(
+            span("?").fg,
+            Some(theme.question),
+            "$glyph keeps its status color inside a $style run"
+        );
+
+        // Width 8: "? q>! ss" fits but not with the "+1" tail, so the
+        // second entry folds and the tail counts both.
+        let folded = render_attention(&specs, &theme, &three_entries(), 8).unwrap();
+        assert_eq!(folded.plain_text(), "? q+2");
+        assert_eq!(
+            hits(&folded),
+            vec![
+                (0, 3, Hit::Attention(WorkspaceId(1))),
+                (3, 2, Hit::AttentionMore),
+            ]
+        );
+        let tail = folded
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "+")
+            .expect("tail literal span");
+        assert_eq!(tail.style.fg, Some(theme.warn));
+    }
+
+    /// The fit uses the theme's separator width, not the stock 3 cells: a
+    /// 7-cell separator makes two entries plus the tail overrun a budget
+    /// the stock separator fits in, so the second entry folds.
+    #[test]
+    fn fitting_measures_the_themes_separator_width() {
+        let theme = Theme::wsx();
+        let wide = specs_with("[attention]\nseparator = \"[ ───── ](fg:dim)\"\n", &theme);
+        let seg = render_attention(&wide, &theme, &three_entries(), 36).unwrap();
+        assert_eq!(entry_hits(&seg).len(), 1, "{:?}", seg.plain_text());
+        assert!(
+            seg.plain_text().ends_with("+2 more"),
+            "{:?}",
+            seg.plain_text()
+        );
+        assert!(usize::from(seg.width) <= 36);
+        // Same budget, stock separator: two entries fit (the baseline).
+        assert_eq!(entry_hits(&stock(&three_entries(), 36)).len(), 2);
+    }
+
+    /// Likewise the tail: a longer `more_format` claims more of the
+    /// budget, and entries give way to keep it on screen.
+    #[test]
+    fn fitting_measures_the_themes_tail_width() {
+        let theme = Theme::wsx();
+        let long = specs_with(
+            "[attention]\nmore_format = \"[ and $count more workspaces](fg:dim)\"\n",
+            &theme,
+        );
+        let seg = render_attention(&long, &theme, &three_entries(), 36).unwrap();
+        assert_eq!(entry_hits(&seg).len(), 1, "{:?}", seg.plain_text());
+        assert!(
+            seg.plain_text().ends_with("and 2 more workspaces"),
+            "{:?}",
+            seg.plain_text()
+        );
+        assert!(usize::from(seg.width) <= 36, "{}", seg.width);
+        assert_eq!(more(&seg), Some((10, 22)));
+    }
+
+    #[test]
+    fn no_entries_renders_nothing() {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        assert!(render_attention(&specs, &theme, &[], 80).is_none());
+    }
+
+    #[test]
+    fn only_rendered_entries_get_hits() {
+        // Budget 10 fits only entry 0 ("? a/q (1s)" is exactly 10).
+        let seg = stock(&three_entries(), 10);
+        let entries = entry_hits(&seg);
+        assert_eq!(entries.len(), 1, "{:?}", seg.plain_text());
+        assert_eq!(entries[0].2, WorkspaceId(1));
+        assert!(more(&seg).is_some(), "the folded entries are reachable");
+    }
+
+    /// The glyph is the dashboard's, so a row reads the same in both
+    /// surfaces: Waiting draws the ellipsis, Idle the dot, each in its
+    /// status color.
+    #[test]
+    fn glyph_follows_canonical_status() {
+        let theme = Theme::wsx();
+        let seg = stock(
+            &[
+                entry(1, "a", "w", Status::Waiting, None),
+                entry(2, "a", "i", Status::Idle, None),
+            ],
+            200,
+        );
+        let text = seg.plain_text();
+        assert!(text.contains("\u{2026} a/w"), "waiting glyph: {text:?}");
+        assert!(text.contains("\u{b7} a/i"), "idle glyph: {text:?}");
+        let idle = seg
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "\u{b7}")
+            .expect("idle glyph span");
+        assert_eq!(idle.style.fg, Some(theme.idle));
+    }
+
+    #[test]
+    fn entries_give_way_so_the_tail_fits() {
+        // Budget 30: entries 0+1 fit on their own (25) but not with the
+        // tail (35), so entry 1 folds into the tail too: 10 + " … +2 more".
+        let seg = stock(&three_entries(), 30);
+        assert_eq!(entry_hits(&seg).len(), 1, "entry 1 must yield to the tail");
+        assert_eq!(more(&seg), Some((10, 10)));
+        assert!(usize::from(seg.width) <= 30, "{}", seg.width);
+        assert!(
+            seg.plain_text().ends_with("+2 more"),
+            "{:?}",
+            seg.plain_text()
+        );
+    }
+
+    #[test]
+    fn no_tail_when_everything_fits() {
+        let seg = stock(&three_entries(), 200);
+        assert_eq!(entry_hits(&seg).len(), 3);
+        assert_eq!(more(&seg), None);
+    }
+
+    /// A first entry wider than the budget used to push the tail off
+    /// screen. Its name yields (with an ellipsis) so the tail fits.
+    #[test]
+    fn a_long_first_name_is_ellipsized_to_keep_the_tail_visible() {
+        let seg = stock(&[q(1, "repo", &"n".repeat(40)), q(2, "repo", "b")], 30);
+        let text = seg.plain_text();
+        assert!(usize::from(seg.width) <= 30, "{text:?}");
+        assert!(text.ends_with("+1 more"), "{text:?}");
+        assert!(text.contains("repo/nnn"), "name keeps its head: {text:?}");
+        assert!(text.contains("…") && text.contains(" (1s)"), "{text:?}");
+        let entries = entry_hits(&seg);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].1 + more(&seg).unwrap().1,
+            seg.width,
+            "entry + tail must tile the segment exactly"
+        );
+    }
+
+    #[test]
+    fn a_zero_width_budget_still_renders_the_first_entry() {
+        let seg = stock(&three_entries(), 0);
+        assert_eq!(entry_hits(&seg).len(), 1);
+    }
+
+    /// "日本" is two double-width glyphs: 4 cells, 2 chars. Hit geometry
+    /// must use cells or the click rects drift.
+    #[test]
+    fn hits_are_measured_in_terminal_cells() {
+        let seg = stock(&[q(1, "a", "日本"), q(2, "a", "q")], 200);
+        let entries = entry_hits(&seg);
+        // "? a/日本 (1s)" = 1+1 + 1+1 + 4 + 2+2+1 = 13 cells.
+        assert_eq!(entries[0].1, 13);
+        assert_eq!(entries[1].0, 16);
+    }
+
+    /// Giving an entry back can push the remainder from 9 to 10 and widen
+    /// the tail by a column; the fit must use the final width.
+    #[test]
+    fn tail_width_tracks_a_multi_digit_remainder() {
+        let entries: Vec<AttentionEntry> = (1..=12).map(|i| q(i, "a", "q")).collect();
+        for budget in [33usize, 34, 42] {
+            let seg = stock(&entries, budget);
+            let text = seg.plain_text();
+            assert!(
+                usize::from(seg.width) <= budget,
+                "budget {budget}: {text:?}"
+            );
+            let (start, width) = more(&seg).expect("overflow");
+            assert_eq!(
+                start + width,
+                seg.width,
+                "budget {budget}: tail extent must end the segment: {text:?}"
+            );
+        }
     }
 }

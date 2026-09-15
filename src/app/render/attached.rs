@@ -9,7 +9,7 @@ use crate::git::DiffStats;
 use crate::pty::session::AgentKind;
 use crate::ui::attached::ChipPr;
 use crate::ui::detail_modules::session_summary::ChipModelTokens;
-use crate::ui::updates_bar::AttentionLine;
+use crate::ui::updates_bar::AttentionItems;
 
 /// Everything the attached bars need from `App`, gathered once per frame.
 struct AttachedData {
@@ -31,7 +31,7 @@ struct AttachedData {
 impl AttachedData {
     fn inputs<'a>(
         &'a self,
-        attention: Option<AttentionLine>,
+        attention: Option<AttentionItems>,
     ) -> crate::ui::bar::AttachedInputs<'a> {
         crate::ui::bar::AttachedInputs {
             repo: &self.repo,
@@ -329,7 +329,7 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
             data.inputs(None),
             info_area.width,
         );
-        compute_attention_line(app, Some(focused_id), max_width)
+        compute_attention_items(app, Some(focused_id), max_width)
     };
 
     let out = attached::render_panes(

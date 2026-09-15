@@ -187,7 +187,7 @@ pub(crate) struct AttachedInputs<'a> {
     /// builds, so the sparkline reads identically in every bar.
     pub activity: &'a [u32],
     pub agent: Option<crate::pty::session::AgentKind>,
-    pub attention: Option<crate::ui::updates_bar::AttentionLine>,
+    pub attention: Option<crate::ui::updates_bar::AttentionItems>,
     pub pinned: &'a [crate::commands::pinned::PinnedCommand],
     pub procs: u32,
     pub diff: Option<crate::git::DiffStats>,
@@ -251,7 +251,12 @@ pub(super) fn attached_segments(
     put(
         &mut segments,
         "attention",
-        providers::attention(cfg(specs, "attention"), inputs.attention, resolver),
+        providers::attention(
+            cfg(specs, "attention"),
+            inputs.attention.as_ref(),
+            theme,
+            resolver,
+        ),
     );
     put(
         &mut segments,
@@ -345,13 +350,14 @@ pub(crate) fn attached_bars(
 /// nothing constrains the items and the full width is returned.
 ///
 /// The measurement builds the shared segment map once with a ONE-cell
-/// probe standing in for the attention line — one cell rather than none,
+/// probe standing in for the attention items — one cell rather than none,
 /// so the enclosing `( … $attention)` group and all of its literals
 /// survive — then evaluates both sides of the bar that places it directly
 /// (bypassing `render_bar`'s width-based overflow, which would otherwise
 /// drop right-side content at a narrow probe width). `inputs` must carry
 /// every other segment's real data (they share the bar) but need not set
-/// `attention`; whatever it holds is replaced by the probe.
+/// `attention`; whatever it holds is replaced by the probe. A disabled
+/// `[attention]` gets no probe, exactly as it gets no items.
 ///
 /// The chrome subtracted is: the probe's own side minus its one probe
 /// cell, plus — when the OTHER side of that same bar is nonempty — that
@@ -363,17 +369,18 @@ pub(crate) fn attention_width_budget(
     inputs: AttachedInputs<'_>,
     width: u16,
 ) -> usize {
-    let probe = crate::ui::updates_bar::AttentionLine {
-        line: ratatui::text::Line::from("x"),
-        segments: Vec::new(),
-        more: None,
-    };
     let inputs = AttachedInputs {
-        attention: Some(probe),
+        attention: None,
         ..inputs
     };
     let resolver = specs.resolver(theme);
-    let segments = attached_segments(specs, theme, inputs, &resolver);
+    let mut segments = attached_segments(specs, theme, inputs, &resolver);
+    if !cfg(specs, "attention").disabled {
+        segments.insert(
+            "attention".to_string(),
+            Segment::text("x", ratatui::style::Style::default()),
+        );
+    }
 
     let has_attention = |nodes: &[format::Node]| format::vars(nodes).contains(&"attention");
     let placement = if has_attention(&specs.attached_top.format) {

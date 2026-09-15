@@ -102,7 +102,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
     },
     SegmentDef {
         name: "attention",
-        vars: &["items"],
+        vars: &["glyph", "repo", "name", "age"],
         style_vars: STYLE,
         more_vars: &["count"],
         singleton: true,

@@ -50,11 +50,11 @@ pub(super) fn notifications_enabled(store: &Store) -> bool {
     }
 }
 
-pub(super) fn compute_attention_line(
+pub(super) fn compute_attention_items(
     app: &App,
     attached_id: Option<crate::data::store::WorkspaceId>,
     max_width: usize,
-) -> Option<crate::ui::updates_bar::AttentionLine> {
+) -> Option<crate::ui::updates_bar::AttentionItems> {
     let now_ms = crate::util::time::now_ms();
     let candidates: Vec<crate::ui::updates_bar::WorkspaceUpdateInfo> = app
         .workspaces
@@ -93,7 +93,11 @@ pub(super) fn compute_attention_line(
         app.dashboard.sort_mode,
         app.dashboard.blocked_pin_max_age_secs,
     );
-    crate::ui::updates_bar::format_attention_line_styled(&entries, now_ms, max_width, &app.theme)
+    (!entries.is_empty()).then_some(crate::ui::updates_bar::AttentionItems {
+        entries,
+        now_ms,
+        max_width,
+    })
 }
 
 pub fn draw(f: &mut ratatui::Frame, app: &mut App) {

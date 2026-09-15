@@ -18,7 +18,7 @@ use crate::ui::dashboard::status::Status;
 use crate::ui::detail_modules::session_summary::ChipModelTokens;
 use crate::ui::text::{FILTER_ECHO_MAX, truncate};
 use crate::ui::theme::Theme;
-use crate::ui::updates_bar::AttentionLine;
+use crate::ui::updates_bar::{AttentionItems, format_age};
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Span;
@@ -292,39 +292,113 @@ pub fn workspace(
     eval_segment(cfg, &v, theme.header_style(), &[], resolver)
 }
 
-/// The pre-built attention line as one opaque `$items` variable, its entry
-/// and `… +N more` click extents carried as hits.
+/// Cross-workspace attention entries: one item per entry, greedy-fitted
+/// to `items.max_width` using the theme's own item, separator, and tail
+/// widths. `$glyph` arrives pre-styled in the entry's status color;
+/// `$style` is the name's PR-lifecycle tint, or the muted `path` hue when
+/// the lifecycle has no color. Entries that don't fit fold into
+/// `cfg.more_format` (`$count`); entries then give way from the tail end
+/// until that tail fits too, since a clipped tail is both unreadable and,
+/// as a click target, unreachable. The first entry always renders; when
+/// it alone crowds out the tail its `$name` is shortened with an
+/// ellipsis, and a lone entry with nothing behind it just clips. Each
+/// rendered entry gets `Hit::Attention`, the tail `Hit::AttentionMore`.
 pub fn attention(
     cfg: &SegmentConfig,
-    line: Option<AttentionLine>,
+    items: Option<&AttentionItems>,
+    theme: &Theme,
     resolver: &Resolver,
 ) -> Option<Segment> {
-    let line = line?;
-    let mut items = Segment::default();
-    for span in line.line.spans {
-        items.push(span);
+    let items = items?;
+    let entries = &items.entries;
+    if cfg.disabled || entries.is_empty() {
+        return None;
     }
-    for s in &line.segments {
-        items.hits.push(super::segment::HitSpan {
-            start_col: s.start_col,
-            width: s.width,
-            hit: Hit::Attention(s.workspace_id),
-        });
-    }
-    if let Some(m) = line.more {
-        items.hits.push(super::segment::HitSpan {
-            start_col: m.start_col,
-            width: m.width,
-            hit: Hit::AttentionMore,
-        });
-    }
-    eval_segment(
-        cfg,
-        &vars(vec![("items", items)]),
-        Style::default(),
-        &[],
+    let cell_width = |s: &str| Span::raw(s).width();
+    let ages: Vec<String> = entries
+        .iter()
+        .map(|e| format_age(items.now_ms.saturating_sub(e.age_anchor_ms)))
+        .collect();
+    let item = |i: usize, name: &str| -> Segment {
+        let e = &entries[i];
+        let mut v = vars(vec![
+            ("repo", var(e.repo_name.clone())),
+            ("name", var(name)),
+            ("age", var(ages[i].clone())),
+        ]);
+        v.insert(
+            "glyph".to_string(),
+            Segment::text(e.status.glyph().to_string(), theme.status_style(e.status)),
+        );
+        let name_style = theme
+            .lifecycle_style(e.lifecycle)
+            .unwrap_or_else(|| Style::default().fg(theme.path));
+        eval_segment(cfg, &v, name_style, &[], resolver).unwrap_or_default()
+    };
+    let (separator, _) = eval(
+        &cfg.separator,
+        &SegmentMap::new(),
         resolver,
-    )
+        Style::default(),
+    );
+    let sep_w = usize::from(separator.width);
+    let tail = |remaining: usize| -> Segment {
+        let v = vars(vec![("count", var(remaining.to_string()))]);
+        eval(&cfg.more_format, &v, resolver, Style::default()).0
+    };
+    let width = |seg: &Segment| usize::from(seg.width);
+
+    let mut rendered: Vec<Segment> = (0..entries.len())
+        .map(|i| item(i, &entries[i].name))
+        .collect();
+    let max_width = items.max_width;
+    let mut included = 0usize;
+    let mut total = 0usize;
+    for (i, seg) in rendered.iter().enumerate() {
+        let s = if i == 0 { 0 } else { sep_w };
+        if total + s + width(seg) > max_width {
+            break;
+        }
+        total += s + width(seg);
+        included += 1;
+    }
+    while included > 1 && included < entries.len() {
+        if total + width(&tail(entries.len() - included)) <= max_width {
+            break;
+        }
+        included -= 1;
+        total -= width(&rendered[included]) + sep_w;
+    }
+    included = included.max(1);
+    if included < entries.len() {
+        let budget = max_width.saturating_sub(width(&tail(entries.len() - included)));
+        if width(&rendered[0]) > budget {
+            let name = &entries[0].name;
+            let fixed = width(&rendered[0]).saturating_sub(cell_width(name));
+            let name_budget = budget.saturating_sub(fixed);
+            let mut kept = name.clone();
+            while cell_width(&kept) + 1 > name_budget && kept.pop().is_some() {}
+            kept.push('…');
+            rendered[0] = item(0, &kept);
+        }
+    }
+
+    let mut out = Segment::default();
+    for (i, seg) in rendered.into_iter().take(included).enumerate() {
+        if i > 0 {
+            out.append(separator.clone());
+        }
+        let start = out.width;
+        out.append(seg);
+        out.hit_from(start, Hit::Attention(entries[i].workspace_id));
+    }
+    let remaining = entries.len() - included;
+    if remaining > 0 {
+        let start = out.width;
+        out.append(tail(remaining));
+        out.hit_from(start, Hit::AttentionMore);
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// The whole segment is the usage-graph click target.

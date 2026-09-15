@@ -244,6 +244,7 @@ pub(super) fn attached_segments(
             cfg(specs, "workspace"),
             inputs.repo,
             inputs.name,
+            inputs.pr.map(|p| p.lifecycle),
             theme,
             resolver,
         ),

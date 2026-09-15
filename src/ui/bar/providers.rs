@@ -9,6 +9,7 @@ use super::style::Resolver;
 use crate::commands::pinned::{PinnedCommand, truncate_label};
 use crate::data::store::AgentInstanceId;
 use crate::git::DiffStats;
+use crate::git::forge::BranchLifecycle;
 use crate::pty::session::AgentKind;
 use crate::ui::attached::ChipPr;
 use crate::ui::attached::chip_row::CHIP_LABEL_COLS;
@@ -342,10 +343,14 @@ pub fn agent_bar(
 }
 
 /// `$repo` is absent (so `($repo/)` collapses) when the repo name is empty.
+/// `$style` is the branch's PR-lifecycle tint — the same one the dashboard
+/// row and the `pr` chip use — or the header style when there is no PR or
+/// the lifecycle has no tint of its own (draft).
 pub fn workspace(
     cfg: &SegmentConfig,
     repo: &str,
     name: &str,
+    lifecycle: Option<BranchLifecycle>,
     theme: &Theme,
     resolver: &Resolver,
 ) -> Option<Segment> {
@@ -353,7 +358,11 @@ pub fn workspace(
     if !repo.is_empty() {
         v.insert("repo".to_string(), var(repo));
     }
-    eval_segment(cfg, &v, theme.header_style(), &[], resolver)
+    let style = theme
+        .lifecycle_style(lifecycle)
+        .map(|s| s.add_modifier(Modifier::BOLD))
+        .unwrap_or_else(|| theme.header_style());
+    eval_segment(cfg, &v, style, &[], resolver)
 }
 
 /// Cross-workspace attention entries: one item per entry, greedy-fitted
@@ -726,6 +735,27 @@ mod tests {
             .find(|s| s.content.as_ref() == text)
             .unwrap_or_else(|| panic!("span {text:?} in {:?}", out.plain_text()))
             .style
+    }
+
+    /// `$workspace`'s `$style` is the PR-lifecycle tint when the branch
+    /// has a PR, so a theme can colour the focused name like the
+    /// dashboard row and the `pr` chip; without one it stays the header
+    /// style.
+    #[test]
+    fn workspace_style_is_the_lifecycle_tint_or_header_style() {
+        use crate::git::forge::BranchLifecycle::*;
+        let theme = Theme::wsx();
+        let palette = HashMap::new();
+        let resolver = Resolver::new(&palette, &theme);
+        let cfg = item_cfg("[$name]($style)", "");
+        let out = workspace(&cfg, "", "ws", Some(PrMerged), &theme, &resolver).unwrap();
+        assert_eq!(span_style(&out, "ws").fg, Some(theme.merged));
+        let out = workspace(&cfg, "", "ws", None, &theme, &resolver).unwrap();
+        assert_eq!(span_style(&out, "ws").fg, Some(theme.header_fg));
+        assert!(span_style(&out, "ws").add_modifier.contains(Modifier::BOLD));
+        // Lifecycles with no tint of their own (draft) fall back the same way.
+        let out = workspace(&cfg, "", "ws", Some(PrDraft), &theme, &resolver).unwrap();
+        assert_eq!(span_style(&out, "ws").fg, Some(theme.header_fg));
     }
 
     /// `styles` grades by RENDERED position — an empty item takes no

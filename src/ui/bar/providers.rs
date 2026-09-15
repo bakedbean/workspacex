@@ -73,12 +73,18 @@ pub fn eval_items(
         return None;
     }
     let mut out = Segment::default();
+    let (separator, _) = eval(
+        &cfg.separator,
+        &SegmentMap::new(),
+        resolver,
+        Style::default(),
+    );
     for (vars, default_style, hit) in items {
         let Some(seg) = eval_segment(cfg, vars, *default_style, &[], resolver) else {
             continue;
         };
         if !out.is_empty() {
-            out.push(Span::raw(cfg.separator.clone()));
+            out.append(separator.clone());
         }
         let start = out.width;
         out.append(seg);
@@ -508,7 +514,7 @@ mod tests {
             format: crate::ui::bar::format::parse(format_src).unwrap(),
             disabled: false,
             priority: 100,
-            separator: separator.to_string(),
+            separator: crate::ui::bar::format::parse(separator).unwrap(),
         }
     }
 
@@ -546,6 +552,26 @@ mod tests {
         assert_eq!(out.hits.len(), 1, "the empty item emits no hit");
         assert_eq!(out.hits[0].hit, Hit::Pr);
         assert_eq!(out.hits[0].start_col, 0);
+    }
+
+    #[test]
+    fn a_styled_separator_keeps_its_style_between_items() {
+        let theme = Theme::wsx();
+        let palette = HashMap::new();
+        let resolver = Resolver::new(&palette, &theme);
+        let cfg = item_cfg("$label", "[ │ ](fg:dim)");
+        let items: Vec<(SegmentMap, Style, Option<Hit>)> = vec![
+            (vars(vec![("label", var("a"))]), Style::default(), None),
+            (vars(vec![("label", var("b"))]), Style::default(), None),
+        ];
+        let out = eval_items(&cfg, &items, &resolver).unwrap();
+        assert_eq!(out.plain_text(), "a │ b");
+        let sep = out
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == " │ ")
+            .expect("separator span");
+        assert_eq!(sep.style.fg, Some(theme.dim));
     }
 
     #[test]

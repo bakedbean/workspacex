@@ -270,6 +270,11 @@ fn resolve_segment(
     let nodes = parse_format(&loc, tbl.format.as_deref().unwrap_or(""), errors);
     let seg_resolver = resolver.with_styles(placeholder_styles(def.style_vars));
     validate(&loc, &nodes, def.vars, &seg_resolver, errors);
+    // The separator sits between items, so it has no item variables and no
+    // item `$style`: validated against the bare resolver.
+    let sep_loc = format!("[{name}].separator");
+    let separator = parse_format(&sep_loc, tbl.separator.as_deref().unwrap_or("  "), errors);
+    validate(&sep_loc, &separator, &[], resolver, errors);
     let style = styled(
         &format!("[{name}].style"),
         tbl.style.as_deref(),
@@ -284,7 +289,7 @@ fn resolve_segment(
         priority: tbl
             .priority
             .unwrap_or(crate::ui::bar::render::DEFAULT_PRIORITY),
-        separator: tbl.separator.clone().unwrap_or_else(|| "  ".to_string()),
+        separator,
     })
 }
 
@@ -527,7 +532,10 @@ mod tests {
         assert_eq!(specs.segments["counts"].priority, 50);
         assert_eq!(specs.segments["usage"].priority, 60);
         assert_eq!(specs.segments["brand"].symbol.as_deref(), Some("▌"));
-        assert_eq!(specs.segments["keys"].separator, "  ");
+        assert_eq!(
+            specs.segments["keys"].separator,
+            format::parse("  ").unwrap()
+        );
         assert_eq!(specs.segments["procs"].symbol.as_deref(), Some("●"));
         for def in SEGMENTS {
             assert!(
@@ -648,6 +656,24 @@ mod tests {
             .is_ok()
         );
         assert!(!errs("[procs]\nformat = \"[$count]($mark_style)\"\n").is_empty());
+    }
+
+    /// `separator` is a format like `format` is — styled runs and escapes
+    /// work — but it sits BETWEEN items, so it has no item variables and no
+    /// item `$style` to borrow.
+    #[test]
+    fn a_separator_is_a_format_with_styles_but_no_variables() {
+        let specs = ok("[pins]\nseparator = \"[ │ ](fg:dim)\"\n");
+        assert_eq!(
+            specs.segments["pins"].separator,
+            format::parse("[ │ ](fg:dim)").unwrap()
+        );
+        let e = errs("[pins]\nseparator = \"$label\"\n");
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(e[0].location, "[pins].separator");
+        assert!(e[0].message.contains("label"), "{}", e[0].message);
+        assert!(!errs("[pins]\nseparator = \"[x](fg:nope)\"\n").is_empty());
+        assert!(!errs("[pins]\nseparator = \"[x]($style)\"\n").is_empty());
     }
 
     #[test]

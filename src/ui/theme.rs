@@ -286,6 +286,39 @@ impl Theme {
         })
     }
 
+    /// A copy with every token named in `overrides` replaced — the
+    /// inverse of [`Theme::token`]. Names that aren't tokens (`brand`,
+    /// `wordmark`, palette entries) are ignored: they never come from a
+    /// `Theme` field, so there is nothing to replace.
+    pub fn shadowed(&self, overrides: &std::collections::HashMap<String, Color>) -> Theme {
+        let mut t = *self;
+        for (name, &c) in overrides {
+            match name.as_str() {
+                "header_fg" => t.header_fg = c,
+                "selected_fg" => t.selected_fg = c,
+                "selected_bg" => t.selected_bg = c,
+                "dim" => t.dim = c,
+                "path" => t.path = c,
+                "code" => t.code = c,
+                "bg_alt" => t.bg_alt = c,
+                "bg_soft" => t.bg_soft = c,
+                "ok" => t.ok = c,
+                "warn" => t.warn = c,
+                "err" => t.err = c,
+                "attention" => t.attention = c,
+                "merged" => t.merged = c,
+                "question" => t.question = c,
+                "stalled" => t.stalled = c,
+                "waiting" => t.waiting = c,
+                "thinking" => t.thinking = c,
+                "complete" => t.complete = c,
+                "idle" => t.idle = c,
+                _ => {}
+            }
+        }
+        t
+    }
+
     pub fn header_style(&self) -> Style {
         let mut s = Style::default()
             .fg(self.header_fg)
@@ -751,6 +784,51 @@ mod pr_chip_tests {
 mod tests {
     use super::*;
     use crate::ui::dashboard::status::Status;
+    use std::collections::HashMap;
+
+    /// `shadowed` is the inverse of `token`: every token name it accepts
+    /// lands on the field `token` reads, and a name that is no token
+    /// (`brand`, or a palette entry) changes nothing.
+    #[test]
+    fn shadowed_replaces_exactly_the_named_tokens() {
+        let base = Theme::wsx();
+        let tokens = [
+            "header_fg",
+            "selected_fg",
+            "selected_bg",
+            "dim",
+            "path",
+            "code",
+            "bg_alt",
+            "bg_soft",
+            "ok",
+            "warn",
+            "err",
+            "attention",
+            "merged",
+            "question",
+            "stalled",
+            "waiting",
+            "thinking",
+            "complete",
+            "idle",
+        ];
+        for name in tokens {
+            let overrides = HashMap::from([(name.to_string(), Color::Indexed(200))]);
+            let t = base.shadowed(&overrides);
+            assert_eq!(t.token(name), Some(Color::Indexed(200)), "{name}");
+            for other in tokens.iter().filter(|o| **o != name) {
+                assert_eq!(t.token(other), base.token(other), "{name} touched {other}");
+            }
+        }
+        let overrides = HashMap::from([
+            ("brand".to_string(), Color::Indexed(200)),
+            ("rust".to_string(), Color::Indexed(200)),
+        ]);
+        let t = base.shadowed(&overrides);
+        assert_eq!(t.token("brand"), Some(BRAND_ACCENT));
+        assert_eq!(t.header_fg, base.header_fg);
+    }
 
     #[test]
     fn by_name_resolves_known_themes() {

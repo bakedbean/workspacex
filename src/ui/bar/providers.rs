@@ -95,7 +95,8 @@ fn eval_format(
 
 /// Evaluate `cfg.format` against `vars`. `$style` is `default_style` with
 /// the user's `cfg.style` patched over it; `extra` adds more named styles
-/// (`$mark_style`). `None` when the segment is disabled or renders empty.
+/// (`$mark_style`). Colour names resolve under the segment's own palette.
+/// `None` when the segment is disabled or renders empty.
 pub fn eval_segment(
     cfg: &SegmentConfig,
     vars: &SegmentMap,
@@ -103,6 +104,7 @@ pub fn eval_segment(
     extra: &[(&str, Style)],
     resolver: &Resolver,
 ) -> Option<Segment> {
+    let resolver = &resolver.with_overlay(&cfg.palette);
     let style = segment_style(cfg, default_style, resolver);
     eval_format(cfg, vars, style, extra, HashMap::new(), resolver)
 }
@@ -126,6 +128,7 @@ pub fn eval_items(
     if cfg.disabled || items.is_empty() {
         return None;
     }
+    let resolver = &resolver.with_overlay(&cfg.palette);
     let rendered: Vec<usize> = (0..items.len())
         .filter(|&i| {
             let (vars, default_style, _) = &items[i];
@@ -331,6 +334,7 @@ pub fn agent_bar(
     theme: &Theme,
     resolver: &Resolver,
 ) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
     let agent = agent?;
     let symbol = cfg.symbol.clone().unwrap_or_else(|| "▎".to_string());
     eval_segment(
@@ -354,6 +358,7 @@ pub fn workspace(
     theme: &Theme,
     resolver: &Resolver,
 ) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
     let mut v = vars(vec![("name", var(name))]);
     if !repo.is_empty() {
         v.insert("repo".to_string(), var(repo));
@@ -394,6 +399,8 @@ pub fn attention(
     if cfg.disabled || entries.is_empty() {
         return None;
     }
+    let theme = &cfg.theme(theme);
+    let resolver = &resolver.with_overlay(&cfg.palette);
     let cell_width = |s: &str| Span::raw(s).width();
     let ages: Vec<String> = entries
         .iter()
@@ -562,6 +569,7 @@ pub fn agents(
     theme: &Theme,
     resolver: &Resolver,
 ) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
     let items: Vec<(SegmentMap, Style, Option<Hit>)> = agents
         .iter()
         .map(|(id, kind, label, key)| {
@@ -593,6 +601,7 @@ pub(crate) fn model_tokens(
     theme: &Theme,
     resolver: &Resolver,
 ) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
     let mt = mt?;
     let style = if mt.warn {
         theme.warn_style()
@@ -613,6 +622,7 @@ pub fn procs(
     theme: &Theme,
     resolver: &Resolver,
 ) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
     if procs == 0 {
         return None;
     }
@@ -638,6 +648,7 @@ pub fn diff(
     theme: &Theme,
     resolver: &Resolver,
 ) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
     let d = diff?;
     if d.added == 0 && d.removed == 0 {
         return None;
@@ -665,6 +676,7 @@ pub(crate) fn pr(
     resolver: &Resolver,
 ) -> Option<Segment> {
     use crate::ui::theme::{lifecycle_chip, lifecycle_shows_review, review_mark};
+    let theme = &cfg.theme(theme);
     let pr = pr?;
     let (glyph, label) = lifecycle_chip(pr.lifecycle);
     if glyph.is_empty() {
@@ -703,6 +715,16 @@ mod tests {
             separator: crate::ui::bar::format::parse(separator).unwrap(),
             more_format: Vec::new(),
             styles: Vec::new(),
+            palette: HashMap::new(),
+        }
+    }
+
+    fn chip_pr(lifecycle: BranchLifecycle) -> ChipPr {
+        ChipPr {
+            lifecycle,
+            number: 7,
+            review: None,
+            unresolved: None,
         }
     }
 
@@ -756,6 +778,55 @@ mod tests {
         // Lifecycles with no tint of their own (draft) fall back the same way.
         let out = workspace(&cfg, "", "ws", Some(PrDraft), &theme, &resolver).unwrap();
         assert_eq!(span_style(&out, "ws").fg, Some(theme.header_fg));
+    }
+
+    /// A segment's own palette shadows the theme tokens behind its
+    /// state-derived `$style`: `[pr.palette] ok = …` retints an open PR in
+    /// that segment alone, so a theme can darken the lifecycle colours on a
+    /// light block without touching the same colours elsewhere.
+    #[test]
+    fn segment_palette_shadows_the_tokens_behind_style() {
+        use crate::git::forge::BranchLifecycle::*;
+        let theme = Theme::wsx();
+        let palette = HashMap::new();
+        let resolver = Resolver::new(&palette, &theme);
+        let mut cfg = item_cfg("[$label]($style)", "");
+        cfg.palette.insert("ok".to_string(), Color::Red);
+        let out = pr(&cfg, Some(chip_pr(PrOpen)), &theme, &resolver).unwrap();
+        assert_eq!(span_style(&out, "open").fg, Some(Color::Red));
+        // Tokens the overlay doesn't name keep the theme's colour.
+        let out = pr(&cfg, Some(chip_pr(PrMerged)), &theme, &resolver).unwrap();
+        assert_eq!(span_style(&out, "merged").fg, Some(theme.merged));
+        // The no-PR fallback of `workspace` is a token too (`header_fg`).
+        cfg.palette.insert("header_fg".to_string(), Color::Black);
+        let cfg_ws = SegmentConfig {
+            format: crate::ui::bar::format::parse("[$name]($style)").unwrap(),
+            ..cfg.clone()
+        };
+        let out = workspace(&cfg_ws, "", "ws", None, &theme, &resolver).unwrap();
+        assert_eq!(span_style(&out, "ws").fg, Some(Color::Black));
+    }
+
+    /// The overlay also shadows colour names used directly in the
+    /// segment's format, ahead of the global `[palette]`, and is scoped to
+    /// the segment: the resolver handed in is not changed.
+    #[test]
+    fn segment_palette_shadows_format_colors_ahead_of_the_global_palette() {
+        let theme = Theme::wsx();
+        let mut palette = HashMap::new();
+        palette.insert("ok".to_string(), Color::Blue);
+        let resolver = Resolver::new(&palette, &theme);
+        let mut cfg = item_cfg("[$name](fg:ok)", "");
+        cfg.palette.insert("ok".to_string(), Color::Red);
+        let out = workspace(&cfg, "", "ws", None, &theme, &resolver).unwrap();
+        assert_eq!(span_style(&out, "ws").fg, Some(Color::Red));
+        assert_eq!(resolver.color("ok"), Some(Color::Blue));
+        // Multi-item segments get the same overlay for their items.
+        let mut cfg = item_cfg("[$label](fg:ok)", "-");
+        cfg.palette.insert("ok".to_string(), Color::Red);
+        let out = eval_items(&cfg, &labelled(&["a", "b"]), &resolver).unwrap();
+        assert_eq!(span_style(&out, "a").fg, Some(Color::Red));
+        assert_eq!(span_style(&out, "b").fg, Some(Color::Red));
     }
 
     /// `styles` grades by RENDERED position — an empty item takes no

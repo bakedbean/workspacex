@@ -3,8 +3,9 @@
 use super::format::Node;
 use super::style::StyleSpec;
 use crate::data::store::{AgentInstanceId, WorkspaceId};
+use crate::ui::theme::Theme;
 use crossterm::event::KeyEvent;
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 use std::collections::HashMap;
 
@@ -128,6 +129,21 @@ pub struct SegmentConfig {
     /// `styles[i]`, or the last entry once the list runs out, patched over
     /// the provider's default and `style`. Empty grades nothing.
     pub styles: Vec<StyleSpec>,
+    /// This segment's own colours: shadows the global `[palette]` and the
+    /// theme tokens while the segment renders — both for names in its
+    /// format and for the tokens behind its state-derived `$style` — and
+    /// nowhere else. Lets a theme darken the lifecycle tints on one light
+    /// block without touching the same tints on a dark one.
+    pub palette: HashMap<String, Color>,
+}
+
+impl SegmentConfig {
+    /// The base theme with this segment's palette shadowing its tokens:
+    /// what a provider derives its state colours from, so `[pr.palette]
+    /// ok = …` reaches `$style` and not only the format's own `fg:ok`.
+    pub fn theme(&self, base: &Theme) -> Theme {
+        base.shadowed(&self.palette)
+    }
 }
 
 pub type SegmentMap = HashMap<String, Segment>;

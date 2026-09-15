@@ -63,6 +63,10 @@ pub struct SegmentTable {
     pub separator: Option<String>,
     pub more_format: Option<String>,
     pub styles: Option<Vec<String>>,
+    /// `[<segment>.palette]`: colours that shadow `[palette]` and the theme
+    /// tokens inside this segment only. Same value grammar as `[palette]`.
+    #[serde(default)]
+    pub palette: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +112,13 @@ impl SegmentTable {
             separator: self.separator.or(base.separator),
             more_format: self.more_format.or(base.more_format),
             styles: self.styles.or(base.styles),
+            palette: {
+                let mut palette = self.palette;
+                for (k, v) in base.palette {
+                    palette.entry(k).or_insert(v);
+                }
+                palette
+            },
         }
     }
 }
@@ -222,17 +233,19 @@ fn styled(
     style
 }
 
-/// Resolve every `[palette]` entry to a concrete color: a literal parses
-/// directly, a named reference resolves against the theme's tokens, then
-/// ANSI names; anything else is an error.
+/// Resolve every entry of a palette table (`[palette]`, or a segment's
+/// `[<segment>.palette]`, named by `table`) to a concrete color: a literal
+/// parses directly, a named reference resolves against the theme's tokens,
+/// then ANSI names; anything else is an error.
 fn resolve_palette(
-    file: &ThemeFile,
+    table: &str,
+    entries: &BTreeMap<String, String>,
     theme: &Theme,
     errors: &mut Vec<ThemeError>,
 ) -> HashMap<String, Color> {
     let mut palette = HashMap::new();
-    for (name, value) in &file.palette {
-        let loc = format!("[palette].{name}");
+    for (name, value) in entries {
+        let loc = format!("[{table}].{name}");
         // Inside a multi-item segment these names resolve per item, ahead
         // of the palette, so a palette entry by one of them would be
         // silently shadowed there (and by nothing at all for an absent
@@ -269,6 +282,14 @@ fn resolve_segment(
     base_resolver: &Resolver,
     errors: &mut Vec<ThemeError>,
 ) -> Option<SegmentConfig> {
+    let palette = resolve_palette(
+        &format!("{name}.palette"),
+        &tbl.palette,
+        base_resolver.theme,
+        errors,
+    );
+    // Every format and style of this segment sees its own palette first.
+    let base_resolver = &base_resolver.with_overlay(&palette);
     let resolver = base_resolver;
     let Some(def) = segment_def(name) else {
         errors.push(error(
@@ -366,6 +387,7 @@ fn resolve_segment(
         separator,
         more_format,
         styles,
+        palette,
     })
 }
 
@@ -486,7 +508,7 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
     let file = file.merge_over(base);
     let mut errors = Vec::new();
 
-    let palette = resolve_palette(&file, theme, &mut errors);
+    let palette = resolve_palette("palette", &file.palette, theme, &mut errors);
     let resolver = Resolver::new(&palette, theme);
 
     let mut segments = HashMap::new();
@@ -675,6 +697,67 @@ mod tests {
         assert_eq!(specs.palette["first"], Color::Rgb(0x12, 0x34, 0x56));
         assert_eq!(specs.palette["second"], Theme::wsx().dim);
         assert_eq!(specs.palette["third"], Color::LightRed);
+    }
+
+    /// `[<segment>.palette]` resolves like `[palette]` (literals, theme
+    /// tokens, ANSI names) into that segment's own overlay, and stays out
+    /// of the global palette.
+    #[test]
+    fn segment_palette_resolves_into_the_segment_alone() {
+        let specs = ok(concat!(
+            "[pr.palette]\nok = \"#005f00\"\nmerged = \"dim\"\nerr = \"bright-red\"\n",
+            "[palette]\nglobal = \"#123456\"\n",
+        ));
+        let pr = &specs.segments["pr"];
+        assert_eq!(pr.palette["ok"], Color::Rgb(0x00, 0x5f, 0x00));
+        assert_eq!(pr.palette["merged"], Theme::wsx().dim);
+        assert_eq!(pr.palette["err"], Color::LightRed);
+        assert!(!specs.palette.contains_key("ok"));
+        assert!(specs.segments["workspace"].palette.is_empty());
+        assert_eq!(specs.palette["global"], Color::Rgb(0x12, 0x34, 0x56));
+    }
+
+    /// A segment palette entry validates the segment's own format: a name
+    /// it defines is legal there, and only there.
+    #[test]
+    fn segment_palette_names_are_known_only_to_that_segment() {
+        let specs = ok(concat!(
+            "[pr.palette]\nink = \"#005f00\"\n",
+            "[pr]\nformat = \"[$label](fg:ink)\"\n",
+        ));
+        assert_eq!(
+            specs.segments["pr"].palette["ink"],
+            Color::Rgb(0x00, 0x5f, 0x00)
+        );
+        let e = errs(concat!(
+            "[pr.palette]\nink = \"#005f00\"\n",
+            "[diff]\nformat = \"[$added](fg:ink)\"\n",
+        ));
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(e[0].location, "[diff].format");
+        assert!(e[0].message.contains("ink"), "{e:?}");
+    }
+
+    #[test]
+    fn segment_palette_errors_carry_their_location() {
+        let e = errs("[pr.palette]\nbad = \"#12\"\nnope = \"rusty\"\nitem_bg = \"red\"\n");
+        let locs: Vec<&str> = e.iter().map(|e| e.location.as_str()).collect();
+        assert!(locs.contains(&"[pr.palette].bad"), "{locs:?}");
+        assert!(locs.contains(&"[pr.palette].nope"), "{locs:?}");
+        assert!(locs.contains(&"[pr.palette].item_bg"), "{locs:?}");
+        assert_eq!(e.len(), 3, "{e:?}");
+    }
+
+    /// A user file's segment palette unions with the base's, the user
+    /// winning per name — the same rule as the global `[palette]`.
+    #[test]
+    fn segment_palette_merges_per_name() {
+        let base = ThemeFile::parse("[pr.palette]\nok = \"#111111\"\nerr = \"#222222\"\n").unwrap();
+        let mine = ThemeFile::parse("[pr.palette]\nok = \"#333333\"\n").unwrap();
+        let merged = mine.merge_over(base);
+        let pal = &merged.segments["pr"].palette;
+        assert_eq!(pal["ok"], "#333333");
+        assert_eq!(pal["err"], "#222222");
     }
 
     #[test]

@@ -229,8 +229,9 @@ base `Theme` fields. `fg:dim` selects a color; `dimmed` is a text modifier.
 Each segment has its own table, such as `[workspace]`, with `format` (its
 layout, using the variables below), `style`, `symbol`, `disabled`,
 `priority` (overflow survival; higher lasts longer; unset defaults to 100,
-which never drops), and, for multi-item segments, `separator`. A multi-item
-segment's format describes one item; the items keep their existing order.
+which never drops), and, for multi-item segments, `separator` and
+`styles`. A multi-item segment's format describes one item; the items keep
+their existing order.
 `separator` is a format too — `"[ │ ](fg:dim)"` draws a dim joiner — but
 it sits between items rather than inside one, so it takes no variables and
 no `$style`. Because it is parsed with the grammar above, a separator that
@@ -243,7 +244,45 @@ and setting it on any other segment is an error.
 
 An item whose `format` renders empty — an empty `format`, or one whose
 variables are all absent for that item — is dropped as if it were never in
-the list: no separator, no click target, and not counted in the tail.
+the list: no separator, no click target, no grade, and not counted in the
+tail.
+
+#### Grading items by position
+
+A multi-item segment also takes `styles`, a list of style strings: the
+first rendered item's `$style` is the segment's usual style patched by
+`styles[0]`, the second's by `styles[1]`, and so on, with items past the
+end of the list all taking its last entry. A bg-only grade keeps the
+provider's state colour in the foreground (an attention entry's
+PR-lifecycle tint, an agent pill's identity colour). Positions count
+rendered items, so an empty item takes no grade with it, and an attention
+entry folded into the tail does not either.
+
+To draw powerline caps between graded blocks, the formats of a multi-item
+segment may name six extra colours: `item_fg`/`item_bg` are the item's own
+final `$style` colours, `prev_*` and `next_*` those of its rendered
+neighbours. `separator` sees `prev_*` and `next_*` (the items on each side
+of it); `more_format` sees `prev_*` (the last rendered entry). A colour
+that does not exist — the first item's `prev`, the last rendered item's
+`next` even when a tail follows, or a grade that never set that colour —
+carries nothing, so the token drops out and the run inherits the bar's
+own style. That is what lets the last block's trailing wedge blend into
+the bar without the theme knowing how many entries there are:
+
+```toml
+[attention]
+styles      = ["bg:charcoal fg:orange", "bg:slate fg:cream", "bg:grey fg:cream"]
+format      = '[ $glyph $repo/$name \($age\) ]($style)[\ue0b0](fg:item_bg bg:next_bg)'
+separator   = ""
+more_format = "[\ue0b0](fg:prev_bg bg:orange)[ +$count more ](bg:orange fg:black)[\ue0b0](fg:orange)"
+```
+
+Here each entry carries its own trailing wedge, coloured from its block
+into the next; the first block's leading cap belongs in the bar format,
+where `styles[0]` is known. `styles` entries may not use the six names
+themselves (a grade cannot depend on the neighbours that depend on it),
+and `wsx theme check` rejects `styles` and the six names on a single-item
+segment.
 The bundled default sets `priority` on the segments that compete for room:
 `model_tokens` 10, `agents` 20, `procs` 30, `diff` 40, `pr` 50 (the
 attached chip row's right side); `version` 50, `usage` 60 (the dashboard

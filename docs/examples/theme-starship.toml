@@ -29,7 +29,7 @@ deleted  = "#FFA7A4"   # git_metrics deleted_style
 # funnel module, `second` blending into the darker `first` at the edge.
 [dashboard_footer]
 format       = "[ $keys ](bg:first)[](fg:first)"
-right_format = "[](fg:second)[( $version )](bg:second fg:label)[](fg:first bg:second)[ $funnel ](bg:first fg:amber)"
+right_format = "[](fg:second)[( $version )](bg:second fg:label)([](fg:first bg:second)[ $funnel ](bg:first fg:amber))"
 fill         = " "
 
 # ----------------------------------------------------------------- header

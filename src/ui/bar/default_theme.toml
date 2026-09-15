@@ -31,9 +31,10 @@
 
 [dashboard_footer]
 format = "$keys"
-# The trailing "  " is grouped with $version so it drops along with it (not
-# left as an orphaned gap) when the terminal is too narrow for both.
-right_format = "($version  )$funnel"
+# The leading "  " gap is grouped with $funnel so it drops along with it (not
+# left as an orphaned gap) when the funnel is empty or the terminal is too
+# narrow for both.
+right_format = "$version(  $funnel)"
 fill = " "
 
 # The dashboard's top line: wordmark, group and sort tabs, the live filter

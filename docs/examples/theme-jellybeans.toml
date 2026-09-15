@@ -38,7 +38,7 @@ fill         = " "
 
 [dashboard_footer]
 format       = "[ $keys ](bg:blue fg:bg)[](fg:blue)"
-right_format = "[](fg:mid)[( $version )](bg:mid fg:fg)[](fg:green bg:mid)[ $funnel ](bg:green fg:bg)"
+right_format = "[](fg:mid)[( $version )](bg:mid fg:fg)([](fg:green bg:mid)[ $funnel ](bg:green fg:bg))"
 fill         = " "
 
 [attached_top]

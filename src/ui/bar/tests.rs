@@ -417,11 +417,11 @@ mod footer_tests {
     }
 
     // At 85 columns, keys (71) + the mandatory 1-cell gap + the funnel's
-    // "2 working  " (11, including its own trailing gap) = 83, which fits
-    // with room to spare; adding `$version`'s "0.1.0" plus its own
-    // grouped "  " (7 more, 90 total) does not. `$version`'s lower
-    // priority (50 vs. the funnel's 60) drops it first, so the funnel
-    // survives alone — the same slot `$usage` used to hold.
+    // group "  2 working" (11, including its own grouped leading gap) = 83,
+    // which fits with room to spare; adding `$version`'s "0.1.0" (5 more, 88
+    // total) does not. `$version`'s lower priority (50 vs. the funnel's 60)
+    // drops it first, so the funnel survives alone — the same slot `$usage`
+    // used to hold.
     #[test]
     fn narrow_footer_drops_version_before_funnel() {
         use crate::ui::bar::fleet::{FleetRow, FleetStats};
@@ -444,10 +444,10 @@ mod footer_tests {
     }
 
     // At 110 columns the bundled default's full content (keys 71 + gap 1
-    // + version 5 + its own trailing "  " 2 = 79, well under 110) always
-    // fits with an empty fleet, since the funnel renders nothing to drop
-    // against. Pinned here so a future change to the bundled default's
-    // overflow priorities gets caught at this width.
+    // + version 5 = 77, well under 110) always fits with an empty fleet:
+    // `(  $funnel)` drops entirely — leading gap included — since $funnel
+    // renders nothing to drop against. Pinned here so a future change to
+    // the bundled default's overflow priorities gets caught at this width.
     #[test]
     fn default_footer_snapshot_at_110() {
         let out = footer(false, "24h", 110, crate::ui::bar::fleet::empty());
@@ -1871,6 +1871,36 @@ mod example_theme_tests {
         let name = name_cell(&top);
         assert_eq!((name.fg, name.bg), (chalk, orange), "no-PR name");
         assert!(name.modifier.contains(Modifier::BOLD));
+    }
+
+    /// With an empty fleet, `$funnel` is empty and its conditional group
+    /// must drop *with* the arrow that leads into it — not leave a bare
+    /// coloured stub dangling past the version block.
+    #[test]
+    fn every_example_theme_drops_the_funnel_block_when_empty() {
+        for path in example_themes() {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let theme = Theme::wsx();
+            let specs = load(&path, &theme).unwrap();
+            let activity: Vec<u32> = (0..24).collect();
+            let out = dashboard_footer(
+                &specs,
+                &theme,
+                &DashboardFooterInputs {
+                    activity: &activity,
+                    version: "0.1.0",
+                    window_label: "24h",
+                    workspace_selected: true,
+                    fleet: crate::ui::bar::fleet::empty(),
+                },
+                120,
+            );
+            let text = plain(&out.line);
+            assert!(
+                text.trim_end().ends_with("0.1.0"),
+                "{name}: expected the version block to be the last thing rendered, got {text:?}"
+            );
+        }
     }
 
     /// The brand tokens are constant across base themes, so one base

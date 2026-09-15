@@ -150,7 +150,7 @@ fill         = " "
 
 [dashboard_footer]
 format       = "$keys"
-right_format = "($version  )$funnel"
+right_format = "$version(  $funnel)"
 
 [attached_top]
 format = "($agent_bar )$workspace(   $attention)"
@@ -458,7 +458,7 @@ format   = "([$working working](fg:ok)  )([$blocked blocked](fg:err)  )([$mergea
 priority = 60
 
 [dashboard_footer]
-right_format = "($version  )$funnel"
+right_format = "$version(  $funnel)"
 ```
 
 A module table takes `format`, `style` (patched over the bar style to form
@@ -476,7 +476,7 @@ the sparkline back, place `$usage` again:
 
 ```toml
 [dashboard_footer]
-right_format = "($version  )$funnel  $usage"
+right_format = "$version(  $funnel)(  $usage)"
 ```
 
 Modules carry no click target.

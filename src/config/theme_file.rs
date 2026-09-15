@@ -183,10 +183,12 @@ fn validate(
 ) {
     for v in format::vars(nodes) {
         if !allowed.contains(&v) {
-            errors.push(error(
-                loc,
-                format!("unknown `${v}` (allowed: {})", allowed.join(", ")),
-            ));
+            let hint = if allowed.is_empty() {
+                "no variables are allowed here".to_string()
+            } else {
+                format!("allowed: {}", allowed.join(", "))
+            };
+            errors.push(error(loc, format!("unknown `${v}` ({hint})")));
         }
     }
     for spec in format::styles(nodes) {
@@ -678,7 +680,10 @@ mod tests {
         let e = errs("[pins]\nseparator = \"$label\"\n");
         assert_eq!(e.len(), 1, "{e:?}");
         assert_eq!(e[0].location, "[pins].separator");
-        assert!(e[0].message.contains("label"), "{}", e[0].message);
+        assert_eq!(
+            e[0].message,
+            "unknown `$label` (no variables are allowed here)"
+        );
         assert!(!errs("[pins]\nseparator = \"[x](fg:nope)\"\n").is_empty());
         assert!(!errs("[pins]\nseparator = \"[x]($style)\"\n").is_empty());
     }

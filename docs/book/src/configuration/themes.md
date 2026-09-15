@@ -231,6 +231,11 @@ layout, using the variables below), `style`, `symbol`, `disabled`,
 `priority` (overflow survival; higher lasts longer; unset defaults to 100,
 which never drops), and, for multi-item segments, `separator`. A multi-item
 segment's format describes one item; the items keep their existing order.
+`separator` is a format too — `"[ │ ](fg:dim)"` draws a dim joiner — but
+it sits between items rather than inside one, so it takes no variables and
+no `$style`. `attention` alone also takes `more_format`, the tail drawn
+when entries don't fit the bar; its one variable is `$count`, the number
+of entries folded into it.
 The bundled default sets `priority` on the segments that compete for room:
 `model_tokens` 10, `agents` 20, `procs` 30, `diff` 40, `pr` 50 (the
 attached chip row's right side); `version` 50, `usage` 60 (the dashboard
@@ -249,7 +254,7 @@ other segment is the unset default, 100, and so never drops.
 | `usage` | `$label $spark` | The activity sparkline. Clickable. |
 | `agent_bar` | `$symbol` | `$style` includes the agent's identity color. Attached only. |
 | `workspace` | `$repo $name` | `$repo` is absent when there is no repo name. |
-| `attention` | `$items` | Cross-workspace attention list. Clickable. |
+| `attention` | `$glyph $repo $name $age` | One item per workspace needing attention. `$glyph` is the entry's dashboard status glyph in its status color; `$style` is the name's PR-lifecycle tint (open, merged, …) or the muted `path` hue. Entries that don't fit fold into `more_format` (`$count`); the first entry always renders, its `$name` shortened with an ellipsis if it alone would push the tail off the bar. Clickable: each entry, and the tail. |
 | `pins` | `$index $label` | One chip per pinned command. Clickable. |
 | `agents` | `$symbol $label $key` | One pill per agent (2+ agents). `$style` includes the agent color. `symbol` is ignored — the pill always uses a filled/hollow dot to show which agent is active. Clickable. |
 | `model_tokens` | `$model $tokens` | `$style` includes `ok`, or `warn` near the context limit. |
@@ -257,15 +262,17 @@ other segment is the unset default, 100, and so never drops.
 | `diff` | `$added $removed` | Hidden when clean. |
 | `pr` | `$symbol $number $label $mark` | `$style` includes the lifecycle tint; `$mark_style` supplies the review verdict style. Clickable — except over a remote (ssh) attach, where the chip still renders but isn't clickable (opening a PR keys off a local workspace id a remote attach doesn't have). |
 
-`pr`, `procs`, `usage`, and `attention` each carry exactly one click
-target, unlike `pins`/`agents`/`keys`, which record one hit per item. Put
-one of these four in more than one place across the two attached bars'
-`format`/`right_format` (or twice within the dashboard footer's own
-`format`/`right_format`, or twice within the dashboard header's, or twice
-within the dashboard detail pane's) and only the last-routed placement
-would be clickable, so `wsx theme check` rejects it as a duplicate instead.
-These four scopes are independent: a singleton segment may appear once in
-each without conflicting with the others.
+`pr`, `procs`, `usage`, and `attention` may each be placed only once:
+`pr`, `procs`, and `usage` carry exactly one click target, and `attention`,
+though it records one hit per entry like `pins`/`agents`/`keys`, also
+carries the single `… +N more` tail target and is fitted to the one bar
+that places it. Put one of these four in more than one place across the
+two attached bars' `format`/`right_format` (or twice within the dashboard
+footer's own `format`/`right_format`, or twice within the dashboard
+header's, or twice within the dashboard detail pane's) and only the
+last-routed placement would be clickable, so `wsx theme check` rejects it
+as a duplicate instead. These four scopes are independent: a singleton
+segment may appear once in each without conflicting with the others.
 
 All segments are available in **either attached bar**, on either side;
 click targets follow them between bars as well as within a bar. `version`
@@ -282,12 +289,15 @@ Two details of the **stock formats** are worth knowing before you override
 them:
 
 - `style` only reaches the output through `$style`. The stock formats of
-  `agent_bar`, `workspace`, `agents`, `model_tokens`, `procs`, and `pr`
-  bind it (`[…]($style)`), so setting `style` on those works as written.
-  The stock formats of `keys`, `pins`, `version`, `usage`, `attention`, and
-  `diff` style their parts directly instead (or, for `attention`, not at
-  all), so a bare `style = …` on one of those has no effect unless you also
-  put `$style` in its `format`.
+  `agent_bar`, `workspace`, `attention`, `agents`, `model_tokens`, `procs`,
+  and `pr` bind it (`[…]($style)`), so setting `style` on those works as
+  written. The stock formats of `keys`, `pins`, `version`, `usage`, and
+  `diff` style their parts directly instead, so a bare `style = …` on one
+  of those has no effect unless you also put `$style` in its `format`.
+- Bare parentheses are the conditional-group syntax, so a literal pair
+  must be escaped. The stock `attention` item format writes its age as
+  `[ \($age\)](fg:dim)` in a TOML literal string for exactly this reason;
+  an unescaped `($age)` renders the age without the parentheses.
 - `symbol` is substituted into `format`, but the literal spacing around it
   stays. Emptying one (`[pr]` `symbol = ""`) leaves the space that follows
   `$symbol` in the stock format; delete that space in `format` too if you

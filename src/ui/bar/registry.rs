@@ -1,9 +1,10 @@
 //! The single place a segment is declared. Adding a segment to the bar
 //! engine means: an entry here (name, the variables its own `format` may
-//! reference, its style variables, and its click-target arity), a
-//! provider function in `providers.rs`, and wiring it into the composer
-//! in `bars.rs` that builds the bar it belongs to. Nothing outside this
-//! trio needs to change.
+//! reference, its style variables, the variables of its overflow tail if
+//! it has one, and its click-target arity), a provider function in
+//! `providers.rs`, and wiring it into the composer in `bars.rs` that
+//! builds the bar it belongs to. Nothing outside this trio needs to
+//! change.
 
 /// What a segment's own `format` may reference.
 pub struct SegmentDef {

@@ -304,15 +304,29 @@ fn abbreviate_tokens(n: u64) -> String {
     }
 }
 
-/// Resolve the context-window size for a model id. Known families default
-/// to 200k; if the current fill already exceeds that, treat the session as
-/// the 1M variant (the model id doesn't encode the variant). Unknown or
-/// absent model → None (render raw tokens without a percentage).
+/// Resolve the context-window size for a model id.
+///
+/// `model_variant_id` is the id as Claude Code announces it in its `model`
+/// attachment (`claude-opus-5[1m]`); a `[1m]` tag settles the window at 1M
+/// up front. Only Claude sessions populate it — every other harness leaves
+/// it `None`, and the assistant lines' bare `model_id` never carries the
+/// tag — so the fallback below still matters.
+///
+/// Without a variant tag, known families default to 200k; if the current
+/// fill already exceeds that, treat the session as the 1M variant. Unknown
+/// or absent model → None (render raw tokens without a percentage).
 ///
 /// The `>` is strict: exactly 200k stays on the 200k window (100%, warn), and
 /// 200_001 flips to the 1M window (20%). That discontinuity is intended — a
 /// session past 200k provably isn't on a 200k-window model.
-fn resolve_window(context_tokens: u64, model_id: Option<&str>) -> Option<u64> {
+fn resolve_window(
+    context_tokens: u64,
+    model_id: Option<&str>,
+    model_variant_id: Option<&str>,
+) -> Option<u64> {
+    if model_variant_id.is_some_and(|v| v.contains("[1m]")) {
+        return Some(1_000_000);
+    }
     let base = model_id.and_then(|m| {
         if m.contains("opus") || m.contains("sonnet") || m.contains("haiku") {
             Some(200_000u64)
@@ -374,7 +388,7 @@ fn format_context_line(evt: &WorkspaceEvents) -> Option<(String, bool)> {
     // Treat a 0 sum (no usage yet, or a malformed all-zero usage block) the
     // same as "no data" — a `context: 0` line is noise, not signal.
     let n = evt.context_tokens.filter(|&n| n > 0)?;
-    match resolve_window(n, evt.model_id.as_deref()) {
+    match resolve_window(n, evt.model_id.as_deref(), evt.model_variant_id.as_deref()) {
         Some(w) => {
             let pct = (n.saturating_mul(100) / w).min(999);
             let text = format!(
@@ -411,16 +425,17 @@ pub(crate) struct ChipModelTokens {
 pub(crate) fn format_chip_model_tokens(evt: &WorkspaceEvents) -> Option<ChipModelTokens> {
     let n = evt.context_tokens.filter(|&n| n > 0)?;
     let model = evt.model_id.as_deref().map(short_model_label);
-    let (tokens, warn) = match resolve_window(n, evt.model_id.as_deref()) {
-        Some(w) => {
-            let pct = (n.saturating_mul(100) / w).min(999);
-            (
-                format!("{}/{}", abbreviate_tokens(n), abbreviate_tokens(w)),
-                pct >= 85,
-            )
-        }
-        None => (abbreviate_tokens(n), n >= 150_000),
-    };
+    let (tokens, warn) =
+        match resolve_window(n, evt.model_id.as_deref(), evt.model_variant_id.as_deref()) {
+            Some(w) => {
+                let pct = (n.saturating_mul(100) / w).min(999);
+                (
+                    format!("{}/{}", abbreviate_tokens(n), abbreviate_tokens(w)),
+                    pct >= 85,
+                )
+            }
+            None => (abbreviate_tokens(n), n >= 150_000),
+        };
     Some(ChipModelTokens {
         model,
         tokens,
@@ -964,16 +979,61 @@ mod tests {
     #[test]
     fn resolve_window_maps_known_models_and_upgrades_past_default() {
         assert_eq!(
-            resolve_window(50_000, Some("claude-opus-4-8")),
+            resolve_window(50_000, Some("claude-opus-4-8"), None),
             Some(200_000)
         );
         // current fill above the 200k default → treat as the 1M variant
         assert_eq!(
-            resolve_window(250_000, Some("claude-opus-4-8")),
+            resolve_window(250_000, Some("claude-opus-4-8"), None),
             Some(1_000_000)
         );
-        assert_eq!(resolve_window(50_000, Some("some-unknown-model")), None);
-        assert_eq!(resolve_window(50_000, None), None);
+        assert_eq!(
+            resolve_window(50_000, Some("some-unknown-model"), None),
+            None
+        );
+        assert_eq!(resolve_window(50_000, None, None), None);
+    }
+
+    #[test]
+    fn resolve_window_uses_1m_variant_tag_before_fill_exceeds_200k() {
+        // The announced variant id settles the window up front: no need to
+        // wait for the fill to cross 200k.
+        assert_eq!(
+            resolve_window(150_000, Some("claude-opus-5"), Some("claude-opus-5[1m]")),
+            Some(1_000_000)
+        );
+        // A variant id without the tag changes nothing.
+        assert_eq!(
+            resolve_window(150_000, Some("claude-opus-5"), Some("claude-opus-5")),
+            Some(200_000)
+        );
+        // The tag alone is enough even when model_id hasn't arrived yet.
+        assert_eq!(
+            resolve_window(150_000, None, Some("claude-opus-5[1m]")),
+            Some(1_000_000)
+        );
+        // The strict-`>` discontinuity is unchanged for the no-variant case.
+        assert_eq!(
+            resolve_window(200_000, Some("claude-opus-5"), None),
+            Some(200_000)
+        );
+        assert_eq!(
+            resolve_window(200_001, Some("claude-opus-5"), None),
+            Some(1_000_000)
+        );
+    }
+
+    #[test]
+    fn format_context_line_1m_variant_shows_1m_window_below_200k() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(150_000),
+            model_id: Some("claude-opus-5".to_string()),
+            model_variant_id: Some("claude-opus-5[1m]".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        let (text, warn) = format_context_line(&evt).unwrap();
+        assert_eq!(text, "150k / 1M · 15%");
+        assert!(!warn);
     }
 
     #[test]
@@ -1228,6 +1288,20 @@ mod tests {
         let chip = format_chip_model_tokens(&evt).expect("has tokens");
         assert_eq!(chip.model.as_deref(), Some("opus 4.8"));
         assert_eq!(chip.tokens, "45k/200k");
+        assert!(!chip.warn);
+    }
+
+    #[test]
+    fn format_chip_model_tokens_1m_variant_keeps_short_label() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(150_000),
+            model_id: Some("claude-opus-5".to_string()),
+            model_variant_id: Some("claude-opus-5[1m]".to_string()),
+            ..WorkspaceEvents::default()
+        };
+        let chip = format_chip_model_tokens(&evt).expect("has tokens");
+        assert_eq!(chip.model.as_deref(), Some("opus 5"));
+        assert_eq!(chip.tokens, "150k/1M");
         assert!(!chip.warn);
     }
 

@@ -159,6 +159,7 @@ async fn tail_instance_events(
         context_tokens,
         model_id,
         model_variant_id,
+        context_window,
         current_action,
         pending_question_text,
     } = update;
@@ -261,6 +262,9 @@ async fn tail_instance_events(
     }
     if let Some(m) = model_variant_id {
         evt.model_variant_id = Some(m);
+    }
+    if let Some(w) = context_window {
+        evt.context_window = Some(w);
     }
     if let Some(a) = current_action {
         evt.current_action = Some(a);
@@ -550,6 +554,42 @@ mod instance_event_tests {
             events.model_variant_id.as_deref(),
             Some("claude-opus-5[1m]")
         );
+    }
+
+    #[tokio::test]
+    async fn codex_peer_tail_carries_model_context_tokens_and_window() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        let (app, ws, _, _, _, _) = setup(dir.path());
+        // A codex peer pinned by thread id resolves under ~/.codex/sessions/
+        // and reports its own window size, which no Claude/pi log carries.
+        let codex_dir = home.path().join(".codex/sessions/2026/09/15");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        let codex_file = codex_dir.join("rollout-2026-09-15T15-24-08-codex-thread.jsonl");
+        let turn = r#"{"timestamp":"2026-09-15T19:24:15.105Z","type":"turn_context","payload":{"turn_id":"t1","cwd":"/x","model":"gpt-6-astra"}}"#;
+        let count = r#"{"timestamp":"2026-09-15T19:26:02.009Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":74254,"cached_input_tokens":73728,"output_tokens":177,"total_tokens":74431},"model_context_window":258400}}}"#;
+        std::fs::write(&codex_file, format!("{turn}\n{count}\n")).unwrap();
+        let codex = {
+            let mut g = app.lock().await;
+            let id = g
+                .store
+                .add_workspace_agent(ws, AgentKind::Codex)
+                .unwrap()
+                .id;
+            g.store
+                .set_instance_agent_session(id, "codex-thread")
+                .unwrap();
+            g.agent_roster = g.store.all_workspace_agents().unwrap();
+            id
+        };
+        tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp).await;
+        let g = app.lock().await;
+        let events = &g.agent_events[&codex];
+        assert_eq!(events.model_id.as_deref(), Some("gpt-6-astra"));
+        assert_eq!(events.context_tokens, Some(74_254));
+        assert_eq!(events.context_window, Some(258_400));
     }
 
     #[tokio::test]

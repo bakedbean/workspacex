@@ -323,7 +323,13 @@ fn resolve_window(
     context_tokens: u64,
     model_id: Option<&str>,
     model_variant_id: Option<&str>,
+    context_window: Option<u64>,
 ) -> Option<u64> {
+    // An agent that reports its own window (codex) is authoritative; the
+    // model-id heuristics below only exist because Claude Code logs don't.
+    if let Some(w) = context_window.filter(|&w| w > 0) {
+        return Some(w);
+    }
     if model_variant_id.is_some_and(|v| v.contains("[1m]")) {
         return Some(1_000_000);
     }
@@ -388,7 +394,12 @@ fn format_context_line(evt: &WorkspaceEvents) -> Option<(String, bool)> {
     // Treat a 0 sum (no usage yet, or a malformed all-zero usage block) the
     // same as "no data" — a `context: 0` line is noise, not signal.
     let n = evt.context_tokens.filter(|&n| n > 0)?;
-    match resolve_window(n, evt.model_id.as_deref(), evt.model_variant_id.as_deref()) {
+    match resolve_window(
+        n,
+        evt.model_id.as_deref(),
+        evt.model_variant_id.as_deref(),
+        evt.context_window,
+    ) {
         Some(w) => {
             let pct = (n.saturating_mul(100) / w).min(999);
             let text = format!(
@@ -425,17 +436,21 @@ pub(crate) struct ChipModelTokens {
 pub(crate) fn format_chip_model_tokens(evt: &WorkspaceEvents) -> Option<ChipModelTokens> {
     let n = evt.context_tokens.filter(|&n| n > 0)?;
     let model = evt.model_id.as_deref().map(short_model_label);
-    let (tokens, warn) =
-        match resolve_window(n, evt.model_id.as_deref(), evt.model_variant_id.as_deref()) {
-            Some(w) => {
-                let pct = (n.saturating_mul(100) / w).min(999);
-                (
-                    format!("{}/{}", abbreviate_tokens(n), abbreviate_tokens(w)),
-                    pct >= 85,
-                )
-            }
-            None => (abbreviate_tokens(n), n >= 150_000),
-        };
+    let (tokens, warn) = match resolve_window(
+        n,
+        evt.model_id.as_deref(),
+        evt.model_variant_id.as_deref(),
+        evt.context_window,
+    ) {
+        Some(w) => {
+            let pct = (n.saturating_mul(100) / w).min(999);
+            (
+                format!("{}/{}", abbreviate_tokens(n), abbreviate_tokens(w)),
+                pct >= 85,
+            )
+        }
+        None => (abbreviate_tokens(n), n >= 150_000),
+    };
     Some(ChipModelTokens {
         model,
         tokens,
@@ -979,19 +994,19 @@ mod tests {
     #[test]
     fn resolve_window_maps_known_models_and_upgrades_past_default() {
         assert_eq!(
-            resolve_window(50_000, Some("claude-opus-4-8"), None),
+            resolve_window(50_000, Some("claude-opus-4-8"), None, None),
             Some(200_000)
         );
         // current fill above the 200k default → treat as the 1M variant
         assert_eq!(
-            resolve_window(250_000, Some("claude-opus-4-8"), None),
+            resolve_window(250_000, Some("claude-opus-4-8"), None, None),
             Some(1_000_000)
         );
         assert_eq!(
-            resolve_window(50_000, Some("some-unknown-model"), None),
+            resolve_window(50_000, Some("some-unknown-model"), None, None),
             None
         );
-        assert_eq!(resolve_window(50_000, None, None), None);
+        assert_eq!(resolve_window(50_000, None, None, None), None);
     }
 
     #[test]
@@ -999,26 +1014,31 @@ mod tests {
         // The announced variant id settles the window up front: no need to
         // wait for the fill to cross 200k.
         assert_eq!(
-            resolve_window(150_000, Some("claude-opus-5"), Some("claude-opus-5[1m]")),
+            resolve_window(
+                150_000,
+                Some("claude-opus-5"),
+                Some("claude-opus-5[1m]"),
+                None
+            ),
             Some(1_000_000)
         );
         // A variant id without the tag changes nothing.
         assert_eq!(
-            resolve_window(150_000, Some("claude-opus-5"), Some("claude-opus-5")),
+            resolve_window(150_000, Some("claude-opus-5"), Some("claude-opus-5"), None),
             Some(200_000)
         );
         // The tag alone is enough even when model_id hasn't arrived yet.
         assert_eq!(
-            resolve_window(150_000, None, Some("claude-opus-5[1m]")),
+            resolve_window(150_000, None, Some("claude-opus-5[1m]"), None),
             Some(1_000_000)
         );
         // The strict-`>` discontinuity is unchanged for the no-variant case.
         assert_eq!(
-            resolve_window(200_000, Some("claude-opus-5"), None),
+            resolve_window(200_000, Some("claude-opus-5"), None, None),
             Some(200_000)
         );
         assert_eq!(
-            resolve_window(200_001, Some("claude-opus-5"), None),
+            resolve_window(200_001, Some("claude-opus-5"), None, None),
             Some(1_000_000)
         );
     }
@@ -1316,6 +1336,59 @@ mod tests {
         assert_eq!(chip.model.as_deref(), Some("opus 4.8"));
         assert_eq!(chip.tokens, "190k/200k");
         assert!(chip.warn);
+    }
+
+    #[test]
+    fn format_chip_model_tokens_reported_window_beats_model_lookup() {
+        // Codex reports its own window; a model id the lookup doesn't know
+        // must not demote the chip to raw tokens.
+        let evt = WorkspaceEvents {
+            context_tokens: Some(74_254),
+            model_id: Some("gpt-6-astra".to_string()),
+            context_window: Some(258_400),
+            ..WorkspaceEvents::default()
+        };
+        let chip = format_chip_model_tokens(&evt).expect("has tokens");
+        assert_eq!(chip.model.as_deref(), Some("gpt-6-astra"));
+        assert_eq!(chip.tokens, "74k/258k");
+        assert!(!chip.warn);
+    }
+
+    #[test]
+    fn format_context_line_reported_window_shows_percent() {
+        let evt = WorkspaceEvents {
+            context_tokens: Some(220_000),
+            model_id: Some("gpt-6-astra".to_string()),
+            context_window: Some(258_400),
+            ..WorkspaceEvents::default()
+        };
+        let (text, warn) = format_context_line(&evt).unwrap();
+        assert_eq!(text, "220k / 258k · 85%");
+        assert!(warn);
+    }
+
+    #[test]
+    fn resolve_window_prefers_reported_window_over_heuristics() {
+        // The agent-reported figure wins even when a Claude id or the 1M
+        // tag would otherwise pick a window.
+        assert_eq!(
+            resolve_window(
+                50_000,
+                Some("claude-opus-5"),
+                Some("claude-opus-5[1m]"),
+                Some(258_400)
+            ),
+            Some(258_400)
+        );
+        assert_eq!(
+            resolve_window(50_000, Some("gpt-6-astra"), None, Some(258_400)),
+            Some(258_400)
+        );
+        // A reported zero is malformed, not a window: fall through.
+        assert_eq!(
+            resolve_window(50_000, Some("gpt-6-astra"), None, Some(0)),
+            None
+        );
     }
 
     #[test]

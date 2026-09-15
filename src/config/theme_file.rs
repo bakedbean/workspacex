@@ -737,6 +737,12 @@ mod tests {
             format::parse("  ").unwrap()
         );
         assert_eq!(specs.segments["procs"].symbol.as_deref(), Some("●"));
+        assert_eq!(specs.modules, vec!["funnel".to_string()]);
+        assert_eq!(specs.segments["funnel"].priority, 60);
+        assert_eq!(
+            specs.dashboard_footer.right_format,
+            format::parse("($version  )$funnel").unwrap()
+        );
         for def in SEGMENTS {
             assert!(
                 specs.segments.contains_key(def.name),

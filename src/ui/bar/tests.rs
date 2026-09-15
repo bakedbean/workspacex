@@ -260,7 +260,12 @@ mod footer_tests {
     use crate::ui::bar::test_util::{plain, render_line};
     use crossterm::event::KeyCode;
 
-    fn footer(selected: bool, label: &str, width: u16) -> Rendered {
+    fn footer(
+        selected: bool,
+        label: &str,
+        width: u16,
+        fleet: &crate::ui::bar::segment::SegmentMap,
+    ) -> Rendered {
         let theme = Theme::wsx();
         let specs = bundled_default(&theme);
         let activity: Vec<u32> = (0..24).collect();
@@ -272,7 +277,7 @@ mod footer_tests {
                 version: "0.1.0",
                 window_label: label,
                 workspace_selected: selected,
-                fleet: crate::ui::bar::fleet::empty(),
+                fleet,
             },
             width,
         )
@@ -280,7 +285,7 @@ mod footer_tests {
 
     #[test]
     fn default_footer_snapshot() {
-        let out = footer(true, "24h", 120);
+        let out = footer(true, "24h", 120, crate::ui::bar::fleet::empty());
         let text = plain(&out.line);
         assert!(
             text.starts_with(
@@ -288,8 +293,14 @@ mod footer_tests {
             ),
             "{text:?}"
         );
-        let spark = crate::ui::dashboard::sparkline::render(&(0..24).collect::<Vec<u32>>(), 24);
-        assert!(text.ends_with(&format!("0.1.0  24h {spark}")), "{text:?}");
+        assert!(
+            text.trim_end().ends_with("0.1.0"),
+            "empty fleet: version only: {text:?}"
+        );
+        assert!(
+            !text.contains('▁'),
+            "the sparkline is no longer in the default footer: {text:?}"
+        );
         assert_eq!(out.line.width(), 120);
         assert_eq!(
             out.hits
@@ -301,15 +312,80 @@ mod footer_tests {
     }
 
     #[test]
+    fn default_footer_funnel_lists_nonzero_stages() {
+        use crate::ui::bar::fleet::{FleetRow, FleetStats};
+        let rows = vec![
+            FleetRow {
+                reported: Some(crate::data::store::ReportedState::Working),
+                ..Default::default()
+            },
+            FleetRow {
+                reported: Some(crate::data::store::ReportedState::Working),
+                ..Default::default()
+            },
+            FleetRow {
+                reported: Some(crate::data::store::ReportedState::Blocked),
+                ..Default::default()
+            },
+            FleetRow {
+                lifecycle: Some(crate::git::forge::BranchLifecycle::PrOpen),
+                review: Some(crate::git::forge::ReviewDecision::Approved),
+                ..Default::default()
+            },
+        ];
+        let fleet = FleetStats::from_rows(rows, 1, 0).to_vars();
+        let text = plain(&footer(false, "24h", 140, &fleet).line);
+        assert!(
+            text.ends_with("0.1.0  2 working  1 blocked  1 ready"),
+            "{text:?}"
+        );
+    }
+
+    #[test]
+    fn usage_still_renders_when_a_theme_places_it() {
+        let theme = Theme::wsx();
+        let specs = crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse(
+                "[dashboard_footer]\nright_format = \"$usage\"\n",
+            )
+            .unwrap(),
+            &theme,
+        )
+        .unwrap();
+        let activity: Vec<u32> = (0..24).collect();
+        let out = dashboard_footer(
+            &specs,
+            &theme,
+            &DashboardFooterInputs {
+                activity: &activity,
+                version: "0.1.0",
+                window_label: "24h",
+                workspace_selected: false,
+                fleet: crate::ui::bar::fleet::empty(),
+            },
+            120,
+        );
+        let spark = crate::ui::dashboard::sparkline::render(&activity, 24);
+        assert!(plain(&out.line).ends_with(&format!("24h {spark}")));
+        assert!(out.hits.iter().any(|h| matches!(h.hit, Hit::UsageGraph)));
+    }
+
+    #[test]
     fn footer_omits_actions_pill_without_workspace() {
-        assert!(!plain(&footer(false, "24h", 120).line).contains("actions"));
-        assert!(plain(&footer(true, "24h", 120).line).contains("actions"));
+        assert!(
+            !plain(&footer(false, "24h", 120, crate::ui::bar::fleet::empty()).line)
+                .contains("actions")
+        );
+        assert!(
+            plain(&footer(true, "24h", 120, crate::ui::bar::fleet::empty()).line)
+                .contains("actions")
+        );
     }
 
     #[test]
     fn footer_key_pill_wraps_key_only_not_label() {
         let theme = Theme::wsx();
-        let out = footer(true, "24h", 120);
+        let out = footer(true, "24h", 120, crate::ui::bar::fleet::empty());
         let buf = render_line(&out.line, 120);
         // " ↑↓ " is cols 0..4 on the chip bg; " nav" follows on the bar bg.
         assert_eq!(buf[(1, 0)].bg, theme.bg_soft);
@@ -319,7 +395,7 @@ mod footer_tests {
 
     #[test]
     fn footer_hints_align_with_rendered_key_pills() {
-        let out = footer(true, "24h", 120);
+        let out = footer(true, "24h", 120, crate::ui::bar::fleet::empty());
         let buf = render_line(&out.line, 120);
         let order = out
             .hits
@@ -330,107 +406,6 @@ mod footer_tests {
             .map(|x| buf[(x, 0)].symbol().to_string())
             .collect();
         assert_eq!(cells, " o  order");
-    }
-
-    #[test]
-    fn footer_usage_hit_covers_label_and_sparkline() {
-        let out = footer(true, "1w", 120);
-        let usage = out.hits.iter().find(|h| h.hit == Hit::UsageGraph).unwrap();
-        assert_eq!(usage.width, 2 + 1 + 24);
-        assert_eq!(usage.start_col + usage.width, 120);
-    }
-
-    // At 100 columns the full content (keys 71 + gap 1 + version 5 + "  " 2
-    // + usage 28 = 107, without the actions pill) doesn't fit. `version`'s
-    // lower priority drops it first: keys 71 + gap 1 + usage 28 = 100 fits
-    // exactly, so the usage graph survives and lands flush against the
-    // right edge. `workspace_selected: false` (no `actions` pill) — with
-    // it, keys alone are already 84 wide, leaving no room for usage either,
-    // so this specifically exercises version-drops-before-usage rather than
-    // everything-drops.
-    #[test]
-    fn narrow_footer_drops_version_before_usage() {
-        let out = footer(false, "24h", 100);
-        let text = plain(&out.line);
-        assert!(!text.contains("0.1.0"), "{text:?}");
-        let spark = crate::ui::dashboard::sparkline::render(&(0..24).collect::<Vec<u32>>(), 24);
-        assert!(text.ends_with(&format!("24h {spark}")), "{text:?}");
-        assert_eq!(out.line.width(), 100);
-        let usage = out.hits.iter().find(|h| h.hit == Hit::UsageGraph).unwrap();
-        assert_eq!(usage.start_col + usage.width, 100);
-
-        // Narrower still (60): even usage alone no longer fits, so both
-        // right-side segments are gone — but the left side is never
-        // dropped, only clipped by whatever renders the (now wider than
-        // requested) line.
-        let out = footer(false, "24h", 60);
-        let text = plain(&out.line);
-        assert!(!text.contains("0.1.0"), "{text:?}");
-        assert!(!text.contains("24h"), "{text:?}");
-        assert_eq!(
-            out.hits
-                .iter()
-                .filter(|h| matches!(h.hit, Hit::Key(_)))
-                .count(),
-            7
-        );
-    }
-
-    /// Durable evidence for fix round 2: these two strings were verified
-    /// byte-for-byte against the pre-Task-7 legacy footer builder
-    /// (temporarily restored in git history for that one check, then
-    /// removed again — see the `engine_footer_matches_legacy_footer` commit
-    /// history) before this test was written. Pinning them here means a
-    /// future change to the bundled default's overflow priorities gets
-    /// caught without needing to resurrect the legacy code again.
-    ///
-    /// `workspace_selected: false` fits its full content at 110 (keys 71 +
-    /// gap 4 + version 5 + "  " 2 + usage 28 = 110) without dropping
-    /// anything, so it matches legacy exactly. `workspace_selected: true`
-    /// does NOT: with the `actions` pill, keys alone are 84 wide, leaving
-    /// only 110 - 84 - 1 = 25 cells for the right side — 3 short of even
-    /// `usage` alone (28) — so both `version` and `usage` drop and legacy
-    /// parity does not apply (legacy has no such drop and would overflow
-    /// to 120 cells instead); this asserts the engine's own, intentional
-    /// behavior at that width.
-    #[test]
-    fn default_footer_snapshot_at_110() {
-        let spark = crate::ui::dashboard::sparkline::render(&(0..24).collect::<Vec<u32>>(), 24);
-
-        let out = footer(false, "24h", 110);
-        let expected = format!(
-            "{}{}0.1.0  24h {spark}",
-            " ↑↓  nav   ↵  open   n  new   G  group   o  order   /  filter   q  quit",
-            " ".repeat(4),
-        );
-        assert_eq!(plain(&out.line), expected);
-        assert_eq!(out.line.width(), 110);
-        let usage = out.hits.iter().find(|h| h.hit == Hit::UsageGraph).unwrap();
-        assert_eq!(usage.start_col + usage.width, 110);
-        assert_eq!(
-            out.hits
-                .iter()
-                .filter(|h| matches!(h.hit, Hit::Key(_)))
-                .count(),
-            7
-        );
-
-        let out = footer(true, "24h", 110);
-        let expected = format!(
-            "{}{}",
-            " ↑↓  nav   ↵  open   n  new   G  group   o  order   /  filter   ?  actions   q  quit",
-            " ".repeat(26)
-        );
-        assert_eq!(plain(&out.line), expected);
-        assert_eq!(out.line.width(), 110);
-        assert!(out.hits.iter().all(|h| h.hit != Hit::UsageGraph));
-        assert_eq!(
-            out.hits
-                .iter()
-                .filter(|h| matches!(h.hit, Hit::Key(_)))
-                .count(),
-            8
-        );
     }
 }
 

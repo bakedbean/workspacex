@@ -346,7 +346,6 @@ fn by_repo_render_includes_chrome_status_strip_and_a_repo_header() {
         joined.contains("theme-tokens"),
         "stalled workspace row: {joined}"
     );
-    assert!(joined.contains("24h "), "footer sparkline label");
 }
 
 #[test]

@@ -279,10 +279,25 @@ fn resolve_segment(
     let sep_loc = format!("[{name}].separator");
     let separator = parse_format(&sep_loc, tbl.separator.as_deref().unwrap_or("  "), errors);
     validate(&sep_loc, &separator, &[], resolver, errors);
-    // Likewise the overflow tail: no item, so no item `$style`.
+    // Likewise the overflow tail: no item, so no item `$style`. Only a
+    // segment that folds entries has one at all; a tail on any other is
+    // rejected outright rather than silently ignored.
     let more_loc = format!("[{name}].more_format");
-    let more_format = parse_format(&more_loc, tbl.more_format.as_deref().unwrap_or(""), errors);
-    validate(&more_loc, &more_format, def.more_vars, resolver, errors);
+    let more_format = match tbl.more_format.as_deref() {
+        Some(_) if def.more_vars.is_empty() => {
+            errors.push(error(
+                &more_loc,
+                "this segment has no overflow tail (only `attention` takes `more_format`)",
+            ));
+            Vec::new()
+        }
+        Some(src) => {
+            let nodes = parse_format(&more_loc, src, errors);
+            validate(&more_loc, &nodes, def.more_vars, resolver, errors);
+            nodes
+        }
+        None => Vec::new(),
+    };
     let style = styled(
         &format!("[{name}].style"),
         tbl.style.as_deref(),
@@ -703,9 +718,21 @@ mod tests {
         assert_eq!(e[0].location, "[attention].more_format");
         assert!(e[0].message.contains("nope"), "{}", e[0].message);
         assert!(!errs("[attention]\nmore_format = \"[$count]($style)\"\n").is_empty());
-        let e = errs("[pins]\nmore_format = \"$count\"\n");
-        assert_eq!(e.len(), 1, "{e:?}");
-        assert!(e[0].message.contains("count"), "{}", e[0].message);
+        // A tail on a segment that never folds is rejected outright, even
+        // when it references nothing: "attention alone takes more_format".
+        for src in [
+            "[pins]\nmore_format = \"$count\"\n",
+            "[pins]\nmore_format = \"x\"\n",
+        ] {
+            let e = errs(src);
+            assert_eq!(e.len(), 1, "{e:?}");
+            assert_eq!(e[0].location, "[pins].more_format");
+            assert!(
+                e[0].message.contains("no overflow tail"),
+                "{}",
+                e[0].message
+            );
+        }
     }
 
     #[test]

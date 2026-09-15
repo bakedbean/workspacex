@@ -15,8 +15,8 @@ pub struct SegmentDef {
     /// beyond the default `$style`.
     pub style_vars: &'static [&'static str],
     /// `$var` names the segment's `more_format` (its overflow tail) may
-    /// use. Empty for segments without a tail, where any variable — even
-    /// `$count` — is unknown.
+    /// use. Empty for segments without a tail, where setting `more_format`
+    /// at all is a theme error.
     pub more_vars: &'static [&'static str],
     /// Carries one click target that isn't indexed by item (unlike
     /// `pins`/`agents`/`keys`, which record a hit per item and so tolerate

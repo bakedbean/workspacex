@@ -367,7 +367,15 @@ mod footer_tests {
         );
         let spark = crate::ui::dashboard::sparkline::render(&activity, 24);
         assert!(plain(&out.line).ends_with(&format!("24h {spark}")));
-        assert!(out.hits.iter().any(|h| matches!(h.hit, Hit::UsageGraph)));
+        // Its hit still covers exactly the `<label> <spark>` span, flush
+        // against the right edge.
+        let usage = out
+            .hits
+            .iter()
+            .find(|h| matches!(h.hit, Hit::UsageGraph))
+            .unwrap();
+        assert_eq!(usage.width, "24h".len() as u16 + 1 + 24);
+        assert_eq!(usage.start_col + usage.width, 120);
     }
 
     #[test]
@@ -406,6 +414,63 @@ mod footer_tests {
             .map(|x| buf[(x, 0)].symbol().to_string())
             .collect();
         assert_eq!(cells, " o  order");
+    }
+
+    // At 85 columns, keys (71) + the mandatory 1-cell gap + the funnel's
+    // "2 working  " (11, including its own trailing gap) = 83, which fits
+    // with room to spare; adding `$version`'s "0.1.0" plus its own
+    // grouped "  " (7 more, 90 total) does not. `$version`'s lower
+    // priority (50 vs. the funnel's 60) drops it first, so the funnel
+    // survives alone — the same slot `$usage` used to hold.
+    #[test]
+    fn narrow_footer_drops_version_before_funnel() {
+        use crate::ui::bar::fleet::{FleetRow, FleetStats};
+        let rows = vec![
+            FleetRow {
+                reported: Some(crate::data::store::ReportedState::Working),
+                ..Default::default()
+            },
+            FleetRow {
+                reported: Some(crate::data::store::ReportedState::Working),
+                ..Default::default()
+            },
+        ];
+        let fleet = FleetStats::from_rows(rows, 1, 0).to_vars();
+        let out = footer(false, "24h", 85, &fleet);
+        let text = plain(&out.line);
+        assert!(!text.contains("0.1.0"), "{text:?}");
+        assert!(text.contains("2 working"), "{text:?}");
+        assert_eq!(out.line.width(), 85);
+    }
+
+    // At 110 columns the bundled default's full content (keys 71 + gap 1
+    // + version 5 + its own trailing "  " 2 = 79, well under 110) always
+    // fits with an empty fleet, since the funnel renders nothing to drop
+    // against. Pinned here so a future change to the bundled default's
+    // overflow priorities gets caught at this width.
+    #[test]
+    fn default_footer_snapshot_at_110() {
+        let out = footer(false, "24h", 110, crate::ui::bar::fleet::empty());
+        let text = plain(&out.line);
+        assert!(
+            text.starts_with(
+                " ↑↓  nav   ↵  open   n  new   G  group   o  order   /  filter   q  quit"
+            ),
+            "{text:?}"
+        );
+        assert!(
+            text.trim_end().ends_with("0.1.0"),
+            "empty fleet: version only: {text:?}"
+        );
+        assert!(!text.contains('▁'), "no sparkline: {text:?}");
+        assert_eq!(out.line.width(), 110);
+        assert_eq!(
+            out.hits
+                .iter()
+                .filter(|h| matches!(h.hit, Hit::Key(_)))
+                .count(),
+            7
+        );
     }
 }
 

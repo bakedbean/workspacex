@@ -124,9 +124,14 @@ format = "[$symbol]($style)"
 [workspace]
 format = "[($repo/)$name]($style)"
 
-# Cross-workspace attention items. Variables: $items
+# Cross-workspace attention entries: one item per workspace, folded into
+# `more_format` when they don't fit. $glyph carries the entry's status
+# color; $style is the name's PR-lifecycle tint (or the muted path hue).
+# Variables: $glyph $repo $name $age — and $count in more_format
 [attention]
-format = "$items"
+format      = '$glyph [$repo/$name]($style)[ \($age\)](fg:dim)'
+separator   = "[ │ ](fg:dim)"
+more_format = "[ … +$count more](fg:dim)"
 
 # Pinned commands: one chip per command. Variables: $index $label
 [pins]

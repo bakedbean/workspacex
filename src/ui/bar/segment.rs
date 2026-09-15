@@ -116,8 +116,18 @@ pub struct SegmentConfig {
     /// Below 100 the segment is droppable on overflow, lowest first and
     /// from either side; 100 (the default) never drops. See `render_bar`.
     pub priority: u32,
-    /// Separator between items of a multi-item segment.
-    pub separator: String,
+    /// Separator between items of a multi-item segment: a format like
+    /// `format`, so it can carry styled runs, but with no item variables
+    /// (it sits between items, not inside one).
+    pub separator: Vec<Node>,
+    /// The overflow tail of a multi-item segment that folds items it can't
+    /// fit (`attention`'s ` … +N more`). Its variables are the segment's
+    /// `SegmentDef::more_vars`; empty on segments without a tail.
+    pub more_format: Vec<Node>,
+    /// Per-position item styles for a multi-item segment: item `i` gets
+    /// `styles[i]`, or the last entry once the list runs out, patched over
+    /// the provider's default and `style`. Empty grades nothing.
+    pub styles: Vec<StyleSpec>,
 }
 
 pub type SegmentMap = HashMap<String, Segment>;

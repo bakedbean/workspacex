@@ -251,7 +251,9 @@ mod tests {
             format: vec![],
             disabled: false,
             priority,
-            separator: String::new(),
+            separator: Vec::new(),
+            more_format: Vec::new(),
+            styles: Vec::new(),
         }
     }
 

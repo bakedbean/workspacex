@@ -129,7 +129,7 @@ pub(crate) fn render_panes(
     window_label: &str,
     activity: &[u32],
     agent: Option<AgentKind>,
-    attention: Option<crate::ui::updates_bar::AttentionLine>,
+    attention: Option<crate::ui::updates_bar::AttentionItems>,
     pinned: &[PinnedCommand],
     procs: u32,
     diff: Option<crate::git::DiffStats>,
@@ -343,7 +343,7 @@ mod tests {
         repo: &str,
         name: &str,
         agent: Option<AgentKind>,
-        attention: Option<crate::ui::updates_bar::AttentionLine>,
+        attention: Option<crate::ui::updates_bar::AttentionItems>,
         width: u16,
     ) -> crate::ui::bar::render::Rendered {
         crate::ui::bar::attached_bars(
@@ -609,32 +609,38 @@ mod tests {
         );
     }
 
-    /// Durable evidence for the engine cutover: this snapshot and its hit
-    /// tuples were verified byte-for-byte against the legacy `info_line`
-    /// builder (temporarily restored in git history for that one check,
-    /// then removed again — see the `engine_top_bar_matches_legacy_info_line`
-    /// commit history) before `info_line` was deleted.
+    /// The stock top bar with attention items: the items start right after
+    /// the `▎ label   ` prefix and their hits land there too. (The items'
+    /// own cell-for-cell rendering is pinned by
+    /// `ui::bar::tests::attention_tests`.)
     #[test]
     fn engine_top_bar_snapshot_with_attention() {
         use crate::ui::bar::segment::Hit;
-        use crate::ui::updates_bar::{AttentionLine, AttentionMore, AttentionSegment};
+        use crate::ui::dashboard::status::Status;
+        use crate::ui::updates_bar::{AttentionEntry, AttentionItems};
         let theme = Theme::wsx();
         let specs = crate::config::theme_file::bundled_default(&theme);
-        let attention = Some(AttentionLine {
-            line: Line::from(vec![
-                Span::styled("? foo".to_string(), theme.attention_style()),
-                Span::raw("  ".to_string()),
-                Span::styled("… +2 more".to_string(), theme.dim_style()),
-            ]),
-            segments: vec![AttentionSegment {
-                workspace_id: crate::data::store::WorkspaceId(7),
-                start_col: 0,
-                width: 5,
-            }],
-            more: Some(AttentionMore {
-                start_col: 7,
-                width: 9,
-            }),
+        let entry = |id: i64, name: &str| AttentionEntry {
+            workspace_id: crate::data::store::WorkspaceId(id),
+            repo_name: "r".into(),
+            name: name.into(),
+            age_anchor_ms: 9_000,
+            status: Status::Question,
+            lifecycle: None,
+        };
+        // The stock prefix: `▎` + a space, the label, and the format's
+        // 3-column gap before the attention items — 12 cells, leaving 48
+        // for the items: "? r/foo (1s)" (12) fits, the two 30-name entries
+        // (39 each) fold into " … +2 more" (10).
+        let prefix: u16 = 2 + 7 + 3;
+        let attention = Some(AttentionItems {
+            entries: vec![
+                entry(7, "foo"),
+                entry(8, &"x".repeat(30)),
+                entry(9, &"y".repeat(30)),
+            ],
+            now_ms: 10_000,
+            max_width: 60 - usize::from(prefix),
         });
         let new = attached_bars_top(
             &specs,
@@ -646,13 +652,11 @@ mod tests {
             60,
         );
         assert!(
-            crate::ui::bar::test_util::plain(&new.line).starts_with("▎ wsx/foo   ? foo  … +2 more"),
+            crate::ui::bar::test_util::plain(&new.line)
+                .starts_with("▎ wsx/foo   ? r/foo (1s) … +2 more"),
             "{:?}",
             crate::ui::bar::test_util::plain(&new.line)
         );
-        // The stock prefix: `▎` + a space, the label, and the format's
-        // 3-column gap before the attention items.
-        let prefix: u16 = 2 + 7 + 3;
         let hits: Vec<_> = new
             .hits
             .iter()
@@ -663,10 +667,10 @@ mod tests {
             vec![
                 (
                     prefix,
-                    5,
+                    12,
                     Hit::Attention(crate::data::store::WorkspaceId(7))
                 ),
-                (prefix + 7, 9, Hit::AttentionMore),
+                (prefix + 12, 10, Hit::AttentionMore),
             ]
         );
     }
@@ -775,13 +779,20 @@ mod tests {
     /// (Replaces the old `info_line_prefix_width` round-trip.)
     #[test]
     fn attention_budget_complement_is_where_the_items_are_drawn() {
-        use crate::ui::updates_bar::AttentionLine;
+        use crate::ui::updates_bar::{AttentionEntry, AttentionItems};
         let theme = Theme::wsx();
         let specs = crate::config::theme_file::bundled_default(&theme);
-        let attention = Some(AttentionLine {
-            line: Line::from(vec![Span::raw("ATTN".to_string())]),
-            segments: vec![],
-            more: None,
+        let attention = Some(AttentionItems {
+            entries: vec![AttentionEntry {
+                workspace_id: crate::data::store::WorkspaceId(1),
+                repo_name: "a".into(),
+                name: "q".into(),
+                age_anchor_ms: 9_000,
+                status: crate::ui::dashboard::status::Status::Question,
+                lifecycle: None,
+            }],
+            now_ms: 10_000,
+            max_width: 40,
         });
         let budget = crate::ui::bar::attention_width_budget(
             &specs,
@@ -816,7 +827,7 @@ mod tests {
         );
         let buf = crate::ui::bar::test_util::render_line(&out.line, 60);
         let cols: Vec<String> = (0..60).map(|x| buf[(x, 0)].symbol().to_string()).collect();
-        assert_eq!(cols[prefix..prefix + 4].concat(), "ATTN", "cols={cols:?}");
+        assert_eq!(cols[prefix..prefix + 5].concat(), "? a/q", "cols={cols:?}");
     }
 
     #[test]

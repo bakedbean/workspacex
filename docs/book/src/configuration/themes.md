@@ -229,8 +229,68 @@ base `Theme` fields. `fg:dim` selects a color; `dimmed` is a text modifier.
 Each segment has its own table, such as `[workspace]`, with `format` (its
 layout, using the variables below), `style`, `symbol`, `disabled`,
 `priority` (overflow survival; higher lasts longer; unset defaults to 100,
-which never drops), and, for multi-item segments, `separator`. A multi-item
-segment's format describes one item; the items keep their existing order.
+which never drops), and, for multi-item segments, `separator` and
+`styles`. A multi-item segment's format describes one item; the items keep
+their existing order.
+`separator` is a format too — `"[ │ ](fg:dim)"` draws a dim joiner — but
+it sits between items rather than inside one, so it takes no variables and
+no `$style`. Because it is parsed with the grammar above, a separator that
+wants a literal `$`, `[`, `(`, or backslash must escape it (`$$`, `\[`,
+`\(`, `\\`), and a bare `(x)` is a conditional group that renders nothing;
+a plain run of spaces or box-drawing characters needs no change. `attention`
+alone also takes `more_format`, the tail drawn when entries don't fit the
+bar; its one variable is `$count`, the number of entries folded into it,
+and setting it on any other segment is an error.
+
+An item whose `format` renders empty — an empty `format`, or one whose
+variables are all absent for that item — is dropped as if it were never in
+the list: no separator, no click target, no grade, and not counted in the
+tail.
+
+#### Grading items by position
+
+A multi-item segment also takes `styles`, a list of style strings: the
+first rendered item's `$style` is the segment's usual style patched by
+`styles[0]`, the second's by `styles[1]`, and so on, with items past the
+end of the list all taking its last entry. A bg-only grade keeps the
+provider's state colour in the foreground (an attention entry's
+PR-lifecycle tint, an agent pill's identity colour). Positions count
+rendered items, so an empty item takes no grade with it, and an attention
+entry folded into the tail does not either.
+
+To draw powerline caps between graded blocks, the formats of a multi-item
+segment may name six extra colours: `item_fg`/`item_bg` are the item's own
+final `$style` colours, `prev_*` and `next_*` those of its rendered
+neighbours. `separator` sees `prev_*` and `next_*` (the items on each side
+of it); `more_format` sees `prev_*` (the last rendered entry). A colour
+that does not exist — the first item's `prev`, the last rendered item's
+`next` even when a tail follows, or a grade that never set that colour —
+carries nothing: that token sets nothing, whatever `$style` or an
+enclosing run already set stays, and where nothing set it the bar's own
+style shows through. That is what lets the last block's trailing wedge
+blend into the bar without the theme knowing how many entries there are,
+provided the wedge sits outside the graded background run (as below),
+not inside it:
+
+```toml
+[attention]
+styles      = ["bg:charcoal fg:orange", "bg:slate fg:cream", "bg:grey fg:cream"]
+format      = "[ $glyph $repo/$name \\($age\\) ]($style)[\ue0b0](fg:item_bg bg:next_bg)"
+separator   = ""
+more_format = "[\ue0b0](fg:prev_bg bg:orange)[ +$count more ](bg:orange fg:black)[\ue0b0](fg:orange)"
+```
+
+Here each entry carries its own trailing wedge, coloured from its block
+into the next; the first block's leading cap belongs in the bar format,
+where `styles[0]` is known. The formats are TOML double-quoted strings so
+that `\ue0b0` decodes to the wedge glyph and `\\(` reaches the grammar as
+`\(`; in a single-quoted literal string `\ue0b0` would stay as typed and
+render as the five characters `ue0b0`. `styles` entries may not use the
+six names themselves (a grade cannot depend on the neighbours that depend
+on it), `wsx theme check` rejects `styles` and the six names on a
+single-item segment, and the six names are reserved: a `[palette]` entry
+by one of them is an error, since inside a multi-item segment it would be
+shadowed by the per-item colour.
 The bundled default sets `priority` on the segments that compete for room:
 `model_tokens` 10, `agents` 20, `procs` 30, `diff` 40, `pr` 50 (the
 attached chip row's right side); `version` 50, `usage` 60 (the dashboard
@@ -249,7 +309,7 @@ other segment is the unset default, 100, and so never drops.
 | `usage` | `$label $spark` | The activity sparkline. Clickable. |
 | `agent_bar` | `$symbol` | `$style` includes the agent's identity color. Attached only. |
 | `workspace` | `$repo $name` | `$repo` is absent when there is no repo name. |
-| `attention` | `$items` | Cross-workspace attention list. Clickable. |
+| `attention` | `$glyph $repo $name $age` | One item per workspace needing attention. `$glyph` is the entry's dashboard status glyph in its status color; `$style` is the name's PR-lifecycle tint (open, merged, …) or the muted `path` hue. Entries that don't fit fold into `more_format` (`$count`); the first entry always renders, and if it alone would push the tail off the bar its `$name` is shortened with an ellipsis (assuming one `$name` in the format; a format without `$name`, or a very long `$repo`, has nothing to yield and simply clips). Clickable: each entry, and the tail. |
 | `pins` | `$index $label` | One chip per pinned command. Clickable. |
 | `agents` | `$symbol $label $key` | One pill per agent (2+ agents). `$style` includes the agent color. `symbol` is ignored — the pill always uses a filled/hollow dot to show which agent is active. Clickable. |
 | `model_tokens` | `$model $tokens` | `$style` includes `ok`, or `warn` near the context limit. |
@@ -257,15 +317,17 @@ other segment is the unset default, 100, and so never drops.
 | `diff` | `$added $removed` | Hidden when clean. |
 | `pr` | `$symbol $number $label $mark` | `$style` includes the lifecycle tint; `$mark_style` supplies the review verdict style. Clickable — except over a remote (ssh) attach, where the chip still renders but isn't clickable (opening a PR keys off a local workspace id a remote attach doesn't have). |
 
-`pr`, `procs`, `usage`, and `attention` each carry exactly one click
-target, unlike `pins`/`agents`/`keys`, which record one hit per item. Put
-one of these four in more than one place across the two attached bars'
-`format`/`right_format` (or twice within the dashboard footer's own
-`format`/`right_format`, or twice within the dashboard header's, or twice
-within the dashboard detail pane's) and only the last-routed placement
-would be clickable, so `wsx theme check` rejects it as a duplicate instead.
-These four scopes are independent: a singleton segment may appear once in
-each without conflicting with the others.
+`pr`, `procs`, `usage`, and `attention` may each be placed only once:
+`pr`, `procs`, and `usage` carry exactly one click target, and `attention`,
+though it records one hit per entry like `pins`/`agents`/`keys`, also
+carries the single `… +N more` tail target and is fitted to the one bar
+that places it. Put one of these four in more than one place across the
+two attached bars' `format`/`right_format` (or twice within the dashboard
+footer's own `format`/`right_format`, or twice within the dashboard
+header's, or twice within the dashboard detail pane's) and only the
+last-routed placement would be clickable, so `wsx theme check` rejects it
+as a duplicate instead. These four scopes are independent: a singleton
+segment may appear once in each without conflicting with the others.
 
 All segments are available in **either attached bar**, on either side;
 click targets follow them between bars as well as within a bar. `version`
@@ -282,12 +344,19 @@ Two details of the **stock formats** are worth knowing before you override
 them:
 
 - `style` only reaches the output through `$style`. The stock formats of
-  `agent_bar`, `workspace`, `agents`, `model_tokens`, `procs`, and `pr`
-  bind it (`[…]($style)`), so setting `style` on those works as written.
-  The stock formats of `keys`, `pins`, `version`, `usage`, `attention`, and
-  `diff` style their parts directly instead (or, for `attention`, not at
-  all), so a bare `style = …` on one of those has no effect unless you also
-  put `$style` in its `format`.
+  `agent_bar`, `workspace`, `attention`, `agents`, `model_tokens`, `procs`,
+  and `pr` bind it (`[…]($style)`), so setting `style` on those works as
+  written. The stock formats of `keys`, `pins`, `version`, `usage`, and
+  `diff` style their parts directly instead, so a bare `style = …` on one
+  of those has no effect unless you also put `$style` in its `format`.
+- Bare parentheses are the conditional-group syntax, so a literal pair
+  must be escaped. The stock `attention` item format writes its age as
+  `[ \($age\)](fg:dim)` in a TOML literal string for exactly this reason;
+  an unescaped `($age)` renders the age without the parentheses.
+- Upgrading a theme written before `attention` became multi-item: its
+  old `[attention] format = "$items"` is now rejected as an unknown
+  variable — delete the table to take the stock item format, or rewrite it
+  with the variables above. There is no `$items` alias.
 - `symbol` is substituted into `format`, but the literal spacing around it
   stays. Emptying one (`[pr]` `symbol = ""`) leaves the space that follows
   `$symbol` in the stock format; delete that space in `format` too if you

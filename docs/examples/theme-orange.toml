@@ -8,11 +8,11 @@
 # disagree: the GUI columns still hold the jellybeans greens and greys, the
 # cterm columns are the orange ones vim actually renders (no termguicolors).
 # The orange is cterm 166 -> #d75f00 and the edge-block text is black; the
-# rest of each chain steps away from the orange through the file's own dark
-# tones, darkest first: ash (cterm 234), charcoal (gui01), slate (gui02),
-# grey (gui03). Left chains run orange -> ash -> charcoal (-> slate on the
-# header); the right chain of the attached bottom bar shows the whole ramp,
-# orange at the edge.
+# rest of each chain steps away from the orange down an even ramp of xterm
+# greys, one shade per block, trending darker toward the middle: smoke
+# (cterm 237), soot (236), charcoal (235), ash (234). Left chains run
+# orange -> smoke -> soot (-> charcoal on the header); the right chain of
+# the attached bottom bar shows the whole ramp, orange at the edge.
 #
 # Airline layout: a "mode" block at each outer edge (sections a / z), a
 # mid block beside it (b / y), and a base-toned block toward the middle
@@ -28,46 +28,50 @@
 black    = "#151515"   # ctermBlack, as the jellybeans base background
 orange   = "#d75f00"   # ctermOrange 166
 ash      = "#1c1c1c"   # ctermAsh 234
-charcoal = "#262626"   # gui01
-slate    = "#4f5b66"   # gui02
-grey     = "#65737e"   # gui03
+charcoal = "#262626"   # gui01 (cterm 235)
+soot     = "#303030"   # cterm 236, one step above charcoal
+smoke    = "#3a3a3a"   # cterm 237, one step above soot
 cream    = "#ffd7af"   # ctermBrightYellow 223
 green    = "#008700"   # cterm0B 28
 blood    = "#870000"   # ctermBlood 88
 
 # The brand segment draws its own wedge so the wordmark and the view name
-# are two blocks: title on orange, view on ash, then group on charcoal and
-# sort on slate. The counts segment does the same on the right.
+# are two blocks: title on orange, view on smoke, then group on soot and
+# sort on charcoal. The counts segment does the same on the right.
 [dashboard_header]
-format       = "[ $brand](bg:orange fg:black)[](fg:ash bg:charcoal)[ $group ](bg:charcoal fg:orange)[](fg:charcoal bg:slate)[( $sort )](bg:slate fg:cream)[](fg:slate)(  $filter)"
-right_format = "[](fg:ash)[$counts ](bg:orange fg:black)"
+format       = "[ $brand](bg:orange fg:black)[](fg:smoke bg:soot)[ $group ](bg:soot fg:orange)[](fg:soot bg:charcoal)[( $sort )](bg:charcoal fg:cream)[](fg:charcoal)(  $filter)"
+right_format = "[](fg:smoke)[$counts ](bg:orange fg:black)"
 fill         = " "
 
-# Left: a blank orange stub as the mode block, then the key hints on ash,
-# so the footer chain reads like the header's brand -> group step.
+# Left: a blank orange stub as the mode block, then the key hints on smoke,
+# so the footer chain reads like the header's brand -> view step.
 [dashboard_footer]
-format       = "[  ](bg:orange)[](fg:orange bg:ash)[ $keys ](bg:ash fg:orange)[](fg:ash)"
-right_format = "[](fg:ash)[( $version )](bg:ash fg:orange)[](fg:orange bg:ash)[ $usage ](bg:orange fg:black)"
+format       = "[  ](bg:orange)[](fg:orange bg:smoke)[ $keys ](bg:smoke fg:orange)[](fg:smoke)"
+right_format = "[](fg:smoke)[( $version )](bg:smoke fg:orange)[](fg:orange bg:smoke)[ $usage ](bg:orange fg:black)"
 fill         = " "
 
+# The attention entries are graded blocks (see [attention]); the ash run
+# carries the cap into the first block, and each block draws its own
+# trailing wedge, the last one blending back into ash. With nothing to
+# show, the run collapses to its wedge like the other bars' blocks.
 [attached_top]
-format       = "[($agent_bar )$workspace ](bg:orange fg:black bold)[](fg:orange bg:ash)[( $attention )](bg:ash fg:orange)[](fg:ash)"
+format       = "[($agent_bar )$workspace ](bg:orange fg:black bold)[\ue0b0](fg:orange bg:ash)[( [\ue0b0](fg:ash bg:smoke)$attention )](bg:ash fg:orange)[\ue0b0](fg:ash)"
 fill         = " "
 
-# Left chain as in the footer: orange stub, key hints on ash, then pinned
-# commands on charcoal. Right chain, orange at the edge then the greys
-# lightening toward the middle: pr on orange, diff on ash, procs on charcoal, model + tokens on
-# slate, agents on grey. Optional segments get their own block so every
-# step shows; a missing one collapses to its wedge.
+# Left chain as in the footer: orange stub, key hints on smoke, then pinned
+# commands on soot. Right chain, orange at the edge then the greys
+# darkening toward the middle: pr on orange, diff on smoke, procs on soot,
+# model + tokens on charcoal, agents on ash. Optional segments get their
+# own block so every step shows; a missing one collapses to its wedge.
 [attached_bottom]
-format       = "[  ](bg:orange)[](fg:orange bg:ash)[ $keys ](bg:ash fg:orange)[](fg:ash bg:charcoal)[( $pins )](bg:charcoal fg:orange)[](fg:charcoal)"
-right_format = "[](fg:grey)[( $agents )](bg:grey fg:cream)[](fg:slate bg:grey)[( $model_tokens )](bg:slate fg:cream)[](fg:charcoal bg:slate)[( $procs )](bg:charcoal fg:orange)[](fg:ash bg:charcoal)[( $diff )](bg:ash fg:orange)[](fg:orange bg:ash)[( $pr )](bg:orange fg:black)"
+format       = "[  ](bg:orange)[](fg:orange bg:smoke)[ $keys ](bg:smoke fg:orange)[](fg:smoke bg:soot)[( $pins )](bg:soot fg:orange)[](fg:soot)"
+right_format = "[](fg:ash)[( $agents )](bg:ash fg:cream)[](fg:charcoal bg:ash)[( $model_tokens )](bg:charcoal fg:cream)[](fg:soot bg:charcoal)[( $procs )](bg:soot fg:orange)[](fg:smoke bg:soot)[( $diff )](bg:smoke fg:orange)[](fg:orange bg:smoke)[( $pr )](bg:orange fg:black)"
 fill         = " "
 
 # --- segments (unset fields keep the bundled defaults) -------------------
 
 [brand]
-format = "[$symbol]() [$name](bold)[ $mark](bold) [](fg:orange bg:ash)[ $view ](bg:ash fg:orange)"
+format = "[$symbol]() [$name](bold)[ $mark](bold) [](fg:orange bg:smoke)[ $view ](bg:smoke fg:orange)"
 
 [group]
 format = "[$label ]()$tabs"
@@ -78,10 +82,10 @@ format = "[$label ]()$tabs"
 [filter]
 format = "[/$needle](fg:orange bold)"
 
-# Two blocks, like the brand: repos on ash toward the middle, workspaces on
-# orange at the edge.
+# Two blocks, like the brand: repos on smoke toward the middle, workspaces
+# on orange at the edge.
 [counts]
-format = "[ $repos repos ](bg:ash fg:orange)[](fg:orange bg:ash)[ $workspaces workspaces]()"
+format = "[ $repos repos ](bg:smoke fg:orange)[](fg:orange bg:smoke)[ $workspaces workspaces]()"
 
 # Inherit the block's text colour; the bundled formats use fg:path, which
 # would override the block on a coloured background.
@@ -109,6 +113,22 @@ symbol = ""
 # colour, which the engine would otherwise supply as $style.
 format = "[($repo/)$name](bold)"
 
+# Attention entries as graded airline blocks that fade back into the ash
+# run: smoke, soot, charcoal, then ash for everything after (styles clamp
+# to the last grade). Each step is one xterm grey (237 -> 234), so the
+# ramp is even and trends darker; the first entry is the most prominent.
+# Grades set only the background, so each name keeps its PR-lifecycle
+# tint; the age is cream, dimmed. Every block draws its own trailing wedge from its bg
+# (item_bg) into the next block's (next_bg); the last block's next is
+# absent, so its wedge inherits the ash run. The fold tail is an orange
+# block whose leading wedge takes the last block's bg. Literal parens
+# around the age must be escaped: bare ( ) is the conditional group.
+[attention]
+styles      = ["bg:smoke", "bg:soot", "bg:charcoal", "bg:ash"]
+format      = "[[ $glyph $repo/$name ]($style)[\\($age\\) ](fg:cream dimmed)](bg:item_bg)[\ue0b0](fg:item_bg bg:next_bg)"
+separator   = ""
+more_format = "[\ue0b0](fg:prev_bg bg:orange)[ +$count more ](bg:orange fg:black bold)[\ue0b0](fg:orange bg:ash)"
+
 [agents]
 format    = "[$symbol]($style)$label ([$key](bold))"
 separator = "   "
@@ -120,4 +140,6 @@ format = "([$model](bold) )[$tokens]($style)"
 format = "[+$added](fg:green bold) [−$removed](fg:blood)"
 
 [pr]
-format = "[$symbol #$number $label](bold)( [$mark]($mark_style))"
+# Keep the lifecycle tint ($style: green open, purple merged, red closed)
+# on top of the block's orange, instead of the block's black text.
+format = "[$symbol #$number $label]($style bold)( [$mark]($mark_style))"

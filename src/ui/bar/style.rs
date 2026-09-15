@@ -136,12 +136,16 @@ impl StyleSpec {
 }
 
 /// Resolves color names and `$style` variables. Cheap to build per frame:
-/// two borrows plus a small owned map of named styles.
+/// two borrows plus small owned maps of named styles and colours.
 #[derive(Debug, Clone)]
 pub struct Resolver<'a> {
     pub palette: &'a HashMap<String, Color>,
     pub theme: &'a Theme,
     pub styles: HashMap<String, Style>,
+    /// Per-evaluation colour names (`item_bg`, `next_bg`, …), consulted
+    /// before the palette. `None` marks a name that is known but carries no
+    /// colour: its `fg:`/`bg:` token drops out and the run inherits.
+    pub colors: HashMap<String, Option<Color>>,
 }
 
 impl<'a> Resolver<'a> {
@@ -150,15 +154,27 @@ impl<'a> Resolver<'a> {
             palette,
             theme,
             styles: HashMap::new(),
+            colors: HashMap::new(),
         }
     }
 
-    /// Same palette and theme, different `$name` styles.
+    /// Same palette, theme, and colours, different `$name` styles.
     pub fn with_styles(&self, styles: HashMap<String, Style>) -> Resolver<'a> {
         Resolver {
             palette: self.palette,
             theme: self.theme,
             styles,
+            colors: self.colors.clone(),
+        }
+    }
+
+    /// Same palette, theme, and styles, different per-evaluation colours.
+    pub fn with_colors(&self, colors: HashMap<String, Option<Color>>) -> Resolver<'a> {
+        Resolver {
+            palette: self.palette,
+            theme: self.theme,
+            styles: self.styles.clone(),
+            colors,
         }
     }
 
@@ -171,12 +187,17 @@ impl<'a> Resolver<'a> {
             .or_else(|| ansi(name))
     }
 
-    fn color_of(&self, color: &ColorRef) -> Result<Color, StyleError> {
+    /// `Ok(None)` is a known per-evaluation name with no colour behind it.
+    fn color_of(&self, color: &ColorRef) -> Result<Option<Color>, StyleError> {
         match color {
-            ColorRef::Literal(color) => Ok(*color),
-            ColorRef::Named(name) => self
-                .color(name)
-                .ok_or_else(|| StyleError(format!("unknown color `{name}`"))),
+            ColorRef::Literal(color) => Ok(Some(*color)),
+            ColorRef::Named(name) => match self.colors.get(name) {
+                Some(color) => Ok(*color),
+                None => self
+                    .color(name)
+                    .map(Some)
+                    .ok_or_else(|| StyleError(format!("unknown color `{name}`"))),
+            },
         }
     }
 
@@ -189,11 +210,23 @@ impl<'a> Resolver<'a> {
                 .ok_or_else(|| StyleError(format!("unknown style variable `${name}`")))?;
             style = style.patch(*named);
         }
-        if let Some(fg) = &spec.fg {
-            style = style.fg(self.color_of(fg)?);
+        if let Some(fg) = spec
+            .fg
+            .as_ref()
+            .map(|c| self.color_of(c))
+            .transpose()?
+            .flatten()
+        {
+            style = style.fg(fg);
         }
-        if let Some(bg) = &spec.bg {
-            style = style.bg(self.color_of(bg)?);
+        if let Some(bg) = spec
+            .bg
+            .as_ref()
+            .map(|c| self.color_of(c))
+            .transpose()?
+            .flatten()
+        {
+            style = style.bg(bg);
         }
         Ok(style.add_modifier(spec.modifiers))
     }
@@ -202,6 +235,33 @@ impl<'a> Resolver<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Per-evaluation colours (`item_bg`, `next_bg`, …) shadow the palette
+    /// for the resolver that carries them; a name mapped to `None` is
+    /// known but carries no colour, so its `fg:`/`bg:` token drops out and
+    /// the run inherits instead. The base resolver never knows the names.
+    #[test]
+    fn per_eval_colors_shadow_the_palette_and_may_carry_no_color() {
+        let theme = Theme::wsx();
+        let mut palette = HashMap::new();
+        palette.insert("next_bg".to_string(), Color::Red);
+        let base = Resolver::new(&palette, &theme);
+        let r = base.with_colors(HashMap::from([
+            ("next_bg".to_string(), Some(Color::Blue)),
+            ("prev_bg".to_string(), None),
+        ]));
+        let s = r
+            .resolve(&StyleSpec::parse("fg:prev_bg bg:next_bg bold").unwrap())
+            .unwrap();
+        assert_eq!(s.fg, None, "an absent colour drops the token");
+        assert_eq!(s.bg, Some(Color::Blue), "per-eval shadows the palette");
+        assert_eq!(s.add_modifier, Modifier::BOLD);
+        assert!(r.resolve(&StyleSpec::parse("fg:nope").unwrap()).is_err());
+        assert!(
+            base.resolve(&StyleSpec::parse("fg:prev_bg").unwrap())
+                .is_err()
+        );
+    }
 
     #[test]
     fn parses_every_token_kind() {

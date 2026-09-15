@@ -1087,7 +1087,7 @@ dependencies = [
 [[package]]
 name = "sessionx"
 version = "0.1.0"
-source = "git+https://github.com/bakedbean/sessionx?rev=3545a9ebffedc6fd719eff73858665e69e35e495#3545a9ebffedc6fd719eff73858665e69e35e495"
+source = "git+https://github.com/bakedbean/sessionx?rev=6d772eefd7691477cd509bcc939d4b771c772337#6d772eefd7691477cd509bcc939d4b771c772337"
 dependencies = [
  "dirs",
  "log",

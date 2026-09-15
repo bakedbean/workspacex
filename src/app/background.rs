@@ -158,6 +158,7 @@ async fn tail_instance_events(
         edited_file_paths,
         context_tokens,
         model_id,
+        model_variant_id,
         current_action,
         pending_question_text,
     } = update;
@@ -257,6 +258,9 @@ async fn tail_instance_events(
     }
     if let Some(m) = model_id {
         evt.model_id = Some(m);
+    }
+    if let Some(m) = model_variant_id {
+        evt.model_variant_id = Some(m);
     }
     if let Some(a) = current_action {
         evt.current_action = Some(a);
@@ -486,6 +490,66 @@ mod instance_event_tests {
         assert_eq!(g.workspace_events[&ws].context_tokens, Some(16_485));
         assert_eq!(g.workspace_events[&ws].log.len(), 4);
         assert!(g.workspace_events_scanned.contains(&ws));
+    }
+
+    #[tokio::test]
+    async fn model_variant_id_merges_like_model_id_some_overwrites_none_keeps() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        let (app, ws, _, _, _, _) = setup(dir.path());
+        // A Claude peer: only the Claude parser surfaces the model attachment,
+        // and its pinned session resolves under ~/.claude/projects/<cwd>/.
+        let abs = std::fs::canonicalize(dir.path()).unwrap();
+        let claude_dir = home
+            .path()
+            .join(".claude/projects")
+            .join(crate::activity::events::encode_cwd(&abs));
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let claude_file = claude_dir.join("variant-session.jsonl");
+        let att = r#"{"attachment":{"type":"model","identity":{"modelId":"claude-opus-5[1m]","marketingName":"Opus 5 (1M context)","knowledgeCutoff":"May 2026"},"text":"x"},"type":"attachment","timestamp":"2026-09-15T13:11:57.747Z"}"#;
+        let asst = |model: &str| {
+            format!(
+                r#"{{"type":"assistant","timestamp":"2026-09-15T13:12:00.000Z","message":{{"model":"{model}","usage":{{"input_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":9}},"content":[{{"type":"text","text":"hi"}}]}}}}"#
+            )
+        };
+        std::fs::write(&claude_file, format!("{att}\n{}\n", asst("claude-opus-5"))).unwrap();
+        let claude = {
+            let mut g = app.lock().await;
+            let id = g
+                .store
+                .add_workspace_agent(ws, AgentKind::Claude)
+                .unwrap()
+                .id;
+            g.store
+                .set_instance_agent_session(id, "variant-session")
+                .unwrap();
+            // The tailer reads the cached roster; pick up the new peer.
+            g.agent_roster = g.store.all_workspace_agents().unwrap();
+            id
+        };
+        tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp).await;
+        {
+            let g = app.lock().await;
+            let events = &g.agent_events[&claude];
+            assert_eq!(events.model_id.as_deref(), Some("claude-opus-5"));
+            assert_eq!(
+                events.model_variant_id.as_deref(),
+                Some("claude-opus-5[1m]")
+            );
+        }
+        // A later batch with no attachment updates model_id but must keep
+        // the previously seen variant (None never overwrites a prior Some).
+        append(&claude_file, &format!("{}\n", asst("claude-sonnet-5")));
+        tail_workspace_events(app.clone(), ws, dir.path().into(), AgentKind::Omp).await;
+        let g = app.lock().await;
+        let events = &g.agent_events[&claude];
+        assert_eq!(events.model_id.as_deref(), Some("claude-sonnet-5"));
+        assert_eq!(
+            events.model_variant_id.as_deref(),
+            Some("claude-opus-5[1m]")
+        );
     }
 
     #[tokio::test]

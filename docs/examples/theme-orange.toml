@@ -50,12 +50,13 @@ format       = "[  ](bg:orange)[](fg:orange bg:smoke)[ $keys ](bg:smoke fg:or
 right_format = "[](fg:smoke)[( $version )](bg:smoke fg:orange)[](fg:orange bg:smoke)[ $usage ](bg:orange fg:black)"
 fill         = " "
 
-# The attention entries are graded blocks (see [attention]); the ash run
-# carries the cap into the first block, and each block draws its own
-# trailing wedge, the last one blending back into ash. With nothing to
-# show, the run collapses to its wedge like the other bars' blocks.
+# The attention entries are graded blocks (see [attention]). The orange
+# block keeps one cell of spacer and caps straight onto the first entry,
+# whose grade is the run's own ash; each block then draws its own trailing
+# wedge, the last one blending back into ash. With nothing to show, the
+# run collapses to its wedge like the other bars' blocks.
 [attached_top]
-format       = "[($agent_bar )$workspace ](bg:orange fg:black bold)[\ue0b0](fg:orange bg:ash)[( [\ue0b0](fg:ash bg:smoke)$attention )](bg:ash fg:orange)[\ue0b0](fg:ash)"
+format       = "[($agent_bar )$workspace  ](bg:orange fg:black bold)[\ue0b0](fg:orange bg:ash)[($attention )](bg:ash fg:orange)[\ue0b0](fg:ash)"
 fill         = " "
 
 # Left chain as in the footer: orange stub, key hints on smoke, then pinned
@@ -113,10 +114,10 @@ symbol = ""
 # colour, which the engine would otherwise supply as $style.
 format = "[($repo/)$name](bold)"
 
-# Attention entries as graded airline blocks that fade back into the ash
-# run: smoke, soot, charcoal, then ash for everything after (styles clamp
-# to the last grade). Each step is one xterm grey (237 -> 234), so the
-# ramp is even and trends darker; the first entry is the most prominent.
+# Attention entries as graded airline blocks: the first on the run's own
+# ash, every one after on black, the base background (styles clamp to the
+# last grade), so the first entry reads as a block and the rest sit flat
+# on the bar.
 # Grades set only the background, so each name keeps its PR-lifecycle
 # tint; the age is cream, dimmed. Every block draws its own trailing wedge from its bg
 # (item_bg) into the next block's (next_bg); the last block's next is
@@ -124,7 +125,7 @@ format = "[($repo/)$name](bold)"
 # block whose leading wedge takes the last block's bg. Literal parens
 # around the age must be escaped: bare ( ) is the conditional group.
 [attention]
-styles      = ["bg:smoke", "bg:soot", "bg:charcoal", "bg:ash"]
+styles      = ["bg:ash", "bg:black"]
 format      = "[[ $glyph $repo/$name ]($style)[\\($age\\) ](fg:cream dimmed)](bg:item_bg)[\ue0b0](fg:item_bg bg:next_bg)"
 separator   = ""
 more_format = "[\ue0b0](fg:prev_bg bg:orange)[ +$count more ](bg:orange fg:black bold)[\ue0b0](fg:orange bg:ash)"

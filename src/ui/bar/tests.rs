@@ -1443,6 +1443,93 @@ mod attention_tests {
         assert_eq!(more(&seg), Some((10, 22)));
     }
 
+    /// An item whose `format` renders empty is dropped as if it were never
+    /// in the list — no separator, no hit, and not counted in the tail —
+    /// exactly as `eval_items` treats empty items. An all-empty format
+    /// renders nothing, so the enclosing bar group hides.
+    #[test]
+    fn entries_that_render_empty_are_dropped_not_joined() {
+        let theme = Theme::wsx();
+        let empty = specs_with("[attention]\nformat = \"\"\n", &theme);
+        assert!(render_attention(&empty, &theme, &three_entries(), 80).is_none());
+        assert!(render_attention(&empty, &theme, &three_entries(), 0).is_none());
+
+        // `$repo` alone: the middle entry has no repo name, so it renders
+        // empty and vanishes; the other two join with one separator.
+        let repo_only = specs_with(
+            "[attention]\nformat = \"$repo\"\nseparator = \"|\"\nmore_format = \"+$count\"\n",
+            &theme,
+        );
+        let entries = vec![q(1, "aa", "x"), q(2, "", "y"), q(3, "cc", "z")];
+        let seg = render_attention(&repo_only, &theme, &entries, 80).unwrap();
+        assert_eq!(seg.plain_text(), "aa|cc");
+        assert_eq!(
+            hits(&seg),
+            vec![
+                (0, 2, Hit::Attention(WorkspaceId(1))),
+                (3, 2, Hit::Attention(WorkspaceId(3))),
+            ]
+        );
+        // Folding counts only entries that would have rendered: at width
+        // 2 the first fits, the empty one is not "more", the third is.
+        let seg = render_attention(&repo_only, &theme, &entries, 4).unwrap();
+        assert_eq!(seg.plain_text(), "aa+1");
+        assert_eq!(more(&seg), Some((2, 2)));
+    }
+
+    /// Restores the lifecycle cases the old builder tests covered: merged
+    /// is the merged hue, and an explicit colorless lifecycle (NoPr) falls
+    /// back to `path` just like an unpolled `None`.
+    #[test]
+    fn name_style_follows_every_lifecycle_hue() {
+        let theme = Theme::wsx();
+        let seg = stock(
+            &[
+                entry(
+                    1,
+                    "r",
+                    "open",
+                    Status::Question,
+                    Some(BranchLifecycle::PrOpen),
+                ),
+                entry(
+                    2,
+                    "r",
+                    "merged",
+                    Status::Question,
+                    Some(BranchLifecycle::PrMerged),
+                ),
+                entry(
+                    3,
+                    "r",
+                    "closed",
+                    Status::Question,
+                    Some(BranchLifecycle::PrClosed),
+                ),
+                entry(
+                    4,
+                    "r",
+                    "nopr",
+                    Status::Question,
+                    Some(BranchLifecycle::NoPr),
+                ),
+            ],
+            200,
+        );
+        let fg = |name: &str| {
+            seg.spans
+                .iter()
+                .find(|s| s.content.as_ref() == name)
+                .unwrap_or_else(|| panic!("name span {name:?} in {:?}", seg.plain_text()))
+                .style
+                .fg
+        };
+        assert_eq!(fg("open"), Some(theme.ok));
+        assert_eq!(fg("merged"), Some(theme.merged));
+        assert_eq!(fg("closed"), Some(theme.err));
+        assert_eq!(fg("nopr"), Some(theme.path));
+    }
+
     #[test]
     fn no_entries_renders_nothing() {
         let theme = Theme::wsx();

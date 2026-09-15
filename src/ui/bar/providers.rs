@@ -348,51 +348,60 @@ pub fn attention(
     };
     let width = |seg: &Segment| usize::from(seg.width);
 
-    let mut rendered: Vec<Segment> = (0..entries.len())
-        .map(|i| item(i, &entries[i].name))
+    // An entry whose item renders empty is dropped as if it were never in
+    // the list — no separator, no hit, not counted in the tail — exactly
+    // as `eval_items` treats empty items. `rendered` pairs each surviving
+    // item with its entry index.
+    let mut rendered: Vec<(usize, Segment)> = (0..entries.len())
+        .map(|i| (i, item(i, &entries[i].name)))
+        .filter(|(_, seg)| !seg.is_empty())
         .collect();
+    if rendered.is_empty() {
+        return None;
+    }
     let max_width = items.max_width;
     let mut included = 0usize;
     let mut total = 0usize;
-    for (i, seg) in rendered.iter().enumerate() {
-        let s = if i == 0 { 0 } else { sep_w };
+    for (n, (_, seg)) in rendered.iter().enumerate() {
+        let s = if n == 0 { 0 } else { sep_w };
         if total + s + width(seg) > max_width {
             break;
         }
         total += s + width(seg);
         included += 1;
     }
-    while included > 1 && included < entries.len() {
-        if total + width(&tail(entries.len() - included)) <= max_width {
+    while included > 1 && included < rendered.len() {
+        if total + width(&tail(rendered.len() - included)) <= max_width {
             break;
         }
         included -= 1;
-        total -= width(&rendered[included]) + sep_w;
+        total -= width(&rendered[included].1) + sep_w;
     }
     included = included.max(1);
-    if included < entries.len() {
-        let budget = max_width.saturating_sub(width(&tail(entries.len() - included)));
-        if width(&rendered[0]) > budget {
-            let name = &entries[0].name;
-            let fixed = width(&rendered[0]).saturating_sub(cell_width(name));
+    if included < rendered.len() {
+        let budget = max_width.saturating_sub(width(&tail(rendered.len() - included)));
+        let (first, seg) = &rendered[0];
+        if width(seg) > budget {
+            let name = &entries[*first].name;
+            let fixed = width(seg).saturating_sub(cell_width(name));
             let name_budget = budget.saturating_sub(fixed);
             let mut kept = name.clone();
             while cell_width(&kept) + 1 > name_budget && kept.pop().is_some() {}
             kept.push('…');
-            rendered[0] = item(0, &kept);
+            rendered[0].1 = item(*first, &kept);
         }
     }
 
+    let remaining = rendered.len() - included;
     let mut out = Segment::default();
-    for (i, seg) in rendered.into_iter().take(included).enumerate() {
-        if i > 0 {
+    for (n, (i, seg)) in rendered.into_iter().take(included).enumerate() {
+        if n > 0 {
             out.append(separator.clone());
         }
         let start = out.width;
         out.append(seg);
         out.hit_from(start, Hit::Attention(entries[i].workspace_id));
     }
-    let remaining = entries.len() - included;
     if remaining > 0 {
         let start = out.width;
         out.append(tail(remaining));

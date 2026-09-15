@@ -252,6 +252,7 @@ mod tests {
             disabled: false,
             priority,
             separator: Vec::new(),
+            more_format: Vec::new(),
         }
     }
 

@@ -13,6 +13,10 @@ pub struct SegmentDef {
     /// Named styles the segment's `format` may reference in a `(...)` run,
     /// beyond the default `$style`.
     pub style_vars: &'static [&'static str],
+    /// `$var` names the segment's `more_format` (its overflow tail) may
+    /// use. Empty for segments without a tail, where any variable — even
+    /// `$count` — is unknown.
+    pub more_vars: &'static [&'static str],
     /// Carries one click target that isn't indexed by item (unlike
     /// `pins`/`agents`/`keys`, which record a hit per item and so tolerate
     /// repeats): placing one of these in two formats at once means the
@@ -23,108 +27,126 @@ pub struct SegmentDef {
 }
 
 const STYLE: &[&str] = &["style"];
+const NO_TAIL: &[&str] = &[];
 
 pub const SEGMENTS: &[SegmentDef] = &[
     SegmentDef {
         name: "brand",
         vars: &["symbol", "name", "mark", "view"],
         style_vars: STYLE,
+        more_vars: NO_TAIL,
         singleton: false,
     },
     SegmentDef {
         name: "group",
         vars: &["label", "tabs"],
         style_vars: STYLE,
+        more_vars: NO_TAIL,
         singleton: false,
     },
     SegmentDef {
         name: "sort",
         vars: &["label", "tabs"],
         style_vars: STYLE,
+        more_vars: NO_TAIL,
         singleton: false,
     },
     SegmentDef {
         name: "filter",
         vars: &["needle"],
         style_vars: STYLE,
+        more_vars: NO_TAIL,
         singleton: false,
     },
     SegmentDef {
         name: "counts",
         vars: &["repos", "workspaces"],
         style_vars: STYLE,
+        more_vars: NO_TAIL,
         singleton: false,
     },
     SegmentDef {
         name: "keys",
         vars: &["key", "label"],
         style_vars: STYLE,
+        more_vars: NO_TAIL,
         singleton: false,
     },
     SegmentDef {
         name: "version",
         vars: &["version"],
         style_vars: STYLE,
+        more_vars: NO_TAIL,
         singleton: false,
     },
     SegmentDef {
         name: "usage",
         vars: &["label", "spark"],
         style_vars: STYLE,
+        more_vars: NO_TAIL,
         singleton: true,
     },
     SegmentDef {
         name: "agent_bar",
         vars: &["symbol"],
         style_vars: STYLE,
+        more_vars: NO_TAIL,
         singleton: false,
     },
     SegmentDef {
         name: "workspace",
         vars: &["repo", "name"],
         style_vars: STYLE,
+        more_vars: NO_TAIL,
         singleton: false,
     },
     SegmentDef {
         name: "attention",
         vars: &["items"],
         style_vars: STYLE,
+        more_vars: &["count"],
         singleton: true,
     },
     SegmentDef {
         name: "pins",
         vars: &["index", "label"],
         style_vars: STYLE,
+        more_vars: NO_TAIL,
         singleton: false,
     },
     SegmentDef {
         name: "agents",
         vars: &["symbol", "label", "key"],
         style_vars: STYLE,
+        more_vars: NO_TAIL,
         singleton: false,
     },
     SegmentDef {
         name: "model_tokens",
         vars: &["model", "tokens"],
         style_vars: STYLE,
+        more_vars: NO_TAIL,
         singleton: false,
     },
     SegmentDef {
         name: "procs",
         vars: &["symbol", "count"],
         style_vars: STYLE,
+        more_vars: NO_TAIL,
         singleton: true,
     },
     SegmentDef {
         name: "diff",
         vars: &["added", "removed"],
         style_vars: STYLE,
+        more_vars: NO_TAIL,
         singleton: false,
     },
     SegmentDef {
         name: "pr",
         vars: &["symbol", "number", "label", "mark"],
         style_vars: &["style", "mark_style"],
+        more_vars: NO_TAIL,
         singleton: true,
     },
 ];

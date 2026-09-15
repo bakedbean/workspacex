@@ -61,6 +61,7 @@ pub struct SegmentTable {
     pub disabled: Option<bool>,
     pub priority: Option<u32>,
     pub separator: Option<String>,
+    pub more_format: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +105,7 @@ impl SegmentTable {
             disabled: self.disabled.or(base.disabled),
             priority: self.priority.or(base.priority),
             separator: self.separator.or(base.separator),
+            more_format: self.more_format.or(base.more_format),
         }
     }
 }
@@ -275,6 +277,10 @@ fn resolve_segment(
     let sep_loc = format!("[{name}].separator");
     let separator = parse_format(&sep_loc, tbl.separator.as_deref().unwrap_or("  "), errors);
     validate(&sep_loc, &separator, &[], resolver, errors);
+    // Likewise the overflow tail: no item, so no item `$style`.
+    let more_loc = format!("[{name}].more_format");
+    let more_format = parse_format(&more_loc, tbl.more_format.as_deref().unwrap_or(""), errors);
+    validate(&more_loc, &more_format, def.more_vars, resolver, errors);
     let style = styled(
         &format!("[{name}].style"),
         tbl.style.as_deref(),
@@ -290,6 +296,7 @@ fn resolve_segment(
             .priority
             .unwrap_or(crate::ui::bar::render::DEFAULT_PRIORITY),
         separator,
+        more_format,
     })
 }
 
@@ -674,6 +681,26 @@ mod tests {
         assert!(e[0].message.contains("label"), "{}", e[0].message);
         assert!(!errs("[pins]\nseparator = \"[x](fg:nope)\"\n").is_empty());
         assert!(!errs("[pins]\nseparator = \"[x]($style)\"\n").is_empty());
+    }
+
+    /// `more_format` renders a multi-item segment's overflow tail. Only
+    /// `attention` has one, and its single variable is `$count`; on any
+    /// other segment even `$count` is unknown.
+    #[test]
+    fn more_format_takes_count_on_attention_and_nothing_elsewhere() {
+        let specs = ok("[attention]\nmore_format = \"[ +$count](fg:dim)\"\n");
+        assert_eq!(
+            specs.segments["attention"].more_format,
+            format::parse("[ +$count](fg:dim)").unwrap()
+        );
+        let e = errs("[attention]\nmore_format = \"$nope\"\n");
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(e[0].location, "[attention].more_format");
+        assert!(e[0].message.contains("nope"), "{}", e[0].message);
+        assert!(!errs("[attention]\nmore_format = \"[$count]($style)\"\n").is_empty());
+        let e = errs("[pins]\nmore_format = \"$count\"\n");
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(e[0].message.contains("count"), "{}", e[0].message);
     }
 
     #[test]

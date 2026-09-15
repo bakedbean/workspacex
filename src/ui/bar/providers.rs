@@ -515,6 +515,7 @@ mod tests {
             disabled: false,
             priority: 100,
             separator: crate::ui::bar::format::parse(separator).unwrap(),
+            more_format: Vec::new(),
         }
     }
 

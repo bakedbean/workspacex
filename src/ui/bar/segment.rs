@@ -120,6 +120,10 @@ pub struct SegmentConfig {
     /// `format`, so it can carry styled runs, but with no item variables
     /// (it sits between items, not inside one).
     pub separator: Vec<Node>,
+    /// The overflow tail of a multi-item segment that folds items it can't
+    /// fit (`attention`'s ` … +N more`). Its variables are the segment's
+    /// `SegmentDef::more_vars`; empty on segments without a tail.
+    pub more_format: Vec<Node>,
 }
 
 pub type SegmentMap = HashMap<String, Segment>;

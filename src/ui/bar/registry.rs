@@ -326,27 +326,27 @@ pub const FLEET_VARS: &[FleetVar] = &[
     },
     FleetVar {
         name: "tokens_total",
-        doc: "Σ latest context size (prompt-side tokens) across every live agent, abbreviated (`77k`, `1.2M`)",
+        doc: "Σ latest reported context size (prompt-side tokens) across every retained agent instance, primary and peers, abbreviated (`77k`, `1.2M`)",
     },
     FleetVar {
         name: "tokens_claude",
-        doc: "as `tokens`, over claude agents only",
+        doc: "as `tokens_total`, over claude agents only",
     },
     FleetVar {
         name: "tokens_pi",
-        doc: "as `tokens`, over pi agents only",
+        doc: "as `tokens_total`, over pi agents only",
     },
     FleetVar {
         name: "tokens_hermes",
-        doc: "as `tokens`, over hermes agents only (hermes reports no usage, so always empty today)",
+        doc: "as `tokens_total`, over hermes agents only (hermes reports no usage, so always empty today)",
     },
     FleetVar {
         name: "tokens_codex",
-        doc: "as `tokens`, over codex agents only",
+        doc: "as `tokens_total`, over codex agents only",
     },
     FleetVar {
         name: "tokens_omp",
-        doc: "as `tokens`, over omp agents only",
+        doc: "as `tokens_total`, over omp agents only",
     },
 ];
 

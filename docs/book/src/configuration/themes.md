@@ -511,7 +511,7 @@ Modules carry no click target.
 | `dirty` | workspaces with modified or untracked files |
 | `msgs_queued` | agent-to-agent messages not yet delivered |
 | `workspaces` `repos` | totals (always rendered) |
-| `tokens_total` | Σ latest context size (prompt-side tokens) across every agent that has reported one, primary and peers |
+| `tokens_total` | Σ latest reported context size (prompt-side tokens) across every agent instance whose transcript is still cached, primary and peers |
 | `tokens_claude` `tokens_pi` `tokens_hermes` `tokens_codex` `tokens_omp` | the same, per agent kind (hermes reports no usage, so it is always empty) |
 
 ### A powerline example

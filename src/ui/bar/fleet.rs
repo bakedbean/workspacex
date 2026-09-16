@@ -27,8 +27,11 @@ pub struct FleetRow {
     pub review: Option<ReviewDecision>,
     pub unresolved: u32,
     pub dirty: bool,
-    /// Latest prompt-side context size of every agent instance in the
-    /// workspace (primary and peers) that has reported one, with its kind.
+    /// Latest reported prompt-side context size of every agent instance in
+    /// the workspace (primary and peers) whose transcript is still cached,
+    /// with its kind. "Latest reported", not "live": the cache outlives the
+    /// session until the tail loop prunes it, and lags a roster change until
+    /// the next tail — the same eventual consistency every events reader has.
     pub context_tokens: Vec<(AgentKind, u64)>,
 }
 
@@ -125,8 +128,11 @@ impl FleetStats {
             if r.dirty {
                 s.dirty += 1;
             }
+            // Transcripts are external input; a malformed count must not
+            // panic the collector, so saturate rather than overflow.
             for (kind, n) in r.context_tokens {
-                s.tokens_by_kind[kind_index(kind)] += n;
+                let slot = &mut s.tokens_by_kind[kind_index(kind)];
+                *slot = slot.saturating_add(n);
             }
         }
         s
@@ -134,7 +140,9 @@ impl FleetStats {
 
     /// Σ `tokens_by_kind` — the fleet-wide context fill.
     pub fn tokens(&self) -> u64 {
-        self.tokens_by_kind.iter().sum()
+        self.tokens_by_kind
+            .iter()
+            .fold(0u64, |acc, n| acc.saturating_add(*n))
     }
 
     /// Walk every workspace the dashboard lists, once per frame.
@@ -446,6 +454,83 @@ mod tests {
             "peer, kind from the roster"
         );
         assert_eq!(text(&vars, "tokens_total"), "82k");
+    }
+
+    #[test]
+    fn token_sums_saturate_instead_of_overflowing() {
+        use crate::pty::session::AgentKind;
+        let rows = vec![
+            FleetRow {
+                context_tokens: vec![(AgentKind::Claude, u64::MAX), (AgentKind::Codex, 1)],
+                ..row()
+            },
+            FleetRow {
+                context_tokens: vec![(AgentKind::Claude, 1)],
+                ..row()
+            },
+        ];
+        let stats = FleetStats::from_rows(rows, 1, 0);
+        assert_eq!(stats.tokens_by_kind[0], u64::MAX, "per-kind sum saturates");
+        assert_eq!(stats.tokens(), u64::MAX, "total saturates");
+    }
+
+    /// Each retained instance counts exactly once: same-kind peers add up,
+    /// a stray `agent_events` entry under the primary's own instance id is
+    /// ignored (the primary is read from `workspace_events`), an entry for
+    /// an instance no longer in the roster contributes nothing, and a
+    /// transcript reset (`context_tokens: None`) drops that instance.
+    #[test]
+    fn collect_counts_each_rostered_instance_once() {
+        use crate::activity::events::WorkspaceEvents;
+        use crate::data::store::{NewWorkspace, Store};
+        use crate::pty::session::AgentKind;
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "x")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "a",
+                branch: "x/a",
+                worktree_path: std::path::Path::new("/tmp/r/a"),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let primary = store
+            .add_primary_agent(ws, AgentKind::Claude, 1)
+            .unwrap()
+            .id;
+        let peer_a = store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        let peer_b = store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        let orphan = store.add_workspace_agent(ws, AgentKind::Omp).unwrap();
+        store.remove_workspace_agent(orphan.id).unwrap();
+        let mut app =
+            crate::app::App::new(store, std::path::PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.agent_roster = app.store.all_workspace_agents().unwrap();
+        let evt = |n: Option<u64>| WorkspaceEvents {
+            context_tokens: n,
+            ..Default::default()
+        };
+        // Primary reset mid-session: nothing reported yet.
+        app.workspace_events.insert(ws, evt(None));
+        // Stray entry under the primary's instance id must not resurrect it.
+        app.agent_events.insert(primary, evt(Some(1_000_000)));
+        app.agent_events.insert(peer_a.id, evt(Some(5_000)));
+        app.agent_events.insert(peer_b.id, evt(Some(6_000)));
+        // Removed from the roster; its cached events are not yet pruned.
+        app.agent_events.insert(orphan.id, evt(Some(9_000_000)));
+        let vars = FleetStats::collect(&app).to_vars();
+        assert_eq!(text(&vars, "tokens_claude"), "", "reset primary drops out");
+        assert_eq!(
+            text(&vars, "tokens_codex"),
+            "11k",
+            "both same-kind peers count"
+        );
+        assert_eq!(text(&vars, "tokens_omp"), "", "unrostered instance ignored");
+        assert_eq!(text(&vars, "tokens_total"), "11k");
     }
 
     #[test]

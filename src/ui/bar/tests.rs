@@ -421,8 +421,22 @@ mod footer_tests {
         );
         let text = plain(&out.line);
         assert!(text.ends_with("0.1.0  claude 1.2M  codex 340k"), "{text:?}");
-        // Empty fleet: the whole `(  $tokens)` group drops.
-        let text = plain(&footer(false, "24h", 140, crate::ui::bar::fleet::empty()).line);
+        // Empty fleet, same specs: the whole `(  $tokens)` group drops,
+        // leading gap included, leaving the version flush right.
+        let out = dashboard_footer(
+            &specs,
+            &theme,
+            &DashboardFooterInputs {
+                activity: &[],
+                version: "0.1.0",
+                window_label: "24h",
+                workspace_selected: false,
+                fleet: crate::ui::bar::fleet::empty(),
+            },
+            140,
+        );
+        let text = plain(&out.line);
+        assert!(text.ends_with("0.1.0"), "{text:?}");
         assert!(!text.contains("claude"), "{text:?}");
     }
 

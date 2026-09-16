@@ -14,6 +14,7 @@ mod name_color_picker;
 mod process_list;
 mod remote_workspace_list;
 mod repo_settings;
+mod textarea;
 mod updates_panel;
 mod usage_picker;
 
@@ -23,6 +24,7 @@ pub use name_color_picker::{Dir, move_selection, render_name_color_picker};
 pub use process_list::render_process_list;
 pub use remote_workspace_list::render_remote_workspace_list;
 pub use repo_settings::render_repo_settings;
+pub use textarea::TextArea;
 pub use updates_panel::{
     PANEL_MAX_WIDTH, PanelInputs, PanelView, ordered_workspaces_for_panel, panel_sections,
     render_updates_panel,

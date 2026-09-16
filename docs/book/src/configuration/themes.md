@@ -277,7 +277,8 @@ segment, is an error. Entries union per kind over the bundled default,
 yours winning, like a segment palette. An empty entry (`pi = ""`) is an
 override, not an absence: that kind shows no glyph rather than `symbol`.
 The `agents` pills read the same table through their `$icon` variable,
-so each harness's glyph is drawn once and appears in both places.
+and a `[module.<name>]` format through `$icon_<kind>`, so each harness's
+glyph is drawn once and appears everywhere the theme names it.
 
 An item whose `format` renders empty — an empty `format`, or one whose
 variables are all absent for that item — is dropped as if it were never in
@@ -533,6 +534,7 @@ Modules carry no click target.
 | `workspaces` `repos` | totals (always rendered) |
 | `tokens_total` | Σ latest reported context size (prompt-side tokens) across every agent instance whose transcript is still cached, primary and peers |
 | `tokens_claude` `tokens_pi` `tokens_hermes` `tokens_codex` `tokens_omp` | the same, per agent kind (hermes reports no usage, so it is always empty) |
+| `icon_claude` `icon_pi` `icon_hermes` `icon_codex` `icon_omp` | the kind's glyph from `[agent_bar.symbols]` — the theme's, not the fleet's; absent for a kind without an entry, so `($icon_pi )` collapses like the pills' `($icon )` |
 
 ### A powerline example
 

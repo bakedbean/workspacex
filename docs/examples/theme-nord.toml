@@ -106,6 +106,12 @@ omp    = ""
 pi     = ""
 hermes = ""
 
+# The tokens module names each harness by the glyph above instead of the
+# bundled preset's word. Defined but not placed, like the preset: add
+# `$tokens` to a bar to show it.
+[module.tokens]
+format = "([$icon_claude $tokens_claude](fg:agent_claude))(  [$icon_codex $tokens_codex](fg:agent_codex))(  [$icon_omp $tokens_omp](fg:agent_omp))(  [$icon_pi $tokens_pi](fg:agent_pi))"
+
 [workspace]
 # Inherit the block's text colour (bold) instead of the base theme's header
 # colour, which the engine would otherwise supply as $style.

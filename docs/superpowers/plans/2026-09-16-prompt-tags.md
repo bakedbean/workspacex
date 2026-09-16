@@ -576,6 +576,18 @@ mod tests {
         // col 3 on a width-3 line is the START of the second visual row
         assert_eq!(t.wrap_rows(3).1, (1, 0));
     }
+
+    #[test]
+    fn a_line_that_exactly_fills_its_rows_keeps_a_trailing_empty_row_wherever_the_cursor_is() {
+        // Without this, the empty row would appear only while the cursor sat
+        // on it, shifting every line below as the cursor moved.
+        let mut t = with("abc\nxyz");
+        assert_eq!(t.wrap_rows(3).0, vec!["abc", "", "xyz"]);
+        t.move_up();
+        assert_eq!(t.cursor(), (0, 3));
+        assert_eq!(t.wrap_rows(3), (vec!["abc".to_string(), String::new(), "xyz".to_string()], (1, 0)));
+        assert_eq!(with("ab\nxyz").wrap_rows(3).0, vec!["ab", "xyz"]);
+    }
 }
 ```
 
@@ -765,16 +777,17 @@ impl TextArea {
                 for chunk in chars.chunks(width) {
                     rows.push(chunk.iter().collect());
                 }
-            }
-            if i == self.row {
-                let vrow = first_row + self.col / width;
-                let vcol = self.col % width;
-                // `col == len` on a line that filled its last row exactly
-                // lands one row past what `chunks` produced; make it exist.
-                if vrow >= rows.len() {
+                // A line that fills its last row exactly gets an empty row
+                // after it so the cursor at `col == len` has somewhere to
+                // sit. Added for every such line, not only the cursor's, so
+                // the layout depends on the text alone and never shifts as
+                // the cursor moves.
+                if chars.len() % width == 0 {
                     rows.push(String::new());
                 }
-                cursor = (vrow, vcol);
+            }
+            if i == self.row {
+                cursor = (first_row + self.col / width, self.col % width);
             }
         }
         (rows, cursor)

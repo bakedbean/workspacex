@@ -681,8 +681,20 @@ impl Session {
 /// Enter myself" symptom. Wrapping the body in a bracketed paste
 /// (`ESC[200~ … ESC[201~`) makes the paste boundary explicit in the byte
 /// stream, so the following CR is an unambiguous Enter even when the two writes
-/// arrive in a single read. Other agents (Claude/Pi/Hermes/omp) submit fine on
-/// a plain `text` + CR, so they keep the simpler form and are untouched.
+/// arrive in a single read.
+///
+/// Claude needs the same wrapper for a different reason: size. The PTY hands
+/// Claude Code a multi-KB body as several ~1 KB reads (macOS raw-queue chunks)
+/// that all land in one event-loop tick, and its input layer classifies each
+/// ≥800-char read as a paste of its own, keeping only the last one — the
+/// message arrives as its final fragment with no banner. Measured against
+/// Claude Code 2.1.273: a 3277-byte body written plain arrived as its last
+/// 211 bytes, while the same body between paste markers arrived whole and
+/// submitted on the following CR (a short one did too). Inside the markers
+/// Claude Code's tokenizer accumulates everything into a single paste however
+/// the kernel slices it — which is also the shape Claude Code's own PTY reply
+/// path writes. Pi and Hermes submit fine on a plain `text` + CR, so they keep
+/// the simpler form and are untouched.
 ///
 /// omp is the one where the wrapper would actively hurt, and it was checked
 /// rather than assumed. Its editor runs its own `BracketedPasteHandler` and
@@ -694,16 +706,14 @@ impl Session {
 pub(crate) fn submit_writes(agent: AgentKind, text: &str) -> (Vec<u8>, Vec<u8>) {
     let enter = b"\r".to_vec();
     match agent {
-        AgentKind::Codex => {
+        AgentKind::Codex | AgentKind::Claude => {
             let mut body = Vec::with_capacity(text.len() + 12);
             body.extend_from_slice(b"\x1b[200~");
             body.extend_from_slice(text.as_bytes());
             body.extend_from_slice(b"\x1b[201~");
             (body, enter)
         }
-        AgentKind::Claude | AgentKind::Pi | AgentKind::Hermes | AgentKind::Omp => {
-            (text.as_bytes().to_vec(), enter)
-        }
+        AgentKind::Pi | AgentKind::Hermes | AgentKind::Omp => (text.as_bytes().to_vec(), enter),
     }
 }
 

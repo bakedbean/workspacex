@@ -331,7 +331,10 @@ pub fn version(cfg: &SegmentConfig, version: &str, resolver: &Resolver) -> Optio
     )
 }
 
-/// The agent identity bar; `$style` is the agent's fixed color.
+/// The agent identity bar; `$style` is the agent's fixed color. `$symbol`
+/// is the kind's `[agent_bar.symbols]` entry when the theme has one, else
+/// `symbol` — so a theme can give each harness its own icon and keep one
+/// glyph for kinds it hasn't drawn.
 pub fn agent_bar(
     cfg: &SegmentConfig,
     agent: Option<AgentKind>,
@@ -340,7 +343,13 @@ pub fn agent_bar(
 ) -> Option<Segment> {
     let theme = &cfg.theme(theme);
     let agent = agent?;
-    let symbol = cfg.symbol.clone().unwrap_or_else(|| "▎".to_string());
+    let symbol = cfg
+        .symbols
+        .iter()
+        .find(|(kind, _)| *kind == agent)
+        .map(|(_, glyph)| glyph.clone())
+        .or_else(|| cfg.symbol.clone())
+        .unwrap_or_else(|| "▎".to_string());
     eval_segment(
         cfg,
         &vars(vec![("symbol", var(symbol))]),
@@ -615,10 +624,13 @@ pub fn tags(cfg: &SegmentConfig, tags: &[PromptTag], resolver: &Resolver) -> Opt
 /// Agent pills: `● claude q   ○ codex w`. The active instance gets the
 /// filled dot and a bold label. `$symbol` is the dot plus its space (the
 /// `[agents].symbol` field is not used; the dot encodes active/idle).
+/// `$icon` is the pill's kind's glyph from `icons` — `[agent_bar.symbols]`,
+/// so a theme draws each harness once — and absent for a kind without one.
 pub fn agents(
     cfg: &SegmentConfig,
     agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
     active: Option<AgentInstanceId>,
+    icons: &[(AgentKind, String)],
     theme: &Theme,
     resolver: &Resolver,
 ) -> Option<Segment> {
@@ -634,6 +646,9 @@ pub fn agents(
                 Style::default()
             };
             let mut v = vars(vec![("symbol", var(dot))]);
+            if let Some((_, icon)) = icons.iter().find(|(k, _)| k == kind) {
+                v.insert("icon".to_string(), var(icon.clone()));
+            }
             v.insert(
                 "label".to_string(),
                 Segment::text(label.clone(), label_style),
@@ -769,6 +784,7 @@ mod tests {
             more_format: Vec::new(),
             styles: Vec::new(),
             palette: HashMap::new(),
+            symbols: Vec::new(),
         }
     }
 
@@ -812,7 +828,49 @@ mod tests {
             .style
     }
 
-    /// `$workspace`'s `$style` is the PR-lifecycle tint when the branch
+    /// `$symbol` is the kind's entry in `[agent_bar.symbols]` when it has
+    /// one, else the segment's `symbol`; `$style` stays the agent colour
+    /// either way, so a per-kind icon wears its kind's identity.
+    #[test]
+    fn agent_bar_symbol_prefers_the_kinds_entry_and_falls_back_to_symbol() {
+        let theme = Theme::wsx();
+        let palette = HashMap::new();
+        let resolver = Resolver::new(&palette, &theme);
+        let mut cfg = item_cfg("[$symbol]($style)", "");
+        cfg.symbol = Some(">".to_string());
+        cfg.symbols = vec![(AgentKind::Codex, "X".to_string())];
+        let out = agent_bar(&cfg, Some(AgentKind::Codex), &theme, &resolver).unwrap();
+        assert_eq!(out.plain_text(), "X");
+        assert_eq!(
+            span_style(&out, "X").fg,
+            theme.agent_style(AgentKind::Codex).fg
+        );
+        let out = agent_bar(&cfg, Some(AgentKind::Claude), &theme, &resolver).unwrap();
+        assert_eq!(out.plain_text(), ">", "no entry: the plain symbol");
+        assert_eq!(
+            span_style(&out, ">").fg,
+            theme.agent_style(AgentKind::Claude).fg
+        );
+    }
+
+    /// An empty per-kind glyph is an override, not an absence: the segment
+    /// drops (so a `($agent_bar )` group collapses) rather than falling
+    /// through to `symbol`. With neither a per-kind entry nor `symbol`,
+    /// the bundled bar glyph stands in.
+    #[test]
+    fn agent_bar_empty_entry_suppresses_and_no_symbol_uses_the_bar() {
+        let theme = Theme::wsx();
+        let palette = HashMap::new();
+        let resolver = Resolver::new(&palette, &theme);
+        let mut cfg = item_cfg("[$symbol]($style)", "");
+        cfg.symbol = Some(">".to_string());
+        cfg.symbols = vec![(AgentKind::Pi, String::new())];
+        assert!(agent_bar(&cfg, Some(AgentKind::Pi), &theme, &resolver).is_none());
+        cfg.symbol = None;
+        let out = agent_bar(&cfg, Some(AgentKind::Claude), &theme, &resolver).unwrap();
+        assert_eq!(out.plain_text(), "▎");
+    }
+
     /// has a PR, so a theme can colour the focused name like the
     /// dashboard row and the `pr` chip; without one it stays the header
     /// style.

@@ -5,6 +5,7 @@
 //!
 //! See `docs/superpowers/specs/2026-09-13-bar-theming-design.md`.
 
+use crate::pty::session::AgentKind;
 use crate::ui::bar::format::{self, Node};
 use crate::ui::bar::registry::{ITEM_COLORS, SEGMENTS, segment_def, singleton_names};
 use crate::ui::bar::render::BarSpec;
@@ -72,6 +73,10 @@ pub struct SegmentTable {
     /// tokens inside this segment only. Same value grammar as `[palette]`.
     #[serde(default)]
     pub palette: BTreeMap<String, String>,
+    /// `[agent_bar.symbols]`: one glyph per agent kind (`claude`, `pi`, …),
+    /// tried ahead of `symbol`. Rejected on every other segment, which is
+    /// why it is `Option`: an absent table and a present empty one differ.
+    pub symbols: Option<BTreeMap<String, String>>,
 }
 
 /// A `[module.<name>]` table: a segment composed from fleet variables. No
@@ -146,6 +151,15 @@ impl SegmentTable {
                     palette.entry(k).or_insert(v);
                 }
                 palette
+            },
+            symbols: match (self.symbols, base.symbols) {
+                (Some(mut mine), Some(base)) => {
+                    for (k, v) in base {
+                        mine.entry(k).or_insert(v);
+                    }
+                    Some(mine)
+                }
+                (mine, base) => mine.or(base),
             },
         }
     }
@@ -436,6 +450,7 @@ fn resolve_segment(
         base_resolver,
         errors,
     );
+    let symbols = resolve_symbols(name, tbl.symbols.as_ref(), errors);
     Some(SegmentConfig {
         style,
         symbol: tbl.symbol.clone(),
@@ -448,7 +463,45 @@ fn resolve_segment(
         more_format,
         styles,
         palette,
+        symbols,
     })
+}
+
+/// Validate a `[<segment>.symbols]` table: only `agent_bar` reads one, and
+/// every key must name an `AgentKind`. Entries come back in `AgentKind::ALL`
+/// order regardless of the file's.
+fn resolve_symbols(
+    segment: &str,
+    tbl: Option<&BTreeMap<String, String>>,
+    errors: &mut Vec<ThemeError>,
+) -> Vec<(AgentKind, String)> {
+    let Some(tbl) = tbl else {
+        return Vec::new();
+    };
+    let location = format!("[{segment}.symbols]");
+    if segment != "agent_bar" {
+        errors.push(error(
+            location,
+            "`symbols` is read by [agent_bar] only".to_string(),
+        ));
+        return Vec::new();
+    }
+    let kind_names: Vec<&str> = AgentKind::ALL.iter().map(|k| k.display_name()).collect();
+    for key in tbl.keys() {
+        if !kind_names.contains(&key.as_str()) {
+            errors.push(error(
+                location.clone(),
+                format!(
+                    "unknown agent kind `{key}` (known: {})",
+                    kind_names.join(", ")
+                ),
+            ));
+        }
+    }
+    AgentKind::ALL
+        .iter()
+        .filter_map(|&kind| tbl.get(kind.display_name()).map(|s| (kind, s.clone())))
+        .collect()
 }
 
 /// Validate one `[module.<name>]` table: its `format` may reference only
@@ -496,6 +549,7 @@ fn resolve_module(
         // A module has no `[module.<name>.palette]`: its format is
         // validated against the global resolver, so nothing to shadow.
         palette: HashMap::new(),
+        symbols: Vec::new(),
     })
 }
 
@@ -850,6 +904,64 @@ mod tests {
         assert!(!specs.palette.contains_key("ok"));
         assert!(specs.segments["workspace"].palette.is_empty());
         assert_eq!(specs.palette["global"], Color::Rgb(0x12, 0x34, 0x56));
+    }
+
+    /// `[agent_bar.symbols]` maps agent kinds to their own glyph; kinds
+    /// without an entry keep `symbol`. Entries union with the bundled
+    /// default per kind, like `[<segment>.palette]`.
+    #[test]
+    fn agent_bar_symbols_parse_per_kind_and_keep_the_fallback_symbol() {
+        use crate::pty::session::AgentKind;
+        let specs = ok("[agent_bar.symbols]\nclaude = \"C\"\ncodex = \"X\"\n");
+        let bar = &specs.segments["agent_bar"];
+        assert_eq!(bar.symbol.as_deref(), Some("▎"), "symbol keeps the default");
+        assert_eq!(
+            bar.symbols,
+            vec![
+                (AgentKind::Claude, "C".to_string()),
+                (AgentKind::Codex, "X".to_string()),
+            ]
+        );
+        assert!(specs.segments["pr"].symbols.is_empty());
+    }
+
+    /// A key that isn't an agent kind is a typo, not a silent no-op.
+    #[test]
+    fn agent_bar_symbols_reject_unknown_kinds() {
+        let errs = errs("[agent_bar.symbols]\ngpt = \"G\"\n");
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert_eq!(errs[0].location, "[agent_bar.symbols]");
+        assert!(errs[0].message.contains("gpt"), "{}", errs[0].message);
+        assert!(errs[0].message.contains("claude"), "{}", errs[0].message);
+    }
+
+    /// Only `agent_bar` reads `symbols`; on any other segment the table
+    /// would do nothing, so it is an error there — even an empty one, so
+    /// the rule holds as documented rather than only for non-empty tables.
+    #[test]
+    fn symbols_table_is_an_error_off_agent_bar() {
+        for src in ["[pr.symbols]\nclaude = \"C\"\n", "[pr.symbols]\n"] {
+            let errs = errs(src);
+            assert_eq!(errs.len(), 1, "{src:?}: {errs:?}");
+            assert_eq!(errs[0].location, "[pr.symbols]");
+            assert!(errs[0].message.contains("agent_bar"), "{}", errs[0].message);
+        }
+    }
+
+    /// A user file's `[agent_bar.symbols]` unions with the base's per
+    /// kind, the user winning — an empty user glyph included, since it is
+    /// a deliberate override, not an absence.
+    #[test]
+    fn agent_bar_symbols_merge_per_kind() {
+        let base =
+            ThemeFile::parse("[agent_bar.symbols]\nclaude = \"C\"\ncodex = \"X\"\npi = \"P\"\n")
+                .unwrap();
+        let mine = ThemeFile::parse("[agent_bar.symbols]\nclaude = \"c\"\npi = \"\"\n").unwrap();
+        let merged = mine.merge_over(base);
+        let symbols = merged.segments["agent_bar"].symbols.as_ref().unwrap();
+        assert_eq!(symbols["claude"], "c");
+        assert_eq!(symbols["codex"], "X");
+        assert_eq!(symbols["pi"], "");
     }
 
     /// A segment palette value may name a global `[palette]` entry — the

@@ -116,6 +116,8 @@ format = "[$label $spark](fg:path)"
 priority = 60
 
 # Agent identity bar; $style carries the agent's color. Variables: $symbol
+# An `[agent_bar.symbols]` table (keys: claude, pi, hermes, codex, omp)
+# gives a kind its own glyph; `symbol` covers the kinds without one.
 [agent_bar]
 symbol = "▎"
 format = "[$symbol]($style)"
@@ -151,9 +153,11 @@ more_format = "[ <> ](bg:bg_soft fg:dim bold)"
 # narrow-row test depends on this ordering.
 priority    = 40
 
-# Agent pills (2+ agents). $style is the agent color. Variables: $symbol $label $key
+# Agent pills (2+ agents). $style is the agent color. Variables: $symbol
+# $icon $label $key — $icon is the kind's [agent_bar.symbols] glyph, absent
+# (its group collapsing) for a kind without one.
 [agents]
-format    = "[$symbol]($style)$label ([ $key ](bg:bg_soft fg:dim bold))"
+format    = "[$symbol($icon )]($style)$label ([ $key ](bg:bg_soft fg:dim bold))"
 separator = "   "
 priority  = 20
 

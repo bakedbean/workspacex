@@ -304,6 +304,7 @@ pub(super) fn attached_segments(
             cfg(specs, "agents"),
             inputs.agents,
             inputs.active_agent,
+            &cfg(specs, "agent_bar").symbols,
             theme,
             resolver,
         ),

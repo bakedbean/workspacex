@@ -255,6 +255,7 @@ mod tests {
             more_format: Vec::new(),
             styles: Vec::new(),
             palette: Default::default(),
+            symbols: Vec::new(),
         }
     }
 

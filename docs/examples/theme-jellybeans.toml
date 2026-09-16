@@ -92,10 +92,18 @@ separator   = "  "
 more_format = "[ <> ](fg:yellow bold)"
 priority    = 40
 
-# Agent identity as a right-pointing chevron in the agent's colour (the
-# bundled default is a thin vertical bar).
+# Agent identity in the agent's colour: each harness's Nerd Font icon,
+# falling back to a right-pointing chevron for a kind without one (the
+# bundled default is a thin vertical bar for every kind).
 [agent_bar]
 symbol = ""
+
+[agent_bar.symbols]
+claude = ""
+codex  = ""
+omp    = ""
+pi     = ""
+hermes = ""
 
 [workspace]
 # Inherit the block's text colour (bold) instead of the base theme's header
@@ -103,7 +111,7 @@ symbol = ""
 format = "[($repo/)$name](bold)"
 
 [agents]
-format    = "[$symbol]($style)$label ([$key](fg:yellow bold))"
+format    = "[$symbol($icon )]($style)$label ([$key](fg:yellow bold))"
 separator = "   "
 
 [model_tokens]

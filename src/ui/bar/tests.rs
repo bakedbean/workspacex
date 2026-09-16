@@ -696,6 +696,37 @@ mod bottom_tests {
         assert_eq!(ids, vec![AgentInstanceId(1), AgentInstanceId(2)]);
     }
 
+    /// Agent pills read the same per-kind icon table as `agent_bar`, so a
+    /// theme defines each harness's glyph once. `$icon` is the pill's
+    /// kind's entry, absent (its group collapsing) for a kind without one,
+    /// and it takes the pill's `$style` — the agent colour — like the dot.
+    #[test]
+    fn agent_pills_take_their_kinds_icon_from_agent_bar_symbols() {
+        let theme = Theme::wsx();
+        let specs = crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse("[agent_bar.symbols]\nclaude = \"C\"\n")
+                .unwrap(),
+            &theme,
+        )
+        .unwrap();
+        let pinned = cmds(&[]);
+        let agents = agents();
+        let out = attached_bars(&specs, &theme, full(&pinned, &agents), 120, 120).bottom;
+        let t = plain(&out.line);
+        assert!(t.contains("● C claude  q "), "{t:?}");
+        assert!(
+            t.contains("○ codex  w "),
+            "no icon for codex: group collapses; {t:?}"
+        );
+        let icon = out
+            .line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "C")
+            .unwrap_or_else(|| panic!("icon span in {:?}", out.line));
+        assert_eq!(icon.style.fg, theme.agent_style(AgentKind::Claude).fg);
+    }
+
     #[test]
     fn tag_chips_follow_the_pins_and_carry_their_hits() {
         let pinned = cmds(&[("PR", "/pr")]);

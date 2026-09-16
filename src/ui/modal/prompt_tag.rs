@@ -27,6 +27,10 @@ pub struct PromptTagModal {
     pub selected: usize,
     /// The body draft. Survives Esc from the body stage back to pick.
     pub body: TextArea,
+    /// A one-line message shown above the body-stage footer after an
+    /// insert could not be confirmed (no session, agent gone, ack timed
+    /// out). The draft stays; the next key clears it.
+    pub notice: Option<String>,
 }
 
 /// What Enter in the pick stage does.
@@ -43,6 +47,7 @@ impl PromptTagModal {
             name_field: String::new(),
             selected: 0,
             body: TextArea::new(),
+            notice: None,
         }
     }
 
@@ -198,9 +203,14 @@ fn render_body(
     theme: &Theme,
 ) {
     let inner = panel_frame(f, area, w, h, format!(" <{name}> "), theme);
+    let notice_rows = u16::from(modal.notice.is_some());
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(notice_rows),
+            Constraint::Length(1),
+        ])
         .split(inner);
     let box_area = Rect {
         x: chunks[0].x + 1,
@@ -208,9 +218,15 @@ fn render_body(
         ..chunks[0]
     };
     modal.body.render(f, box_area, theme);
+    if let Some(notice) = &modal.notice {
+        f.render_widget(
+            Paragraph::new(format!(" {notice}")).style(theme.err_style()),
+            chunks[1],
+        );
+    }
     f.render_widget(
         Paragraph::new("[^s] insert   [enter] newline   [esc] back").style(theme.dim_style()),
-        chunks[1],
+        chunks[2],
     );
 }
 
@@ -247,6 +263,7 @@ mod tests {
             }
         );
         assert!(m.body.is_blank());
+        assert_eq!(m.notice, None);
     }
 
     #[test]

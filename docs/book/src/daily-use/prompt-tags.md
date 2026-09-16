@@ -23,7 +23,9 @@ picker:
 
 The body box is a small multi-line editor: `Enter` inserts a newline,
 arrows/Home/End move, `Esc` goes back to the picker (keeping your draft).
-Tabs are kept as tabs (shown four columns wide).
+Tabs are kept as tabs (shown four columns wide). Pasted CRLF line endings
+become single newlines; control characters other than newline and tab are
+stripped when inserting.
 `Ctrl-s` inserts
 
 ```
@@ -37,8 +39,12 @@ tagged sections and add a plain instruction before pressing Enter yourself.
 Each insert bumps the tag's use count; the three most-used tags sit in the
 footer as `<context>`-style chips — click one to go straight to its body box.
 
-Tag names must start with a letter or `_` and contain only letters, digits,
-`_`, `.` and `-`.
+Tag names are ASCII-only: they must start with a letter or `_` and contain
+only letters, digits, `_`, `.` and `-` (`[A-Za-z_][A-Za-z0-9_.-]*`).
+
+If the insert can't be confirmed — no agent in the focused pane, or the
+agent has exited or stopped responding — the body box stays open with your
+draft and a one-line notice, so nothing you typed is lost.
 
 The list lives in the `prompt_tags` setting, one `name=uses` per line:
 
@@ -50,6 +56,26 @@ task=7"
 wsx config set prompt_tags ""               # clear
 ```
 
+Lines that don't parse (an invalid name, a non-numeric count) are dropped
+when the list is read and disappear on the next save.
+
 The footer chips are the `$tags` bar segment — see
 [Themes](../configuration/themes.md) to move, restyle, or drop them. The
 `Ctrl-x <` chord works even when a theme omits the segment.
+
+If you have your own `~/.config/wsx/theme.toml` with an explicit
+`[attached_bottom].format`, the chips only appear once you add `($tags  )`
+beside `$pins` in that format and give the segment a `[tags]` table:
+
+```toml
+[attached_bottom]
+format = "$keys  ($pins  )($tags  )"
+
+[tags]
+format      = "[<$label>]()"
+separator   = "  "
+more_format = "[ <> ](bold)"
+```
+
+The bundled examples in `docs/examples/theme-*.toml` carry styled versions
+of both.

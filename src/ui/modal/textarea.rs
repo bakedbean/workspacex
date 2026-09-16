@@ -6,6 +6,7 @@ use crate::ui::theme::Theme;
 use ratatui::layout::Rect;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
+use unicode_width::UnicodeWidthChar;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextArea {
@@ -159,16 +160,19 @@ impl TextArea {
         self.goal_col = None;
     }
 
-    /// Soft-wrap every line at `width` chars. Returns the visual rows and
-    /// the cursor's `(visual row, visual col)`. A cursor exactly at a wrap
-    /// boundary sits at the start of the next visual row, so typing at the
-    /// end of a full row continues on the row below.
+    /// Soft-wrap every line at `width` display cells. Returns the visual
+    /// rows and the cursor's `(visual row, visual cell)`. A cursor exactly
+    /// at a wrap boundary sits at the start of the next visual row, so
+    /// typing at the end of a full row continues on the row below.
     ///
-    /// A tab is one char for editing (see `insert_char`/`byte_at`/etc, which
-    /// stay char-indexed on the raw text) but is expanded here to 4 display
-    /// columns, since a raw tab char renders as a single (usually blank)
-    /// terminal cell. `self.col` (a raw char index) is mapped to its
-    /// expanded display column before chunking into rows.
+    /// Rows are built by display cell, not char count: a tab is one char
+    /// for editing (see `insert_char`/`byte_at`/etc, which stay
+    /// char-indexed on the raw text) but takes `TAB_COLS` cells here, and
+    /// every other char takes its `unicode_width` cell count (0 for a
+    /// combining mark, 2 for e.g. a CJK ideograph, 1 for the common case).
+    /// A char never splits across rows: one that would push a row over
+    /// `width` starts a new row first, and a zero-width char always joins
+    /// the current row.
     fn wrap_rows(&self, width: usize) -> (Vec<String>, (usize, usize)) {
         const TAB_COLS: usize = 4;
         let width = width.max(1);
@@ -176,40 +180,51 @@ impl TextArea {
         let mut cursor = (0, 0);
         for (i, line) in self.lines.iter().enumerate() {
             let chars: Vec<char> = line.chars().collect();
-            let mut disp: Vec<char> = Vec::with_capacity(chars.len());
-            let mut cursor_disp_col = None;
+            let first_row = rows.len();
+            let mut cur = String::new();
+            let mut cur_cells = 0usize;
+            let mut rows_in_line = 0usize;
+            let mut cursor_found: Option<(usize, usize)> = None;
             for (ci, &c) in chars.iter().enumerate() {
+                let w = if c == '\t' {
+                    TAB_COLS
+                } else {
+                    c.width().unwrap_or(0)
+                };
+                if w > 0 && cur_cells > 0 && cur_cells + w > width {
+                    rows.push(std::mem::take(&mut cur));
+                    cur_cells = 0;
+                    rows_in_line += 1;
+                }
                 if i == self.row && ci == self.col {
-                    cursor_disp_col = Some(disp.len());
+                    cursor_found = Some((rows_in_line, cur_cells));
                 }
                 if c == '\t' {
-                    disp.extend(std::iter::repeat_n(' ', TAB_COLS));
+                    cur.push_str("    ");
                 } else {
-                    disp.push(c);
+                    cur.push(c);
                 }
+                cur_cells += w;
             }
             if i == self.row && self.col == chars.len() {
-                cursor_disp_col = Some(disp.len());
+                cursor_found = Some(if !chars.is_empty() && cur_cells == width {
+                    (rows_in_line + 1, 0)
+                } else {
+                    (rows_in_line, cur_cells)
+                });
             }
-            let first_row = rows.len();
-            if disp.is_empty() {
+            // A line that fills its last row exactly gets an empty row
+            // after it so the cursor at `col == len` has somewhere to
+            // sit. Added for every such line, not only the cursor's, so
+            // the layout depends on the text alone and never shifts as
+            // the cursor moves.
+            let trailing_empty = !chars.is_empty() && cur_cells == width;
+            rows.push(cur);
+            if trailing_empty {
                 rows.push(String::new());
-            } else {
-                for chunk in disp.chunks(width) {
-                    rows.push(chunk.iter().collect());
-                }
-                // A line that fills its last row exactly gets an empty row
-                // after it so the cursor at `col == len` has somewhere to
-                // sit. Added for every such line, not only the cursor's, so
-                // the layout depends on the text alone and never shifts as
-                // the cursor moves.
-                if disp.len() % width == 0 {
-                    rows.push(String::new());
-                }
             }
-            if i == self.row {
-                let dcol = cursor_disp_col.unwrap_or(0);
-                cursor = (first_row + dcol / width, dcol % width);
+            if let Some((r, c)) = cursor_found {
+                cursor = (first_row + r, c);
             }
         }
         (rows, cursor)
@@ -395,5 +410,22 @@ mod tests {
             )
         );
         assert_eq!(with("ab\nxyz").wrap_rows(3).0, vec!["ab", "xyz", ""]);
+    }
+
+    #[test]
+    fn wide_chars_wrap_by_display_cells_and_place_the_cursor_in_cells() {
+        // 界 is two cells: three of them do not fit a 4-cell row.
+        let t = with("界界界");
+        assert_eq!(t.wrap_rows(4).0, vec!["界界", "界"]);
+        assert_eq!(t.wrap_rows(4).1, (1, 2));
+        // A combining mark is zero cells: it stays on its base's row and
+        // does not advance the cursor column.
+        let mut t = with("e\u{301}x");
+        assert_eq!(t.wrap_rows(10), (vec!["e\u{301}x".to_string()], (0, 2)));
+        // One raw char left puts the cursor before `x`: the mark before it
+        // is a char for editing but no cell on screen, so display col 1.
+        t.move_left();
+        assert_eq!(t.cursor(), (0, 2));
+        assert_eq!(t.wrap_rows(10).1, (0, 1));
     }
 }

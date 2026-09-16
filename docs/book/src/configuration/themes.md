@@ -179,6 +179,10 @@ and `sort:` mode tabs, the live filter echo, and the repo/workspace counts
 flush right. Its five segments are display only — nothing on that line is
 clickable.
 
+A theme that sets its own `[attached_bottom].format` keeps that layout
+unchanged — add `$tags` to it yourself to get the prompt-tag chips (the
+keyboard chord works either way).
+
 `[dashboard_detail]` is the dashboard's own DETAIL pane (the pane shown when
 a workspace row is selected, distinct from the attached view): its
 pinned-command chip row, followed by a rule to the edge. `$pins` is the only

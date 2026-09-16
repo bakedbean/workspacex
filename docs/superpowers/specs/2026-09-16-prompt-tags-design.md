@@ -94,7 +94,9 @@ Keys:
 
 Pasted text (bracketed paste from the terminal) is inserted verbatim at
 the cursor. The box wraps long lines visually at the panel width and
-scrolls vertically to keep the cursor in view.
+scrolls vertically to keep the cursor in view. CRLF line endings are
+normalised to LF; C0 control characters other than newline and tab are
+stripped at insert time.
 
 ### Insertion
 
@@ -208,6 +210,7 @@ pub struct PromptTagModal {
     pub name_field: String,     // pick-stage filter / new-name input
     pub selected: usize,        // index into the *filtered* list
     pub body: TextArea,         // survives Esc from body → pick
+    pub notice: Option<String>, // body-stage inline error; cleared by the next key
 }
 pub enum TagStage { Pick, Body { name: String } }
 ```
@@ -265,12 +268,28 @@ input behaves.
 - Malformed lines in the `prompt_tags` setting (bad names, non-numeric
   uses) are dropped on parse and disappear on the next serialize — same
   posture as pinned commands, surfaced via `wsx config get`.
-- Writer channel closed (agent exited mid-modal): `insert_text` returns
-  `false`; the modal closes and an `Error` modal reports
-  `agent is not running`. The use count is **not** bumped.
-- Settings write failure: `Error` modal with the store error; the
-  in-memory cache keeps the mutation so the UI stays consistent until
-  the next successful write.
+- Insert not confirmed: with no session in the focused pane, or when
+  `insert_text` returns `false` (writer channel closed because the agent
+  exited, or the write acknowledgement timed out), the modal stays on the
+  body stage with the draft intact and a one-line `notice` in the error
+  colour above the footer (`no running agent in the focused pane — draft
+  kept` / `insert not confirmed (agent exited or not responding) — draft
+  kept`). A timeout only means delivery is uncertain, so the notice never
+  claims the agent is gone. The use count is **not** bumped. The next key
+  clears the notice.
+- Settings write failure after a successful insert: the modal closes (the
+  text is already in the composer) and an `Error` modal says so —
+  `inserted, but could not save the use count: …` — so the user does not
+  insert it twice.
+- Settings write failure in the pick stage (create on Enter, `^d`
+  delete): the prompt-tag modal is replaced by an `Error` modal with the
+  store error (`could not save prompt tags: …`); the UI never shows a
+  list the store doesn't have. The user reopens the picker and retries.
+- Every mutation is a transactional read-modify-write
+  (`tags::update` over `Store::update_setting`, `BEGIN IMMEDIATE`): the
+  closure edits the row as it is in the table, not the memoized copy, so
+  a `wsx config set prompt_tags` or another wsx process writing between
+  the modal's read and its write is folded in rather than overwritten.
 
 ## Testing
 

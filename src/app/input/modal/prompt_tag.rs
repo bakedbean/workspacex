@@ -18,7 +18,12 @@ fn pick_key(
     ctrl: bool,
     modal: &mut PromptTagModal,
 ) -> bool {
-    let mut list = match tags::load(&app.store) {
+    // Read-only: filtering, navigation and `enter_action` all work off this
+    // snapshot. The two arms that mutate the list (`ctrl-d`, Enter on a new
+    // name) go through `tags::update` instead of writing this copy back,
+    // so a sibling writer between this read and that write is folded in
+    // rather than overwritten.
+    let list = match tags::load(&app.store) {
         Ok(list) => list,
         Err(e) => {
             // Editing on top of an unreadable list could wipe it on save.
@@ -57,22 +62,49 @@ fn pick_key(
                 .get(modal.selected)
                 .map(|t| t.name.clone());
             if let Some(name) = name {
-                tags::remove(&mut list, &name);
-                persist(app, &list);
-                let len = modal.filtered(&list).len();
-                modal.selected = modal.selected.min(len.saturating_sub(1));
+                // Mutate through `tags::update` (one write transaction) so
+                // a sibling writer between this read and the write is
+                // folded in rather than overwritten.
+                match tags::update(&app.store, |l| {
+                    tags::remove(l, &name);
+                }) {
+                    Ok(written) => {
+                        let len = modal.filtered(&written).len();
+                        modal.selected = modal.selected.min(len.saturating_sub(1));
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to persist prompt tags");
+                        app.modal = Some(Modal::Error {
+                            message: format!("could not save prompt tags: {e}"),
+                        });
+                        return true;
+                    }
+                }
             }
         }
         KeyCode::Enter => match modal.enter_action(&list) {
             Some(EnterAction::Existing(name)) => modal.stage = TagStage::Body { name },
             Some(EnterAction::Create(name)) => {
-                list.push(tags::PromptTag {
-                    name: name.clone(),
-                    uses: 0,
-                });
-                tags::sort(&mut list);
-                persist(app, &list);
-                modal.stage = TagStage::Body { name };
+                // Same transactional update; the `any` guard folds in a
+                // sibling that created this same name meanwhile instead of
+                // pushing a duplicate.
+                match tags::update(&app.store, |l| {
+                    if !l.iter().any(|t| t.name == name) {
+                        l.push(tags::PromptTag {
+                            name: name.clone(),
+                            uses: 0,
+                        });
+                    }
+                }) {
+                    Ok(_) => modal.stage = TagStage::Body { name },
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to persist prompt tags");
+                        app.modal = Some(Modal::Error {
+                            message: format!("could not save prompt tags: {e}"),
+                        });
+                        return true;
+                    }
+                }
             }
             None => {}
         },
@@ -91,6 +123,10 @@ fn pick_key(
 
 /// Body-stage keys. Returns `true` when the modal was replaced or closed
 /// (insert succeeded, or an error modal took its place).
+///
+/// An insert that cannot be confirmed never costs the draft: the modal
+/// stays on the body stage with a one-line `notice` explaining why, so the
+/// user can attach a pane (or wait for the agent) and press `^s` again.
 async fn body_key(
     app: &mut App,
     k: crossterm::event::KeyEvent,
@@ -98,6 +134,8 @@ async fn body_key(
     name: &str,
     modal: &mut PromptTagModal,
 ) -> bool {
+    // Any key acknowledges the previous notice.
+    modal.notice = None;
     match k.code {
         KeyCode::Esc => {
             modal.stage = TagStage::Pick;
@@ -113,34 +151,35 @@ async fn body_key(
                 View::Dashboard => None,
             };
             let Some(session) = session else {
-                app.modal = Some(Modal::Error {
-                    message: "no running agent in the focused pane".to_string(),
-                });
-                return true;
+                modal.notice =
+                    Some("no running agent in the focused pane — draft kept".to_string());
+                return false;
             };
-            let text = tags::wrap(name, &modal.body.text());
+            let text = tags::wrap(name, &tags::sanitize_body(&modal.body.text()));
             if !session.insert_text(&text).await {
-                app.modal = Some(Modal::Error {
-                    message: "agent is not running".to_string(),
-                });
-                return true;
+                // `false` covers both a closed writer (agent exited) and an
+                // ack timeout, and a timeout only means delivery is
+                // uncertain — so say "not confirmed", not "not running",
+                // and count nothing.
+                modal.notice = Some(
+                    "insert not confirmed (agent exited or not responding) — draft kept"
+                        .to_string(),
+                );
+                return false;
             }
-            let mut list = match tags::load(&app.store) {
-                Ok(list) => list,
-                Err(e) => {
-                    // The text is already in the composer; only the count
-                    // is lost. Say so rather than saving over an unread list.
-                    app.modal = Some(Modal::Error {
-                        message: format!(
-                            "inserted, but could not read prompt tags to count the use: {e}"
-                        ),
-                    });
-                    return true;
-                }
-            };
-            tags::bump(&mut list, name);
+            // The text is already in the composer; only the count is at
+            // stake, so the modal closes either way. `tags::update` folds
+            // this bump into the table's current value in one write
+            // transaction rather than the read/bump/save the modal used to
+            // do, which could stomp a sibling writer's change. A failure
+            // here says the insert happened so the user does not retry it.
             app.modal = None;
-            persist(app, &list);
+            if let Err(e) = tags::update(&app.store, |l| tags::bump(l, name)) {
+                tracing::warn!(error = %e, "inserted prompt tag but failed to bump its use count");
+                app.modal = Some(Modal::Error {
+                    message: format!("inserted, but could not save the use count: {e}"),
+                });
+            }
             return true;
         }
         KeyCode::Enter => modal.body.newline(),
@@ -157,18 +196,6 @@ async fn body_key(
         _ => {}
     }
     false
-}
-
-/// Write the list back. A failed write surfaces as an error modal (which
-/// replaces the prompt-tag modal — the in-memory edit is lost, but the user
-/// sees why) rather than silently reading as saved.
-fn persist(app: &mut App, list: &[tags::PromptTag]) {
-    if let Err(e) = tags::save(&app.store, list) {
-        tracing::warn!(error = %e, "failed to persist prompt tags");
-        app.modal = Some(Modal::Error {
-            message: format!("could not save prompt tags: {e}"),
-        });
-    }
 }
 
 pub(super) async fn prompt_tag(

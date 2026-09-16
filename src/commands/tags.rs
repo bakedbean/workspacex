@@ -107,6 +107,15 @@ pub fn wrap(name: &str, body: &str) -> String {
     format!("<{name}>\n{}\n</{name}>", body.trim_end_matches('\n'))
 }
 
+/// The body with every C0 control character other than newline and tab
+/// removed. A stray ESC could end the bracketed paste early and let the
+/// text after it read as typed keys — including Enter.
+pub fn sanitize_body(body: &str) -> String {
+    body.chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .collect()
+}
+
 /// The saved list. A store error propagates rather than reading as "no
 /// tags": a caller that loads, edits and saves would otherwise wipe the
 /// list on a transient read failure. Render paths that only display may
@@ -120,6 +129,25 @@ pub fn load(store: &Store) -> Result<Vec<PromptTag>> {
 
 pub fn save(store: &Store, tags: &[PromptTag]) -> Result<()> {
     store.set_setting(SETTING_KEY, &serialize(tags))
+}
+
+/// Edit the saved list in place: parse the value as it is in the table
+/// right now, apply `f`, and write the result back, all inside one
+/// write-locked transaction (`Store::update_setting`). Every mutation the
+/// modal makes goes through here so a `wsx config set prompt_tags` from
+/// another process between a read and a write is folded in rather than
+/// overwritten. Returns the list as written, in display order.
+pub fn update(store: &Store, f: impl FnOnce(&mut Vec<PromptTag>)) -> Result<Vec<PromptTag>> {
+    let mut out = Vec::new();
+    store.update_setting(SETTING_KEY, |current| {
+        let mut list = current.map(parse).unwrap_or_default();
+        f(&mut list);
+        sort(&mut list);
+        let text = serialize(&list);
+        out = list;
+        text
+    })?;
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -203,6 +231,42 @@ mod tests {
         assert_eq!(wrap("t", "a\nb"), "<t>\na\nb\n</t>");
         // Trailing newlines in the body do not double up before the close.
         assert_eq!(wrap("t", "a\n\n"), "<t>\na\n</t>");
+    }
+
+    #[test]
+    fn sanitize_body_strips_c0_controls_but_keeps_newline_and_tab() {
+        assert_eq!(sanitize_body("a\x1b[201~b\n\tc\r"), "a[201~b\n\tc");
+    }
+
+    #[test]
+    fn update_folds_in_a_write_the_cache_has_not_seen() {
+        // `save` primes the memoized read; a sibling process then rewrites
+        // the row. `update` must edit THAT value, keeping the other
+        // writer's tag alongside the bump.
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        save(&store, &[tag("x", 1)]).unwrap();
+        assert_eq!(load(&store).unwrap(), vec![tag("x", 1)]);
+        store
+            .conn()
+            .execute(
+                "UPDATE settings SET value = ?1 WHERE key = ?2",
+                rusqlite::params!["theirs=5\nx=1\n", SETTING_KEY],
+            )
+            .unwrap();
+        let written = update(&store, |l| bump(l, "x")).unwrap();
+        assert_eq!(written, vec![tag("theirs", 5), tag("x", 2)]);
+        assert_eq!(load(&store).unwrap(), vec![tag("theirs", 5), tag("x", 2)]);
+    }
+
+    #[test]
+    fn update_starts_from_an_empty_list_when_unset() {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        let written = update(&store, |l| bump(l, "new")).unwrap();
+        assert_eq!(written, vec![tag("new", 1)]);
+        assert_eq!(
+            store.get_setting(SETTING_KEY).unwrap().as_deref(),
+            Some("new=1\n")
+        );
     }
 
     #[test]

@@ -107,6 +107,17 @@ pub(in crate::app::input) async fn handle_paste(
             .await;
         return Ok(());
     }
+    if let Some(Modal::PromptTag(mut modal)) = app.modal.clone() {
+        if matches!(modal.stage, crate::ui::modal::TagStage::Body { .. }) {
+            // The body box takes a paste as text, not keystrokes: CRLF is
+            // one line break, and tabs stay tabs (see `TextArea`).
+            modal
+                .body
+                .insert_str(&content.replace("\r\n", "\n").replace('\r', "\n"));
+            app.modal = Some(Modal::PromptTag(modal));
+            return Ok(());
+        }
+    }
     if input_trace_enabled() {
         tracing::info!(
             target: "wsx::input_trace",
@@ -119,7 +130,9 @@ pub(in crate::app::input) async fn handle_paste(
     // Non-attached fallback: forward each char as if typed, translating
     // control chars to the KeyCodes crossterm would have emitted live so
     // modal handlers see paste-with-newlines as multiple Enter presses
-    // rather than literal '\n' Chars.
+    // rather than literal '\n' Chars. A CRLF is one line break, not two:
+    // `paste_char_to_key` maps both halves to Enter, so fold it first.
+    let content = content.replace("\r\n", "\n");
     for c in content.chars() {
         dispatch_key(app, shared, paste_char_to_key(c)).await?;
     }

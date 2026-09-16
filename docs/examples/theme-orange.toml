@@ -12,7 +12,8 @@
 # greys, one shade per block, trending darker toward the middle: smoke
 # (cterm 237), soot (236), charcoal (235), ash (234). Left chains run
 # orange -> smoke -> soot (-> charcoal on the header); the right chain of
-# the attached bottom bar shows the whole ramp, orange at the edge.
+# the attached bottom bar shows the whole ramp, orange at the edge, and the
+# dashboard footer's right chain is its first two steps.
 #
 # Airline layout: a "mode" block at each outer edge (sections a / z), a
 # mid block beside it (b / y), and a base-toned block toward the middle
@@ -52,9 +53,18 @@ fill         = " "
 
 # Left: a blank orange stub as the mode block, then the key hints on smoke,
 # so the footer chain reads like the header's brand -> view step.
+# Right: the funnel on the orange edge block, and the version with the
+# context-token sums beside it on smoke, an airline sub-divider between
+# them. The tokens share the version's block rather than taking a soot
+# one of their own: a block that can vanish in the middle of a chain
+# leaves the wedge on either side of it with the wrong background, and the
+# agent identity colours the module is drawn in (claude's is an orange)
+# would disappear on the orange block. The divider sits inside the tokens
+# group so an idle fleet drops it along with the sums; a footer too narrow
+# for everything sheds the version first, then the tokens, then the funnel.
 [dashboard_footer]
 format       = "[  ](bg:orange)[](fg:orange bg:smoke)[ $keys ](bg:smoke fg:orange)[](fg:smoke)"
-right_format = "[](fg:smoke)[( $version )](bg:smoke fg:orange)([](fg:orange bg:smoke)[ $funnel ](bg:orange fg:black))"
+right_format = "[](fg:smoke)[( $version )(  $tokens )](bg:smoke fg:orange)([](fg:orange bg:smoke)[ $funnel ](bg:orange fg:black))"
 fill         = " "
 
 # The attention entries are graded blocks (see [attention]). The orange
@@ -110,6 +120,10 @@ format = "[$version]()"
 [module.funnel]
 format   = "([$working working](fg:green)  )([$blocked blocked](fg:blood)  )([$review_required review](fg:waiting)  )([$changes_requested changes](fg:cream)  )([$mergeable ready](fg:merged))"
 priority = 60
+
+# The tokens module is placed as bundled, with no table of its own: each
+# item is drawn in its agent's fixed identity colour (`agent_<kind>`
+# tokens), and those read against the smoke block the footer puts it on.
 
 [keys]
 format    = "[$key](fg:cream bold) [$label]()"

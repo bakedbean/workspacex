@@ -107,13 +107,15 @@ pub fn wrap(name: &str, body: &str) -> String {
     format!("<{name}>\n{}\n</{name}>", body.trim_end_matches('\n'))
 }
 
-pub fn load(store: &Store) -> Vec<PromptTag> {
-    store
-        .get_setting(SETTING_KEY)
-        .ok()
-        .flatten()
+/// The saved list. A store error propagates rather than reading as "no
+/// tags": a caller that loads, edits and saves would otherwise wipe the
+/// list on a transient read failure. Render paths that only display may
+/// `unwrap_or_default()`.
+pub fn load(store: &Store) -> Result<Vec<PromptTag>> {
+    Ok(store
+        .get_setting(SETTING_KEY)?
         .map(|s| parse(&s))
-        .unwrap_or_default()
+        .unwrap_or_default())
 }
 
 pub fn save(store: &Store, tags: &[PromptTag]) -> Result<()> {
@@ -206,12 +208,15 @@ mod tests {
     #[test]
     fn load_and_save_go_through_the_settings_table() {
         let store = crate::data::store::Store::open_in_memory().unwrap();
-        assert!(load(&store).is_empty());
+        assert!(load(&store).unwrap().is_empty());
         save(&store, &[tag("context", 4), tag("task", 9)]).unwrap();
         assert_eq!(
             store.get_setting(SETTING_KEY).unwrap().as_deref(),
             Some("task=9\ncontext=4\n")
         );
-        assert_eq!(load(&store), vec![tag("task", 9), tag("context", 4)]);
+        assert_eq!(
+            load(&store).unwrap(),
+            vec![tag("task", 9), tag("context", 4)]
+        );
     }
 }

@@ -183,13 +183,15 @@ priority = 50
 # A [module.<name>] table is a segment you compose yourself from fleet-wide
 # variables and place in any bar as $<name>. It takes `format`, `style`,
 # `priority`, `disabled` only. Counts render empty at zero, so wrap each item
-# in ( ) to drop it; `$workspaces` and `$repos` always render.
+# in ( ) to drop it; `$workspaces` and `$repos` always render. The $tokens*
+# variables are context-size sums, abbreviated (77k, 1.2M), empty at zero.
 #
 # Variables: $working $waiting $blocked $done $busy $unreported $alerts
 #   $awaiting $stalled $active $idle $live_agents $pr_none $pr_draft
 #   $pr_open $pr_conflicted $pr_merged $pr_closed $review_required
 #   $changes_requested $approved $unresolved $mergeable $dirty $msgs_queued
-#   $workspaces $repos
+#   $workspaces $repos $tokens_total $tokens_claude $tokens_pi $tokens_hermes
+#   $tokens_codex $tokens_omp
 
 # The delivery funnel: how many workspaces sit at each stage of the
 # pipeline, from working through review to mergeable. Each item carries

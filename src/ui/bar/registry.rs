@@ -324,6 +324,30 @@ pub const FLEET_VARS: &[FleetVar] = &[
         name: "repos",
         doc: "total repos (always rendered)",
     },
+    FleetVar {
+        name: "tokens_total",
+        doc: "Σ latest context size (prompt-side tokens) across every live agent, abbreviated (`77k`, `1.2M`)",
+    },
+    FleetVar {
+        name: "tokens_claude",
+        doc: "as `tokens`, over claude agents only",
+    },
+    FleetVar {
+        name: "tokens_pi",
+        doc: "as `tokens`, over pi agents only",
+    },
+    FleetVar {
+        name: "tokens_hermes",
+        doc: "as `tokens`, over hermes agents only (hermes reports no usage, so always empty today)",
+    },
+    FleetVar {
+        name: "tokens_codex",
+        doc: "as `tokens`, over codex agents only",
+    },
+    FleetVar {
+        name: "tokens_omp",
+        doc: "as `tokens`, over omp agents only",
+    },
 ];
 
 pub fn fleet_var(name: &str) -> Option<&'static FleetVar> {
@@ -387,6 +411,20 @@ mod tests {
         );
         assert!(fleet_var("nope").is_none());
         assert!(fleet_var_names().contains(&"workspaces"));
+    }
+
+    /// One `tokens_<kind>` variable per agent kind, spelled with the kind's
+    /// display name, so a module can break context fill down by harness.
+    #[test]
+    fn every_agent_kind_has_a_tokens_fleet_var() {
+        for kind in crate::pty::session::AgentKind::ALL {
+            let name = format!("tokens_{}", kind.display_name());
+            assert!(fleet_var(&name).is_some(), "missing fleet var {name}");
+        }
+        assert!(
+            fleet_var("tokens_total").is_some(),
+            "missing fleet-wide total"
+        );
     }
 
     /// Every `FLEET_VARS` name must be documented in both places a user

@@ -694,7 +694,11 @@ impl Session {
 /// Claude Code's tokenizer accumulates everything into a single paste however
 /// the kernel slices it — which is also the shape Claude Code's own PTY reply
 /// path writes. Pi and Hermes submit fine on a plain `text` + CR, so they keep
-/// the simpler form and are untouched.
+/// the simpler form and are untouched. The whole-body guarantee is for text:
+/// a body that itself contains a literal `ESC[201~` closes the paste early
+/// (the markers are not escaped, here or in `insert_writes`), and the plain
+/// form was never control-safe either. Live checks of this path live in
+/// `docs/manual-tests/agent-send-long-body.md`.
 ///
 /// omp is the one where the wrapper would actively hurt, and it was checked
 /// rather than assumed. Its editor runs its own `BracketedPasteHandler` and
@@ -1381,17 +1385,18 @@ mod tests {
         expected.extend_from_slice(b"\x1b[200~");
         expected.extend_from_slice(banner.as_bytes());
         expected.extend_from_slice(b"\x1b[201~\r");
-        // Poll until the file stops growing.
-        let mut last = 0usize;
+        // Poll until the whole payload is on disk or the deadline passes.
+        // Not "until the file stops growing": the CR ack proves the bytes
+        // reached the PTY, not that cat has written them out, and a 100 ms
+        // scheduling pause mid-file would otherwise read as a short payload.
         for _ in 0..40 {
             tokio::time::sleep(Duration::from_millis(100)).await;
             let n = std::fs::metadata(&out)
                 .map(|m| m.len() as usize)
                 .unwrap_or(0);
-            if n == expected.len() || (n > 0 && n == last) {
+            if n >= expected.len() {
                 break;
             }
-            last = n;
         }
         let got = std::fs::read(&out).unwrap_or_default();
         assert!(

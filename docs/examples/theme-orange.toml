@@ -176,7 +176,7 @@ separator   = ""
 more_format = "[\ue0b0](fg:prev_bg bg:orange)[ +$count more ](bg:orange fg:black bold)[\ue0b0](fg:orange bg:ash)"
 
 [agents]
-format    = "[$symbol]($style)$label ([$key](bold))"
+format    = "[$symbol($icon )]($style)$label ([$key](bold))"
 separator = "   "
 
 [model_tokens]

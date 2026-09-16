@@ -119,7 +119,7 @@ hermes = ""
 format = "[($repo/)$name](bold)"
 
 [agents]
-format    = "[$symbol]($style)$label ([$key](fg:nord13 bold))"
+format    = "[$symbol($icon )]($style)$label ([$key](fg:nord13 bold))"
 separator = "   "
 
 [model_tokens]

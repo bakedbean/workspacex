@@ -130,7 +130,7 @@ format = "[($repo/)$name](bold)"
 
 [agents]
 # `● claude q   ○ codex w` — keys in amber, no pill background.
-format    = "[$symbol]($style)$label ([$key](fg:amber bold))"
+format    = "[$symbol($icon )]($style)$label ([$key](fg:amber bold))"
 separator = "   "
 
 [model_tokens]

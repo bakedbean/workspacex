@@ -154,7 +154,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
     },
     SegmentDef {
         name: "agents",
-        vars: &["symbol", "label", "key"],
+        vars: &["symbol", "icon", "label", "key"],
         style_vars: STYLE,
         more_vars: NO_TAIL,
         items: true,

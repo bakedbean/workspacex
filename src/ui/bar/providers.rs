@@ -624,10 +624,13 @@ pub fn tags(cfg: &SegmentConfig, tags: &[PromptTag], resolver: &Resolver) -> Opt
 /// Agent pills: `● claude q   ○ codex w`. The active instance gets the
 /// filled dot and a bold label. `$symbol` is the dot plus its space (the
 /// `[agents].symbol` field is not used; the dot encodes active/idle).
+/// `$icon` is the pill's kind's glyph from `icons` — `[agent_bar.symbols]`,
+/// so a theme draws each harness once — and absent for a kind without one.
 pub fn agents(
     cfg: &SegmentConfig,
     agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
     active: Option<AgentInstanceId>,
+    icons: &[(AgentKind, String)],
     theme: &Theme,
     resolver: &Resolver,
 ) -> Option<Segment> {
@@ -643,6 +646,9 @@ pub fn agents(
                 Style::default()
             };
             let mut v = vars(vec![("symbol", var(dot))]);
+            if let Some((_, icon)) = icons.iter().find(|(k, _)| k == kind) {
+                v.insert("icon".to_string(), var(icon.clone()));
+            }
             v.insert(
                 "label".to_string(),
                 Segment::text(label.clone(), label_style),

@@ -276,6 +276,8 @@ Keys must be agent kind names; any other key, or the table on another
 segment, is an error. Entries union per kind over the bundled default,
 yours winning, like a segment palette. An empty entry (`pi = ""`) is an
 override, not an absence: that kind shows no glyph rather than `symbol`.
+The `agents` pills read the same table through their `$icon` variable,
+so each harness's glyph is drawn once and appears in both places.
 
 An item whose `format` renders empty — an empty `format`, or one whose
 variables are all absent for that item — is dropped as if it were never in
@@ -349,7 +351,7 @@ default, 100, and so never drops.
 | `attention` | `$glyph $repo $name $age` | One item per workspace needing attention. `$glyph` is the entry's dashboard status glyph in its status color; `$style` is the name's PR-lifecycle tint (open, merged, …) or the muted `path` hue. Entries that don't fit fold into `more_format` (`$count`); the first entry always renders, and if it alone would push the tail off the bar its `$name` is shortened with an ellipsis (assuming one `$name` in the format; a format without `$name`, or a very long `$repo`, has nothing to yield and simply clips). Clickable: each entry, and the tail. |
 | `pins` | `$index $label` | One chip per pinned command. Clickable. |
 | `tags` | `$index $label` | The three most-used prompt tags as chips, then the manager chip from `more_format` (`$count` = saved tags). Attached only. Clickable: each chip, and the manager. |
-| `agents` | `$symbol $label $key` | One pill per agent (2+ agents). `$style` includes the agent color. `symbol` is ignored — the pill always uses a filled/hollow dot to show which agent is active. Clickable. |
+| `agents` | `$symbol $icon $label $key` | One pill per agent (2+ agents). `$style` includes the agent color. `symbol` is ignored — the pill always uses a filled/hollow dot to show which agent is active. `$icon` is the pill's kind's entry in `[agent_bar.symbols]`, absent for a kind without one. Clickable. |
 | `model_tokens` | `$model $tokens` | `$style` includes `ok`, or `warn` near the context limit. |
 | `procs` | `$symbol $count` | Hidden at zero. Clickable. |
 | `diff` | `$added $removed` | Hidden when clean. |

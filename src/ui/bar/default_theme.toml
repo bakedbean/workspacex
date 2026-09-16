@@ -153,9 +153,11 @@ more_format = "[ <> ](bg:bg_soft fg:dim bold)"
 # narrow-row test depends on this ordering.
 priority    = 40
 
-# Agent pills (2+ agents). $style is the agent color. Variables: $symbol $label $key
+# Agent pills (2+ agents). $style is the agent color. Variables: $symbol
+# $icon $label $key — $icon is the kind's [agent_bar.symbols] glyph, absent
+# (its group collapsing) for a kind without one.
 [agents]
-format    = "[$symbol]($style)$label ([ $key ](bg:bg_soft fg:dim bold))"
+format    = "[$symbol($icon )]($style)$label ([ $key ](bg:bg_soft fg:dim bold))"
 separator = "   "
 priority  = 20
 

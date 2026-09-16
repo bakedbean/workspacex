@@ -331,7 +331,10 @@ pub fn version(cfg: &SegmentConfig, version: &str, resolver: &Resolver) -> Optio
     )
 }
 
-/// The agent identity bar; `$style` is the agent's fixed color.
+/// The agent identity bar; `$style` is the agent's fixed color. `$symbol`
+/// is the kind's `[agent_bar.symbols]` entry when the theme has one, else
+/// `symbol` — so a theme can give each harness its own icon and keep one
+/// glyph for kinds it hasn't drawn.
 pub fn agent_bar(
     cfg: &SegmentConfig,
     agent: Option<AgentKind>,
@@ -340,7 +343,13 @@ pub fn agent_bar(
 ) -> Option<Segment> {
     let theme = &cfg.theme(theme);
     let agent = agent?;
-    let symbol = cfg.symbol.clone().unwrap_or_else(|| "▎".to_string());
+    let symbol = cfg
+        .symbols
+        .iter()
+        .find(|(kind, _)| *kind == agent)
+        .map(|(_, glyph)| glyph.clone())
+        .or_else(|| cfg.symbol.clone())
+        .unwrap_or_else(|| "▎".to_string());
     eval_segment(
         cfg,
         &vars(vec![("symbol", var(symbol))]),
@@ -811,6 +820,31 @@ mod tests {
             .find(|s| s.content.as_ref() == text)
             .unwrap_or_else(|| panic!("span {text:?} in {:?}", out.plain_text()))
             .style
+    }
+
+    /// `$symbol` is the kind's entry in `[agent_bar.symbols]` when it has
+    /// one, else the segment's `symbol`; `$style` stays the agent colour
+    /// either way, so a per-kind icon wears its kind's identity.
+    #[test]
+    fn agent_bar_symbol_prefers_the_kinds_entry_and_falls_back_to_symbol() {
+        let theme = Theme::wsx();
+        let palette = HashMap::new();
+        let resolver = Resolver::new(&palette, &theme);
+        let mut cfg = item_cfg("[$symbol]($style)", "");
+        cfg.symbol = Some(">".to_string());
+        cfg.symbols = vec![(AgentKind::Codex, "X".to_string())];
+        let out = agent_bar(&cfg, Some(AgentKind::Codex), &theme, &resolver).unwrap();
+        assert_eq!(out.plain_text(), "X");
+        assert_eq!(
+            span_style(&out, "X").fg,
+            theme.agent_style(AgentKind::Codex).fg
+        );
+        let out = agent_bar(&cfg, Some(AgentKind::Claude), &theme, &resolver).unwrap();
+        assert_eq!(out.plain_text(), ">", "no entry: the plain symbol");
+        assert_eq!(
+            span_style(&out, ">").fg,
+            theme.agent_style(AgentKind::Claude).fg
+        );
     }
 
     /// `$workspace`'s `$style` is the PR-lifecycle tint when the branch

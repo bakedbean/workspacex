@@ -704,10 +704,11 @@ pub(crate) fn submit_writes(agent: AgentKind, text: &str) -> (Vec<u8>, Vec<u8>) 
 /// submitting it (the prompt-tag insert). Wrapped in a bracketed paste for
 /// every agent so embedded newlines stay newlines rather than reading as
 /// Enter. omp renders an accepted paste as a `[Paste #N]` placeholder in its
-/// editor, which is acceptable here — the text still submits when the user
-/// presses Enter — and is preferable to plain `\n`, which its editor treats
-/// as submit. (Verified against a live omp during implementation; see the
-/// manual test `docs/manual-tests/prompt-tags.md`.)
+/// editor, which should be acceptable here — the text still submits when
+/// the user presses Enter — and is preferable to plain `\n`, which its
+/// editor treats as submit. The live omp check is the manual test in
+/// `docs/manual-tests/prompt-tags.md`; if it disagrees, this is the one
+/// place to give omp a different shape.
 pub(crate) fn insert_writes(_agent: AgentKind, text: &str) -> Vec<u8> {
     let mut body = Vec::with_capacity(text.len() + 12);
     body.extend_from_slice(b"\x1b[200~");

@@ -50,8 +50,9 @@ pub struct DetailInputs<'a> {
     pub events_scanned: bool,
     pub config: &'a DetailBarConfig,
     pub registry: &'a crate::ui::detail_modules::Registry,
-    /// Pinned commands resolved for the selected workspace's repo. When
-    /// empty, no chip row is rendered.
+    /// Pinned commands resolved for the selected workspace's repo. The chip
+    /// row is rendered when these exist or when `[dashboard_detail]` places
+    /// a module (see `BarSpecs::places_module`).
     pub pinned: &'a [crate::commands::pinned::PinnedCommand],
     /// The resolved bar theme, so the chip row draws through
     /// `crate::ui::bar::dashboard_detail` instead of a bespoke painter.
@@ -93,7 +94,12 @@ pub fn render(
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::widgets::Paragraph;
 
-    let chip_present = !inputs.pinned.is_empty();
+    // The chip row holds pinned commands and whatever `[module.*]` the
+    // theme places in `[dashboard_detail]`. Either earns it a row.
+    let chip_present = !inputs.pinned.is_empty()
+        || inputs
+            .bar_specs
+            .places_module(&inputs.bar_specs.dashboard_detail);
     let has_body = inputs.config.has_body();
     // The body region holds the top horizontal rule, container content,
     // and bottom horizontal rule as a single 3+ row strip — so that
@@ -1541,6 +1547,116 @@ mod tests {
             })
             .unwrap();
         assert!(returned.is_empty(), "no chip rects when pinned empty");
+    }
+
+    /// A `[dashboard_detail]` that places only a module — no `$pins`, no
+    /// pinned commands — must still get its row. The row is allocated on
+    /// what the theme *places*, not on what the fleet currently counts, so
+    /// the layout does not jump as counts come and go.
+    #[test]
+    fn render_allocates_chip_row_for_a_module_without_pinned() {
+        let (_store, repo, ws) = seed_workspace();
+        let cfg = DetailBarConfig::default();
+        let reg = make_registry();
+        let mut offsets = [0u16; 4];
+        let specs = crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse(
+                "[module.pipe]\nformat = \"$workspaces workspaces\"\n\n[dashboard_detail]\nformat = \"$pipe\"\n",
+            )
+            .unwrap(),
+            &Theme::wsx(),
+        )
+        .unwrap();
+        let mut inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: None,
+            recap: None,
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            review: None,
+            unresolved: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+            config: &cfg,
+            registry: &reg,
+            pinned: &[],
+            bar_specs: &specs,
+            fleet: crate::ui::bar::fleet::empty(),
+            scroll_offsets: &mut offsets,
+        };
+        let text = render_to_text(&mut inputs, 120, 12);
+        let module_line = text
+            .lines()
+            .position(|l| l.contains("0 workspaces"))
+            .unwrap_or_else(|| panic!("module rendered in the detail bar: {text:?}"));
+        let reply_line = text
+            .lines()
+            .position(|l| l.contains("Reply to agent"))
+            .expect("reply line");
+        assert!(
+            module_line < reply_line,
+            "module row above reply: module={module_line} reply={reply_line}"
+        );
+    }
+
+    /// A disabled module is not content: placing only it must not cost a row.
+    #[test]
+    fn render_omits_chip_row_for_a_disabled_module() {
+        let (_store, repo, ws) = seed_workspace();
+        let cfg = DetailBarConfig::default();
+        let reg = make_registry();
+        let mut offsets = [0u16; 4];
+        let specs = crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse(
+                "[module.pipe]\nformat = \"$workspaces workspaces\"\ndisabled = true\n\n[dashboard_detail]\nformat = \"$pipe\"\n",
+            )
+            .unwrap(),
+            &Theme::wsx(),
+        )
+        .unwrap();
+        let mut inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: None,
+            recap: None,
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            review: None,
+            unresolved: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+            config: &cfg,
+            registry: &reg,
+            pinned: &[],
+            bar_specs: &specs,
+            fleet: crate::ui::bar::fleet::empty(),
+            scroll_offsets: &mut offsets,
+        };
+        let with_disabled = render_to_text(&mut inputs, 120, 12);
+        let stock = bar_specs();
+        inputs.bar_specs = &stock;
+        let mut offsets2 = [0u16; 4];
+        inputs.scroll_offsets = &mut offsets2;
+        let without = render_to_text(&mut inputs, 120, 12);
+        assert_eq!(
+            with_disabled, without,
+            "a disabled module must not add a row"
+        );
     }
 
     #[test]

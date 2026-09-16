@@ -124,8 +124,11 @@ replaced:
 - A workspace with no PR leaves one blank cell at the chip row's right
   edge instead of hugging it exactly (the stock chip row's `$pr` is bare,
   with no trailing separator of its own).
-- Below roughly 107 columns, the dashboard footer drops the version string
-  first, then the `funnel` module, instead of overflowing the terminal width.
+- When the dashboard footer is too narrow for its key hints plus the
+  right side, it drops the version string first, then the `funnel`
+  module, instead of overflowing the terminal width. Where that happens
+  depends on how much the funnel has to say, since each stage renders
+  only while its count is non-zero.
 - A pinned chip clipped by the right edge keeps its visible portion
   clickable, rather than being dropped in full.
 - The stock attached view draws a dim `─` rule under its top bar to set it
@@ -304,9 +307,9 @@ shadowed by the per-item colour.
 The bundled default sets `priority` on the segments that compete for room:
 `model_tokens` 10, `agents` 20, `procs` 30, `diff` 40, `pr` 50 (the
 attached chip row's right side); `version` 50, the `funnel` module 60 (the
-dashboard footer's right side); `sort` 30, `counts` 50 (the dashboard
-header). Every other segment is the unset default, 100, and so never
-drops.
+dashboard footer's right side, and `usage` keeps its 60 for a theme that
+places it back); `sort` 30, `counts` 50 (the dashboard header). Every
+other segment is the unset default, 100, and so never drops.
 
 | Segment | Variables | Notes |
 |---|---|---|

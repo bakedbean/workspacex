@@ -199,6 +199,21 @@ impl BarSpecs {
     pub fn resolver<'a>(&'a self, theme: &'a Theme) -> Resolver<'a> {
         Resolver::new(&self.palette, theme)
     }
+
+    /// Whether `bar`'s `format` or `right_format` places an enabled
+    /// `[module.<name>]`. A layout that allocates a row only when the bar
+    /// has something to draw asks this rather than rendering first: it
+    /// depends on what the theme places, not on what the fleet currently
+    /// counts, so the row does not come and go with the numbers.
+    pub fn places_module(&self, bar: &BarSpec) -> bool {
+        format::vars(&bar.format)
+            .into_iter()
+            .chain(format::vars(&bar.right_format))
+            .any(|name| {
+                self.modules.iter().any(|m| m == name)
+                    && self.segments.get(name).is_some_and(|cfg| !cfg.disabled)
+            })
+    }
 }
 
 fn parse_format(loc: &str, src: &str, errors: &mut Vec<ThemeError>) -> Vec<Node> {
@@ -1278,6 +1293,27 @@ mod tests {
             !specs.segments["funnel"].format.is_empty(),
             "unset format keeps the bundled default's"
         );
+    }
+
+    #[test]
+    fn places_module_sees_enabled_modules_in_either_format() {
+        let specs = ok(
+            "[module.a]\nformat = \"$working\"\n[module.b]\nformat = \"$blocked\"\ndisabled = true\n\
+             [dashboard_detail]\nformat = \"$pins\"\nright_format = \"$a\"\n\
+             [dashboard_header]\nformat = \"$b\"\n",
+        );
+        assert!(
+            specs.places_module(&specs.dashboard_detail),
+            "enabled module in right_format"
+        );
+        assert!(
+            !specs.places_module(&specs.dashboard_header),
+            "disabled module is not content"
+        );
+        // The bundled default places $funnel in the footer and nothing in the detail bar.
+        let stock = bundled_default(&Theme::wsx());
+        assert!(stock.places_module(&stock.dashboard_footer));
+        assert!(!stock.places_module(&stock.dashboard_detail));
     }
 
     #[test]

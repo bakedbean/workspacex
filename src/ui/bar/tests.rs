@@ -2082,6 +2082,7 @@ mod module_tests {
                 agent: None,
                 attention: None,
                 pinned: &[],
+                tags: &[],
                 procs: 0,
                 diff: None,
                 pr: None,

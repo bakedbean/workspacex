@@ -259,7 +259,21 @@ wants a literal `$`, `[`, `(`, or backslash must escape it (`$$`, `\[`,
 a plain run of spaces or box-drawing characters needs no change. `attention`
 alone also takes `more_format`, the tail drawn when entries don't fit the
 bar; its one variable is `$count`, the number of entries folded into it,
-and setting it on any other segment is an error.
+and setting it on any other segment is an error. Likewise `agent_bar`
+alone takes a `symbols` sub-table, one glyph per agent kind, tried ahead
+of `symbol`:
+
+```toml
+[agent_bar]
+symbol = ""            # kinds without an entry below
+
+[agent_bar.symbols]
+claude = ""
+codex  = ""
+```
+
+Keys must be agent kind names; any other key, or the table on another
+segment, is an error.
 
 An item whose `format` renders empty — an empty `format`, or one whose
 variables are all absent for that item — is dropped as if it were never in
@@ -328,7 +342,7 @@ default, 100, and so never drops.
 | `keys` | `$key $label` | One pill per key hint. Clickable. |
 | `version` | `$version` | |
 | `usage` | `$label $spark` | The activity sparkline. Clickable. |
-| `agent_bar` | `$symbol` | `$style` includes the agent's identity color. Attached only. |
+| `agent_bar` | `$symbol` | `$style` includes the agent's identity color. `$symbol` is the focused agent's entry in `[agent_bar.symbols]` (keys `claude`, `pi`, `hermes`, `codex`, `omp`) when the theme sets one, else `symbol`. Attached only. |
 | `workspace` | `$repo $name` | `$repo` is absent when there is no repo name. `$style` includes the PR-lifecycle tint (green open, purple merged, red closed), or the header style without a PR. Attached only. |
 | `attention` | `$glyph $repo $name $age` | One item per workspace needing attention. `$glyph` is the entry's dashboard status glyph in its status color; `$style` is the name's PR-lifecycle tint (open, merged, …) or the muted `path` hue. Entries that don't fit fold into `more_format` (`$count`); the first entry always renders, and if it alone would push the tail off the bar its `$name` is shortened with an ellipsis (assuming one `$name` in the format; a format without `$name`, or a very long `$repo`, has nothing to yield and simply clips). Clickable: each entry, and the tail. |
 | `pins` | `$index $label` | One chip per pinned command. Clickable. |

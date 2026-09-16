@@ -116,6 +116,8 @@ format = "[$label $spark](fg:path)"
 priority = 60
 
 # Agent identity bar; $style carries the agent's color. Variables: $symbol
+# An `[agent_bar.symbols]` table (keys: claude, pi, hermes, codex, omp)
+# gives a kind its own glyph; `symbol` covers the kinds without one.
 [agent_bar]
 symbol = "▎"
 format = "[$symbol]($style)"

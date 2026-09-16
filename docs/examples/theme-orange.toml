@@ -126,10 +126,18 @@ separator   = "  "
 more_format = "[ <> ](fg:cream bold)"
 priority    = 40
 
-# Agent identity as a right-pointing chevron in the agent's colour (the
-# bundled default is a thin vertical bar).
+# Agent identity in the agent's colour: each harness's Nerd Font icon,
+# falling back to a right-pointing chevron for a kind without one (the
+# bundled default is a thin vertical bar for every kind).
 [agent_bar]
 symbol = ""
+
+[agent_bar.symbols]
+claude = ""
+codex  = ""
+omp    = ""
+pi     = ""
+hermes = ""
 
 # The name carries the branch's PR-lifecycle tint like the pr block does.
 # The base theme's tints are picked for the dark background and wash out

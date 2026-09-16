@@ -127,6 +127,8 @@ pub(in crate::app::input) async fn handle_key_modal(
             name_buffer,
             notice: _,
         } => workspace::rename_workspace(app, shared, k, workspace_id, name_buffer).await?,
+        // TEMPORARY: Task 5 replaces this with the modal's own key handler.
+        Modal::PromptTag(_) => {}
     }
     Ok(())
 }

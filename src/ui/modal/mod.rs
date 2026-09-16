@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 mod agents_panel;
 mod name_color_picker;
 mod process_list;
+mod prompt_tag;
 mod remote_workspace_list;
 mod repo_settings;
 mod textarea;
@@ -22,6 +23,7 @@ mod usage_picker;
 pub use agents_panel::render_agents_panel;
 pub use name_color_picker::{Dir, move_selection, render_name_color_picker};
 pub use process_list::render_process_list;
+pub use prompt_tag::{EnterAction, PromptTagModal, TagStage, render_prompt_tag};
 pub use remote_workspace_list::render_remote_workspace_list;
 pub use repo_settings::render_repo_settings;
 pub use textarea::TextArea;
@@ -105,6 +107,10 @@ pub enum Modal {
         repo_id: crate::data::store::RepoId,
         selected: usize,
     },
+    /// Pick or name an XML tag and type the body to wrap in it; see
+    /// `ui::modal::prompt_tag`. Rendered from `draw()` because it lists
+    /// the live tag cache.
+    PromptTag(PromptTagModal),
     AgentMissing {
         ws_id: crate::data::store::WorkspaceId,
         agent: crate::pty::session::AgentKind,
@@ -231,6 +237,7 @@ pub fn render(
             | Modal::UsageWindowPicker { .. }
             | Modal::NameColorPicker { .. }
             | Modal::RemoteWorkspaceList { .. }
+            | Modal::PromptTag(..)
     ) {
         return;
     }
@@ -390,6 +397,7 @@ pub fn render(
         Modal::UsageWindowPicker { .. } => {
             unreachable!("UsageWindowPicker must not reach render()")
         }
+        Modal::PromptTag(..) => unreachable!("PromptTag must not reach render()"),
         Modal::AgentMissing { agent, binary, .. } => (
             "agent not installed",
             format!(

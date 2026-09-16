@@ -82,6 +82,10 @@ pub(super) fn draw_modal(f: &mut ratatui::Frame, app: &mut App, area: ratatui::l
         crate::ui::modal::Modal::UsageWindowPicker { .. } => {
             // Rendered separately below, anchored to the footer graph.
         }
+        crate::ui::modal::Modal::PromptTag(modal) => {
+            let tags = crate::commands::tags::load(&app.store).unwrap_or_default();
+            crate::ui::modal::render_prompt_tag(f, area, modal, &tags, &app.theme);
+        }
         other => modal::render(f, area, other, &app.in_flight, app.tick, &app.theme),
     }
 }

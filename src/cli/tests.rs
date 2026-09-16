@@ -671,6 +671,15 @@ fn config_set_accepts_pinned_commands_key() {
 }
 
 #[test]
+fn config_set_accepts_prompt_tags_key() {
+    let a = parse(&["config", "set", "prompt_tags", "context=3"]).unwrap();
+    match a {
+        CliAction::ConfigSet { key, .. } => assert_eq!(key, "prompt_tags"),
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[test]
 fn parse_repo_set_pinned_commands_literal() {
     let a = parse(&["repo", "set-pinned-commands", "demo", "PR=/pull-request"]).unwrap();
     match a {

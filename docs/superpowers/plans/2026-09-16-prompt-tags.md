@@ -582,11 +582,11 @@ mod tests {
         // Without this, the empty row would appear only while the cursor sat
         // on it, shifting every line below as the cursor moved.
         let mut t = with("abc\nxyz");
-        assert_eq!(t.wrap_rows(3).0, vec!["abc", "", "xyz"]);
+        assert_eq!(t.wrap_rows(3).0, vec!["abc", "", "xyz", ""]);
         t.move_up();
         assert_eq!(t.cursor(), (0, 3));
-        assert_eq!(t.wrap_rows(3), (vec!["abc".to_string(), String::new(), "xyz".to_string()], (1, 0)));
-        assert_eq!(with("ab\nxyz").wrap_rows(3).0, vec!["ab", "xyz"]);
+        assert_eq!(t.wrap_rows(3), (vec!["abc".to_string(), String::new(), "xyz".to_string(), String::new()], (1, 0)));
+        assert_eq!(with("ab\nxyz").wrap_rows(3).0, vec!["ab", "xyz", ""]);
     }
 }
 ```

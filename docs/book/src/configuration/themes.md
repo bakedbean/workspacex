@@ -236,7 +236,9 @@ A **color** is `#rrggbb`, a 0–255
 index, an ANSI name (`red`, `bright-blue`, `white`), a `[palette]` name, or
 a theme token: `dim path code bg_alt bg_soft ok warn err attention merged
 header_fg selected_fg selected_bg question stalled waiting thinking complete
-idle brand wordmark`. Palette names shadow theme tokens, which shadow ANSI names.
+idle brand wordmark agent_claude agent_pi agent_hermes agent_codex agent_omp`
+(the `agent_*` tokens are each agent kind's fixed identity colour, the same
+in every theme). Palette names shadow theme tokens, which shadow ANSI names.
 Shadowing changes color lookup in the bar theme only; it never changes the
 base `Theme` fields. `fg:dim` selects a color; `dimmed` is a text modifier.
 

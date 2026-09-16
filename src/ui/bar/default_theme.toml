@@ -208,9 +208,10 @@ priority = 60
 #   right_format = "$version(  $tokens)(  $funnel)"
 # Gaps lead each item after the first (the opposite of the funnel) so the
 # module hugs the right edge whichever trailing kinds are absent; kinds are
-# ordered most- to least-common so the leading one is rarely the gap.
+# ordered most- to least-common so the leading one is rarely the gap. Each
+# label wears its agent's identity colour via the `agent_<kind>` tokens.
 [module.tokens]
-format   = "([claude $tokens_claude](fg:path))(  [codex $tokens_codex](fg:path))(  [omp $tokens_omp](fg:path))(  [pi $tokens_pi](fg:path))"
+format   = "([claude $tokens_claude](fg:agent_claude))(  [codex $tokens_codex](fg:agent_codex))(  [omp $tokens_omp](fg:agent_omp))(  [pi $tokens_pi](fg:agent_pi))"
 # Between $version (50) and $funnel (60): the first of the two modules to
 # drop when the footer is narrow.
 priority = 55

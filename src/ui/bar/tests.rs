@@ -421,6 +421,17 @@ mod footer_tests {
         );
         let text = plain(&out.line);
         assert!(text.ends_with("0.1.0  claude 1.2M  codex 340k"), "{text:?}");
+        // Each item wears its agent's fixed identity colour.
+        let fg_of = |needle: &str| {
+            out.line
+                .spans
+                .iter()
+                .find(|s| s.content.contains(needle))
+                .map(|s| s.style.fg)
+                .unwrap_or_else(|| panic!("no span containing {needle:?}"))
+        };
+        assert_eq!(fg_of("claude"), theme.agent_style(AgentKind::Claude).fg);
+        assert_eq!(fg_of("codex"), theme.agent_style(AgentKind::Codex).fg);
         // Empty fleet, same specs: the whole `(  $tokens)` group drops,
         // leading gap included, leaving the version flush right.
         let out = dashboard_footer(

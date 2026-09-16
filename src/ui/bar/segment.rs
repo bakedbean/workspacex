@@ -140,6 +140,10 @@ pub struct SegmentConfig {
     /// nowhere else. Lets a theme darken the lifecycle tints on one light
     /// block without touching the same tints on a dark one.
     pub palette: HashMap<String, Color>,
+    /// `[agent_bar.symbols]`: a glyph per agent kind, tried before
+    /// `symbol`. Only `agent_bar` reads it; the theme loader rejects the
+    /// table on any other segment.
+    pub symbols: Vec<(crate::pty::session::AgentKind, String)>,
 }
 
 impl SegmentConfig {

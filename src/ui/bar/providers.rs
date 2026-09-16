@@ -769,6 +769,7 @@ mod tests {
             more_format: Vec::new(),
             styles: Vec::new(),
             palette: HashMap::new(),
+            symbols: Vec::new(),
         }
     }
 

@@ -201,3 +201,16 @@ priority = 50
 format   = "([$working working](fg:ok)  )([$blocked blocked](fg:err)  )([$review_required review](fg:waiting)  )([$changes_requested changes](fg:warn)  )([$mergeable ready](fg:merged))"
 # Same slot as $usage had: $version drops first on a narrow footer.
 priority = 60
+
+# Context fill by agent kind: how many prompt-side tokens each harness has
+# loaded across the fleet right now (not cumulative spend). Defined but not
+# placed — add `$tokens` to a bar to show it, e.g.
+#   right_format = "$version(  $tokens)(  $funnel)"
+# Gaps lead each item after the first (the opposite of the funnel) so the
+# module hugs the right edge whichever trailing kinds are absent; kinds are
+# ordered most- to least-common so the leading one is rarely the gap.
+[module.tokens]
+format   = "([claude $tokens_claude](fg:path))(  [codex $tokens_codex](fg:path))(  [omp $tokens_omp](fg:path))(  [pi $tokens_pi](fg:path))"
+# Between $version (50) and $funnel (60): the first of the two modules to
+# drop when the footer is narrow.
+priority = 55

@@ -760,7 +760,11 @@ mod tests {
             format::parse("  ").unwrap()
         );
         assert_eq!(specs.segments["procs"].symbol.as_deref(), Some("●"));
-        assert_eq!(specs.modules, vec!["funnel".to_string()]);
+        assert_eq!(
+            specs.modules,
+            vec!["funnel".to_string(), "tokens".to_string()]
+        );
+        assert_eq!(specs.segments["tokens"].priority, 55);
         assert_eq!(specs.segments["funnel"].priority, 60);
         assert_eq!(
             specs.dashboard_footer.right_format,
@@ -1221,7 +1225,11 @@ mod tests {
         );
         assert_eq!(
             specs.modules,
-            vec!["funnel".to_string(), "pipe".to_string()]
+            vec![
+                "funnel".to_string(),
+                "pipe".to_string(),
+                "tokens".to_string()
+            ]
         );
         assert_eq!(specs.segments["pipe"].priority, 40);
         assert_eq!(

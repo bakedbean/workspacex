@@ -482,14 +482,16 @@ its label and gap; `$workspaces` and `$repos` always render a number. The
 abbreviated (`77k`, `1.2M`) and are likewise empty at zero.
 
 A module's name may not be the name of a built-in segment (`keys`, `usage`,
-`pr`, …). The bundled default defines one module, `funnel`, and places it
-where the usage graph used to be; set only the fields you want to change to
-restyle it, or define your own and put that in the bar instead. To bring
-the sparkline back, place `$usage` again:
+`pr`, …). The bundled default defines two modules: `funnel`, placed where
+the usage graph used to be, and `tokens` — context fill per agent kind
+(`claude 1.2M  codex 340k`), defined but not placed. Set only the fields
+you want to change to restyle either, or define your own and put that in
+the bar instead. To show the token module, or bring the sparkline back,
+place `$tokens` or `$usage`:
 
 ```toml
 [dashboard_footer]
-right_format = "$version(  $funnel)(  $usage)"
+right_format = "$version(  $tokens)(  $funnel)(  $usage)"
 ```
 
 Modules carry no click target.

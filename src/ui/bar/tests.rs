@@ -380,6 +380,52 @@ mod footer_tests {
         assert_eq!(usage.start_col + usage.width, 120);
     }
 
+    /// The bundled `tokens` module is defined but not placed; a theme that
+    /// puts `$tokens` in the footer gets per-kind context sums, with kinds
+    /// that have no live context dropped along with their gap.
+    #[test]
+    fn bundled_tokens_module_renders_when_a_theme_places_it() {
+        use crate::pty::session::AgentKind;
+        use crate::ui::bar::fleet::{FleetRow, FleetStats};
+        let theme = Theme::wsx();
+        let specs = crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse(
+                "[dashboard_footer]\nright_format = \"$version(  $tokens)\"\n",
+            )
+            .unwrap(),
+            &theme,
+        )
+        .unwrap();
+        let rows = vec![
+            FleetRow {
+                context_tokens: vec![(AgentKind::Claude, 1_200_000), (AgentKind::Codex, 40_000)],
+                ..Default::default()
+            },
+            FleetRow {
+                context_tokens: vec![(AgentKind::Codex, 300_000)],
+                ..Default::default()
+            },
+        ];
+        let fleet = FleetStats::from_rows(rows, 1, 0).to_vars();
+        let out = dashboard_footer(
+            &specs,
+            &theme,
+            &DashboardFooterInputs {
+                activity: &[],
+                version: "0.1.0",
+                window_label: "24h",
+                workspace_selected: false,
+                fleet: &fleet,
+            },
+            140,
+        );
+        let text = plain(&out.line);
+        assert!(text.ends_with("0.1.0  claude 1.2M  codex 340k"), "{text:?}");
+        // Empty fleet: the whole `(  $tokens)` group drops.
+        let text = plain(&footer(false, "24h", 140, crate::ui::bar::fleet::empty()).line);
+        assert!(!text.contains("claude"), "{text:?}");
+    }
+
     #[test]
     fn footer_omits_actions_pill_without_workspace() {
         assert!(

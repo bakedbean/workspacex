@@ -251,6 +251,12 @@ pub(in crate::app::input) async fn handle_key_attached_remote(
             crate::app::detach_remote(app);
             return Ok(());
         }
+        if k.code == KeyCode::Char('<') {
+            app.modal = Some(crate::ui::modal::Modal::PromptTag(
+                crate::ui::modal::PromptTagModal::pick(),
+            ));
+            return Ok(());
+        }
         // `^x <digit>` fires the matching global pinned command into the remote
         // session, mirroring the local attached chord (`handle_leader_key`).
         if let KeyCode::Char(c @ '1'..='9') = k.code {

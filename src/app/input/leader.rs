@@ -167,6 +167,11 @@ pub(in crate::app::input) async fn dispatch_leader_action(
             });
             Ok(())
         }
+        KeyCode::Char('<') => {
+            // Prompt tag: pick an XML tag, type a body, insert it unsubmitted.
+            app.modal = Some(Modal::PromptTag(crate::ui::modal::PromptTagModal::pick()));
+            Ok(())
+        }
         KeyCode::Char(c @ '1'..='9') => {
             let idx = (c as u8 - b'1') as usize;
             if let Some(cmd) = app.pinned_commands_cache.get(idx) {

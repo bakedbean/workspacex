@@ -272,6 +272,25 @@ impl Session {
             .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Insert `text` into the agent's composer unsubmitted (see
+    /// `insert_writes`). Returns whether the write reached the PTY: `false`
+    /// when the writer channel is closed (the agent has exited) or the
+    /// acknowledgement times out, so callers can avoid recording a use that
+    /// never landed.
+    pub async fn insert_text(&self, text: &str) -> bool {
+        self.scroll_to_live();
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        if self
+            .writer
+            .send(WriteReq::Acked(insert_writes(self.agent, text), ack_tx))
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        await_ack(ack_rx, WRITE_ACK_TIMEOUT_MS).await
+    }
+
     /// Encode a wheel event for the inner program when it has mouse reporting
     /// enabled. Returns `None` when mouse mode is off, in which case the caller
     /// should fall back to wsx's own scrollback. `col`/`row` are 1-based cell
@@ -686,6 +705,23 @@ pub(crate) fn submit_writes(agent: AgentKind, text: &str) -> (Vec<u8>, Vec<u8>) 
             (text.as_bytes().to_vec(), enter)
         }
     }
+}
+
+/// The single write used to drop `text` into an agent's composer WITHOUT
+/// submitting it (the prompt-tag insert). Wrapped in a bracketed paste for
+/// every agent so embedded newlines stay newlines rather than reading as
+/// Enter. omp renders an accepted paste as a `[Paste #N]` placeholder in its
+/// editor, which should be acceptable here — the text still submits when
+/// the user presses Enter — and is preferable to plain `\n`, which its
+/// editor treats as submit. The live omp check is the manual test in
+/// `docs/manual-tests/prompt-tags.md`; if it disagrees, this is the one
+/// place to give omp a different shape.
+pub(crate) fn insert_writes(_agent: AgentKind, text: &str) -> Vec<u8> {
+    let mut body = Vec::with_capacity(text.len() + 12);
+    body.extend_from_slice(b"\x1b[200~");
+    body.extend_from_slice(text.as_bytes());
+    body.extend_from_slice(b"\x1b[201~");
+    body
 }
 
 impl Drop for Session {
@@ -1532,6 +1568,32 @@ mod tests {
             assert_eq!(body, b"hello\nworld".to_vec(), "agent {agent:?}");
             assert_eq!(enter, b"\r".to_vec(), "agent {agent:?}");
         }
+    }
+
+    #[test]
+    fn insert_writes_wraps_every_agent_in_a_bracketed_paste_without_a_cr() {
+        // An insert must land in the composer unsubmitted with its newlines
+        // intact. Bracketed paste is how every harness distinguishes a
+        // pasted newline from Enter, so the wrapper is unconditional here
+        // (unlike `submit_writes`, which needs the CR to read as Enter).
+        for agent in AgentKind::ALL {
+            let bytes = insert_writes(agent, "<t>\nbody\n</t>");
+            assert_eq!(
+                bytes,
+                b"\x1b[200~<t>\nbody\n</t>\x1b[201~".to_vec(),
+                "{agent:?}"
+            );
+            assert!(!bytes.ends_with(b"\r"));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn insert_text_reports_failure_when_the_writer_is_gone() {
+        // `Session::fake` drops its receiver, which is the same closed-channel
+        // state as an exited agent; a lost insert must not read as delivered
+        // (the caller bumps the use count only on `true`).
+        let s = Session::fake(SessionStatus::Running { pid: 1 });
+        assert!(!s.insert_text("<t>\nx\n</t>").await);
     }
 
     /// A cut of a real cold boot, captured off a PTY and replayed here through

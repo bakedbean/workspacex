@@ -159,7 +159,7 @@ right_format = "$version(  $funnel)"
 format = "($agent_bar )$workspace(   $attention)"
 
 [attached_bottom]
-format       = "$keys  ($pins  )"
+format       = "$keys  ($pins  )($tags  )"
 right_format = "( ($agents   )($model_tokens )($procs )($diff )$pr)"
 fill         = "─"
 fill_style   = "fg:dim"
@@ -178,6 +178,10 @@ replace or restyle it.
 and `sort:` mode tabs, the live filter echo, and the repo/workspace counts
 flush right. Its five segments are display only — nothing on that line is
 clickable.
+
+A theme that sets its own `[attached_bottom].format` keeps that layout
+unchanged — add `$tags` to it yourself to get the prompt-tag chips (the
+keyboard chord works either way).
 
 `[dashboard_detail]` is the dashboard's own DETAIL pane (the pane shown when
 a workspace row is selected, distinct from the attached view): its
@@ -306,10 +310,11 @@ by one of them is an error, since inside a multi-item segment it would be
 shadowed by the per-item colour.
 The bundled default sets `priority` on the segments that compete for room:
 `model_tokens` 10, `agents` 20, `procs` 30, `diff` 40, `pr` 50 (the
-attached chip row's right side); `version` 50, the `funnel` module 60 (the
-dashboard footer's right side, and `usage` keeps its 60 for a theme that
-places it back); `sort` 30, `counts` 50 (the dashboard header). Every
-other segment is the unset default, 100, and so never drops.
+attached chip row's right side); `tags` 40 (the same row's left side);
+`version` 50, the `funnel` module 60 (the dashboard footer's right side,
+and `usage` keeps its 60 for a theme that places it back); `sort` 30,
+`counts` 50 (the dashboard header). Every other segment is the unset
+default, 100, and so never drops.
 
 | Segment | Variables | Notes |
 |---|---|---|
@@ -325,23 +330,26 @@ other segment is the unset default, 100, and so never drops.
 | `workspace` | `$repo $name` | `$repo` is absent when there is no repo name. `$style` includes the PR-lifecycle tint (green open, purple merged, red closed), or the header style without a PR. Attached only. |
 | `attention` | `$glyph $repo $name $age` | One item per workspace needing attention. `$glyph` is the entry's dashboard status glyph in its status color; `$style` is the name's PR-lifecycle tint (open, merged, …) or the muted `path` hue. Entries that don't fit fold into `more_format` (`$count`); the first entry always renders, and if it alone would push the tail off the bar its `$name` is shortened with an ellipsis (assuming one `$name` in the format; a format without `$name`, or a very long `$repo`, has nothing to yield and simply clips). Clickable: each entry, and the tail. |
 | `pins` | `$index $label` | One chip per pinned command. Clickable. |
+| `tags` | `$index $label` | The three most-used prompt tags as chips, then the manager chip from `more_format` (`$count` = saved tags). Attached only. Clickable: each chip, and the manager. |
 | `agents` | `$symbol $label $key` | One pill per agent (2+ agents). `$style` includes the agent color. `symbol` is ignored — the pill always uses a filled/hollow dot to show which agent is active. Clickable. |
 | `model_tokens` | `$model $tokens` | `$style` includes `ok`, or `warn` near the context limit. |
 | `procs` | `$symbol $count` | Hidden at zero. Clickable. |
 | `diff` | `$added $removed` | Hidden when clean. |
 | `pr` | `$symbol $number $label $mark` | `$style` includes the lifecycle tint; `$mark_style` supplies the review verdict style. Clickable — except over a remote (ssh) attach, where the chip still renders but isn't clickable (opening a PR keys off a local workspace id a remote attach doesn't have). |
 
-`pr`, `procs`, `usage`, and `attention` may each be placed only once:
-`pr`, `procs`, and `usage` carry exactly one click target, and `attention`,
-though it records one hit per entry like `pins`/`agents`/`keys`, also
-carries the single `… +N more` tail target and is fitted to the one bar
-that places it. Put one of these four in more than one place across the
-two attached bars' `format`/`right_format` (or twice within the dashboard
-footer's own `format`/`right_format`, or twice within the dashboard
-header's, or twice within the dashboard detail pane's) and only the
-last-routed placement would be clickable, so `wsx theme check` rejects it
-as a duplicate instead. These four scopes are independent: a singleton
-segment may appear once in each without conflicting with the others.
+`pr`, `procs`, `usage`, `attention`, and `tags` may each be placed only
+once: `pr`, `procs`, and `usage` carry exactly one click target; `attention`
+and `tags`, though each records one hit per entry/chip like
+`pins`/`agents`/`keys`, also carry a single tail target — `… +N more` for
+`attention`, the manager chip (`more_format`) for `tags` — and each is
+fitted to the one bar that places it. Put one of these five in more than
+one place across the two attached bars' `format`/`right_format` (or twice
+within the dashboard footer's own `format`/`right_format`, or twice within
+the dashboard header's, or twice within the dashboard detail pane's) and
+only the last-routed placement would be clickable, so `wsx theme check`
+rejects it as a duplicate instead. These four scopes are independent: a
+singleton segment may appear once in each without conflicting with the
+others.
 
 All segments are available in **either attached bar**, on either side;
 click targets follow them between bars as well as within a bar. `version`

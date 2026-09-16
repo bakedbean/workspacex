@@ -873,3 +873,40 @@ async fn click_more_tail_opens_updates_panel() {
         app.modal
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn clicking_a_tag_chip_opens_the_body_stage_and_the_manager_chip_opens_pick() {
+    use crate::commands::tags::PromptTag;
+    use crate::ui::modal::TagStage;
+    use crossterm::event::{MouseButton, MouseEventKind};
+    let store = Store::open_in_memory().unwrap();
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    spawn_attached_workspace(&mut app);
+    app.prompt_tags_cache = vec![PromptTag {
+        name: "context".into(),
+        uses: 2,
+    }];
+    app.tag_chip_rects = vec![(0, ratatui::layout::Rect::new(10, 23, 9, 1))];
+    app.tags_manager_rect = Some(ratatui::layout::Rect::new(22, 23, 4, 1));
+
+    let mut m = mouse_event(MouseEventKind::Down(MouseButton::Left));
+    m.column = 12;
+    m.row = 23;
+    handle_mouse(&mut app, m).await;
+    assert!(
+        matches!(&app.modal, Some(Modal::PromptTag(x)) if x.stage == (TagStage::Body { name: "context".into() })),
+        "{:?}",
+        app.modal
+    );
+
+    app.modal = None;
+    let mut m = mouse_event(MouseEventKind::Down(MouseButton::Left));
+    m.column = 23;
+    m.row = 23;
+    handle_mouse(&mut app, m).await;
+    assert!(
+        matches!(&app.modal, Some(Modal::PromptTag(x)) if x.stage == TagStage::Pick),
+        "{:?}",
+        app.modal
+    );
+}

@@ -11,10 +11,12 @@
 //!   [`agents`]     agent picker, agents panel, missing-agent notice
 //!   [`remote`]     shared-workspace browsing on another host
 //!   [`pickers`]    name color and usage window
+//!   [`prompt_tag`]  the XML prompt-tag picker and body box
 
 pub(super) mod agents;
 pub(super) mod panels;
 pub(super) mod pickers;
+pub(super) mod prompt_tag;
 pub(super) mod remote;
 pub(super) mod workspace;
 
@@ -127,6 +129,7 @@ pub(in crate::app::input) async fn handle_key_modal(
             name_buffer,
             notice: _,
         } => workspace::rename_workspace(app, shared, k, workspace_id, name_buffer).await?,
+        Modal::PromptTag(modal) => prompt_tag::prompt_tag(app, shared, k, modal).await?,
     }
     Ok(())
 }

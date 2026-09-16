@@ -13,6 +13,7 @@
 ///   - `g` → open lazygit
 ///   - `c` → open chronox
 ///   - `k` → process list
+///   - `<` → prompt tag
 ///   - `1-9` (digits) → pinned commands
 ///
 /// This is the single source of truth: both the renderer and (in a later
@@ -26,7 +27,7 @@
 /// without a keyboard switch key; they remain clickable).
 pub fn agent_switch_keys(count: usize) -> Vec<char> {
     // Pool excludes every letter the attached `^x` leader already binds
-    // (d, x, u, a, e, t, v, g, c, k) plus all digits (pinned chips 1-9).
+    // (d, x, u, a, e, t, v, g, c, k, and `<` for prompt tags) plus all digits (pinned chips 1-9).
     const POOL: &[char] = &['q', 'w', 'r', 'y', 'i', 'o', 'p', 's', 'h', 'j'];
     POOL.iter().copied().take(count).collect()
 }

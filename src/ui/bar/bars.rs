@@ -213,6 +213,9 @@ pub(crate) struct AttachedInputs<'a> {
     pub agent: Option<crate::pty::session::AgentKind>,
     pub attention: Option<crate::ui::updates_bar::AttentionItems>,
     pub pinned: &'a [crate::commands::pinned::PinnedCommand],
+    /// `$tags`' chips, most-used first; the provider takes the first
+    /// `CHIP_COUNT` and counts the rest into the manager chip.
+    pub tags: &'a [crate::commands::tags::PromptTag],
     pub procs: u32,
     pub diff: Option<crate::git::DiffStats>,
     pub pr: Option<crate::ui::attached::ChipPr>,
@@ -288,6 +291,11 @@ pub(super) fn attached_segments(
         &mut segments,
         "pins",
         providers::pins(cfg(specs, "pins"), inputs.pinned, resolver),
+    );
+    put(
+        &mut segments,
+        "tags",
+        providers::tags(cfg(specs, "tags"), inputs.tags, resolver),
     );
     put(
         &mut segments,

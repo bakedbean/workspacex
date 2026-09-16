@@ -23,6 +23,7 @@ mod attention_budget_tests {
             agent,
             attention: None,
             pinned: &[],
+            tags: &[],
             procs: 0,
             diff: None,
             pr: None,
@@ -232,6 +233,7 @@ mod attached_bars_tests {
                 agent: None,
                 attention: None,
                 pinned: &[],
+                tags: &[],
                 procs: 0,
                 diff: None,
                 pr: None,
@@ -544,6 +546,7 @@ mod bottom_tests {
             agent: None,
             attention: None,
             pinned,
+            tags: &[],
             procs: 3,
             diff: Some(crate::git::DiffStats {
                 added: 12,
@@ -584,9 +587,11 @@ mod bottom_tests {
         let out = render(full(&pinned, &agents), 120);
         let t = plain(&out.line);
         // keys ` ^x  menu`, two literal spaces, chips ` 1  PR` and ` 2  feedback`
-        // (pill pad + `index` pad + space-led label), two spaces, then the rule.
+        // (pill pad + `index` pad + space-led label), two spaces, the tags
+        // group (no tags, so just the ` <> ` manager pill), two spaces, then
+        // the rule.
         assert!(
-            t.starts_with(" ^x  menu   1  PR   2  feedback  ──"),
+            t.starts_with(" ^x  menu   1  PR   2  feedback   <>   ──"),
             "{t:?}"
         );
         // Each agent pill ends with its ` q ` key pill (trailing pad), then the
@@ -621,6 +626,40 @@ mod bottom_tests {
     }
 
     #[test]
+    fn tag_chips_follow_the_pins_and_carry_their_hits() {
+        let pinned = cmds(&[("PR", "/pr")]);
+        let agents = agents();
+        let tags = vec![
+            crate::commands::tags::PromptTag {
+                name: "context".into(),
+                uses: 3,
+            },
+            crate::commands::tags::PromptTag {
+                name: "task".into(),
+                uses: 1,
+            },
+        ];
+        let mut inputs = full(&pinned, &agents);
+        inputs.tags = &tags;
+        let out = render(inputs, 140);
+        let t = plain(&out.line);
+        assert!(
+            t.starts_with(" ^x  menu   1  PR  <context>  <task>   <>   ──"),
+            "{t:?}"
+        );
+        let chips: Vec<_> = out
+            .hits
+            .iter()
+            .filter_map(|h| match h.hit {
+                Hit::TagChip(i) => Some(i),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(chips, vec![0, 1]);
+        assert!(out.hits.iter().any(|h| h.hit == Hit::TagsManager));
+    }
+
+    #[test]
     fn zero_procs_and_clean_diff_render_nothing() {
         let pinned = cmds(&[]);
         let agents = vec![];
@@ -649,15 +688,18 @@ mod bottom_tests {
     fn narrow_rows_drop_model_tokens_then_agents_then_procs_then_diff() {
         let pinned = cmds(&[("PR", "/pr")]);
         let agents = agents();
-        // Left side is 19 cells (` ^x  menu` + 2 + ` 1  PR` + 2). Right side at
-        // full strength is 73: 2 + agents 26 + 3 + model 17 + 1 + procs 4 + 1
-        // + diff 6 + 1 + pr 12. Dropping model removes 18, agents 29, procs 5,
-        // diff 7.
+        // Left side is 25 cells (` ^x  menu` + 2 + ` 1  PR` + 2 + ` <> ` + 2).
+        // Right side at full strength is 73: 2 + agents 26 + 3 + model 17 + 1
+        // + procs 4 + 1 + diff 6 + 1 + pr 12. Dropping model removes 18,
+        // agents 29, procs 5, diff 7. The `$tags` manager chip (priority 40,
+        // on the `format` side) goes before `diff` (also 40, `right_format`)
+        // on the tie, handing its 6 cells back — so the pr-only width is the
+        // same one that squeezed diff out before the chip existed.
         let widths_and_expect: [(u16, &[&str]); 5] = [
-            (120, &["agents", "model_tokens", "procs", "diff", "pr"]),
-            (80, &["agents", "procs", "diff", "pr"]),
-            (50, &["procs", "diff", "pr"]),
-            (40, &["diff", "pr"]),
+            (126, &["agents", "model_tokens", "procs", "diff", "pr"]),
+            (86, &["agents", "procs", "diff", "pr"]),
+            (56, &["procs", "diff", "pr"]),
+            (46, &["diff", "pr"]),
             (35, &["pr"]),
         ];
         for (w, expect) in widths_and_expect {
@@ -750,6 +792,7 @@ mod bottom_tests {
             agent: None,
             attention: None,
             pinned: &pinned,
+            tags: &[],
             procs: 0,
             diff: None,
             pr: pr(None),
@@ -919,6 +962,10 @@ mod segment_registry_drift_tests {
                 Some('w'),
             ),
         ];
+        let tags = vec![crate::commands::tags::PromptTag {
+            name: "context".into(),
+            uses: 1,
+        }];
         let activity: Vec<u32> = (0..24).collect();
         let attention = Some(AttentionItems {
             entries: vec![AttentionEntry {
@@ -942,6 +989,7 @@ mod segment_registry_drift_tests {
             agent: Some(AgentKind::Claude),
             attention,
             pinned: &pinned,
+            tags: &tags,
             procs: 3,
             diff: Some(DiffStats {
                 added: 12,
@@ -1305,6 +1353,7 @@ mod attention_tests {
             agent: None,
             attention: attention_input(entries, max_width),
             pinned: &[],
+            tags: &[],
             procs: 0,
             diff: None,
             pr: None,
@@ -1830,6 +1879,7 @@ mod example_theme_tests {
                 agent: None,
                 attention: None,
                 pinned: &[],
+                tags: &[],
                 procs: 0,
                 diff: None,
                 pr,
@@ -2032,6 +2082,7 @@ mod module_tests {
                 agent: None,
                 attention: None,
                 pinned: &[],
+                tags: &[],
                 procs: 0,
                 diff: None,
                 pr: None,

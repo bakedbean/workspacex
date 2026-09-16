@@ -44,6 +44,40 @@ impl Store {
         Ok(())
     }
 
+    /// Read-modify-write `key` atomically. `f` sees the value as it is in
+    /// the table right now (not the memoized copy) inside a `BEGIN
+    /// IMMEDIATE` transaction, so a sibling `wsx` process writing the same
+    /// key between the read and the write blocks instead of being
+    /// overwritten. Returns the value written.
+    pub fn update_setting(
+        &self,
+        key: &str,
+        f: impl FnOnce(Option<&str>) -> String,
+    ) -> Result<String> {
+        // `Transaction::new` wants `&mut Connection`; `new_unchecked` is the
+        // `&Connection` form the store's other transactions use
+        // (`unchecked_transaction`), here with IMMEDIATE so the read already
+        // holds the write lock.
+        let tx = rusqlite::Transaction::new_unchecked(
+            self.conn(),
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        let current: Option<String> = tx
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()?;
+        let next = f(current.as_deref());
+        tx.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![key, next],
+        )?;
+        tx.commit()?;
+        self.invalidate_settings_cache();
+        Ok(next)
+    }
+
     pub fn delete_setting(&self, key: &str) -> Result<()> {
         self.conn()
             .execute("DELETE FROM settings WHERE key = ?1", [key])?;
@@ -140,6 +174,60 @@ mod tests {
         b.set_setting("theme", "light").unwrap();
         a.invalidate_settings_cache();
         assert_eq!(a.get_setting("theme").unwrap().as_deref(), Some("light"));
+    }
+
+    #[test]
+    fn update_setting_reads_the_table_not_the_cache() {
+        // A sibling process wrote after this handle cached the key. The
+        // closure must be handed the table's value, or the update would
+        // put the stale copy back and lose the other writer's change.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let a = Store::open(&path).unwrap();
+        let b = Store::open(&path).unwrap();
+
+        a.set_setting("prompt_tags", "old=1\n").unwrap();
+        assert_eq!(
+            a.get_setting("prompt_tags").unwrap().as_deref(),
+            Some("old=1\n")
+        );
+        b.set_setting("prompt_tags", "theirs=2\n").unwrap();
+        // Still stale from A's point of view.
+        assert_eq!(
+            a.get_setting("prompt_tags").unwrap().as_deref(),
+            Some("old=1\n")
+        );
+
+        let written = a
+            .update_setting("prompt_tags", |cur| {
+                assert_eq!(cur, Some("theirs=2\n"), "closure sees the fresh row");
+                format!("{}mine=1\n", cur.unwrap_or(""))
+            })
+            .unwrap();
+        assert_eq!(written, "theirs=2\nmine=1\n");
+        assert_eq!(
+            a.get_setting("prompt_tags").unwrap().as_deref(),
+            Some("theirs=2\nmine=1\n"),
+            "the cache is dropped by the update"
+        );
+        assert_eq!(
+            b.get_setting("prompt_tags").unwrap().as_deref(),
+            Some("theirs=2\nmine=1\n")
+        );
+    }
+
+    #[test]
+    fn update_setting_creates_a_missing_key() {
+        let s = Store::open_in_memory().unwrap();
+        assert_eq!(s.get_setting("k").unwrap(), None);
+        let v = s
+            .update_setting("k", |cur| {
+                assert_eq!(cur, None);
+                "v".to_string()
+            })
+            .unwrap();
+        assert_eq!(v, "v");
+        assert_eq!(s.get_setting("k").unwrap().as_deref(), Some("v"));
     }
 
     #[test]

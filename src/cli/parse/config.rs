@@ -28,6 +28,7 @@ pub(in crate::cli) fn known_setting_key(k: &str) -> bool {
             | "remote_control"
             | "remote_control_sandbox"
             | "pinned_commands"
+            | "prompt_tags"
             | "remotes"
             | "shared_hosts"
             | "dashboard_branch_width"

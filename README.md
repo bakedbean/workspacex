@@ -33,8 +33,8 @@ other users, ask questions, and share feedback.
   focus with a keypress, and have them message each other via the `wsx` CLI.
 - **Cross-session attention alerts** and a per-workspace activity sub-line so you
   see what every session is doing at a glance.
-- **Configurable detail bar, themes, remote access, pinned commands, and MCP
-  inheritance.**
+- **Configurable detail bar, themes, remote access, pinned commands, prompt
+  tags (XML-wrapped prompt sections), and MCP inheritance.**
 
 See the
 [full feature list](https://bakedbean.github.io/workspacex/docs/overview/key-features.html).

@@ -7,6 +7,7 @@ use super::render::eval;
 use super::segment::{Hit, Segment, SegmentConfig, SegmentMap};
 use super::style::Resolver;
 use crate::commands::pinned::{PinnedCommand, truncate_label};
+use crate::commands::tags::{CHIP_COUNT, PromptTag};
 use crate::data::store::AgentInstanceId;
 use crate::git::DiffStats;
 use crate::git::forge::BranchLifecycle;
@@ -568,6 +569,49 @@ pub fn pins(cfg: &SegmentConfig, pinned: &[PinnedCommand], resolver: &Resolver) 
     eval_items(cfg, &items, resolver)
 }
 
+/// Prompt-tag chips: the first `CHIP_COUNT` tags (the caller passes them
+/// most-used first), then the manager chip from `more_format`. The manager
+/// chip always renders — with no tags it is the only way to discover the
+/// feature from the footer — so this segment is never empty unless disabled.
+pub fn tags(cfg: &SegmentConfig, tags: &[PromptTag], resolver: &Resolver) -> Option<Segment> {
+    if cfg.disabled {
+        return None;
+    }
+    let items: Vec<(SegmentMap, Style, Option<Hit>)> = tags
+        .iter()
+        .take(CHIP_COUNT)
+        .enumerate()
+        .map(|(i, t)| {
+            (
+                vars(vec![
+                    ("index", var((i + 1).to_string())),
+                    ("label", var(truncate_label(&t.name, CHIP_LABEL_COLS))),
+                ]),
+                Style::default(),
+                Some(Hit::TagChip(i)),
+            )
+        })
+        .collect();
+    let mut out = eval_items(cfg, &items, resolver).unwrap_or_default();
+    let resolver = &resolver.with_overlay(&cfg.palette);
+    if !out.is_empty() {
+        out.append(
+            eval(
+                &cfg.separator,
+                &SegmentMap::new(),
+                resolver,
+                Style::default(),
+            )
+            .0,
+        );
+    }
+    let start = out.width;
+    let v = vars(vec![("count", var(tags.len().to_string()))]);
+    out.append(eval(&cfg.more_format, &v, resolver, Style::default()).0);
+    out.hit_from(start, Hit::TagsManager);
+    (!out.is_empty()).then_some(out)
+}
+
 /// Agent pills: `● claude q   ○ codex w`. The active instance gets the
 /// filled dot and a bold label. `$symbol` is the dot plus its space (the
 /// `[agents].symbol` field is not used; the dot encodes active/idle).
@@ -1001,5 +1045,40 @@ mod tests {
         ];
         let out = eval_items(&cfg, &items, &resolver).unwrap();
         assert_eq!(out.plain_text(), "a-b");
+    }
+
+    #[test]
+    fn tags_renders_at_most_three_chips_then_the_manager_chip() {
+        let theme = Theme::wsx();
+        let specs = crate::config::theme_file::bundled_default(&theme);
+        let resolver = specs.resolver(&theme);
+        let cfg = &specs.segments["tags"];
+        let four: Vec<PromptTag> = ["context", "task", "constraints", "examples"]
+            .iter()
+            .map(|n| PromptTag {
+                name: (*n).into(),
+                uses: 1,
+            })
+            .collect();
+        let seg = tags(cfg, &four, &resolver).unwrap();
+        assert_eq!(seg.plain_text(), "<context>  <task>  <constraints>   <> ");
+        let hits: Vec<_> = seg.hits.iter().map(|h| h.hit).collect();
+        assert_eq!(
+            hits,
+            vec![
+                Hit::TagChip(0),
+                Hit::TagChip(1),
+                Hit::TagChip(2),
+                Hit::TagsManager
+            ]
+        );
+        let manager = seg.hits.iter().find(|h| h.hit == Hit::TagsManager).unwrap();
+        assert_eq!(manager.width, 4, "` <> ` is the manager pill");
+
+        // No tags at all still gives the manager chip, and nothing else.
+        let seg = tags(cfg, &[], &resolver).unwrap();
+        assert_eq!(seg.plain_text(), " <> ");
+        assert_eq!(seg.hits.len(), 1);
+        assert_eq!(seg.hits[0].hit, Hit::TagsManager);
     }
 }

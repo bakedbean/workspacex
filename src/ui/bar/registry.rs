@@ -143,6 +143,16 @@ pub const SEGMENTS: &[SegmentDef] = &[
         singleton: false,
     },
     SegmentDef {
+        name: "tags",
+        vars: &["index", "label"],
+        style_vars: STYLE,
+        // The manager chip is the tail; `$count` is how many tags exist.
+        more_vars: &["count"],
+        items: true,
+        // One un-indexed target (the manager chip), like `attention`'s tail.
+        singleton: true,
+    },
+    SegmentDef {
         name: "agents",
         vars: &["symbol", "label", "key"],
         style_vars: STYLE,
@@ -333,7 +343,7 @@ mod tests {
     #[test]
     fn singleton_names_matches_the_flagged_entries() {
         let names: Vec<&str> = singleton_names().collect();
-        assert_eq!(names, vec!["usage", "attention", "procs", "pr"]);
+        assert_eq!(names, vec!["usage", "attention", "tags", "procs", "pr"]);
     }
 
     #[test]

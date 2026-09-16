@@ -28,6 +28,7 @@ mod mouse;
 mod new_workspace_notice;
 mod pm_pane;
 mod process_command;
+mod prompt_tag;
 mod remote;
 mod rename_modal;
 mod repo_pr_link_click;

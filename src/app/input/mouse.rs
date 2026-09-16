@@ -205,6 +205,26 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, m: MouseEvent) {
                     && m.row < r.y.saturating_add(r.height)
             }) {
                 fire_chip(app, idx).await;
+            } else if let Some((idx, _)) = app.tag_chip_rects.iter().copied().find(|(_, r)| {
+                m.column >= r.x
+                    && m.column < r.x.saturating_add(r.width)
+                    && m.row >= r.y
+                    && m.row < r.y.saturating_add(r.height)
+            }) {
+                // A tag chip opens the body box for that tag straight away.
+                if let Some(tag) = app.prompt_tags_cache.get(idx) {
+                    app.modal = Some(Modal::PromptTag(crate::ui::modal::PromptTagModal::for_tag(
+                        &tag.name,
+                    )));
+                }
+            } else if app.tags_manager_rect.is_some_and(|r| {
+                m.column >= r.x
+                    && m.column < r.x.saturating_add(r.width)
+                    && m.row >= r.y
+                    && m.row < r.y.saturating_add(r.height)
+            }) {
+                // The manager chip is `^x <`.
+                app.modal = Some(Modal::PromptTag(crate::ui::modal::PromptTagModal::pick()));
             } else if let Some((ws_id, _)) = app.attention_rects.iter().copied().find(|(_, r)| {
                 m.column >= r.x
                     && m.column < r.x.saturating_add(r.width)

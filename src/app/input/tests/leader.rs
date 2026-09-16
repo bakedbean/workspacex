@@ -1198,3 +1198,37 @@ async fn z_shift_r_expands_all_repos() {
         );
     }
 }
+
+/// `^x <` opens the prompt-tag modal in its pick stage and clears the leader.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn leader_less_than_opens_the_prompt_tag_modal() {
+    use crossterm::event::{KeyCode, KeyEvent};
+    let store = Store::open_in_memory().unwrap();
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    let ws_id = spawn_attached_workspace(&mut app);
+    let target = test_target(&app, ws_id);
+    handle_key_attached(
+        &mut app,
+        target,
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+    )
+    .await
+    .unwrap();
+    handle_key_attached(
+        &mut app,
+        target,
+        KeyEvent::new(KeyCode::Char('<'), KeyModifiers::NONE),
+    )
+    .await
+    .unwrap();
+    assert!(!app.leader_pending);
+    assert!(
+        matches!(
+            &app.modal,
+            Some(crate::ui::modal::Modal::PromptTag(m))
+                if m.stage == crate::ui::modal::TagStage::Pick
+        ),
+        "{:?}",
+        app.modal
+    );
+}

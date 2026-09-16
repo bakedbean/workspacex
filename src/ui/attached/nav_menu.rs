@@ -68,6 +68,10 @@ pub fn nav_menu_items(multi_pane: bool) -> Vec<NavItem> {
             label: "processes",
         },
         NavItem {
+            glyph: "<",
+            label: "prompt tag",
+        },
+        NavItem {
             glyph: "x",
             label: "send literal ^x",
         },
@@ -210,6 +214,17 @@ mod tests {
         assert!(!items.iter().any(|i| i.label == "focus pane"));
         // Stable tail order the Enter handler depends on.
         assert_eq!(items.last().unwrap().glyph, "x");
+        assert!(
+            items
+                .iter()
+                .any(|i| i.glyph == "<" && i.label == "prompt tag"),
+            "the nav overlay lists the prompt-tag row"
+        );
+        assert_eq!(
+            crate::ui::footer::key_for_glyph("<").map(|k| k.code),
+            Some(crossterm::event::KeyCode::Char('<')),
+            "the overlay's Enter path resolves the row to the `<` key"
+        );
     }
 
     #[test]

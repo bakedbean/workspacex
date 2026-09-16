@@ -419,7 +419,7 @@ fn resolve_segment(
         Some(_) if def.more_vars.is_empty() => {
             errors.push(error(
                 &more_loc,
-                "this segment has no overflow tail (only `attention` takes `more_format`)",
+                "this segment has no overflow tail (only `attention` and `tags` take `more_format`)",
             ));
             Vec::new()
         }
@@ -1015,6 +1015,19 @@ mod tests {
                 e[0].message
             );
         }
+    }
+
+    /// `tags` folds nothing, but its manager chip is a tail all the same:
+    /// `more_format` renders once after the chips, with `$count` the
+    /// number of saved tags, and item variables are unknown there.
+    #[test]
+    fn tags_takes_a_more_format_with_count() {
+        let specs = ok("[tags]\nmore_format = \"[$count tags](fg:dim)\"\n");
+        assert_eq!(
+            specs.segments["tags"].more_format,
+            format::parse("[$count tags](fg:dim)").unwrap()
+        );
+        assert!(!errs("[tags]\nmore_format = \"$label\"\n").is_empty());
     }
 
     /// `styles` grades a multi-item segment's items by position, and the

@@ -9,6 +9,7 @@
 - [Daily use](daily-use/index.md)
   - [Keybindings](daily-use/keybindings.md)
   - [Pinned commands](daily-use/pinned-commands.md)
+  - [Prompt tags](daily-use/prompt-tags.md)
   - [Mouse, scrollback, and text selection](daily-use/mouse-scrollback-selection.md)
   - [Dashboard status indicators](daily-use/status-indicators.md)
   - [Process tracking](daily-use/process-tracking.md)

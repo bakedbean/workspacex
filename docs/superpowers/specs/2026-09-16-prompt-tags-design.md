@@ -30,8 +30,9 @@ footer as chips beside the pinned commands.
 - Tags with a saved default body (snippets). A tag is a name only.
 - Per-repo tag lists. The list is global.
 - Submitting the tagged text. Insertion never sends a trailing CR.
-- The dashboard detail chip row and the remote-attach view
-  (`View::AttachedRemote`). The modal targets the focused local pane only.
+- The dashboard detail chip row. (The remote-attach view does get the
+  chips and `^x <`: its PTY is the ssh hop into the remote agent, so the
+  insert is plain bytes exactly as `$pins` already behaves there.)
 - Handing the body to `$EDITOR`. The in-TUI box is the only editor.
 - Vim-style editing in the body box. Cursor movement, insert, delete,
   newline only.

@@ -72,7 +72,7 @@ fill         = " "
 # model + tokens on charcoal, agents on ash. Optional segments get their
 # own block so every step shows; a missing one collapses to its wedge.
 [attached_bottom]
-format       = "[  ](bg:orange)[](fg:orange bg:smoke)[ $keys ](bg:smoke fg:orange)[](fg:smoke bg:soot)[( $pins )](bg:soot fg:orange)[](fg:soot)"
+format       = "[  ](bg:orange)[](fg:orange bg:smoke)[ $keys ](bg:smoke fg:orange)[](fg:smoke bg:soot)[( $pins )( $tags )](bg:soot fg:orange)[](fg:soot)"
 right_format = "[](fg:ash)[( $agents )](bg:ash fg:cream)[](fg:charcoal bg:ash)[( $model_tokens )](bg:charcoal fg:cream)[](fg:soot bg:charcoal)[( $procs )](bg:soot fg:orange)[](fg:smoke bg:soot)[( $diff )](bg:smoke fg:orange)[](fg:orange bg:smoke)[( $pr )](bg:orange fg:black)"
 fill         = " "
 
@@ -118,6 +118,13 @@ separator = "  "
 [pins]
 format    = "[$index](fg:cream bold) [$label]()"
 separator = "  "
+
+# The three most-used prompt tags as chips, then the manager chip.
+[tags]
+format      = "[<$label>]()"
+separator   = "  "
+more_format = "[ <> ](fg:cream bold)"
+priority    = 40
 
 # Agent identity as a right-pointing chevron in the agent's colour (the
 # bundled default is a thin vertical bar).

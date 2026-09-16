@@ -63,7 +63,7 @@ fill         = " "
 # Right-side transitions point left: fg is the block to the right, bg the block
 # to the left.
 [attached_bottom]
-format       = "[ $keys ](bg:first)[](fg:first bg:second)[( $pins )](bg:second)[](fg:second)"
+format       = "[ $keys ](bg:first)[](fg:first bg:second)[( $pins )( $tags )](bg:second)[](fg:second)"
 right_format = "[](fg:third)[( $agents )](bg:third)[](fg:second bg:third)[( $model_tokens )](bg:second)[](fg:first bg:second)[( $procs )( $diff )](bg:first)[](fg:zero bg:first)[( $pr )](bg:zero)"
 fill         = " "
 
@@ -102,6 +102,13 @@ separator = "  "
 [pins]
 format    = "[$index](fg:amber bold) [$label](fg:label)"
 separator = "  "
+
+# The three most-used prompt tags as chips, then the manager chip.
+[tags]
+format      = "[<$label>](fg:label)"
+separator   = "  "
+more_format = "[ <> ](fg:amber bold)"
+priority    = 40
 
 # Agent identity as a right-pointing chevron in the agent's colour (the
 # bundled default is a thin vertical bar).

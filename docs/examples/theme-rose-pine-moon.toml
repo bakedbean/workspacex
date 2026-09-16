@@ -47,7 +47,7 @@ format       = "[($agent_bar )$workspace ](bg:rose fg:base bold)[](fg:rose bg
 fill         = " "
 
 [attached_bottom]
-format       = "[ $keys ](bg:rose fg:base)[](fg:rose bg:hl_med)[( $pins )](bg:hl_med fg:text)[](fg:hl_med)"
+format       = "[ $keys ](bg:rose fg:base)[](fg:rose bg:hl_med)[( $pins )( $tags )](bg:hl_med fg:text)[](fg:hl_med)"
 right_format = "[](fg:surface)[( $agents )( $model_tokens )](bg:surface fg:subtle)[](fg:hl_high bg:surface)[( $procs )( $diff )](bg:hl_high fg:text)[](fg:pine bg:hl_high)[( $pr )](bg:pine fg:text)"
 fill         = " "
 
@@ -84,6 +84,13 @@ separator = "  "
 [pins]
 format    = "[$index](fg:gold bold) [$label]()"
 separator = "  "
+
+# The three most-used prompt tags as chips, then the manager chip.
+[tags]
+format      = "[<$label>]()"
+separator   = "  "
+more_format = "[ <> ](fg:gold bold)"
+priority    = 40
 
 # Agent identity as a right-pointing chevron in the agent's colour (the
 # bundled default is a thin vertical bar).

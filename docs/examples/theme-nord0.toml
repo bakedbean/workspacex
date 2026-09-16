@@ -56,7 +56,7 @@ format       = "[($agent_bar )$workspace ](bg:nord8 fg:nord0 bold)[](fg:nord8
 fill         = " "
 
 [attached_bottom]
-format       = "[ $keys ](bg:nord8 fg:nord0)[](fg:nord8 bg:nord1)[( $pins )](bg:nord1 fg:nord4)[](fg:nord1)"
+format       = "[ $keys ](bg:nord8 fg:nord0)[](fg:nord8 bg:nord1)[( $pins )( $tags )](bg:nord1 fg:nord4)[](fg:nord1)"
 right_format = "[](fg:nord0)[( $agents )( $model_tokens )](bg:nord0 fg:nord4)[](fg:nord1 bg:nord0)[( $procs )( $diff )](bg:nord1 fg:nord4)[](fg:nord10 bg:nord1)[( $pr )](bg:nord10 fg:nord6)"
 fill         = " "
 
@@ -92,6 +92,13 @@ separator = "  "
 [pins]
 format    = "[$index](fg:nord13 bold) [$label]()"
 separator = "  "
+
+# The three most-used prompt tags as chips, then the manager chip.
+[tags]
+format      = "[<$label>]()"
+separator   = "  "
+more_format = "[ <> ](fg:nord13 bold)"
+priority    = 40
 
 # Agent identity as a right-pointing chevron in the agent's colour (the
 # bundled default is a thin vertical bar).

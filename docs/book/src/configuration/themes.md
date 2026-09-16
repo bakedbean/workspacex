@@ -265,15 +265,17 @@ of `symbol`:
 
 ```toml
 [agent_bar]
-symbol = ""            # kinds without an entry below
+symbol = "\ue0b0"        # kinds without an entry below (Nerd Font chevron)
 
 [agent_bar.symbols]
-claude = ""
-codex  = ""
+claude = "\uec82"
+codex  = "\uec81"
 ```
 
 Keys must be agent kind names; any other key, or the table on another
-segment, is an error.
+segment, is an error. Entries union per kind over the bundled default,
+yours winning, like a segment palette. An empty entry (`pi = ""`) is an
+override, not an absence: that kind shows no glyph rather than `symbol`.
 
 An item whose `format` renders empty — an empty `format`, or one whose
 variables are all absent for that item — is dropped as if it were never in

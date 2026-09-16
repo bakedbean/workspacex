@@ -74,9 +74,9 @@ pub struct SegmentTable {
     #[serde(default)]
     pub palette: BTreeMap<String, String>,
     /// `[agent_bar.symbols]`: one glyph per agent kind (`claude`, `pi`, …),
-    /// tried ahead of `symbol`. Rejected on every other segment.
-    #[serde(default)]
-    pub symbols: BTreeMap<String, String>,
+    /// tried ahead of `symbol`. Rejected on every other segment, which is
+    /// why it is `Option`: an absent table and a present empty one differ.
+    pub symbols: Option<BTreeMap<String, String>>,
 }
 
 /// A `[module.<name>]` table: a segment composed from fleet variables. No
@@ -152,12 +152,14 @@ impl SegmentTable {
                 }
                 palette
             },
-            symbols: {
-                let mut symbols = self.symbols;
-                for (k, v) in base.symbols {
-                    symbols.entry(k).or_insert(v);
+            symbols: match (self.symbols, base.symbols) {
+                (Some(mut mine), Some(base)) => {
+                    for (k, v) in base {
+                        mine.entry(k).or_insert(v);
+                    }
+                    Some(mine)
                 }
-                symbols
+                (mine, base) => mine.or(base),
             },
         }
     }
@@ -448,7 +450,7 @@ fn resolve_segment(
         base_resolver,
         errors,
     );
-    let symbols = resolve_symbols(name, &tbl.symbols, errors);
+    let symbols = resolve_symbols(name, tbl.symbols.as_ref(), errors);
     Some(SegmentConfig {
         style,
         symbol: tbl.symbol.clone(),
@@ -470,12 +472,12 @@ fn resolve_segment(
 /// order regardless of the file's.
 fn resolve_symbols(
     segment: &str,
-    tbl: &BTreeMap<String, String>,
+    tbl: Option<&BTreeMap<String, String>>,
     errors: &mut Vec<ThemeError>,
 ) -> Vec<(AgentKind, String)> {
-    if tbl.is_empty() {
+    let Some(tbl) = tbl else {
         return Vec::new();
-    }
+    };
     let location = format!("[{segment}.symbols]");
     if segment != "agent_bar" {
         errors.push(error(
@@ -934,13 +936,32 @@ mod tests {
     }
 
     /// Only `agent_bar` reads `symbols`; on any other segment the table
-    /// would do nothing, so it is an error there.
+    /// would do nothing, so it is an error there — even an empty one, so
+    /// the rule holds as documented rather than only for non-empty tables.
     #[test]
     fn symbols_table_is_an_error_off_agent_bar() {
-        let errs = errs("[pr.symbols]\nclaude = \"C\"\n");
-        assert_eq!(errs.len(), 1, "{errs:?}");
-        assert_eq!(errs[0].location, "[pr.symbols]");
-        assert!(errs[0].message.contains("agent_bar"), "{}", errs[0].message);
+        for src in ["[pr.symbols]\nclaude = \"C\"\n", "[pr.symbols]\n"] {
+            let errs = errs(src);
+            assert_eq!(errs.len(), 1, "{src:?}: {errs:?}");
+            assert_eq!(errs[0].location, "[pr.symbols]");
+            assert!(errs[0].message.contains("agent_bar"), "{}", errs[0].message);
+        }
+    }
+
+    /// A user file's `[agent_bar.symbols]` unions with the base's per
+    /// kind, the user winning — an empty user glyph included, since it is
+    /// a deliberate override, not an absence.
+    #[test]
+    fn agent_bar_symbols_merge_per_kind() {
+        let base =
+            ThemeFile::parse("[agent_bar.symbols]\nclaude = \"C\"\ncodex = \"X\"\npi = \"P\"\n")
+                .unwrap();
+        let mine = ThemeFile::parse("[agent_bar.symbols]\nclaude = \"c\"\npi = \"\"\n").unwrap();
+        let merged = mine.merge_over(base);
+        let symbols = merged.segments["agent_bar"].symbols.as_ref().unwrap();
+        assert_eq!(symbols["claude"], "c");
+        assert_eq!(symbols["codex"], "X");
+        assert_eq!(symbols["pi"], "");
     }
 
     /// A segment palette value may name a global `[palette]` entry — the

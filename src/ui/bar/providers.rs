@@ -847,7 +847,24 @@ mod tests {
         );
     }
 
-    /// `$workspace`'s `$style` is the PR-lifecycle tint when the branch
+    /// An empty per-kind glyph is an override, not an absence: the segment
+    /// drops (so a `($agent_bar )` group collapses) rather than falling
+    /// through to `symbol`. With neither a per-kind entry nor `symbol`,
+    /// the bundled bar glyph stands in.
+    #[test]
+    fn agent_bar_empty_entry_suppresses_and_no_symbol_uses_the_bar() {
+        let theme = Theme::wsx();
+        let palette = HashMap::new();
+        let resolver = Resolver::new(&palette, &theme);
+        let mut cfg = item_cfg("[$symbol]($style)", "");
+        cfg.symbol = Some(">".to_string());
+        cfg.symbols = vec![(AgentKind::Pi, String::new())];
+        assert!(agent_bar(&cfg, Some(AgentKind::Pi), &theme, &resolver).is_none());
+        cfg.symbol = None;
+        let out = agent_bar(&cfg, Some(AgentKind::Claude), &theme, &resolver).unwrap();
+        assert_eq!(out.plain_text(), "▎");
+    }
+
     /// has a PR, so a theme can colour the focused name like the
     /// dashboard row and the `pr` chip; without one it stays the header
     /// style.

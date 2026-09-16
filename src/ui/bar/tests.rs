@@ -2165,6 +2165,44 @@ mod module_tests {
         );
     }
 
+    /// `$icon_<kind>` is the kind's `[agent_bar.symbols]` glyph, so the
+    /// tokens preset can show each harness's icon in place of its name
+    /// without the theme spelling the glyph twice. Absent for a kind
+    /// without an entry, so a `($icon_codex )` group collapses like the
+    /// pills' `($icon )` while the count beside it still renders.
+    #[test]
+    fn module_reads_its_kinds_icon_from_agent_bar_symbols() {
+        let specs = specs_with(
+            "[agent_bar.symbols]\nclaude = \"C\"\n[module.ctx]\nformat = \"([($icon_claude )$tokens_claude]()  )([($icon_codex )$tokens_codex]())\"\n[dashboard_footer]\nright_format = \"$ctx\"\n",
+        );
+        let theme = Theme::wsx();
+        let rows = [FleetRow {
+            context_tokens: vec![
+                (crate::pty::session::AgentKind::Claude, 1_000),
+                (crate::pty::session::AgentKind::Codex, 2_000),
+            ],
+            ..Default::default()
+        }];
+        let fleet = FleetStats::from_rows(rows, 1, 0).to_vars();
+        let out = dashboard_footer(
+            &specs,
+            &theme,
+            &DashboardFooterInputs {
+                activity: &[],
+                version: "0.1.0",
+                window_label: "24h",
+                workspace_selected: false,
+                fleet: &fleet,
+            },
+            100,
+        );
+        let text = plain(&out.line);
+        assert!(
+            text.ends_with("C 1k  2k"),
+            "claude wears its glyph, codex (no entry) just its count: {text:?}"
+        );
+    }
+
     #[test]
     fn module_renders_in_the_attached_bottom_bar() {
         let specs = specs_with(

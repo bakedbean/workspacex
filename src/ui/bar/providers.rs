@@ -552,9 +552,24 @@ pub fn usage(
 }
 
 /// A `[module.<name>]`: the user's `format` evaluated against the fleet
-/// variable map. No state colour of its own and no click target.
-pub fn module(cfg: &SegmentConfig, fleet: &SegmentMap, resolver: &Resolver) -> Option<Segment> {
-    eval_segment(cfg, fleet, Style::default(), &[], resolver)
+/// variable map plus `$icon_<kind>`, each kind's glyph from `icons` —
+/// `[agent_bar.symbols]`, the table the top bar and the pills read — and
+/// absent for a kind without one, so a `( … )` group around it collapses.
+/// No state colour of its own and no click target.
+pub fn module(
+    cfg: &SegmentConfig,
+    fleet: &SegmentMap,
+    icons: &[(AgentKind, String)],
+    resolver: &Resolver,
+) -> Option<Segment> {
+    if icons.is_empty() {
+        return eval_segment(cfg, fleet, Style::default(), &[], resolver);
+    }
+    let mut v = fleet.clone();
+    for (kind, icon) in icons {
+        v.insert(format!("icon_{}", kind.display_name()), var(icon.clone()));
+    }
+    eval_segment(cfg, &v, Style::default(), &[], resolver)
 }
 
 /// Pinned-command chips, at most nine (they are keyed `1`–`9`).

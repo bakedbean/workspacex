@@ -214,7 +214,11 @@ pub struct FleetVar {
 }
 
 /// Every fleet variable. Counts render empty at zero so a `( … )` group
-/// around one drops; `workspaces` and `repos` always render a number.
+/// around one drops; `workspaces` and `repos` always render a number. The
+/// `icon_<kind>` entries are the one exception to "derived from the fleet":
+/// they come from the theme's `[agent_bar.symbols]` table (see
+/// `providers::module`), so the tokens preset can name each harness by its
+/// glyph without the theme spelling it twice.
 pub const FLEET_VARS: &[FleetVar] = &[
     FleetVar {
         name: "working",
@@ -347,6 +351,26 @@ pub const FLEET_VARS: &[FleetVar] = &[
     FleetVar {
         name: "tokens_omp",
         doc: "as `tokens_total`, over omp agents only",
+    },
+    FleetVar {
+        name: "icon_claude",
+        doc: "the claude glyph from `[agent_bar.symbols]`; absent (its group collapsing) when the theme has none",
+    },
+    FleetVar {
+        name: "icon_pi",
+        doc: "as `icon_claude`, for pi",
+    },
+    FleetVar {
+        name: "icon_hermes",
+        doc: "as `icon_claude`, for hermes",
+    },
+    FleetVar {
+        name: "icon_codex",
+        doc: "as `icon_claude`, for codex",
+    },
+    FleetVar {
+        name: "icon_omp",
+        doc: "as `icon_claude`, for omp",
     },
 ];
 

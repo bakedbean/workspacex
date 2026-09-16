@@ -291,7 +291,9 @@ mod tests {
     #[test]
     fn every_fleet_var_has_an_entry_and_zero_counts_render_empty() {
         let vars = FleetStats::from_rows(Vec::new(), 0, 0).to_vars();
-        for v in FLEET_VARS {
+        // `icon_<kind>` is the theme's, not the fleet's: `providers::module`
+        // adds it from `[agent_bar.symbols]`.
+        for v in FLEET_VARS.iter().filter(|v| !v.name.starts_with("icon_")) {
             assert!(vars.contains_key(v.name), "missing {}", v.name);
         }
         assert_eq!(text(&vars, "working"), "");

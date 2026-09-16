@@ -23,6 +23,7 @@ picker:
 
 The body box is a small multi-line editor: `Enter` inserts a newline,
 arrows/Home/End move, `Esc` goes back to the picker (keeping your draft).
+Tabs are kept as tabs (shown four columns wide).
 `Ctrl-s` inserts
 
 ```

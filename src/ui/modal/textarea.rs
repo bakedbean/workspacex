@@ -163,17 +163,39 @@ impl TextArea {
     /// the cursor's `(visual row, visual col)`. A cursor exactly at a wrap
     /// boundary sits at the start of the next visual row, so typing at the
     /// end of a full row continues on the row below.
+    ///
+    /// A tab is one char for editing (see `insert_char`/`byte_at`/etc, which
+    /// stay char-indexed on the raw text) but is expanded here to 4 display
+    /// columns, since a raw tab char renders as a single (usually blank)
+    /// terminal cell. `self.col` (a raw char index) is mapped to its
+    /// expanded display column before chunking into rows.
     fn wrap_rows(&self, width: usize) -> (Vec<String>, (usize, usize)) {
+        const TAB_COLS: usize = 4;
         let width = width.max(1);
         let mut rows = Vec::new();
         let mut cursor = (0, 0);
         for (i, line) in self.lines.iter().enumerate() {
             let chars: Vec<char> = line.chars().collect();
+            let mut disp: Vec<char> = Vec::with_capacity(chars.len());
+            let mut cursor_disp_col = None;
+            for (ci, &c) in chars.iter().enumerate() {
+                if i == self.row && ci == self.col {
+                    cursor_disp_col = Some(disp.len());
+                }
+                if c == '\t' {
+                    disp.extend(std::iter::repeat_n(' ', TAB_COLS));
+                } else {
+                    disp.push(c);
+                }
+            }
+            if i == self.row && self.col == chars.len() {
+                cursor_disp_col = Some(disp.len());
+            }
             let first_row = rows.len();
-            if chars.is_empty() {
+            if disp.is_empty() {
                 rows.push(String::new());
             } else {
-                for chunk in chars.chunks(width) {
+                for chunk in disp.chunks(width) {
                     rows.push(chunk.iter().collect());
                 }
                 // A line that fills its last row exactly gets an empty row
@@ -181,12 +203,13 @@ impl TextArea {
                 // sit. Added for every such line, not only the cursor's, so
                 // the layout depends on the text alone and never shifts as
                 // the cursor moves.
-                if chars.len() % width == 0 {
+                if disp.len() % width == 0 {
                     rows.push(String::new());
                 }
             }
             if i == self.row {
-                cursor = (first_row + self.col / width, self.col % width);
+                let dcol = cursor_disp_col.unwrap_or(0);
+                cursor = (first_row + dcol / width, dcol % width);
             }
         }
         (rows, cursor)
@@ -335,6 +358,20 @@ mod tests {
         t.move_right();
         // col 3 on a width-3 line is the START of the second visual row
         assert_eq!(t.wrap_rows(3).1, (1, 0));
+    }
+
+    #[test]
+    fn a_tab_expands_to_four_display_columns() {
+        let mut t = with("a\tb");
+        assert_eq!(t.wrap_rows(10).0, vec!["a    b"]);
+        assert_eq!(t.wrap_rows(10).1, (0, 6));
+        t.move_left();
+        t.move_left();
+        assert_eq!(
+            t.wrap_rows(10).1,
+            (0, 1),
+            "raw col 1 (just before the tab) maps to expanded col 1"
+        );
     }
 
     #[test]

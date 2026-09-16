@@ -13,6 +13,7 @@
 ///   - `g` → open lazygit
 ///   - `c` → open chronox
 ///   - `k` → process list
+///   - `<` → prompt tag
 ///   - `1-9` (digits) → pinned commands
 ///
 /// This is the single source of truth: both the renderer and (in a later

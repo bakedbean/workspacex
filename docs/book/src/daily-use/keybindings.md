@@ -52,6 +52,7 @@ Keystrokes are forwarded to the running `claude` session, except:
 | `Ctrl-x t`       | Open the attached workspace in a terminal (same `terminal_cmd` as `[t]`)                                    |
 | `Ctrl-x v`       | View diff of the attached workspace's branch vs the base branch (same `diff_cmd` as `[v]`)                  |
 | `Ctrl-x k`       | Show processes running under the attached workspace's worktree                                              |
+| `Ctrl-x <`       | Open the prompt-tag picker (wrap a body in an XML tag and insert it unsubmitted)                            |
 | `Ctrl-x x`       | Send a literal `Ctrl-x` to claude                                                                           |
 | `Ctrl-x c`       | Toggle the change chronology bar on/off                                                                     |
 | `Ctrl-x C`       | Swap the chronology bar's side (left ↔ right)                                                               |

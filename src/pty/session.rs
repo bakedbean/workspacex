@@ -273,15 +273,22 @@ impl Session {
     }
 
     /// Insert `text` into the agent's composer unsubmitted (see
-    /// `insert_writes`). Returns `false` when the writer channel is closed —
-    /// the agent has exited — so callers can avoid recording a use that
+    /// `insert_writes`). Returns whether the write reached the PTY: `false`
+    /// when the writer channel is closed (the agent has exited) or the
+    /// acknowledgement times out, so callers can avoid recording a use that
     /// never landed.
     pub async fn insert_text(&self, text: &str) -> bool {
         self.scroll_to_live();
-        self.writer
-            .send(WriteReq::Bytes(insert_writes(self.agent, text)))
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        if self
+            .writer
+            .send(WriteReq::Acked(insert_writes(self.agent, text), ack_tx))
             .await
-            .is_ok()
+            .is_err()
+        {
+            return false;
+        }
+        await_ack(ack_rx, WRITE_ACK_TIMEOUT_MS).await
     }
 
     /// Encode a wheel event for the inner program when it has mouse reporting

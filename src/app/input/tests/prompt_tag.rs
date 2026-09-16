@@ -221,6 +221,22 @@ async fn body_esc_returns_to_pick_keeping_the_draft() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pasting_into_the_body_keeps_tabs_verbatim() {
+    // The non-attached (modal-open) paste fallback feeds each pasted char
+    // through `paste_char_to_key`, which maps '\t' to `KeyCode::Tab`; the
+    // body box must have a `Tab` arm or the char vanishes.
+    let store = Store::open_in_memory().unwrap();
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    let shared = shared_app();
+    spawn_attached_workspace(&mut app);
+    app.modal = Some(Modal::PromptTag(PromptTagModal::for_tag("context")));
+    handle_paste(&mut app, &shared, "a\tb".into())
+        .await
+        .unwrap();
+    assert_eq!(modal(&app).body.text(), "a\tb");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn body_ctrl_s_without_a_session_reports_an_error() {
     let store = Store::open_in_memory().unwrap();
     let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();

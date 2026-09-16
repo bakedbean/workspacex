@@ -146,6 +146,9 @@ separator = "  "
 format      = "[<$label>](fg:path)"
 separator   = "  "
 more_format = "[ <> ](bg:bg_soft fg:dim bold)"
+# 40 ties [diff]'s priority below. On a tie the engine drops the left-side
+# segment first, so these chips yield before the diff count -- bar/tests.rs'
+# narrow-row test depends on this ordering.
 priority    = 40
 
 # Agent pills (2+ agents). $style is the agent color. Variables: $symbol $label $key

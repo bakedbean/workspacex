@@ -193,6 +193,139 @@ pub fn singleton_names() -> impl Iterator<Item = &'static str> {
     SEGMENTS.iter().filter(|d| d.singleton).map(|d| d.name)
 }
 
+/// A fleet-wide variable a `[module.<name>]` format may reference. Values
+/// are derived once per frame by `crate::ui::bar::fleet::FleetStats`; the
+/// loader validates module formats against this list exactly as it
+/// validates a segment's `format` against its `SegmentDef::vars`.
+pub struct FleetVar {
+    pub name: &'static str,
+    /// One line for the book's variable table and the loader's error hint.
+    pub doc: &'static str,
+}
+
+/// Every fleet variable. Counts render empty at zero so a `( … )` group
+/// around one drops; `workspaces` and `repos` always render a number.
+pub const FLEET_VARS: &[FleetVar] = &[
+    FleetVar {
+        name: "working",
+        doc: "workspaces whose last reported status is `working`",
+    },
+    FleetVar {
+        name: "waiting",
+        doc: "workspaces whose last reported status is `waiting`",
+    },
+    FleetVar {
+        name: "blocked",
+        doc: "workspaces whose last reported status is `blocked`",
+    },
+    FleetVar {
+        name: "done",
+        doc: "workspaces whose last reported status is `done`",
+    },
+    FleetVar {
+        name: "busy",
+        doc: "workspaces parked on background work (hook-inferred `busy`)",
+    },
+    FleetVar {
+        name: "unreported",
+        doc: "workspaces with no reported status",
+    },
+    FleetVar {
+        name: "alerts",
+        doc: "workspaces with an unacknowledged attention alert",
+    },
+    FleetVar {
+        name: "awaiting",
+        doc: "workspaces whose agent is awaiting an answer",
+    },
+    FleetVar {
+        name: "stalled",
+        doc: "workspaces whose agent has stalled",
+    },
+    FleetVar {
+        name: "active",
+        doc: "workspaces whose agent is actively working",
+    },
+    FleetVar {
+        name: "idle",
+        doc: "workspaces whose agent is idle",
+    },
+    FleetVar {
+        name: "live_agents",
+        doc: "workspaces with a live (thinking or waiting) primary session",
+    },
+    FleetVar {
+        name: "pr_none",
+        doc: "workspaces polled with no PR",
+    },
+    FleetVar {
+        name: "pr_draft",
+        doc: "workspaces with a draft PR",
+    },
+    FleetVar {
+        name: "pr_open",
+        doc: "workspaces with an open PR",
+    },
+    FleetVar {
+        name: "pr_conflicted",
+        doc: "workspaces with a conflicted PR",
+    },
+    FleetVar {
+        name: "pr_merged",
+        doc: "workspaces whose PR merged (not yet archived)",
+    },
+    FleetVar {
+        name: "pr_closed",
+        doc: "workspaces whose PR was closed unmerged",
+    },
+    FleetVar {
+        name: "review_required",
+        doc: "PRs still awaiting a review",
+    },
+    FleetVar {
+        name: "changes_requested",
+        doc: "PRs with changes requested",
+    },
+    FleetVar {
+        name: "approved",
+        doc: "PRs approved",
+    },
+    FleetVar {
+        name: "unresolved",
+        doc: "unresolved review threads across the fleet",
+    },
+    FleetVar {
+        name: "mergeable",
+        doc: "PRs that are open and approved",
+    },
+    FleetVar {
+        name: "dirty",
+        doc: "workspaces with modified or untracked files",
+    },
+    FleetVar {
+        name: "msgs_queued",
+        doc: "agent-to-agent messages not yet delivered",
+    },
+    FleetVar {
+        name: "workspaces",
+        doc: "total workspaces (always rendered)",
+    },
+    FleetVar {
+        name: "repos",
+        doc: "total repos (always rendered)",
+    },
+];
+
+pub fn fleet_var(name: &str) -> Option<&'static FleetVar> {
+    FLEET_VARS.iter().find(|v| v.name == name)
+}
+
+/// Every fleet variable name, in table order — the `allowed` list a module
+/// format validates against.
+pub fn fleet_var_names() -> Vec<&'static str> {
+    FLEET_VARS.iter().map(|v| v.name).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +340,70 @@ mod tests {
     fn segment_def_finds_by_name_and_misses_unknown_names() {
         assert_eq!(segment_def("pr").map(|d| d.name), Some("pr"));
         assert!(segment_def("nope").is_none());
+    }
+
+    #[test]
+    fn fleet_vars_are_unique_snake_case_and_disjoint_from_segments() {
+        let mut seen = std::collections::HashSet::new();
+        for v in FLEET_VARS {
+            assert!(seen.insert(v.name), "duplicate fleet var {}", v.name);
+            assert!(
+                v.name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c == '_' || c.is_ascii_digit()),
+                "fleet var {} is not snake_case",
+                v.name
+            );
+            assert!(
+                segment_def(v.name).is_none(),
+                "fleet var {} collides with a segment",
+                v.name
+            );
+            assert!(
+                !ITEM_COLORS.contains(&v.name),
+                "fleet var {} collides with an item colour",
+                v.name
+            );
+            assert!(!v.doc.is_empty(), "fleet var {} has no doc", v.name);
+        }
+    }
+
+    #[test]
+    fn fleet_var_finds_by_name_and_misses_unknown_names() {
+        assert_eq!(fleet_var("mergeable").map(|v| v.name), Some("mergeable"));
+        assert!(
+            fleet_var("attention").is_none(),
+            "attention is a segment, not a fleet var"
+        );
+        assert!(fleet_var("nope").is_none());
+        assert!(fleet_var_names().contains(&"workspaces"));
+    }
+
+    /// Every `FLEET_VARS` name must be documented in both places a user
+    /// would look: the bundled default's modules comment block (as `$name`)
+    /// and the book's fleet-variable table (as `` `name` ``). Catches a
+    /// fleet var added to the registry but never wired into the docs.
+    #[test]
+    fn every_fleet_var_is_documented_in_the_default_toml_and_the_book() {
+        const DEFAULT_TOML: &str = include_str!("default_theme.toml");
+        let book = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/docs/book/src/configuration/themes.md"
+        ))
+        .expect("book page exists");
+        for v in FLEET_VARS {
+            let in_toml = DEFAULT_TOML.contains(&format!("${}", v.name));
+            assert!(
+                in_toml,
+                "{} missing from default_theme.toml's modules comment block",
+                v.name
+            );
+            let in_book = book.contains(&format!("`{}`", v.name));
+            assert!(
+                in_book,
+                "{} missing from docs/book/src/configuration/themes.md",
+                v.name
+            );
+        }
     }
 }

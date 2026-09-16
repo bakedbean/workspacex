@@ -125,7 +125,7 @@ replaced:
   edge instead of hugging it exactly (the stock chip row's `$pr` is bare,
   with no trailing separator of its own).
 - Below roughly 107 columns, the dashboard footer drops the version string
-  first, then the usage graph, instead of overflowing the terminal width.
+  first, then the `funnel` module, instead of overflowing the terminal width.
 - A pinned chip clipped by the right edge keeps its visible portion
   clickable, rather than being dropped in full.
 - The stock attached view draws a dim `─` rule under its top bar to set it
@@ -150,7 +150,7 @@ fill         = " "
 
 [dashboard_footer]
 format       = "$keys"
-right_format = "($version  )$usage"
+right_format = "$version(  $funnel)"
 
 [attached_top]
 format = "($agent_bar )$workspace(   $attention)"
@@ -166,6 +166,10 @@ format     = "($pins  )"
 fill       = "─"
 fill_style = "fg:dim"
 ```
+
+`[dashboard_footer]`'s right side is `$version` and the bundled `funnel`
+module — see [Modules](#modules) below for what a module is and how to
+replace or restyle it.
 
 `[dashboard_header]` is the dashboard's top line: the wordmark, the `group:`
 and `sort:` mode tabs, the live filter echo, and the repo/workspace counts
@@ -299,9 +303,10 @@ by one of them is an error, since inside a multi-item segment it would be
 shadowed by the per-item colour.
 The bundled default sets `priority` on the segments that compete for room:
 `model_tokens` 10, `agents` 20, `procs` 30, `diff` 40, `pr` 50 (the
-attached chip row's right side); `version` 50, `usage` 60 (the dashboard
-footer's right side); `sort` 30, `counts` 50 (the dashboard header). Every
-other segment is the unset default, 100, and so never drops.
+attached chip row's right side); `version` 50, the `funnel` module 60 (the
+dashboard footer's right side); `sort` 30, `counts` 50 (the dashboard
+header). Every other segment is the unset default, 100, and so never
+drops.
 
 | Segment | Variables | Notes |
 |---|---|---|
@@ -441,6 +446,56 @@ not each other, so there are no local aliases. A name defined only in a
 segment's palette is unknown outside it, so `wsx theme check` reports a
 bar format that uses one. The six per-item names are reserved here as in
 `[palette]`.
+
+### Modules
+
+A module is a segment you compose yourself. Declare it as a
+`[module.<name>]` table and place it in any bar as `$<name>`:
+
+```toml
+[module.funnel]
+format   = "([$working working](fg:ok)  )([$blocked blocked](fg:err)  )([$mergeable ready](fg:merged))"
+priority = 60
+
+[dashboard_footer]
+right_format = "$version(  $funnel)"
+```
+
+A module table takes `format`, `style` (patched over the bar style to form
+`$style`), `priority`, and `disabled` — nothing else, since a module has no
+items. Its `format` may reference only the fleet variables below, which
+describe every workspace on the dashboard at once. A count renders empty
+when it is zero, so wrap each item in a `( … )` group to drop it along with
+its label and gap; `$workspaces` and `$repos` always render a number.
+
+A module's name may not be the name of a built-in segment (`keys`, `usage`,
+`pr`, …). The bundled default defines one module, `funnel`, and places it
+where the usage graph used to be; set only the fields you want to change to
+restyle it, or define your own and put that in the bar instead. To bring
+the sparkline back, place `$usage` again:
+
+```toml
+[dashboard_footer]
+right_format = "$version(  $funnel)(  $usage)"
+```
+
+Modules carry no click target.
+
+| Variable | Counts |
+|---|---|
+| `working` `waiting` `blocked` `done` | workspaces whose last `wsx status set` is that state |
+| `busy` | workspaces parked on background work (hook-inferred) |
+| `unreported` | workspaces with no reported status |
+| `alerts` | workspaces with an unacknowledged attention alert |
+| `awaiting` `stalled` `active` `idle` | workspaces by live transcript classification |
+| `live_agents` | workspaces with a live (thinking or waiting) primary session |
+| `pr_none` `pr_draft` `pr_open` `pr_conflicted` `pr_merged` `pr_closed` | workspaces by PR lifecycle |
+| `review_required` `changes_requested` `approved` | PRs by review verdict |
+| `unresolved` | unresolved review threads across the fleet |
+| `mergeable` | PRs that are open and approved |
+| `dirty` | workspaces with modified or untracked files |
+| `msgs_queued` | agent-to-agent messages not yet delivered |
+| `workspaces` `repos` | totals (always rendered) |
 
 ### A powerline example
 

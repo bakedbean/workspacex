@@ -6,6 +6,7 @@
 //! See `docs/superpowers/specs/2026-09-13-bar-theming-design.md`.
 
 pub mod bars;
+pub mod fleet;
 pub mod format;
 pub mod providers;
 pub mod registry;

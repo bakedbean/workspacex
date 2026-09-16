@@ -67,6 +67,7 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     let workspaces = build_workspace_items(app, &app.repos, now_ms, nerd_fonts);
 
     let (window, activity) = usage_sparkline(app);
+    let fleet = crate::ui::bar::fleet::FleetStats::collect(app).to_vars();
     let column_widths = read_column_widths(&app.store);
     let inputs = dashboard::DashboardInputs {
         repos: app.repos.iter().collect(),
@@ -75,6 +76,7 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
         column_widths,
         github_remotes: &app.github_remotes,
         nerd_fonts,
+        fleet: &fleet,
     };
     // Rebuild `selectable` in the V5 visible order (repos ordered
     // by persisted `sort_order`, priority-sort within repo, hide
@@ -171,6 +173,7 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
                     registry: &app.registry,
                     pinned: &pinned,
                     bar_specs: &app.bar_specs,
+                    fleet: &fleet,
                     scroll_offsets: &mut app.detail_scroll_offsets,
                 };
                 let out =
@@ -198,6 +201,7 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
         window.label(),
         matches!(app.selected_target(), Some(SelectionTarget::Workspace(_))),
         notice.as_deref(),
+        &fleet,
     );
     app.usage_graph_rect = graph_rect;
     app.footer_hint_rects = footer_hint_rects;

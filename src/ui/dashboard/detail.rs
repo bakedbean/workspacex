@@ -56,6 +56,7 @@ pub struct DetailInputs<'a> {
     /// The resolved bar theme, so the chip row draws through
     /// `crate::ui::bar::dashboard_detail` instead of a bespoke painter.
     pub bar_specs: &'a crate::config::theme_file::BarSpecs,
+    pub fleet: &'a crate::ui::bar::segment::SegmentMap,
     /// Per-slot scroll offsets. Borrowed mutably so the container can
     /// clamp them to the current content height during render.
     pub scroll_offsets: &'a mut [u16; 4],
@@ -182,8 +183,13 @@ pub fn render(
     // commands only — no right-justified agent pills, procs, diff, or PR chip.
     // Themed via `[dashboard_detail]`, the fourth bar the engine draws.
     let chip_rects = if let Some(area) = chip_area {
-        let rendered =
-            crate::ui::bar::dashboard_detail(inputs.bar_specs, theme, inputs.pinned, area.width);
+        let rendered = crate::ui::bar::dashboard_detail(
+            inputs.bar_specs,
+            theme,
+            inputs.pinned,
+            inputs.fleet,
+            area.width,
+        );
         f.render_widget(Paragraph::new(rendered.line), area);
         crate::ui::bar::render::hit_rects(area, &rendered.hits)
             .into_iter()
@@ -898,6 +904,7 @@ mod tests {
                 registry: &reg,
                 pinned: &[],
                 bar_specs: &specs,
+                fleet: crate::ui::bar::fleet::empty(),
                 scroll_offsets: &mut offsets,
             };
             render(f, Rect::new(0, 0, 80, 0), &mut inputs, &theme);
@@ -1197,6 +1204,7 @@ mod tests {
             registry: &reg,
             pinned: &[],
             bar_specs: &specs,
+            fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
         };
         let text = render_to_text(&mut inputs, 120, 10);
@@ -1251,6 +1259,7 @@ mod tests {
             registry: &reg,
             pinned: &[],
             bar_specs: &specs,
+            fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
         };
         // Width 100, height exactly CHROME_ROWS (4).
@@ -1302,6 +1311,7 @@ mod tests {
             registry: &reg,
             pinned: &[],
             bar_specs: &specs,
+            fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
         };
         let text = render_to_text(&mut inputs, 70, 10);
@@ -1359,6 +1369,7 @@ mod tests {
             registry: &reg,
             pinned: &[],
             bar_specs: &specs,
+            fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
         };
         let text = render_to_text(&mut inputs, 120, 10);
@@ -1404,6 +1415,7 @@ mod tests {
             registry: &reg,
             pinned: &[],
             bar_specs: &specs,
+            fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
         };
         let text = render_to_text(&mut inputs, 120, 10);
@@ -1456,6 +1468,7 @@ mod tests {
             registry: &reg,
             pinned: &pinned,
             bar_specs: &specs,
+            fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
         };
         let text = render_to_text(&mut inputs, 120, 12);
@@ -1512,6 +1525,7 @@ mod tests {
             registry: &reg,
             pinned: &[],
             bar_specs: &specs,
+            fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
         };
         // Capture render's returned rects via a closure-bound outer mut
@@ -1571,6 +1585,7 @@ mod tests {
             registry: &reg,
             pinned: &pinned,
             bar_specs: &specs,
+            fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
         };
         // Area height exactly CHROME_ROWS (4). With chips present we need 5.
@@ -1776,6 +1791,7 @@ mod tests {
             registry: &reg,
             pinned: &[],
             bar_specs: &specs,
+            fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
         };
         let text = render_to_text(&mut inputs, 120, 10);

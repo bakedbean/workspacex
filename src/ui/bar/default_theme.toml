@@ -31,9 +31,10 @@
 
 [dashboard_footer]
 format = "$keys"
-# The trailing "  " is grouped with $version so it drops along with it (not
-# left as an orphaned gap) when the terminal is too narrow for both.
-right_format = "($version  )$usage"
+# The leading "  " gap is grouped with $funnel so it drops along with it (not
+# left as an orphaned gap) when the funnel is empty or the terminal is too
+# narrow for both.
+right_format = "$version(  $funnel)"
 fill = " "
 
 # The dashboard's top line: wordmark, group and sort tabs, the live filter
@@ -104,15 +105,14 @@ separator = "  "
 [version]
 format   = "[$version](fg:path)"
 # Least useful right-side element on the dashboard footer, so it drops
-# before the usage graph when the terminal is too narrow for both.
+# before the funnel module when the terminal is too narrow for both.
 priority = 50
 
 # Usage sparkline. Variables: $label $spark
+# Not placed by default any more — put `$usage` in a bar format to bring it
+# back (it keeps its click, which opens the window picker).
 [usage]
 format = "[$label $spark](fg:path)"
-# Droppable, but only after $version: on a narrow dashboard footer the
-# version string goes first and the graph is the last right-side element
-# standing.
 priority = 60
 
 # Agent identity bar; $style carries the agent's color. Variables: $symbol
@@ -165,3 +165,24 @@ priority = 40
 [pr]
 format   = "[$symbol #$number $label]($style)( [$mark]($mark_style))"
 priority = 50
+
+# --- modules ----------------------------------------------------------
+# A [module.<name>] table is a segment you compose yourself from fleet-wide
+# variables and place in any bar as $<name>. It takes `format`, `style`,
+# `priority`, `disabled` only. Counts render empty at zero, so wrap each item
+# in ( ) to drop it; `$workspaces` and `$repos` always render.
+#
+# Variables: $working $waiting $blocked $done $busy $unreported $alerts
+#   $awaiting $stalled $active $idle $live_agents $pr_none $pr_draft
+#   $pr_open $pr_conflicted $pr_merged $pr_closed $review_required
+#   $changes_requested $approved $unresolved $mergeable $dirty $msgs_queued
+#   $workspaces $repos
+
+# The delivery funnel: how many workspaces sit at each stage of the
+# pipeline, from working through review to mergeable. Each item carries
+# its own trailing gap so a missing stage takes its gap with it; the last
+# has none so the module hugs the right edge.
+[module.funnel]
+format   = "([$working working](fg:ok)  )([$blocked blocked](fg:err)  )([$review_required review](fg:waiting)  )([$changes_requested changes](fg:warn)  )([$mergeable ready](fg:merged))"
+# Same slot as $usage had: $version drops first on a narrow footer.
+priority = 60

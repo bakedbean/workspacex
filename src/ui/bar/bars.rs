@@ -27,11 +27,30 @@ fn put(map: &mut SegmentMap, name: &str, seg: Option<Segment>) {
     }
 }
 
+/// Insert every `[module.<name>]` from `specs.modules`, so `$<name>` works
+/// in whichever bar the theme places it. Called by every composer.
+pub(super) fn put_modules(
+    segments: &mut SegmentMap,
+    specs: &BarSpecs,
+    fleet: &SegmentMap,
+    resolver: &style::Resolver<'_>,
+) {
+    for name in &specs.modules {
+        put(
+            segments,
+            name,
+            providers::module(cfg(specs, name), fleet, resolver),
+        );
+    }
+}
+
 pub struct DashboardFooterInputs<'a> {
     pub activity: &'a [u32],
     pub version: &'a str,
     pub window_label: &'a str,
     pub workspace_selected: bool,
+    /// Fleet variables for `[module.*]` segments — `fleet::FleetStats::to_vars()`.
+    pub fleet: &'a SegmentMap,
 }
 
 /// The dashboard footer: key hints left, version + usage graph right.
@@ -76,6 +95,7 @@ pub fn dashboard_footer(
         "usage",
         providers::usage(cfg(specs, "usage"), inputs.window_label, &spark, &resolver),
     );
+    put_modules(&mut segments, specs, inputs.fleet, &resolver);
     render_bar(
         &specs.dashboard_footer,
         &segments,
@@ -95,6 +115,7 @@ pub struct DashboardHeaderInputs<'a> {
     pub filter: Option<&'a str>,
     /// `$brand`'s `$view`: which view this header belongs to ("dashboard").
     pub view: &'a str,
+    pub fleet: &'a SegmentMap,
 }
 
 /// The dashboard's top line: wordmark, group and sort tabs, the live
@@ -138,6 +159,7 @@ pub fn dashboard_header(
             &resolver,
         ),
     );
+    put_modules(&mut segments, specs, inputs.fleet, &resolver);
     render_bar(
         &specs.dashboard_header,
         &segments,
@@ -155,6 +177,7 @@ pub fn dashboard_detail(
     specs: &BarSpecs,
     theme: &Theme,
     pinned: &[crate::commands::pinned::PinnedCommand],
+    fleet: &SegmentMap,
     width: u16,
 ) -> Rendered {
     let resolver = specs.resolver(theme);
@@ -164,6 +187,7 @@ pub fn dashboard_detail(
         "pins",
         providers::pins(cfg(specs, "pins"), pinned, &resolver),
     );
+    put_modules(&mut segments, specs, fleet, &resolver);
     render_bar(
         &specs.dashboard_detail,
         &segments,
@@ -200,6 +224,7 @@ pub(crate) struct AttachedInputs<'a> {
         Option<char>,
     )],
     pub active_agent: Option<crate::data::store::AgentInstanceId>,
+    pub fleet: &'a SegmentMap,
 }
 
 /// Build every attached segment once, so a segment that appears in both
@@ -300,6 +325,7 @@ pub(super) fn attached_segments(
         "pr",
         providers::pr(cfg(specs, "pr"), inputs.pr, theme, resolver),
     );
+    put_modules(&mut segments, specs, inputs.fleet, resolver);
     segments
 }
 

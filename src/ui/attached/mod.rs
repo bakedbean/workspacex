@@ -138,6 +138,7 @@ pub(crate) fn render_panes(
     model_tokens: Option<crate::ui::detail_modules::session_summary::ChipModelTokens>,
     agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
     active_agent: Option<AgentInstanceId>,
+    fleet: &crate::ui::bar::segment::SegmentMap,
     theme: &Theme,
 ) -> PanesDrawOutput {
     let show_titles = panes.len() > 1;
@@ -173,6 +174,7 @@ pub(crate) fn render_panes(
             model_tokens,
             agents,
             active_agent,
+            fleet,
         },
         info_area.width,
         chip_area.width,
@@ -368,6 +370,7 @@ mod tests {
                 model_tokens: None,
                 agents: &[],
                 active_agent: None,
+                fleet: crate::ui::bar::fleet::empty(),
             },
             width,
             width,
@@ -475,6 +478,7 @@ mod tests {
                 mt,
                 &agents,
                 Some(AgentInstanceId(1)),
+                crate::ui::bar::fleet::empty(),
                 &theme,
             ));
         })
@@ -538,6 +542,7 @@ mod tests {
                 mt,
                 &agents,
                 Some(AgentInstanceId(1)),
+                crate::ui::bar::fleet::empty(),
                 &theme,
             ));
         })
@@ -591,6 +596,7 @@ mod tests {
                 mt,
                 &agents,
                 Some(AgentInstanceId(1)),
+                crate::ui::bar::fleet::empty(),
                 &theme,
             ));
         })
@@ -777,6 +783,7 @@ mod tests {
                 None,
                 &[],
                 None,
+                crate::ui::bar::fleet::empty(),
                 &theme,
             );
         })
@@ -861,6 +868,7 @@ mod tests {
                 model_tokens: None,
                 agents: &[],
                 active_agent: None,
+                fleet: crate::ui::bar::fleet::empty(),
             },
             60,
         );

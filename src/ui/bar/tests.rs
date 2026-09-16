@@ -29,6 +29,7 @@ mod attention_budget_tests {
             model_tokens: None,
             agents: &[],
             active_agent: None,
+            fleet: crate::ui::bar::fleet::empty(),
         }
     }
 
@@ -237,6 +238,7 @@ mod attached_bars_tests {
                 model_tokens: None,
                 agents: &[],
                 active_agent: None,
+                fleet: crate::ui::bar::fleet::empty(),
             },
             60,
             60,
@@ -258,7 +260,12 @@ mod footer_tests {
     use crate::ui::bar::test_util::{plain, render_line};
     use crossterm::event::KeyCode;
 
-    fn footer(selected: bool, label: &str, width: u16) -> Rendered {
+    fn footer(
+        selected: bool,
+        label: &str,
+        width: u16,
+        fleet: &crate::ui::bar::segment::SegmentMap,
+    ) -> Rendered {
         let theme = Theme::wsx();
         let specs = bundled_default(&theme);
         let activity: Vec<u32> = (0..24).collect();
@@ -270,6 +277,7 @@ mod footer_tests {
                 version: "0.1.0",
                 window_label: label,
                 workspace_selected: selected,
+                fleet,
             },
             width,
         )
@@ -277,7 +285,7 @@ mod footer_tests {
 
     #[test]
     fn default_footer_snapshot() {
-        let out = footer(true, "24h", 120);
+        let out = footer(true, "24h", 120, crate::ui::bar::fleet::empty());
         let text = plain(&out.line);
         assert!(
             text.starts_with(
@@ -285,8 +293,14 @@ mod footer_tests {
             ),
             "{text:?}"
         );
-        let spark = crate::ui::dashboard::sparkline::render(&(0..24).collect::<Vec<u32>>(), 24);
-        assert!(text.ends_with(&format!("0.1.0  24h {spark}")), "{text:?}");
+        assert!(
+            text.trim_end().ends_with("0.1.0"),
+            "empty fleet: version only: {text:?}"
+        );
+        assert!(
+            !text.contains('▁'),
+            "the sparkline is no longer in the default footer: {text:?}"
+        );
         assert_eq!(out.line.width(), 120);
         assert_eq!(
             out.hits
@@ -298,15 +312,88 @@ mod footer_tests {
     }
 
     #[test]
+    fn default_footer_funnel_lists_nonzero_stages() {
+        use crate::ui::bar::fleet::{FleetRow, FleetStats};
+        let rows = vec![
+            FleetRow {
+                reported: Some(crate::data::store::ReportedState::Working),
+                ..Default::default()
+            },
+            FleetRow {
+                reported: Some(crate::data::store::ReportedState::Working),
+                ..Default::default()
+            },
+            FleetRow {
+                reported: Some(crate::data::store::ReportedState::Blocked),
+                ..Default::default()
+            },
+            FleetRow {
+                lifecycle: Some(crate::git::forge::BranchLifecycle::PrOpen),
+                review: Some(crate::git::forge::ReviewDecision::Approved),
+                ..Default::default()
+            },
+        ];
+        let fleet = FleetStats::from_rows(rows, 1, 0).to_vars();
+        let text = plain(&footer(false, "24h", 140, &fleet).line);
+        assert!(
+            text.ends_with("0.1.0  2 working  1 blocked  1 ready"),
+            "{text:?}"
+        );
+    }
+
+    #[test]
+    fn usage_still_renders_when_a_theme_places_it() {
+        let theme = Theme::wsx();
+        let specs = crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse(
+                "[dashboard_footer]\nright_format = \"$usage\"\n",
+            )
+            .unwrap(),
+            &theme,
+        )
+        .unwrap();
+        let activity: Vec<u32> = (0..24).collect();
+        let out = dashboard_footer(
+            &specs,
+            &theme,
+            &DashboardFooterInputs {
+                activity: &activity,
+                version: "0.1.0",
+                window_label: "24h",
+                workspace_selected: false,
+                fleet: crate::ui::bar::fleet::empty(),
+            },
+            120,
+        );
+        let spark = crate::ui::dashboard::sparkline::render(&activity, 24);
+        assert!(plain(&out.line).ends_with(&format!("24h {spark}")));
+        // Its hit still covers exactly the `<label> <spark>` span, flush
+        // against the right edge.
+        let usage = out
+            .hits
+            .iter()
+            .find(|h| matches!(h.hit, Hit::UsageGraph))
+            .unwrap();
+        assert_eq!(usage.width, "24h".len() as u16 + 1 + 24);
+        assert_eq!(usage.start_col + usage.width, 120);
+    }
+
+    #[test]
     fn footer_omits_actions_pill_without_workspace() {
-        assert!(!plain(&footer(false, "24h", 120).line).contains("actions"));
-        assert!(plain(&footer(true, "24h", 120).line).contains("actions"));
+        assert!(
+            !plain(&footer(false, "24h", 120, crate::ui::bar::fleet::empty()).line)
+                .contains("actions")
+        );
+        assert!(
+            plain(&footer(true, "24h", 120, crate::ui::bar::fleet::empty()).line)
+                .contains("actions")
+        );
     }
 
     #[test]
     fn footer_key_pill_wraps_key_only_not_label() {
         let theme = Theme::wsx();
-        let out = footer(true, "24h", 120);
+        let out = footer(true, "24h", 120, crate::ui::bar::fleet::empty());
         let buf = render_line(&out.line, 120);
         // " ↑↓ " is cols 0..4 on the chip bg; " nav" follows on the bar bg.
         assert_eq!(buf[(1, 0)].bg, theme.bg_soft);
@@ -316,7 +403,7 @@ mod footer_tests {
 
     #[test]
     fn footer_hints_align_with_rendered_key_pills() {
-        let out = footer(true, "24h", 120);
+        let out = footer(true, "24h", 120, crate::ui::bar::fleet::empty());
         let buf = render_line(&out.line, 120);
         let order = out
             .hits
@@ -329,104 +416,60 @@ mod footer_tests {
         assert_eq!(cells, " o  order");
     }
 
+    // At 85 columns, keys (71) + the mandatory 1-cell gap + the funnel's
+    // group "  2 working" (11, including its own grouped leading gap) = 83,
+    // which fits with room to spare; adding `$version`'s "0.1.0" (5 more, 88
+    // total) does not. `$version`'s lower priority (50 vs. the funnel's 60)
+    // drops it first, so the funnel survives alone — the same slot `$usage`
+    // used to hold.
     #[test]
-    fn footer_usage_hit_covers_label_and_sparkline() {
-        let out = footer(true, "1w", 120);
-        let usage = out.hits.iter().find(|h| h.hit == Hit::UsageGraph).unwrap();
-        assert_eq!(usage.width, 2 + 1 + 24);
-        assert_eq!(usage.start_col + usage.width, 120);
-    }
-
-    // At 100 columns the full content (keys 71 + gap 1 + version 5 + "  " 2
-    // + usage 28 = 107, without the actions pill) doesn't fit. `version`'s
-    // lower priority drops it first: keys 71 + gap 1 + usage 28 = 100 fits
-    // exactly, so the usage graph survives and lands flush against the
-    // right edge. `workspace_selected: false` (no `actions` pill) — with
-    // it, keys alone are already 84 wide, leaving no room for usage either,
-    // so this specifically exercises version-drops-before-usage rather than
-    // everything-drops.
-    #[test]
-    fn narrow_footer_drops_version_before_usage() {
-        let out = footer(false, "24h", 100);
+    fn narrow_footer_drops_version_before_funnel() {
+        use crate::ui::bar::fleet::{FleetRow, FleetStats};
+        let rows = vec![
+            FleetRow {
+                reported: Some(crate::data::store::ReportedState::Working),
+                ..Default::default()
+            },
+            FleetRow {
+                reported: Some(crate::data::store::ReportedState::Working),
+                ..Default::default()
+            },
+        ];
+        let fleet = FleetStats::from_rows(rows, 1, 0).to_vars();
+        let out = footer(false, "24h", 85, &fleet);
         let text = plain(&out.line);
         assert!(!text.contains("0.1.0"), "{text:?}");
-        let spark = crate::ui::dashboard::sparkline::render(&(0..24).collect::<Vec<u32>>(), 24);
-        assert!(text.ends_with(&format!("24h {spark}")), "{text:?}");
-        assert_eq!(out.line.width(), 100);
-        let usage = out.hits.iter().find(|h| h.hit == Hit::UsageGraph).unwrap();
-        assert_eq!(usage.start_col + usage.width, 100);
-
-        // Narrower still (60): even usage alone no longer fits, so both
-        // right-side segments are gone — but the left side is never
-        // dropped, only clipped by whatever renders the (now wider than
-        // requested) line.
-        let out = footer(false, "24h", 60);
-        let text = plain(&out.line);
-        assert!(!text.contains("0.1.0"), "{text:?}");
-        assert!(!text.contains("24h"), "{text:?}");
-        assert_eq!(
-            out.hits
-                .iter()
-                .filter(|h| matches!(h.hit, Hit::Key(_)))
-                .count(),
-            7
-        );
+        assert!(text.contains("2 working"), "{text:?}");
+        assert_eq!(out.line.width(), 85);
     }
 
-    /// Durable evidence for fix round 2: these two strings were verified
-    /// byte-for-byte against the pre-Task-7 legacy footer builder
-    /// (temporarily restored in git history for that one check, then
-    /// removed again — see the `engine_footer_matches_legacy_footer` commit
-    /// history) before this test was written. Pinning them here means a
-    /// future change to the bundled default's overflow priorities gets
-    /// caught without needing to resurrect the legacy code again.
-    ///
-    /// `workspace_selected: false` fits its full content at 110 (keys 71 +
-    /// gap 4 + version 5 + "  " 2 + usage 28 = 110) without dropping
-    /// anything, so it matches legacy exactly. `workspace_selected: true`
-    /// does NOT: with the `actions` pill, keys alone are 84 wide, leaving
-    /// only 110 - 84 - 1 = 25 cells for the right side — 3 short of even
-    /// `usage` alone (28) — so both `version` and `usage` drop and legacy
-    /// parity does not apply (legacy has no such drop and would overflow
-    /// to 120 cells instead); this asserts the engine's own, intentional
-    /// behavior at that width.
+    // At 110 columns the bundled default's full content (keys 71 + gap 1
+    // + version 5 = 77, well under 110) always fits with an empty fleet:
+    // `(  $funnel)` drops entirely — leading gap included — since $funnel
+    // renders nothing to drop against. Pinned here so a future change to
+    // the bundled default's overflow priorities gets caught at this width.
     #[test]
     fn default_footer_snapshot_at_110() {
-        let spark = crate::ui::dashboard::sparkline::render(&(0..24).collect::<Vec<u32>>(), 24);
-
-        let out = footer(false, "24h", 110);
-        let expected = format!(
-            "{}{}0.1.0  24h {spark}",
-            " ↑↓  nav   ↵  open   n  new   G  group   o  order   /  filter   q  quit",
-            " ".repeat(4),
+        let out = footer(false, "24h", 110, crate::ui::bar::fleet::empty());
+        let text = plain(&out.line);
+        assert!(
+            text.starts_with(
+                " ↑↓  nav   ↵  open   n  new   G  group   o  order   /  filter   q  quit"
+            ),
+            "{text:?}"
         );
-        assert_eq!(plain(&out.line), expected);
+        assert!(
+            text.trim_end().ends_with("0.1.0"),
+            "empty fleet: version only: {text:?}"
+        );
+        assert!(!text.contains('▁'), "no sparkline: {text:?}");
         assert_eq!(out.line.width(), 110);
-        let usage = out.hits.iter().find(|h| h.hit == Hit::UsageGraph).unwrap();
-        assert_eq!(usage.start_col + usage.width, 110);
         assert_eq!(
             out.hits
                 .iter()
                 .filter(|h| matches!(h.hit, Hit::Key(_)))
                 .count(),
             7
-        );
-
-        let out = footer(true, "24h", 110);
-        let expected = format!(
-            "{}{}",
-            " ↑↓  nav   ↵  open   n  new   G  group   o  order   /  filter   ?  actions   q  quit",
-            " ".repeat(26)
-        );
-        assert_eq!(plain(&out.line), expected);
-        assert_eq!(out.line.width(), 110);
-        assert!(out.hits.iter().all(|h| h.hit != Hit::UsageGraph));
-        assert_eq!(
-            out.hits
-                .iter()
-                .filter(|h| matches!(h.hit, Hit::Key(_)))
-                .count(),
-            8
         );
     }
 }
@@ -510,6 +553,7 @@ mod bottom_tests {
             model_tokens: mt(),
             agents,
             active_agent: Some(AgentInstanceId(1)),
+            fleet: crate::ui::bar::fleet::empty(),
         }
     }
     fn present(out: &Rendered) -> Vec<&'static str> {
@@ -712,6 +756,7 @@ mod bottom_tests {
             model_tokens: None,
             agents: &agents,
             active_agent: None,
+            fleet: crate::ui::bar::fleet::empty(),
         };
         let out = attached_bars(&specs, &theme, inputs, 120, 120).bottom;
         let t = plain(&out.line);
@@ -766,7 +811,7 @@ mod dashboard_detail_parity_tests {
         let theme = Theme::wsx();
         let specs = bundled_default(&theme);
         let pinned = cmds(&[("PR", "/pr"), ("feedback", "/fb")]);
-        let out = dashboard_detail(&specs, &theme, &pinned, 80);
+        let out = dashboard_detail(&specs, &theme, &pinned, crate::ui::bar::fleet::empty(), 80);
         assert_eq!(
             plain(&out.line),
             " 1  PR   2  feedback  ──────────────────────────────────────────────────────────"
@@ -781,7 +826,7 @@ mod dashboard_detail_parity_tests {
     fn no_pins_is_a_full_width_rule_like_the_legacy_painter() {
         let theme = Theme::wsx();
         let specs = bundled_default(&theme);
-        let out = dashboard_detail(&specs, &theme, &[], 80);
+        let out = dashboard_detail(&specs, &theme, &[], crate::ui::bar::fleet::empty(), 80);
         assert_eq!(
             plain(&out.line),
             "────────────────────────────────────────────────────────────────────────────────"
@@ -804,7 +849,7 @@ mod dashboard_detail_parity_tests {
             ("eight", "/8"),
             ("nine", "/9"),
         ]);
-        let out = dashboard_detail(&specs, &theme, &nine, 200);
+        let out = dashboard_detail(&specs, &theme, &nine, crate::ui::bar::fleet::empty(), 200);
         assert_eq!(
             plain(&out.line),
             " 1  one   2  two   3  three   4  four   5  five   6  six   7  seven   8  eight   9  nine  ──────────────────────────────────────────────────────────────────────────────────────────────────────────────"
@@ -915,6 +960,7 @@ mod segment_registry_drift_tests {
             }),
             agents: &agents,
             active_agent: Some(AgentInstanceId(1)),
+            fleet: crate::ui::bar::fleet::empty(),
         };
 
         let segments = attached_segments(&specs, &theme, inputs, &resolver);
@@ -996,6 +1042,7 @@ mod dashboard_header_tests {
                 workspaces: 14,
                 filter,
                 view: "dashboard",
+                fleet: crate::ui::bar::fleet::empty(),
             },
             width,
         )
@@ -1264,6 +1311,7 @@ mod attention_tests {
             model_tokens: None,
             agents: &[],
             active_agent: None,
+            fleet: crate::ui::bar::fleet::empty(),
         };
         attached_segments(specs, theme, inputs, &resolver).remove("attention")
     }
@@ -1788,6 +1836,7 @@ mod example_theme_tests {
                 model_tokens: None,
                 agents: &[],
                 active_agent: None,
+                fleet: crate::ui::bar::fleet::empty(),
             };
             let bars = attached_bars(&specs, &theme, inputs, 80, 80);
             (
@@ -1825,6 +1874,36 @@ mod example_theme_tests {
         assert!(name.modifier.contains(Modifier::BOLD));
     }
 
+    /// With an empty fleet, `$funnel` is empty and its conditional group
+    /// must drop *with* the arrow that leads into it — not leave a bare
+    /// coloured stub dangling past the version block.
+    #[test]
+    fn every_example_theme_drops_the_funnel_block_when_empty() {
+        for path in example_themes() {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let theme = Theme::wsx();
+            let specs = load(&path, &theme).unwrap();
+            let activity: Vec<u32> = (0..24).collect();
+            let out = dashboard_footer(
+                &specs,
+                &theme,
+                &DashboardFooterInputs {
+                    activity: &activity,
+                    version: "0.1.0",
+                    window_label: "24h",
+                    workspace_selected: true,
+                    fleet: crate::ui::bar::fleet::empty(),
+                },
+                120,
+            );
+            let text = plain(&out.line);
+            assert!(
+                text.trim_end().ends_with("0.1.0"),
+                "{name}: expected the version block to be the last thing rendered, got {text:?}"
+            );
+        }
+    }
+
     /// The brand tokens are constant across base themes, so one base
     /// (the one the orange and jellybeans files pair with) covers them all.
     #[test]
@@ -1843,6 +1922,7 @@ mod example_theme_tests {
                     workspaces: 14,
                     filter: None,
                     view: "dashboard",
+                    fleet: crate::ui::bar::fleet::empty(),
                 },
                 120,
             );
@@ -1875,5 +1955,142 @@ mod example_theme_tests {
             assert_eq!(mark.fg, BRAND_ACCENT, "{name}: the x must be brand blue");
             assert!(mark.modifier.contains(Modifier::BOLD), "{name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod module_tests {
+    use super::*;
+    use crate::config::theme_file::{ThemeFile, resolve};
+    use crate::ui::bar::fleet::{FleetRow, FleetStats};
+    use crate::ui::bar::segment::SegmentMap;
+    use test_util::plain;
+
+    fn specs_with(src: &str) -> crate::config::theme_file::BarSpecs {
+        resolve(ThemeFile::parse(src).unwrap(), &Theme::wsx()).unwrap()
+    }
+
+    fn fleet(working: u32, mergeable: u32) -> SegmentMap {
+        let rows = (0..working).map(|_| FleetRow {
+            reported: Some(crate::data::store::ReportedState::Working),
+            ..Default::default()
+        });
+        let ready = (0..mergeable).map(|_| FleetRow {
+            lifecycle: Some(crate::git::forge::BranchLifecycle::PrOpen),
+            review: Some(crate::git::forge::ReviewDecision::Approved),
+            ..Default::default()
+        });
+        FleetStats::from_rows(rows.chain(ready), 1, 0).to_vars()
+    }
+
+    #[test]
+    fn module_renders_in_the_dashboard_footer_and_drops_zero_items() {
+        let specs = specs_with(
+            "[module.pipe]\nformat = \"([$working wrk](fg:ok)  )([$mergeable rdy](fg:merged))\"\n[dashboard_footer]\nright_format = \"$pipe\"\n",
+        );
+        let theme = Theme::wsx();
+        let out = dashboard_footer(
+            &specs,
+            &theme,
+            &DashboardFooterInputs {
+                activity: &[],
+                version: "0.1.0",
+                window_label: "24h",
+                workspace_selected: false,
+                fleet: &fleet(3, 0),
+            },
+            80,
+        );
+        let text = plain(&out.line);
+        assert!(text.ends_with("3 wrk  "), "{text:?}");
+        assert!(
+            !text.contains("rdy"),
+            "zero mergeable drops its group: {text:?}"
+        );
+        assert!(
+            out.hits.iter().all(|h| matches!(h.hit, Hit::Key(_))),
+            "modules carry no hit"
+        );
+    }
+
+    #[test]
+    fn module_renders_in_the_attached_bottom_bar() {
+        let specs = specs_with(
+            "[module.pipe]\nformat = \"$working working\"\n[attached_bottom]\nright_format = \"$pipe\"\n",
+        );
+        let theme = Theme::wsx();
+        let f = fleet(2, 0);
+        let bars = attached_bars(
+            &specs,
+            &theme,
+            AttachedInputs {
+                repo: "wsx",
+                name: "foo",
+                version: "0.1.0",
+                window_label: "24h",
+                activity: &[],
+                agent: None,
+                attention: None,
+                pinned: &[],
+                procs: 0,
+                diff: None,
+                pr: None,
+                model_tokens: None,
+                agents: &[],
+                active_agent: None,
+                fleet: &f,
+            },
+            80,
+            80,
+        );
+        assert!(
+            plain(&bars.bottom.line).ends_with("2 working"),
+            "{:?}",
+            plain(&bars.bottom.line)
+        );
+    }
+
+    #[test]
+    fn module_priority_drops_before_keys_when_narrow() {
+        let specs = specs_with(
+            "[module.pipe]\nformat = \"$working working across the whole fleet right now\"\npriority = 10\n[dashboard_footer]\nformat = \"$keys\"\nright_format = \"$pipe\"\n",
+        );
+        let theme = Theme::wsx();
+        let f = fleet(2, 0);
+        let render = |w: u16| {
+            plain(
+                &dashboard_footer(
+                    &specs,
+                    &theme,
+                    &DashboardFooterInputs {
+                        activity: &[],
+                        version: "0.1.0",
+                        window_label: "24h",
+                        workspace_selected: false,
+                        fleet: &f,
+                    },
+                    w,
+                )
+                .line,
+            )
+        };
+        assert!(render(160).contains("2 working"));
+        let narrow = render(60);
+        assert!(!narrow.contains("2 working"), "{narrow:?}");
+        assert!(narrow.contains("nav"), "keys survive: {narrow:?}");
+    }
+
+    #[test]
+    fn dashboard_detail_renders_a_module() {
+        let specs = specs_with(
+            "[module.pipe]\nformat = \"$working w\"\n[dashboard_detail]\nformat = \"$pipe\"\n",
+        );
+        let theme = Theme::wsx();
+        let out = dashboard_detail(&specs, &theme, &[], &fleet(1, 0), 40);
+        assert!(
+            plain(&out.line).starts_with("1 w"),
+            "{:?}",
+            plain(&out.line)
+        );
     }
 }

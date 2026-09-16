@@ -451,6 +451,96 @@ mod footer_tests {
         assert!(!text.contains("claude"), "{text:?}");
     }
 
+    /// A fleet with no claude context: the preset's leading, gap-less item
+    /// is empty, so the module starts with the codex item's own gap and the
+    /// bar's `(  $tokens)` gap stacks on it — the documented trade-off of
+    /// leading gaps (a trailing kind's absence would otherwise leave the
+    /// module short of the right edge).
+    #[test]
+    fn tokens_preset_without_the_leading_kind_keeps_the_next_items_gap() {
+        use crate::pty::session::AgentKind;
+        use crate::ui::bar::fleet::{FleetRow, FleetStats};
+        let theme = Theme::wsx();
+        let specs = tokens_specs("", &theme);
+        let fleet = FleetStats::from_rows(
+            vec![FleetRow {
+                context_tokens: vec![(AgentKind::Codex, 340_000)],
+                ..Default::default()
+            }],
+            1,
+            0,
+        )
+        .to_vars();
+        let text = plain(&tokens_footer(&specs, &theme, &fleet).line);
+        assert!(text.ends_with("0.1.0    codex 340k"), "{text:?}");
+    }
+
+    /// `agent_*` are theme tokens, so a `[palette]` entry of the same name
+    /// shadows one in bar formats without touching the fixed colour the
+    /// dashboard rows use.
+    #[test]
+    fn palette_agent_color_shadows_the_token_in_the_preset_only() {
+        use crate::pty::session::AgentKind;
+        use crate::ui::bar::fleet::{FleetRow, FleetStats};
+        let theme = Theme::wsx();
+        let specs = tokens_specs("[palette]\nagent_claude = \"#123456\"\n", &theme);
+        let fleet = FleetStats::from_rows(
+            vec![FleetRow {
+                context_tokens: vec![(AgentKind::Claude, 1_000)],
+                ..Default::default()
+            }],
+            1,
+            0,
+        )
+        .to_vars();
+        let out = tokens_footer(&specs, &theme, &fleet);
+        let claude = out
+            .line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("claude"))
+            .unwrap();
+        use ratatui::style::Color;
+        assert_eq!(claude.style.fg, Some(Color::Rgb(0x12, 0x34, 0x56)));
+        assert_eq!(
+            theme.agent_style(AgentKind::Claude).fg,
+            Some(Color::Rgb(0xe8, 0x8b, 0x3c)),
+            "the Theme's fixed colour is untouched"
+        );
+    }
+
+    /// Specs from a theme that places `$tokens` in the footer, with
+    /// `extra` TOML prepended.
+    fn tokens_specs(extra: &str, theme: &Theme) -> crate::config::theme_file::BarSpecs {
+        crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse(&format!(
+                "{extra}[dashboard_footer]\nright_format = \"$version(  $tokens)\"\n"
+            ))
+            .unwrap(),
+            theme,
+        )
+        .unwrap()
+    }
+
+    fn tokens_footer(
+        specs: &crate::config::theme_file::BarSpecs,
+        theme: &Theme,
+        fleet: &crate::ui::bar::segment::SegmentMap,
+    ) -> Rendered {
+        dashboard_footer(
+            specs,
+            theme,
+            &DashboardFooterInputs {
+                activity: &[],
+                version: "0.1.0",
+                window_label: "24h",
+                workspace_selected: false,
+                fleet,
+            },
+            140,
+        )
+    }
+
     #[test]
     fn footer_omits_actions_pill_without_workspace() {
         assert!(

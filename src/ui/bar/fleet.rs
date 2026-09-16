@@ -507,6 +507,8 @@ mod tests {
         let peer_b = store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
         let orphan = store.add_workspace_agent(ws, AgentKind::Omp).unwrap();
         store.remove_workspace_agent(orphan.id).unwrap();
+        // Rostered but never tailed: no events entry at all.
+        let _silent = store.add_workspace_agent(ws, AgentKind::Pi).unwrap();
         let mut app =
             crate::app::App::new(store, std::path::PathBuf::from("/tmp/wsx-test")).unwrap();
         app.agent_roster = app.store.all_workspace_agents().unwrap();
@@ -530,6 +532,7 @@ mod tests {
             "both same-kind peers count"
         );
         assert_eq!(text(&vars, "tokens_omp"), "", "unrostered instance ignored");
+        assert_eq!(text(&vars, "tokens_pi"), "", "rostered peer with no events");
         assert_eq!(text(&vars, "tokens_total"), "11k");
     }
 

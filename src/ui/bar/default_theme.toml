@@ -202,9 +202,9 @@ format   = "([$working working](fg:ok)  )([$blocked blocked](fg:err)  )([$review
 # Same slot as $usage had: $version drops first on a narrow footer.
 priority = 60
 
-# Context fill by agent kind: how many prompt-side tokens each harness has
-# loaded across the fleet right now (not cumulative spend). Defined but not
-# placed — add `$tokens` to a bar to show it, e.g.
+# Context fill by agent kind: each harness's latest reported prompt-side
+# context, summed across retained instances (not cumulative spend). Defined
+# but not placed — add `$tokens` to a bar to show it, e.g.
 #   right_format = "$version(  $tokens)(  $funnel)"
 # Gaps lead each item after the first (the opposite of the funnel) so the
 # module hugs the right edge whichever trailing kinds are absent; kinds are

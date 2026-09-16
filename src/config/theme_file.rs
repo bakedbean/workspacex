@@ -478,6 +478,9 @@ fn resolve_module(
         separator: Vec::new(),
         more_format: Vec::new(),
         styles: Vec::new(),
+        // A module has no `[module.<name>.palette]`: its format is
+        // validated against the global resolver, so nothing to shadow.
+        palette: HashMap::new(),
     })
 }
 

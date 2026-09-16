@@ -1836,6 +1836,7 @@ mod example_theme_tests {
                 model_tokens: None,
                 agents: &[],
                 active_agent: None,
+                fleet: crate::ui::bar::fleet::empty(),
             };
             let bars = attached_bars(&specs, &theme, inputs, 80, 80);
             (

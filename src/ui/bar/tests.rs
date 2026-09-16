@@ -2056,6 +2056,80 @@ mod example_theme_tests {
         }
     }
 
+    /// The orange example places the bundled `tokens` module on the
+    /// footer's smoke block beside the version, behind an airline
+    /// sub-divider, with the funnel on the orange edge block after it.
+    /// Each token item keeps its agent identity colour on smoke; an idle
+    /// fleet drops the divider along with the sums.
+    #[test]
+    fn orange_example_places_tokens_beside_the_version_on_smoke() {
+        use crate::data::store::ReportedState;
+        use crate::pty::session::AgentKind;
+        use crate::ui::bar::fleet::{FleetRow, FleetStats};
+        let theme = Theme::jellybeans();
+        let specs = load(&examples_dir().join("theme-orange.toml"), &theme).unwrap();
+        let smoke = Color::Rgb(0x3a, 0x3a, 0x3a);
+        let orange = Color::Rgb(0xd7, 0x5f, 0x00);
+        let render = |fleet: &crate::ui::bar::segment::SegmentMap| {
+            let out = dashboard_footer(
+                &specs,
+                &theme,
+                &DashboardFooterInputs {
+                    activity: &[],
+                    version: "0.1.0",
+                    window_label: "24h",
+                    workspace_selected: false,
+                    fleet,
+                },
+                160,
+            );
+            (plain(&out.line), render_line(&out.line, 160))
+        };
+
+        let rows = vec![
+            FleetRow {
+                reported: Some(ReportedState::Working),
+                context_tokens: vec![(AgentKind::Claude, 1_200_000), (AgentKind::Codex, 40_000)],
+                ..Default::default()
+            },
+            FleetRow {
+                context_tokens: vec![(AgentKind::Codex, 300_000)],
+                ..Default::default()
+            },
+        ];
+        let fleet = FleetStats::from_rows(rows, 1, 0).to_vars();
+        let (text, buf) = render(&fleet);
+        assert!(
+            text.trim_end()
+                .ends_with("\u{e0b2} 0.1.0  \u{e0b3} claude 1.2M  codex 340k \u{e0b2} 1 working"),
+            "{text:?}"
+        );
+        let col_of = |needle: &str| {
+            text.find(needle)
+                .map(|i| text[..i].chars().count() as u16)
+                .unwrap()
+        };
+        let claude = buf[(col_of("claude"), 0)].clone();
+        assert_eq!(
+            (Some(claude.fg), claude.bg),
+            (theme.agent_style(AgentKind::Claude).fg, smoke),
+            "claude item on the smoke block"
+        );
+        let codex = buf[(col_of("codex"), 0)].clone();
+        assert_eq!(
+            Some(codex.fg),
+            theme.agent_style(AgentKind::Codex).fg,
+            "codex item colour"
+        );
+        let working = buf[(col_of("working"), 0)].clone();
+        assert_eq!(working.bg, orange, "funnel on the orange edge block");
+
+        // Idle fleet: the divider goes with the sums, and the funnel group
+        // with its wedge, leaving the version alone on smoke.
+        let (text, _) = render(crate::ui::bar::fleet::empty());
+        assert!(text.trim_end().ends_with("\u{e0b2} 0.1.0"), "{text:?}");
+    }
+
     /// The brand tokens are constant across base themes, so one base
     /// (the one the orange and jellybeans files pair with) covers them all.
     #[test]

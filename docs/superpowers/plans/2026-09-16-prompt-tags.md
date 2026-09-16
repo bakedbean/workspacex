@@ -1547,7 +1547,6 @@ async fn body_key(
         KeyCode::Down => modal.body.move_down(),
         KeyCode::Home => modal.body.home(),
         KeyCode::End => modal.body.end(),
-        KeyCode::Tab => modal.body.insert_str("    "),
         KeyCode::Char(c) if !ctrl => modal.body.insert_char(c),
         _ => {}
     }

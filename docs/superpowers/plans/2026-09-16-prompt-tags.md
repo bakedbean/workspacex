@@ -1477,10 +1477,18 @@ fn pick_key(app: &mut App, k: crossterm::event::KeyEvent, ctrl: bool, modal: &mu
         KeyCode::Down => modal.select_down(modal.filtered(&list).len()),
         KeyCode::Char(c @ '1'..='9') if modal.accelerators_active() && !ctrl => {
             let idx = (c as u8 - b'1') as usize;
-            if let Some(t) = modal.filtered(&list).get(idx) {
-                modal.stage = TagStage::Body {
-                    name: t.name.clone(),
-                };
+            match modal.filtered(&list).get(idx) {
+                Some(t) => {
+                    modal.stage = TagStage::Body {
+                        name: t.name.clone(),
+                    };
+                }
+                // No listed tag at that slot: the digit is just the start
+                // of a typed name, not a dead keystroke.
+                None => {
+                    modal.name_field.push(c);
+                    modal.selected = 0;
+                }
             }
         }
         KeyCode::Char('d') if ctrl => {

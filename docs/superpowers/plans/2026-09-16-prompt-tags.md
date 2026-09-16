@@ -43,7 +43,7 @@
   pub fn bump(tags: &mut Vec<PromptTag>, name: &str);        // re-sorts
   pub fn remove(tags: &mut Vec<PromptTag>, name: &str) -> bool;
   pub fn wrap(name: &str, body: &str) -> String;
-  pub fn load(store: &crate::data::store::Store) -> Vec<PromptTag>;
+  pub fn load(store: &crate::data::store::Store) -> crate::error::Result<Vec<PromptTag>>;  // Err only on a store failure; callers that go on to `save` must NOT treat Err as empty
   pub fn save(store: &crate::data::store::Store, tags: &[PromptTag]) -> crate::error::Result<()>;
   ```
 
@@ -143,13 +143,13 @@ mod tests {
     #[test]
     fn load_and_save_go_through_the_settings_table() {
         let store = crate::data::store::Store::open_in_memory().unwrap();
-        assert!(load(&store).is_empty());
+        assert!(load(&store).unwrap().is_empty());
         save(&store, &[tag("context", 4), tag("task", 9)]).unwrap();
         assert_eq!(
             store.get_setting(SETTING_KEY).unwrap().as_deref(),
             Some("task=9\ncontext=4\n")
         );
-        assert_eq!(load(&store), vec![tag("task", 9), tag("context", 4)]);
+        assert_eq!(load(&store).unwrap(), vec![tag("task", 9), tag("context", 4)]);
     }
 }
 ```
@@ -285,13 +285,15 @@ pub fn wrap(name: &str, body: &str) -> String {
     format!("<{name}>\n{}\n</{name}>", body.trim_end_matches('\n'))
 }
 
-pub fn load(store: &Store) -> Vec<PromptTag> {
-    store
-        .get_setting(SETTING_KEY)
-        .ok()
-        .flatten()
+/// The saved list. A store error propagates rather than reading as "no
+/// tags": a caller that loads, edits and saves would otherwise wipe the
+/// list on a transient read failure. Render paths that only display may
+/// `unwrap_or_default()`.
+pub fn load(store: &Store) -> Result<Vec<PromptTag>> {
+    Ok(store
+        .get_setting(SETTING_KEY)?
         .map(|s| parse(&s))
-        .unwrap_or_default()
+        .unwrap_or_default())
 }
 
 pub fn save(store: &Store, tags: &[PromptTag]) -> Result<()> {
@@ -1188,7 +1190,7 @@ In `src/app/render/overlay.rs`, add an arm in `draw_modal` after the `RepoSettin
 
 ```rust
         crate::ui::modal::Modal::PromptTag(modal) => {
-            let tags = crate::commands::tags::load(&app.store);
+            let tags = crate::commands::tags::load(&app.store).unwrap_or_default();
             crate::ui::modal::render_prompt_tag(f, area, modal, &tags, &app.theme);
         }
 ```
@@ -1270,7 +1272,7 @@ async fn pick_enter_on_a_new_name_creates_it_and_opens_the_body() {
         }
     );
     assert_eq!(
-        tags::load(&app.store),
+        tags::load(&app.store).unwrap(),
         vec![PromptTag {
             name: "context".into(),
             uses: 0
@@ -1289,7 +1291,7 @@ async fn pick_enter_on_an_invalid_name_does_nothing() {
     type_str(&mut app, &shared, "1bad").await;
     handle_key_modal(&mut app, &shared, key(KeyCode::Enter)).await.unwrap();
     assert_eq!(modal(&app).stage, TagStage::Pick);
-    assert!(tags::load(&app.store).is_empty());
+    assert!(tags::load(&app.store).unwrap().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1334,7 +1336,7 @@ async fn ctrl_d_deletes_the_selected_tag_and_persists() {
     handle_key_modal(&mut app, &shared, key(KeyCode::Down)).await.unwrap();
     handle_key_modal(&mut app, &shared, ctrl('d')).await.unwrap();
     assert_eq!(
-        tags::load(&app.store),
+        tags::load(&app.store).unwrap(),
         vec![PromptTag { name: "context".into(), uses: 5 }]
     );
     assert_eq!(modal(&app).selected, 0, "selection clamps after the delete");
@@ -1353,7 +1355,7 @@ async fn body_ctrl_s_inserts_the_wrapped_text_bumps_the_count_and_closes() {
     handle_key_modal(&mut app, &shared, ctrl('s')).await.unwrap();
     assert!(app.modal.is_none(), "insert closes the modal");
     assert_eq!(
-        tags::load(&app.store),
+        tags::load(&app.store).unwrap(),
         vec![PromptTag { name: "context".into(), uses: 1 }]
     );
 
@@ -1378,7 +1380,7 @@ async fn body_ctrl_s_with_a_blank_body_stays_open_and_records_nothing() {
     type_str(&mut app, &shared, "   ").await;
     handle_key_modal(&mut app, &shared, ctrl('s')).await.unwrap();
     assert!(matches!(app.modal, Some(Modal::PromptTag(_))));
-    assert!(tags::load(&app.store).is_empty());
+    assert!(tags::load(&app.store).unwrap().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1411,7 +1413,7 @@ async fn body_ctrl_s_without_a_session_reports_an_error() {
         "{:?}",
         app.modal
     );
-    assert!(tags::load(&app.store).is_empty());
+    assert!(tags::load(&app.store).unwrap().is_empty());
 }
 ```
 
@@ -1442,7 +1444,16 @@ use crossterm::event::{KeyCode, KeyModifiers};
 /// Pick-stage keys. Returns `true` when the modal was closed (the caller
 /// must not put it back).
 fn pick_key(app: &mut App, k: crossterm::event::KeyEvent, ctrl: bool, modal: &mut PromptTagModal) -> bool {
-    let mut list = tags::load(&app.store);
+    let mut list = match tags::load(&app.store) {
+        Ok(list) => list,
+        Err(e) => {
+            // Editing on top of an unreadable list could wipe it on save.
+            app.modal = Some(Modal::Error {
+                message: format!("could not read prompt tags: {e}"),
+            });
+            return true;
+        }
+    };
     match k.code {
         KeyCode::Esc => {
             app.modal = None;
@@ -1532,7 +1543,17 @@ async fn body_key(
                 });
                 return true;
             }
-            let mut list = tags::load(&app.store);
+            let mut list = match tags::load(&app.store) {
+                Ok(list) => list,
+                Err(e) => {
+                    // The text is already in the composer; only the count
+                    // is lost. Say so rather than saving over an unread list.
+                    app.modal = Some(Modal::Error {
+                        message: format!("inserted, but could not read prompt tags to count the use: {e}"),
+                    });
+                    return true;
+                }
+            };
             tags::bump(&mut list, name);
             app.modal = None;
             persist(app, &list);
@@ -2006,7 +2027,7 @@ priority    = 40
 
 `src/app/render/attached.rs`:
 - `AttachedData` gains `tags: Vec<crate::commands::tags::PromptTag>,`; `inputs()` passes `tags: &self.tags,`.
-- `gather_local` and `gather_remote` set `tags: crate::commands::tags::load(&app.store),` (the remote view inserts into the ssh PTY exactly as pins do).
+- `gather_local` and `gather_remote` set `tags: crate::commands::tags::load(&app.store).unwrap_or_default(),` (display only — an unreadable list just shows no chips) (the remote view inserts into the ssh PTY exactly as pins do).
 - Both `render_panes` call sites pass `&data.tags,` after `&data.pinned,`.
 - Both cache-copy blocks add `app.tag_chip_rects = out.tag_chip_rects; app.tags_manager_rect = out.tags_manager_rect; app.prompt_tags_cache = data.tags;`.
 

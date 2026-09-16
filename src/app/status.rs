@@ -139,6 +139,25 @@ impl App {
         )
     }
 
+    /// Whether a workspace's primary session is live — `Thinking` or
+    /// `Waiting`. The usage sparkline buckets, `live_workspace_count`, and
+    /// `$live_agents` all share this predicate.
+    pub fn is_live(&self, ws: &crate::data::store::Workspace) -> bool {
+        matches!(
+            self.classify_status(ws),
+            crate::ui::dashboard::status::Status::Thinking
+                | crate::ui::dashboard::status::Status::Waiting
+        )
+    }
+
+    /// Workspaces whose primary session is live — `Thinking` or `Waiting`.
+    pub fn live_workspace_count(&self) -> u32 {
+        self.workspaces
+            .iter()
+            .filter(|(_rid, ws)| self.is_live(ws))
+            .count() as u32
+    }
+
     /// The freshness-gated agent-pushed status for a workspace, or `None` when
     /// there is no fresh push. Same liveness rule as the status classifier, so
     /// the message and the glyph appear/disappear together.

@@ -288,16 +288,7 @@ pub async fn run<B: Backend + std::io::Write>(
                 }
                 let now_secs = crate::util::time::now_secs();
                 let now_hour = now_secs - (now_secs % 3600);
-                let live = g
-                    .workspaces
-                    .iter()
-                    .filter(|(_rid, ws)| {
-                        let s = g.classify_status(ws);
-                        matches!(s,
-                            crate::ui::dashboard::status::Status::Thinking
-                            | crate::ui::dashboard::status::Status::Waiting)
-                    })
-                    .count() as u32;
+                let live = g.live_workspace_count();
                 match g.activity_history.back().copied() {
                     Some((h, prev_max)) if h == now_hour => {
                         if live > prev_max {

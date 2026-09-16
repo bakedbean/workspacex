@@ -26,6 +26,7 @@ struct AttachedData {
     version: &'static str,
     window_label: &'static str,
     activity: Vec<u32>,
+    fleet: crate::ui::bar::segment::SegmentMap,
 }
 
 impl AttachedData {
@@ -48,6 +49,7 @@ impl AttachedData {
             model_tokens: self.model_tokens.clone(),
             agents: &self.agents,
             active_agent: self.active_agent,
+            fleet: &self.fleet,
         }
     }
 }
@@ -170,6 +172,7 @@ fn gather_local(app: &App, focused: crate::ui::split::AttachTarget) -> AttachedD
         version: env!("CARGO_PKG_VERSION"),
         window_label: usage_window.label(),
         activity: usage_activity,
+        fleet: crate::ui::bar::fleet::FleetStats::collect(app).to_vars(),
     }
 }
 
@@ -225,7 +228,10 @@ fn gather_remote(app: &App, label: &str) -> AttachedData {
         active_agent: None,
         version: env!("CARGO_PKG_VERSION"),
         window_label: usage_window.label(),
+        // Same precedent as `activity` above: these are the local fleet's
+        // stats — the remote attach carries no visibility into its own side.
         activity: usage_activity,
+        fleet: crate::ui::bar::fleet::FleetStats::collect(app).to_vars(),
     }
 }
 
@@ -355,6 +361,7 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
         data.model_tokens.clone(),
         &data.agents,
         data.active_agent,
+        &data.fleet,
         &app.theme,
     );
     app.chip_rects = out.chip_rects;
@@ -415,6 +422,7 @@ pub(super) fn draw_attached_remote(
             data.model_tokens.clone(),
             &data.agents,
             data.active_agent,
+            &data.fleet,
             &app.theme,
         );
         app.attached_pane_rects = out.pane_rects;

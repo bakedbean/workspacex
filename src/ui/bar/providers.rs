@@ -541,6 +541,12 @@ pub fn usage(
     Some(seg)
 }
 
+/// A `[module.<name>]`: the user's `format` evaluated against the fleet
+/// variable map. No state colour of its own and no click target.
+pub fn module(cfg: &SegmentConfig, fleet: &SegmentMap, resolver: &Resolver) -> Option<Segment> {
+    eval_segment(cfg, fleet, Style::default(), &[], resolver)
+}
+
 /// Pinned-command chips, at most nine (they are keyed `1`–`9`).
 pub fn pins(cfg: &SegmentConfig, pinned: &[PinnedCommand], resolver: &Resolver) -> Option<Segment> {
     let items: Vec<(SegmentMap, Style, Option<Hit>)> = pinned

@@ -51,6 +51,8 @@ pub struct DashboardInputs<'a> {
     pub github_remotes: &'a crate::git::github_remotes::GithubRemotes,
     /// The global nerd-fonts setting, for glyphs chosen outside `RowInputs`.
     pub nerd_fonts: bool,
+    /// Fleet variables for theme modules, built once per frame.
+    pub fleet: &'a crate::ui::bar::segment::SegmentMap,
 }
 
 #[derive(Debug)]
@@ -170,6 +172,7 @@ pub fn render(
         "24h",
         matches!(state.selection, Some(SelectionTarget::Workspace(_))),
         None,
+        inputs.fleet,
     );
 }
 
@@ -263,6 +266,7 @@ pub fn render_without_footer(
                     workspaces: inputs.workspaces.len(),
                     filter: state.filter.as_deref(),
                     view: "dashboard",
+                    fleet: inputs.fleet,
                 },
                 chunks[0].width,
             )
@@ -335,6 +339,7 @@ pub fn render_footer(
     window_label: &str,
     workspace_selected: bool,
     notice: Option<&str>,
+    fleet: &crate::ui::bar::segment::SegmentMap,
 ) -> (
     Option<Rect>,
     Vec<(Rect, crate::ui::footer::FooterHintAction)>,
@@ -355,6 +360,7 @@ pub fn render_footer(
             version: env!("CARGO_PKG_VERSION"),
             window_label,
             workspace_selected,
+            fleet,
         },
         area.width,
     );

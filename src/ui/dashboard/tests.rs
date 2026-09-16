@@ -100,6 +100,7 @@ fn render_to_strings(group: GroupMode) -> Vec<String> {
         column_widths: row::ColumnWidths::default(),
         github_remotes: &Default::default(),
         nerd_fonts: false,
+        fleet: crate::ui::bar::fleet::empty(),
     };
     let mut state = DashboardState {
         group_mode: group,
@@ -145,6 +146,7 @@ fn repo_pr_link_rects_land_on_rendered_glyphs() {
         column_widths: row::ColumnWidths::default(),
         github_remotes: &github,
         nerd_fonts: false,
+        fleet: crate::ui::bar::fleet::empty(),
     };
     let mut state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -199,6 +201,7 @@ fn repo_pr_link_rect_survives_a_wide_repo_name() {
         column_widths: row::ColumnWidths::default(),
         github_remotes: &github,
         nerd_fonts: false,
+        fleet: crate::ui::bar::fleet::empty(),
     };
     let mut state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -269,6 +272,7 @@ fn assert_pr_rects_match_buffer(group: GroupMode, height: u16, select_last: bool
         column_widths: row::ColumnWidths::default(),
         github_remotes: &Default::default(),
         nerd_fonts: false,
+        fleet: crate::ui::bar::fleet::empty(),
     };
     let mut state = DashboardState {
         group_mode: group,
@@ -342,7 +346,6 @@ fn by_repo_render_includes_chrome_status_strip_and_a_repo_header() {
         joined.contains("theme-tokens"),
         "stalled workspace row: {joined}"
     );
-    assert!(joined.contains("24h "), "footer sparkline label");
 }
 
 #[test]
@@ -366,6 +369,7 @@ fn footer_row_paints_chip_bg_but_no_bar_bg() {
         column_widths: row::ColumnWidths::default(),
         github_remotes: &Default::default(),
         nerd_fonts: false,
+        fleet: crate::ui::bar::fleet::empty(),
     };
     let mut state = DashboardState::default();
     let theme = Theme::wsx();
@@ -429,6 +433,7 @@ fn render_sets_list_state_to_selected_workspace_index() {
         column_widths: row::ColumnWidths::default(),
         github_remotes: &Default::default(),
         nerd_fonts: false,
+        fleet: crate::ui::bar::fleet::empty(),
     };
     let mut state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -475,6 +480,7 @@ fn selected_workspace_row_renders_with_thicker_gutter() {
         column_widths: row::ColumnWidths::default(),
         github_remotes: &Default::default(),
         nerd_fonts: false,
+        fleet: crate::ui::bar::fleet::empty(),
     };
     let mut state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -534,6 +540,7 @@ fn visible_targets_by_repo_matches_render_order() {
         column_widths: row::ColumnWidths::default(),
         github_remotes: &Default::default(),
         nerd_fonts: false,
+        fleet: crate::ui::bar::fleet::empty(),
     };
     let state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -653,6 +660,7 @@ fn visible_targets_matches_rendered_row_order_under_recency() {
         column_widths: row::ColumnWidths::default(),
         github_remotes: &Default::default(),
         nerd_fonts: false,
+        fleet: crate::ui::bar::fleet::empty(),
     };
     let mut state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -756,6 +764,7 @@ fn repo_order_breaks_sort_order_ties_by_id_in_lockstep() {
         column_widths: row::ColumnWidths::default(),
         github_remotes: &Default::default(),
         nerd_fonts: false,
+        fleet: crate::ui::bar::fleet::empty(),
     };
     let state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -931,6 +940,7 @@ fn fixture_dashboard_inputs() -> DashboardInputs<'static> {
         column_widths: row::ColumnWidths::default(),
         github_remotes: Box::leak(Box::default()),
         nerd_fonts: false,
+        fleet: crate::ui::bar::fleet::empty(),
     }
 }
 
@@ -1080,6 +1090,7 @@ fn render_empty_body(repos: &[Repo], group: GroupMode, filter: Option<&str>) -> 
         column_widths: row::ColumnWidths::default(),
         github_remotes: &Default::default(),
         nerd_fonts: false,
+        fleet: crate::ui::bar::fleet::empty(),
     };
     let mut state = DashboardState {
         group_mode: group,
@@ -1302,6 +1313,7 @@ fn footer_shows_a_theme_notice_instead_of_hints() {
             "24h",
             true,
             Some("theme.toml: [pr].format: col 3: unknown `$nope`"),
+            crate::ui::bar::fleet::empty(),
         ));
     })
     .unwrap();

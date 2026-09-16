@@ -39,7 +39,7 @@ fill         = " "
 
 [dashboard_footer]
 format       = "[ $keys ](bg:rose fg:base)[](fg:rose)"
-right_format = "[](fg:hl_high)[( $version )](bg:hl_high fg:text)[](fg:pine bg:hl_high)[ $usage ](bg:pine fg:text)"
+right_format = "[](fg:hl_high)[( $version )](bg:hl_high fg:text)([](fg:pine bg:hl_high)[ $funnel ](bg:pine fg:text))"
 fill         = " "
 
 [attached_top]
@@ -70,8 +70,12 @@ format = "[$repos repos · $workspaces workspaces]()"
 [version]
 format = "[$version]()"
 
-[usage]
-format = "[$label $spark]()"
+# The funnel module on the rosé pine moon palette; the block's bg (pine)
+# comes from the bar format, so items set only fg. foam/love echo the diff
+# segment's positive/negative pairing below.
+[module.funnel]
+format   = "([$working working](fg:foam)  )([$blocked blocked](fg:love)  )([$review_required review](fg:gold)  )([$changes_requested changes](fg:rose)  )([$mergeable ready](fg:iris))"
+priority = 60
 
 [keys]
 format    = "[$key](fg:base bold) [$label]()"

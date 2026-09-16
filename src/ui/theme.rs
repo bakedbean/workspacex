@@ -282,14 +282,20 @@ impl Theme {
             "idle" => self.idle,
             "brand" => BRAND_ACCENT,
             "wordmark" => BRAND_WORDMARK,
+            // Fixed agent identity colours, theme-independent like `brand`.
+            "agent_claude" => AGENT_CLAUDE,
+            "agent_pi" => AGENT_PI,
+            "agent_hermes" => AGENT_HERMES,
+            "agent_codex" => AGENT_CODEX,
+            "agent_omp" => AGENT_OMP,
             _ => return None,
         })
     }
 
     /// A copy with every token named in `overrides` replaced — the
     /// inverse of [`Theme::token`]. Names that aren't tokens (`brand`,
-    /// `wordmark`, palette entries) are ignored: they never come from a
-    /// `Theme` field, so there is nothing to replace.
+    /// `wordmark`, `agent_*`, palette entries) are ignored: they never
+    /// come from a `Theme` field, so there is nothing to replace.
     pub fn shadowed(&self, overrides: &std::collections::HashMap<String, Color>) -> Theme {
         let mut t = *self;
         for (name, &c) in overrides {
@@ -910,6 +916,21 @@ mod tests {
                 "duplicate color for {k:?}"
             );
         }
+    }
+
+    /// The fixed agent identity colours are reachable from theme.toml as
+    /// `agent_<kind>` tokens, one per `AgentKind::ALL` entry, and are
+    /// theme-independent like `brand`.
+    #[test]
+    fn agent_tokens_resolve_to_the_fixed_agent_colors_in_every_theme() {
+        use crate::pty::session::AgentKind;
+        for t in [Theme::wsx(), Theme::nord()] {
+            for k in AgentKind::ALL {
+                let name = format!("agent_{}", k.display_name());
+                assert_eq!(t.token(&name), t.agent_style(k).fg, "{name}");
+            }
+        }
+        assert_eq!(Theme::wsx().token("agent_nope"), None);
     }
 
     #[test]

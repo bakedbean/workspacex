@@ -6,8 +6,10 @@ use crate::app::App;
 use crate::app::activity::ActivityState;
 use crate::data::store::ReportedState;
 use crate::git::forge::{BranchLifecycle, ReviewDecision};
+use crate::pty::session::AgentKind;
 use crate::ui::bar::providers::var;
 use crate::ui::bar::segment::SegmentMap;
+use crate::ui::text::abbreviate_tokens;
 use std::sync::OnceLock;
 
 /// One workspace's contribution, already looked up from `App`'s maps so
@@ -25,6 +27,12 @@ pub struct FleetRow {
     pub review: Option<ReviewDecision>,
     pub unresolved: u32,
     pub dirty: bool,
+    /// Latest reported prompt-side context size of every agent instance in
+    /// the workspace (primary and peers) whose transcript is still cached,
+    /// with its kind. "Latest reported", not "live": the cache outlives the
+    /// session until the tail loop prunes it, and lags a roster change until
+    /// the next tail — the same eventual consistency every events reader has.
+    pub context_tokens: Vec<(AgentKind, u64)>,
 }
 
 /// Fleet-wide counts, one field per `registry::FLEET_VARS` entry.
@@ -57,6 +65,9 @@ pub struct FleetStats {
     pub msgs_queued: u32,
     pub workspaces: u32,
     pub repos: u32,
+    /// Σ latest `context_tokens` per agent kind, indexed by position in
+    /// `AgentKind::ALL`.
+    pub tokens_by_kind: [u64; AgentKind::ALL.len()],
 }
 
 impl FleetStats {
@@ -117,8 +128,21 @@ impl FleetStats {
             if r.dirty {
                 s.dirty += 1;
             }
+            // Transcripts are external input; a malformed count must not
+            // panic the collector, so saturate rather than overflow.
+            for (kind, n) in r.context_tokens {
+                let slot = &mut s.tokens_by_kind[kind_index(kind)];
+                *slot = slot.saturating_add(n);
+            }
         }
         s
+    }
+
+    /// Σ `tokens_by_kind` — the fleet-wide context fill.
+    pub fn tokens(&self) -> u64 {
+        self.tokens_by_kind
+            .iter()
+            .fold(0u64, |acc, n| acc.saturating_add(*n))
     }
 
     /// Walk every workspace the dashboard lists, once per frame.
@@ -135,15 +159,31 @@ impl FleetStats {
                 .workspace_status
                 .get(&ws.id)
                 .is_some_and(|g| g.modified + g.untracked > 0),
+            context_tokens: context_tokens(app, ws),
         });
         Self::from_rows(rows, app.repos.len() as u32, app.msgs_queued)
     }
 
     /// The variable map a module format evaluates against. Counts are
-    /// empty at zero so `( … )` groups drop; totals always render.
+    /// empty at zero so `( … )` groups drop; totals always render. Token
+    /// sums render abbreviated (`77k`, `1.2M`) and, like counts, empty at
+    /// zero so a kind with no live context drops out of the module.
     pub fn to_vars(&self) -> SegmentMap {
         let count = |n: u32| if n == 0 { String::new() } else { n.to_string() };
-        let entries: [(&str, String); 27] = [
+        let tokens = |n: u64| {
+            if n == 0 {
+                String::new()
+            } else {
+                abbreviate_tokens(n)
+            }
+        };
+        let per_kind = AgentKind::ALL.iter().map(|kind| {
+            (
+                format!("tokens_{}", kind.display_name()),
+                tokens(self.tokens_by_kind[kind_index(*kind)]),
+            )
+        });
+        let entries: [(&str, String); 28] = [
             ("working", count(self.working)),
             ("waiting", count(self.waiting)),
             ("blocked", count(self.blocked)),
@@ -171,12 +211,46 @@ impl FleetStats {
             ("msgs_queued", count(self.msgs_queued)),
             ("workspaces", self.workspaces.to_string()),
             ("repos", self.repos.to_string()),
+            ("tokens_total", tokens(self.tokens())),
         ];
         entries
             .into_iter()
-            .map(|(k, v)| (k.to_string(), var(v)))
+            .map(|(k, v)| (k.to_string(), v))
+            .chain(per_kind)
+            .map(|(k, v)| (k, var(v)))
             .collect()
     }
+}
+
+/// Position of `kind` in `AgentKind::ALL` — the `tokens_by_kind` slot.
+fn kind_index(kind: AgentKind) -> usize {
+    AgentKind::ALL
+        .iter()
+        .position(|k| *k == kind)
+        .expect("AgentKind::ALL lists every variant")
+}
+
+/// The workspace's primary transcript (`workspace_events`, kind from the
+/// workspace) plus every peer's (`agent_events`, kind from the roster).
+fn context_tokens(app: &App, ws: &crate::data::store::Workspace) -> Vec<(AgentKind, u64)> {
+    let primary = app
+        .workspace_events
+        .get(&ws.id)
+        .and_then(|e| e.context_tokens)
+        .map(|n| (ws.agent, n));
+    let peers = app
+        .agent_roster
+        .get(&ws.id)
+        .into_iter()
+        .flatten()
+        .filter(|i| !i.is_primary)
+        .filter_map(|i| {
+            app.agent_events
+                .get(&i.id)
+                .and_then(|e| e.context_tokens)
+                .map(|n| (i.agent, n))
+        });
+    primary.into_iter().chain(peers).collect()
 }
 
 /// A fleet with nothing in it — for tests and preview renders that have no
@@ -204,6 +278,7 @@ mod tests {
             review: None,
             unresolved: 0,
             dirty: false,
+            context_tokens: Vec::new(),
         }
     }
 
@@ -297,6 +372,165 @@ mod tests {
         assert_eq!(text(&vars, "done"), "1");
         assert_eq!(text(&vars, "pr_conflicted"), "1");
         assert_eq!(text(&vars, "review_required"), "1");
+    }
+
+    #[test]
+    fn sums_context_tokens_per_agent_kind_and_in_total() {
+        use crate::pty::session::AgentKind;
+        let rows = vec![
+            FleetRow {
+                context_tokens: vec![(AgentKind::Claude, 1_000_000), (AgentKind::Codex, 300_000)],
+                ..row()
+            },
+            FleetRow {
+                context_tokens: vec![(AgentKind::Claude, 250_000)],
+                ..row()
+            },
+            FleetRow {
+                context_tokens: vec![(AgentKind::Codex, 40_000)],
+                ..row()
+            },
+        ];
+        let vars = FleetStats::from_rows(rows, 1, 0).to_vars();
+        assert_eq!(text(&vars, "tokens_claude"), "1.2M");
+        assert_eq!(text(&vars, "tokens_codex"), "340k");
+        assert_eq!(text(&vars, "tokens_omp"), "", "no omp instance → empty");
+        assert_eq!(text(&vars, "tokens_pi"), "");
+        assert_eq!(text(&vars, "tokens_hermes"), "");
+        assert_eq!(
+            text(&vars, "tokens_total"),
+            "1.6M",
+            "fleet total across kinds"
+        );
+    }
+
+    #[test]
+    fn collect_sums_primary_and_peer_context_tokens_by_kind() {
+        use crate::activity::events::WorkspaceEvents;
+        use crate::data::store::{NewWorkspace, Store};
+        use crate::pty::session::AgentKind;
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "x")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "a",
+                branch: "x/a",
+                worktree_path: std::path::Path::new("/tmp/r/a"),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let peer = store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        let mut app =
+            crate::app::App::new(store, std::path::PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.agent_roster = app.store.all_workspace_agents().unwrap();
+        app.workspace_events.insert(
+            ws,
+            WorkspaceEvents {
+                context_tokens: Some(77_000),
+                ..Default::default()
+            },
+        );
+        app.agent_events.insert(
+            peer.id,
+            WorkspaceEvents {
+                context_tokens: Some(5_000),
+                ..Default::default()
+            },
+        );
+        let vars = FleetStats::collect(&app).to_vars();
+        assert_eq!(
+            text(&vars, "tokens_claude"),
+            "77k",
+            "primary, kind from the workspace"
+        );
+        assert_eq!(
+            text(&vars, "tokens_codex"),
+            "5k",
+            "peer, kind from the roster"
+        );
+        assert_eq!(text(&vars, "tokens_total"), "82k");
+    }
+
+    #[test]
+    fn token_sums_saturate_instead_of_overflowing() {
+        use crate::pty::session::AgentKind;
+        let rows = vec![
+            FleetRow {
+                context_tokens: vec![(AgentKind::Claude, u64::MAX), (AgentKind::Codex, 1)],
+                ..row()
+            },
+            FleetRow {
+                context_tokens: vec![(AgentKind::Claude, 1)],
+                ..row()
+            },
+        ];
+        let stats = FleetStats::from_rows(rows, 1, 0);
+        assert_eq!(stats.tokens_by_kind[0], u64::MAX, "per-kind sum saturates");
+        assert_eq!(stats.tokens(), u64::MAX, "total saturates");
+    }
+
+    /// Each retained instance counts exactly once: same-kind peers add up,
+    /// a stray `agent_events` entry under the primary's own instance id is
+    /// ignored (the primary is read from `workspace_events`), an entry for
+    /// an instance no longer in the roster contributes nothing, and a
+    /// transcript reset (`context_tokens: None`) drops that instance.
+    #[test]
+    fn collect_counts_each_rostered_instance_once() {
+        use crate::activity::events::WorkspaceEvents;
+        use crate::data::store::{NewWorkspace, Store};
+        use crate::pty::session::AgentKind;
+        let store = Store::open_in_memory().unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "x")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "a",
+                branch: "x/a",
+                worktree_path: std::path::Path::new("/tmp/r/a"),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let primary = store
+            .add_primary_agent(ws, AgentKind::Claude, 1)
+            .unwrap()
+            .id;
+        let peer_a = store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        let peer_b = store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        let orphan = store.add_workspace_agent(ws, AgentKind::Omp).unwrap();
+        store.remove_workspace_agent(orphan.id).unwrap();
+        let mut app =
+            crate::app::App::new(store, std::path::PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.agent_roster = app.store.all_workspace_agents().unwrap();
+        let evt = |n: Option<u64>| WorkspaceEvents {
+            context_tokens: n,
+            ..Default::default()
+        };
+        // Primary reset mid-session: nothing reported yet.
+        app.workspace_events.insert(ws, evt(None));
+        // Stray entry under the primary's instance id must not resurrect it.
+        app.agent_events.insert(primary, evt(Some(1_000_000)));
+        app.agent_events.insert(peer_a.id, evt(Some(5_000)));
+        app.agent_events.insert(peer_b.id, evt(Some(6_000)));
+        // Removed from the roster; its cached events are not yet pruned.
+        app.agent_events.insert(orphan.id, evt(Some(9_000_000)));
+        let vars = FleetStats::collect(&app).to_vars();
+        assert_eq!(text(&vars, "tokens_claude"), "", "reset primary drops out");
+        assert_eq!(
+            text(&vars, "tokens_codex"),
+            "11k",
+            "both same-kind peers count"
+        );
+        assert_eq!(text(&vars, "tokens_omp"), "", "unrostered instance ignored");
+        assert_eq!(text(&vars, "tokens_total"), "11k");
     }
 
     #[test]

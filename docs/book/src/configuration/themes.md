@@ -236,7 +236,9 @@ A **color** is `#rrggbb`, a 0–255
 index, an ANSI name (`red`, `bright-blue`, `white`), a `[palette]` name, or
 a theme token: `dim path code bg_alt bg_soft ok warn err attention merged
 header_fg selected_fg selected_bg question stalled waiting thinking complete
-idle brand wordmark`. Palette names shadow theme tokens, which shadow ANSI names.
+idle brand wordmark agent_claude agent_pi agent_hermes agent_codex agent_omp`
+(the `agent_*` tokens are each agent kind's fixed identity colour, the same
+in every theme). Palette names shadow theme tokens, which shadow ANSI names.
 Shadowing changes color lookup in the bar theme only; it never changes the
 base `Theme` fields. `fg:dim` selects a color; `dimmed` is a text modifier.
 
@@ -477,17 +479,21 @@ A module table takes `format`, `style` (patched over the bar style to form
 items. Its `format` may reference only the fleet variables below, which
 describe every workspace on the dashboard at once. A count renders empty
 when it is zero, so wrap each item in a `( … )` group to drop it along with
-its label and gap; `$workspaces` and `$repos` always render a number.
+its label and gap; `$workspaces` and `$repos` always render a number. The
+`tokens_*` variables are sums of context size rather than counts; they render
+abbreviated (`77k`, `1.2M`) and are likewise empty at zero.
 
 A module's name may not be the name of a built-in segment (`keys`, `usage`,
-`pr`, …). The bundled default defines one module, `funnel`, and places it
-where the usage graph used to be; set only the fields you want to change to
-restyle it, or define your own and put that in the bar instead. To bring
-the sparkline back, place `$usage` again:
+`pr`, …). The bundled default defines two modules: `funnel`, placed where
+the usage graph used to be, and `tokens` — context fill per agent kind
+(`claude 1.2M  codex 340k`), defined but not placed. Set only the fields
+you want to change to restyle either, or define your own and put that in
+the bar instead. To show the token module, or bring the sparkline back,
+place `$tokens` or `$usage`:
 
 ```toml
 [dashboard_footer]
-right_format = "$version(  $funnel)(  $usage)"
+right_format = "$version(  $tokens)(  $funnel)(  $usage)"
 ```
 
 Modules carry no click target.
@@ -507,6 +513,8 @@ Modules carry no click target.
 | `dirty` | workspaces with modified or untracked files |
 | `msgs_queued` | agent-to-agent messages not yet delivered |
 | `workspaces` `repos` | totals (always rendered) |
+| `tokens_total` | Σ latest reported context size (prompt-side tokens) across every agent instance whose transcript is still cached, primary and peers |
+| `tokens_claude` `tokens_pi` `tokens_hermes` `tokens_codex` `tokens_omp` | the same, per agent kind (hermes reports no usage, so it is always empty) |
 
 ### A powerline example
 

@@ -95,6 +95,8 @@ impl App {
             next_remote_gen: 0,
             pending_remote_gen: None,
             chip_rects: Vec::new(),
+            tag_chip_rects: Vec::new(),
+            tags_manager_rect: None,
             attention_rects: Vec::new(),
             attention_more_rect: None,
             detail_scroll_offsets: [0; 4],
@@ -107,6 +109,7 @@ impl App {
             usage_window_option_rects: Vec::new(),
             name_color_swatch_rects: Vec::new(),
             pinned_commands_cache: Vec::new(),
+            prompt_tags_cache: Vec::new(),
             pending_bells: Vec::new(),
             startup_workspace_ids: std::collections::HashSet::new(),
             last_data_version: 0,
@@ -629,6 +632,11 @@ pub struct App {
     /// identify which pinned command was clicked. Used by mouse/key
     /// handlers (Tasks 8 and 9) to dispatch clicks.
     pub chip_rects: Vec<(usize, ratatui::layout::Rect)>,
+    /// `(tag index, rect)` per prompt-tag chip on the attached chip row.
+    /// Mirrors the `chip_rects` draw-populates / input-reads pattern.
+    pub tag_chip_rects: Vec<(usize, ratatui::layout::Rect)>,
+    /// The prompt-tag manager chip's rect, when drawn.
+    pub tags_manager_rect: Option<ratatui::layout::Rect>,
     /// Rects of the rendered attention-row entries from the last draw tick,
     /// each paired with the workspace it points to. Consumed by `handle_mouse`
     /// to attach on click. Mirrors the `chip_rects` draw-populates /
@@ -682,6 +690,8 @@ pub struct App {
     pub name_color_swatch_rects: Vec<(u8, ratatui::layout::Rect)>,
     /// Resolved pinned commands from the last draw tick (matches `chip_rects`).
     pub pinned_commands_cache: Vec<crate::commands::pinned::PinnedCommand>,
+    /// Sorted prompt tags from the last draw tick (matches `tag_chip_rects`).
+    pub prompt_tags_cache: Vec<crate::commands::tags::PromptTag>,
     /// Bells queued up by the most recent draw tick. Drained and fired
     /// AFTER `terminal.draw()` returns to avoid interleaving `\x07` writes
     /// with ratatui's escape sequences.

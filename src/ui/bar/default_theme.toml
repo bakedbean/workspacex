@@ -48,7 +48,7 @@ fill         = " "
 format = "($agent_bar )$workspace(   $attention)"
 
 [attached_bottom]
-format       = "$keys  ($pins  )"
+format       = "$keys  ($pins  )($tags  )"
 # Each element carries its OWN trailing separator, so a missing element
 # takes its gap with it (a single-agent workspace, with no agent pills,
 # still gets exactly one gap before model_tokens, not two). The one
@@ -137,6 +137,16 @@ more_format = "[ … +$count more](fg:dim)"
 [pins]
 format    = "[ $index ](bg:bg_soft fg:dim bold)[ $label](fg:path)"
 separator = "  "
+
+# Prompt tags: the three most-used tags as chips, then the manager chip
+# (`more_format`; its `$count` is how many tags are saved). Clicking a chip
+# opens the body box for that tag; the manager chip opens the picker
+# (`^x <`). Variables: $index $label
+[tags]
+format      = "[<$label>](fg:path)"
+separator   = "  "
+more_format = "[ <> ](bg:bg_soft fg:dim bold)"
+priority    = 40
 
 # Agent pills (2+ agents). $style is the agent color. Variables: $symbol $label $key
 [agents]

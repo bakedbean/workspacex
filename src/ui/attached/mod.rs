@@ -43,6 +43,11 @@ pub struct PanesDrawOutput {
     /// it, shifting later indexes) or `$pins` can appear in both bars (a
     /// second run would otherwise index past the pinned list).
     pub chip_rects: Vec<(usize, Rect)>,
+    /// `(tag index, clickable rect)` per prompt-tag chip; the index is into
+    /// `App::prompt_tags_cache`, as `chip_rects` is into the pinned cache.
+    pub tag_chip_rects: Vec<(usize, Rect)>,
+    /// The prompt-tag manager chip, when a theme places `$tags`.
+    pub tags_manager_rect: Option<Rect>,
     /// Clickable rect of the right-justified PR chip on the chip row, or `None`
     /// when the focused workspace has no PR (or the chip didn't fit). Consumed
     /// by the input handler to open the PR in the browser on click.
@@ -81,6 +86,8 @@ fn route_hits(area: Rect, hits: &[crate::ui::bar::segment::HitSpan], out: &mut P
     for (rect, hit) in crate::ui::bar::render::hit_rects(area, hits) {
         match hit {
             Hit::PinnedChip(i) => out.chip_rects.push((i, rect)),
+            Hit::TagChip(i) => out.tag_chip_rects.push((i, rect)),
+            Hit::TagsManager => out.tags_manager_rect = Some(rect),
             Hit::Pr => out.pr_link_rect = Some(rect),
             Hit::Procs => out.procs_link_rect = Some(rect),
             Hit::Agent(id) => out.agent_chip_rects.push((id, rect)),
@@ -132,6 +139,7 @@ pub(crate) fn render_panes(
     agent: Option<AgentKind>,
     attention: Option<crate::ui::updates_bar::AttentionItems>,
     pinned: &[PinnedCommand],
+    tags: &[crate::commands::tags::PromptTag],
     procs: u32,
     diff: Option<crate::git::DiffStats>,
     pr: Option<ChipPr>,
@@ -168,6 +176,7 @@ pub(crate) fn render_panes(
             agent,
             attention,
             pinned,
+            tags,
             procs,
             diff,
             pr,
@@ -364,6 +373,7 @@ mod tests {
                 agent,
                 attention,
                 pinned: &[],
+                tags: &[],
                 procs: 0,
                 diff: None,
                 pr: None,
@@ -472,6 +482,7 @@ mod tests {
                 None,
                 None,
                 &pinned,
+                &[],
                 3,
                 diff,
                 pr,
@@ -536,6 +547,7 @@ mod tests {
                 None,
                 None,
                 &pinned,
+                &[],
                 3,
                 diff,
                 pr,
@@ -590,6 +602,7 @@ mod tests {
                 None,
                 None,
                 &pinned,
+                &[],
                 3,
                 diff,
                 pr,
@@ -777,6 +790,7 @@ mod tests {
                 None,
                 None,
                 &[],
+                &[],
                 0,
                 None,
                 None,
@@ -862,6 +876,7 @@ mod tests {
                 agent: Some(AgentKind::Claude),
                 attention: None,
                 pinned: &[],
+                tags: &[],
                 procs: 0,
                 diff: None,
                 pr: None,

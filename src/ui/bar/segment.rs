@@ -15,6 +15,11 @@ pub enum Hit {
     Key(KeyEvent),
     ArmLeader,
     PinnedChip(usize),
+    /// A prompt-tag chip: index into the sorted tag cache
+    /// (`App::prompt_tags_cache`), opening the body stage for that tag.
+    TagChip(usize),
+    /// The trailing `<>` chip: opens the prompt-tag picker.
+    TagsManager,
     Pr,
     Procs,
     Agent(AgentInstanceId),

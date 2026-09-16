@@ -17,6 +17,8 @@ struct AttachedData {
     name: String,
     agent: Option<AgentKind>,
     pinned: Vec<PinnedCommand>,
+    /// Prompt tags, most-used first (`tags::load` sorts them).
+    tags: Vec<crate::commands::tags::PromptTag>,
     procs: u32,
     diff: Option<DiffStats>,
     pr: Option<ChipPr>,
@@ -43,6 +45,7 @@ impl AttachedData {
             agent: self.agent,
             attention,
             pinned: &self.pinned,
+            tags: &self.tags,
             procs: self.procs,
             diff: self.diff,
             pr: self.pr,
@@ -163,6 +166,7 @@ fn gather_local(app: &App, focused: crate::ui::split::AttachTarget) -> AttachedD
         name,
         agent,
         pinned,
+        tags: crate::commands::tags::load(&app.store).unwrap_or_default(),
         procs,
         diff,
         pr,
@@ -220,6 +224,7 @@ fn gather_remote(app: &App, label: &str) -> AttachedData {
         name: label.to_string(),
         agent: None,
         pinned,
+        tags: crate::commands::tags::load(&app.store).unwrap_or_default(),
         procs: 0,
         diff: None,
         pr,
@@ -355,6 +360,7 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
         data.agent,
         attention,
         &data.pinned,
+        &data.tags,
         data.procs,
         data.diff,
         data.pr,
@@ -374,6 +380,9 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
     app.agent_chip_rects = out.agent_chip_rects;
     app.footer_hint_rects = out.footer_hint_rects;
     app.pinned_commands_cache = data.pinned;
+    app.tag_chip_rects = out.tag_chip_rects;
+    app.tags_manager_rect = out.tags_manager_rect;
+    app.prompt_tags_cache = data.tags;
 }
 
 /// The single full-screen pane of an ssh-attached remote workspace.
@@ -416,6 +425,7 @@ pub(super) fn draw_attached_remote(
             data.agent,
             None,
             &data.pinned,
+            &data.tags,
             data.procs,
             data.diff,
             data.pr,
@@ -430,6 +440,9 @@ pub(super) fn draw_attached_remote(
         app.chip_rects = out.chip_rects;
         app.usage_graph_rect = out.usage_graph_rect;
         app.pinned_commands_cache = data.pinned;
+        app.tag_chip_rects = out.tag_chip_rects;
+        app.tags_manager_rect = out.tags_manager_rect;
+        app.prompt_tags_cache = data.tags;
         // The PR chip renders but isn't clickable: opening a PR keys off a
         // local WorkspaceId we don't have for a remote workspace, so
         // `out.pr_link_rect` is deliberately dropped. The other hit-test

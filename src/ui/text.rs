@@ -71,6 +71,23 @@ pub(crate) fn truncate_pad(s: &str, target: usize) -> String {
     out
 }
 
+/// Abbreviate a token count as `950` / `77k` / `1M` / `1.2M`. The `k` form
+/// floors (77_999 → "77k"); exact precision is meaningless for a fill gauge.
+pub(crate) fn abbreviate_tokens(n: u64) -> String {
+    if n < 1_000 {
+        n.to_string()
+    } else if n < 1_000_000 {
+        format!("{}k", n / 1_000)
+    } else {
+        let m = n as f64 / 1_000_000.0;
+        if (m - m.round()).abs() < 0.05 {
+            format!("{}M", m.round() as u64)
+        } else {
+            format!("{m:.1}M")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -104,5 +121,14 @@ mod tests {
         assert_eq!(truncate_pad("hi", 2), "hi");
         // Over-width pads to exactly `target` (ellipsis included).
         assert_eq!(truncate_pad("hello", 4).chars().count(), 4);
+    }
+
+    #[test]
+    fn abbreviate_tokens_uses_k_and_m() {
+        assert_eq!(abbreviate_tokens(950), "950");
+        assert_eq!(abbreviate_tokens(77_081), "77k");
+        assert_eq!(abbreviate_tokens(200_000), "200k");
+        assert_eq!(abbreviate_tokens(1_000_000), "1M");
+        assert_eq!(abbreviate_tokens(1_250_000), "1.2M");
     }
 }

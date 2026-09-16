@@ -681,8 +681,24 @@ impl Session {
 /// Enter myself" symptom. Wrapping the body in a bracketed paste
 /// (`ESC[200~ … ESC[201~`) makes the paste boundary explicit in the byte
 /// stream, so the following CR is an unambiguous Enter even when the two writes
-/// arrive in a single read. Other agents (Claude/Pi/Hermes/omp) submit fine on
-/// a plain `text` + CR, so they keep the simpler form and are untouched.
+/// arrive in a single read.
+///
+/// Claude needs the same wrapper for a different reason: size. The PTY hands
+/// Claude Code a multi-KB body as several ~1 KB reads (macOS raw-queue chunks)
+/// that all land in one event-loop tick, and its input layer classifies each
+/// ≥800-char read as a paste of its own, keeping only the last one — the
+/// message arrives as its final fragment with no banner. Measured against
+/// Claude Code 2.1.273: a 3277-byte body written plain arrived as its last
+/// 211 bytes, while the same body between paste markers arrived whole and
+/// submitted on the following CR (a short one did too). Inside the markers
+/// Claude Code's tokenizer accumulates everything into a single paste however
+/// the kernel slices it — which is also the shape Claude Code's own PTY reply
+/// path writes. Pi and Hermes submit fine on a plain `text` + CR, so they keep
+/// the simpler form and are untouched. The whole-body guarantee is for text:
+/// a body that itself contains a literal `ESC[201~` closes the paste early
+/// (the markers are not escaped, here or in `insert_writes`), and the plain
+/// form was never control-safe either. Live checks of this path live in
+/// `docs/manual-tests/agent-send-long-body.md`.
 ///
 /// omp is the one where the wrapper would actively hurt, and it was checked
 /// rather than assumed. Its editor runs its own `BracketedPasteHandler` and
@@ -694,16 +710,14 @@ impl Session {
 pub(crate) fn submit_writes(agent: AgentKind, text: &str) -> (Vec<u8>, Vec<u8>) {
     let enter = b"\r".to_vec();
     match agent {
-        AgentKind::Codex => {
+        AgentKind::Codex | AgentKind::Claude => {
             let mut body = Vec::with_capacity(text.len() + 12);
             body.extend_from_slice(b"\x1b[200~");
             body.extend_from_slice(text.as_bytes());
             body.extend_from_slice(b"\x1b[201~");
             (body, enter)
         }
-        AgentKind::Claude | AgentKind::Pi | AgentKind::Hermes | AgentKind::Omp => {
-            (text.as_bytes().to_vec(), enter)
-        }
+        AgentKind::Pi | AgentKind::Hermes | AgentKind::Omp => (text.as_bytes().to_vec(), enter),
     }
 }
 
@@ -1328,6 +1342,74 @@ mod tests {
         assert_eq!(got, expected, "payload corrupted in transit");
     }
 
+    /// The regression behind "a long `wsx agent send` arrives as its tail with
+    /// no banner": a ~3.5 KB multi-paragraph delivery to Claude must reach the
+    /// child as ONE bracketed paste — banner first, body byte-for-byte — and
+    /// then a separate CR. This drives the real delivery entry point
+    /// (`send_text_when_settled`, not the writer directly) so the agent byte
+    /// shape chosen by `submit_writes` is what is under test.
+    ///
+    /// Measured against Claude Code 2.1.273 over a real macOS PTY: the same
+    /// body written plain arrived as its last 211 bytes (3277 − 3 × 1022 —
+    /// three full raw-queue reads lost), while the bracketed form arrived
+    /// whole and submitted.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn long_claude_delivery_arrives_whole_banner_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("probe.bin");
+        // `cat` stands in for the agent: raw mode so the line discipline
+        // passes bytes through, and the alternate-screen switch so
+        // `ready_for_input` sees what it looks for on a booted Claude.
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.arg("-c");
+        cmd.arg("stty raw -echo; printf '\\033[?1049h'; cat > \"$WSX_PROBE_OUT\"");
+        cmd.env("WSX_PROBE_OUT", &out);
+        cmd.cwd(std::env::current_dir().unwrap());
+        let s = spawn_command_session(cmd, 80, 24, AgentKind::Claude, "claude".to_string(), None)
+            .unwrap();
+
+        let para = "lorem ipsum ".repeat(20);
+        let body = (0..14)
+            .map(|i| format!("paragraph {i}: {para}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let banner = crate::app::messaging::delivery_banner(Some("codex"), &body);
+        assert!(banner.len() > 3_000, "body must span several PTY reads");
+
+        assert!(
+            s.send_text_when_settled(&banner, 200, 6_000).await,
+            "a ready, settled PTY must report the write"
+        );
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(b"\x1b[200~");
+        expected.extend_from_slice(banner.as_bytes());
+        expected.extend_from_slice(b"\x1b[201~\r");
+        // Poll until the whole payload is on disk or the deadline passes.
+        // Not "until the file stops growing": the CR ack proves the bytes
+        // reached the PTY, not that cat has written them out, and a 100 ms
+        // scheduling pause mid-file would otherwise read as a short payload.
+        for _ in 0..40 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let n = std::fs::metadata(&out)
+                .map(|m| m.len() as usize)
+                .unwrap_or(0);
+            if n >= expected.len() {
+                break;
+            }
+        }
+        let got = std::fs::read(&out).unwrap_or_default();
+        assert!(
+            got.starts_with(b"\x1b[200~[message from codex]\n"),
+            "delivery must open a bracketed paste with the banner: {:?}",
+            String::from_utf8_lossy(&got[..got.len().min(40)])
+        );
+        assert_eq!(
+            got, expected,
+            "child did not receive the whole banner + body"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn resize_to_zero_rows_is_floored_and_does_not_panic() {
         // A terminal short enough that the projected pane height collapses to 0
@@ -1554,16 +1636,25 @@ mod tests {
     }
 
     #[test]
+    fn submit_writes_wraps_claude_in_bracketed_paste() {
+        // A plain multi-KB body reaches Claude Code as several ~1 KB PTY
+        // reads, and its composer keeps only the last of a same-tick burst of
+        // paste-sized reads (see `submit_writes`). The markers make the whole
+        // body one paste however the kernel slices it.
+        let (body, enter) = submit_writes(AgentKind::Claude, "[message from codex]\nreview pls");
+        assert_eq!(
+            body,
+            b"\x1b[200~[message from codex]\nreview pls\x1b[201~".to_vec()
+        );
+        assert_eq!(enter, b"\r".to_vec());
+    }
+
+    #[test]
     fn submit_writes_keeps_other_agents_plain() {
-        // Claude/Pi/Hermes/omp submit on a plain text + CR; no bracketed paste
-        // so their proven-working behavior is untouched. omp additionally must
+        // Pi/Hermes/omp submit on a plain text + CR; no bracketed paste so
+        // their proven-working behavior is untouched. omp additionally must
         // NOT be wrapped: its editor would render the payload as `[Paste #N]`.
-        for agent in [
-            AgentKind::Claude,
-            AgentKind::Pi,
-            AgentKind::Hermes,
-            AgentKind::Omp,
-        ] {
+        for agent in [AgentKind::Pi, AgentKind::Hermes, AgentKind::Omp] {
             let (body, enter) = submit_writes(agent, "hello\nworld");
             assert_eq!(body, b"hello\nworld".to_vec(), "agent {agent:?}");
             assert_eq!(enter, b"\r".to_vec(), "agent {agent:?}");

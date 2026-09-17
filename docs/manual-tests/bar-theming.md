@@ -212,3 +212,30 @@ row is built from `[pins]` too, through the `[dashboard_detail]` bar.
 Exit the scratch wsx session when finished. Close the dedicated shells to
 restore your normal environment; remove only the scratch directory you
 created once it is no longer needed.
+
+## 8. Repo bars
+
+Spec: `docs/superpowers/specs/2026-09-17-dashboard-repo-bar-theming-design.md`.
+
+With `bar_theme` off, the dashboard's by-repo view is unchanged:
+`▾ ── name  PR  /path  ────  ? 1  ✓ 2    3 ws`, names right-justified to
+a shared column, paths in a shared column whether or not a repo has a PR
+link, an empty repo's rule running to the edge.
+
+Copy `docs/examples/theme-orange.toml` over the file and turn
+`bar_theme` on. Expected within a second: every repo header becomes an
+airline chain — orange name block, smoke link-and-path block, ash counts
+block at the right edge; names stay right-justified inside blocks of
+equal width; an empty repo shows no counts block; the fold glyph is a
+chevron. Fold and unfold a repo (`h`/`l`): the chevron turns. Click the
+PR link: the browser opens the repo's open-PR list, exactly as before.
+
+Edit `[dashboard_repo]` `format` to move `$pr_link` after `$repo_path`
+and save: the link moves and stays clickable at its new position. Set
+`right_format = "$pr_link $status_counts"` and save: the bar keeps its
+last good look and the footer notice names `[dashboard_repo]` and
+`$pr_link` (a singleton placed twice). Restore the file.
+
+Resize the terminal below the width of the longest header: the counts
+disappear from that header first, the left side clips at the edge, and
+nothing overlaps.

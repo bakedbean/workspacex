@@ -172,6 +172,12 @@ fill_style   = "fg:dim"
 format     = "($pins  )"
 fill       = "─"
 fill_style = "fg:dim"
+
+[dashboard_repo]
+format       = "$fold $repo_name  ($pr_link  )$repo_path  "
+right_format = "( $status_counts)"
+fill         = "─"
+fill_style   = "fg:dim"
 ```
 
 `[dashboard_footer]`'s right side is `$version` and the bundled `funnel`
@@ -192,6 +198,22 @@ a workspace row is selected, distinct from the attached view): its
 pinned-command chip row, followed by a rule to the edge. `$pins` is the only
 data-bearing segment there — every other registered segment renders empty if
 you put it in this bar's format.
+
+`[dashboard_repo]` is the by-repo dashboard's per-repo header line, drawn
+once per repo: the fold glyph, the repo name right-justified to the widest
+name in the list, the clickable "my open PRs" link, the path, a rule, and
+the repo's workspaces counted by status flush right. Its five segments —
+`fold`, `repo_name`, `pr_link`, `repo_path`, `status_counts` — are listed
+below and produce output only in this bar. The alignment across repos is
+computed by the view and reaches the theme as `$pad` on `repo_name` and as
+a blank placeholder from `pr_link` on a repo without a link when another
+repo has one; a theme that pads the name with spaces (`[repo_name] pad =
+" "`) keeps the shared name column inside a coloured block. The right side
+is one conditional group: an empty repo renders no `$status_counts`, so the
+group drops, the bar has no right side, and the fill runs to the edge.
+Every bar keeps one mandatory blank between nonempty sides, so the stock
+`right_format` needs only one leading space to reproduce the two-cell pad
+each side of the rule.
 
 The `($version  )` group around `$version` and its trailing two spaces means
 that separator drops along with `$version` itself when the footer is too
@@ -249,7 +271,9 @@ base `Theme` fields. `fg:dim` selects a color; `dimmed` is a text modifier.
 ### Segments
 
 Each segment has its own table, such as `[workspace]`, with `format` (its
-layout, using the variables below), `style`, `symbol`, `disabled`,
+layout, using the variables below), `style`, `symbol`, `pad` (on
+`repo_name` only: the one character that fills `$pad`; a space gives plain
+spaces), `disabled`,
 `priority` (overflow survival; higher lasts longer; unset defaults to 100,
 which never drops), a `palette` sub-table (see
 [Recolouring one segment](#recolouring-one-segment)), and, for multi-item
@@ -266,9 +290,9 @@ when entries don't fit the bar, on `tags` the manager chip that always
 follows the chips; its one variable is `$count` (entries folded, or tags
 saved), and setting it on any other segment is an error. `attention`
 alone takes `more_style`, the tail's own `$style` (see the caps below);
-`tags`' chip has none. Likewise `agent_bar`
-alone takes a `symbols` sub-table, one glyph per agent kind, tried ahead
-of `symbol`:
+`tags`' chip has none. Likewise two segments take a `symbols` sub-table,
+tried ahead of `symbol`: `agent_bar`, one glyph per agent kind, and
+`fold`, whose keys are `expanded` and `folded`:
 
 ```toml
 [agent_bar]
@@ -277,9 +301,14 @@ symbol = "\ue0b0"        # kinds without an entry below (Nerd Font chevron)
 [agent_bar.symbols]
 claude = "\uec82"
 codex  = "\uec81"
+
+[fold.symbols]
+expanded = "\uf078"   # nf-fa-chevron_down
+folded   = "\uf054"   # nf-fa-chevron_right
 ```
 
-Keys must be agent kind names; any other key, or the table on another
+Keys must be that segment's (agent kind names for `agent_bar`,
+`expanded`/`folded` for `fold`); any other key, or the table on any other
 segment, is an error. Entries union per kind over the bundled default,
 yours winning, like a segment palette. An empty entry (`pi = ""`) is an
 override, not an absence: that kind shows no glyph rather than `symbol`.
@@ -373,20 +402,25 @@ default, 100, and so never drops.
 | `procs` | `$symbol $count` | Hidden at zero. Clickable. |
 | `diff` | `$added $removed` | Hidden when clean. |
 | `pr` | `$symbol $number $label $mark` | `$style` includes the lifecycle tint; `$mark_style` supplies the review verdict style. Clickable — except over a remote (ssh) attach, where the chip still renders but isn't clickable (opening a PR keys off a local workspace id a remote attach doesn't have). |
+| `fold` | `$symbol` | The repo bar's fold glyph: `expanded` or `folded` from `[fold.symbols]`, or a blank of the same width for a repo with no workspaces. `$style` is dim. Dashboard repo bar only. |
+| `repo_name` | `$pad $name` | The repo name; `$pad` right-justifies it to the list's widest name (`pad` repeated, then a space) and is absent for the widest. `$style` is the header style. Dashboard repo bar only. |
+| `pr_link` | `$symbol` | The "my open PRs" link (`PR`, or the Nerd Font pull-request glyph; `symbol` overrides). `$style` is the open-PR green when a workspace has an open PR, else dim. Blank, with no click, for a repo without a GitHub remote when another repo has one; absent when none does. Clickable. Dashboard repo bar only. |
+| `repo_path` | `$path` | The repo's path. `$style` is dim. Dashboard repo bar only. |
+| `status_counts` | `$question $stalled $waiting $thinking $complete $idle $total` | This repo's workspaces by dashboard status; each empty at zero, and the whole segment empty for a repo with no workspaces. Dashboard repo bar only. |
 
-`pr`, `procs`, `usage`, `attention`, and `tags` may each be placed only
-once: `pr`, `procs`, and `usage` carry exactly one click target; `attention`
+`pr`, `procs`, `usage`, `attention`, `tags`, and `pr_link` may each be
+placed only once: `pr`, `procs`, and `usage` carry exactly one click target; `attention`
 and `tags`, though each records one hit per entry/chip like
 `pins`/`agents`/`keys`, also carry a single tail target — `… +N more` for
 `attention`, the manager chip (`more_format`) for `tags` — and each is
 fitted to the one bar that places it. Put one of these five in more than
 one place across the two attached bars' `format`/`right_format` (or twice
 within the dashboard footer's own `format`/`right_format`, or twice within
-the dashboard header's, or twice within the dashboard detail pane's) and
-only the last-routed placement would be clickable, so `wsx theme check`
-rejects it as a duplicate instead. These four scopes are independent: a
-singleton segment may appear once in each without conflicting with the
-others.
+the dashboard header's, the dashboard detail pane's, or the dashboard repo
+bar's) and only the last-routed placement would be clickable, so `wsx theme
+check` rejects it as a duplicate instead. These five scopes are
+independent: a singleton segment may appear once in each without
+conflicting with the others.
 
 All segments are available in **either attached bar**, on either side;
 click targets follow them between bars as well as within a bar. `version`
@@ -395,8 +429,9 @@ and `usage` work in all three bars, not just the dashboard footer — put
 the same way. `keys` uses the attached view's leader-key hints in both
 attached bars. On the dashboard footer, only `keys`, `version`, and `usage`
 produce output; on the dashboard header, only `brand`, `group`, `sort`,
-`filter`, and `counts`; on the dashboard detail pane's row, only `pins`;
-other segments render empty in each. Segments also render empty when their
+`filter`, and `counts`; on the dashboard detail pane's row, only `pins`; on
+the dashboard repo bar, only `fold`, `repo_name`, `pr_link`, `repo_path`,
+and `status_counts`; other segments render empty in each. Segments also render empty when their
 underlying data is absent.
 
 Two details of the **stock formats** are worth knowing before you override
@@ -404,8 +439,8 @@ them:
 
 - `style` only reaches the output through `$style`. The stock formats of
   `agent_bar`, `workspace`, `attention`, `agents`, `model_tokens`, `procs`,
-  and `pr` bind it (`[…]($style)`), so setting `style` on those works as
-  written. The stock formats of `keys`, `pins`, `version`, `usage`, and
+  `pr`, `fold`, `repo_name`, `pr_link`, and `repo_path` bind it
+  (`[…]($style)`), so setting `style` on those works as written. The stock formats of `keys`, `pins`, `version`, `usage`, and
   `diff` style their parts directly instead, so a bare `style = …` on one
   of those has no effect unless you also put `$style` in its `format`.
 - Bare parentheses are the conditional-group syntax, so a literal pair

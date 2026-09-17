@@ -1850,6 +1850,63 @@ mod attention_tests {
         );
     }
 
+    /// A tail that renders nothing is no neighbour: entries still fold,
+    /// but the survivor's wedge blends into the bar rather than into the
+    /// colour of a tail that isn't there, and there is no tail hit.
+    #[test]
+    fn an_empty_tail_is_not_the_last_entrys_neighbour() {
+        use ratatui::style::Color;
+        let theme = Theme::wsx();
+        let specs = specs_with(
+            concat!(
+                "[attention]\nstyles = [\"bg:red\"]\n",
+                "more_style = \"bg:green\"\n",
+                "format = '[ $name ]($style)[>](fg:item_bg bg:next_bg)'\n",
+                "separator = \"\"\n",
+                "more_format = \"\"\n",
+            ),
+            &theme,
+        );
+        let folded = render_attention(&specs, &theme, &three_entries(), 4).unwrap();
+        assert_eq!(folded.plain_text(), " q >");
+        let wedge = folded
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == ">")
+            .unwrap();
+        assert_eq!((wedge.style.fg, wedge.style.bg), (Some(Color::Red), None));
+        assert_eq!(hits(&folded), vec![(0, 4, Hit::Attention(WorkspaceId(1)))]);
+    }
+
+    /// `more_style` is a grade: patched over the segment's `style` (and
+    /// its palette), so a bg-only tail style keeps the segment's fg.
+    #[test]
+    fn more_style_patches_over_the_segment_style() {
+        use ratatui::style::Color;
+        let theme = Theme::wsx();
+        let specs = specs_with(
+            concat!(
+                "[attention]\nstyle = \"fg:blue\"\n",
+                "more_style = \"bg:tail\"\n",
+                "format = '$name'\n",
+                "more_format = \"[+$count]($style)\"\n",
+                "[attention.palette]\ntail = \"green\"\n",
+            ),
+            &theme,
+        );
+        let folded = render_attention(&specs, &theme, &three_entries(), 4).unwrap();
+        assert_eq!(folded.plain_text(), "q+2");
+        let tail = folded
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "+")
+            .unwrap();
+        assert_eq!(
+            (tail.style.fg, tail.style.bg),
+            (Some(Color::Blue), Some(Color::Green))
+        );
+    }
+
     #[test]
     fn no_entries_renders_nothing() {
         let theme = Theme::wsx();
@@ -2105,7 +2162,7 @@ mod example_theme_tests {
             status: Status::Stalled,
             lifecycle: None,
         };
-        let render = |width: u16| {
+        let render = |width: u16, entries: Vec<AttentionEntry>| {
             let inputs = AttachedInputs {
                 repo: "",
                 name: "ws",
@@ -2114,7 +2171,7 @@ mod example_theme_tests {
                 activity: &[],
                 agent: None,
                 attention: Some(AttentionItems {
-                    entries: vec![entry(1), entry(2), entry(3)],
+                    entries,
                     now_ms: 10_000,
                     max_width: usize::from(width) - 8,
                 }),
@@ -2140,9 +2197,15 @@ mod example_theme_tests {
             (plain(&bars.top.line), wedges)
         };
 
+        // Nothing to show: the chain collapses to the workspace block's
+        // own wedge, and nothing follows it.
+        let (text, wedges) = render(120, vec![]);
+        assert_eq!(text.trim_end(), " ws  \u{e0b0}");
+        assert_eq!(wedges, vec![(orange, ash)]);
+
         // Wide enough for all three: ash, then two flat black blocks,
         // the last wedging into the bar.
-        let (text, wedges) = render(120);
+        let (text, wedges) = render(120, vec![entry(1), entry(2), entry(3)]);
         assert!(!text.contains("more"), "{text:?}");
         assert_eq!(
             wedges,
@@ -2151,7 +2214,7 @@ mod example_theme_tests {
 
         // Folded: the survivor wedges into the orange tail, which caps
         // itself into the bar — no ash after it.
-        let (text, wedges) = render(40);
+        let (text, wedges) = render(40, vec![entry(1), entry(2), entry(3)]);
         assert!(text.contains("+2 more"), "{text:?}");
         assert_eq!(wedges, vec![(orange, ash), (ash, orange), (orange, None)]);
         assert!(

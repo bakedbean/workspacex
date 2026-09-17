@@ -1158,9 +1158,6 @@ mod tests {
         }
     }
 
-    /// `tags` folds nothing, but its manager chip is a tail all the same:
-    /// `more_format` renders once after the chips, with `$count` the
-    /// number of saved tags, and item variables are unknown there.
     /// `more_style` is the tail's own `$style`, exposed to the tail as
     /// `item_*` and to the last rendered entry as `next_*`. Only
     /// `attention` folds entries into a styled tail, so it is rejected on
@@ -1197,6 +1194,9 @@ mod tests {
         assert!(!errs("[tags]\nmore_format = \"[$count]($style)\"\n").is_empty());
     }
 
+    /// `tags` folds nothing, but its manager chip is a tail all the same:
+    /// `more_format` renders once after the chips, with `$count` the
+    /// number of saved tags, and item variables are unknown there.
     #[test]
     fn tags_takes_a_more_format_with_count() {
         let specs = ok("[tags]\nmore_format = \"[$count tags](fg:dim)\"\n");

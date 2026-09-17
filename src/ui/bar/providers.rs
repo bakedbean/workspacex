@@ -522,7 +522,10 @@ pub fn attention(
         }
     }
 
-    // Paint pass.
+    // Paint pass. The tail is painted first (its `prev` is known: the
+    // last survivor's grade) so that the last entry's `next` is the tail
+    // only when the tail actually renders — an empty `more_format` is no
+    // neighbour, the same as an entry that renders empty.
     let remaining = rendered.len() - included;
     let styles: Vec<Style> = rendered
         .iter()
@@ -530,13 +533,21 @@ pub fn attention(
         .enumerate()
         .map(|(n, (i, _, _))| item_style(cfg, n, name_style(*i), resolver))
         .collect();
+    let tail_seg = (remaining > 0)
+        .then(|| {
+            tail(
+                remaining,
+                item_colors(styles.last().copied(), tail_style, None),
+            )
+        })
+        .filter(|seg| !seg.is_empty());
     let mut out = Segment::default();
     for (n, (i, name, _)) in rendered.into_iter().take(included).enumerate() {
         let prev = (n > 0).then(|| styles[n - 1]);
         let next = styles
             .get(n + 1)
             .copied()
-            .or_else(|| (remaining > 0).then_some(tail_style).flatten());
+            .or_else(|| tail_seg.as_ref().and_then(|_| tail_style));
         if n > 0 {
             out.append(separator(item_colors(prev, None, Some(styles[n]))));
         }
@@ -555,12 +566,9 @@ pub fn attention(
         out.append(seg);
         out.hit_from(start, Hit::Attention(entries[i].workspace_id));
     }
-    if remaining > 0 {
+    if let Some(seg) = tail_seg {
         let start = out.width;
-        out.append(tail(
-            remaining,
-            item_colors(styles.last().copied(), tail_style, None),
-        ));
+        out.append(seg);
         out.hit_from(start, Hit::AttentionMore);
     }
     (!out.is_empty()).then_some(out)

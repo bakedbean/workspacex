@@ -260,11 +260,13 @@ it sits between items rather than inside one, so it takes no variables and
 no `$style`. Because it is parsed with the grammar above, a separator that
 wants a literal `$`, `[`, `(`, or backslash must escape it (`$$`, `\[`,
 `\(`, `\\`), and a bare `(x)` is a conditional group that renders nothing;
-a plain run of spaces or box-drawing characters needs no change. `attention`
-alone also takes `more_format`, the tail drawn when entries don't fit the
-bar; its one variable is `$count`, the number of entries folded into it,
-and setting it on any other segment is an error. `attention` also takes
-`more_style`, the tail's own `$style` (see the caps below). Likewise `agent_bar`
+a plain run of spaces or box-drawing characters needs no change. Two
+segments also take `more_format`: on `attention` it is the tail drawn
+when entries don't fit the bar, on `tags` the manager chip that always
+follows the chips; its one variable is `$count` (entries folded, or tags
+saved), and setting it on any other segment is an error. `attention`
+alone takes `more_style`, the tail's own `$style` (see the caps below);
+`tags`' chip has none. Likewise `agent_bar`
 alone takes a `symbols` sub-table, one glyph per agent kind, tried ahead
 of `symbol`:
 

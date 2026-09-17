@@ -2081,6 +2081,85 @@ mod example_theme_tests {
         assert!(name.modifier.contains(Modifier::BOLD));
     }
 
+    /// The orange example's attention run: the workspace block wedges
+    /// into the first (ash) entry, each block wedges into the next, and
+    /// whichever block comes last — the last entry, or the orange fold
+    /// tail — wedges straight into the bar. The tail used to end on an
+    /// ash wedge, a spacer, and the run's own cap: a dark, empty segment
+    /// after "+N more".
+    #[test]
+    fn orange_example_caps_the_attention_tail_straight_into_the_bar() {
+        use crate::data::store::WorkspaceId;
+        use crate::ui::dashboard::status::Status;
+        use crate::ui::updates_bar::{AttentionEntry, AttentionItems};
+        let theme = Theme::jellybeans();
+        let specs = load(&examples_dir().join("theme-orange.toml"), &theme).unwrap();
+        let orange = Some(Color::Rgb(0xd7, 0x5f, 0x00));
+        let ash = Some(Color::Rgb(0x1c, 0x1c, 0x1c));
+        let black = Some(Color::Rgb(0x15, 0x15, 0x15));
+        let entry = |id: i64| AttentionEntry {
+            workspace_id: WorkspaceId(id),
+            repo_name: "r".into(),
+            name: "n".into(),
+            age_anchor_ms: 9_000,
+            status: Status::Stalled,
+            lifecycle: None,
+        };
+        let render = |width: u16| {
+            let inputs = AttachedInputs {
+                repo: "",
+                name: "ws",
+                version: "0.1.0",
+                window_label: "24h",
+                activity: &[],
+                agent: None,
+                attention: Some(AttentionItems {
+                    entries: vec![entry(1), entry(2), entry(3)],
+                    now_ms: 10_000,
+                    max_width: usize::from(width) - 8,
+                }),
+                pinned: &[],
+                tags: &[],
+                procs: 0,
+                diff: None,
+                pr: None,
+                model_tokens: None,
+                agents: &[],
+                active_agent: None,
+                fleet: crate::ui::bar::fleet::empty(),
+            };
+            let bars = attached_bars(&specs, &theme, inputs, width, width);
+            let wedges: Vec<(Option<Color>, Option<Color>)> = bars
+                .top
+                .line
+                .spans
+                .iter()
+                .filter(|s| s.content.as_ref() == "\u{e0b0}")
+                .map(|s| (s.style.fg, s.style.bg))
+                .collect();
+            (plain(&bars.top.line), wedges)
+        };
+
+        // Wide enough for all three: ash, then two flat black blocks,
+        // the last wedging into the bar.
+        let (text, wedges) = render(120);
+        assert!(!text.contains("more"), "{text:?}");
+        assert_eq!(
+            wedges,
+            vec![(orange, ash), (ash, black), (black, black), (black, None)]
+        );
+
+        // Folded: the survivor wedges into the orange tail, which caps
+        // itself into the bar — no ash after it.
+        let (text, wedges) = render(40);
+        assert!(text.contains("+2 more"), "{text:?}");
+        assert_eq!(wedges, vec![(orange, ash), (ash, orange), (orange, None)]);
+        assert!(
+            text.trim_end().ends_with("more \u{e0b0}"),
+            "the tail's wedge must be the last thing on the bar: {text:?}"
+        );
+    }
+
     /// With an empty fleet, `$funnel` is empty and its conditional group
     /// must drop *with* the arrow that leads into it — not leave a bare
     /// coloured stub dangling past the version block.

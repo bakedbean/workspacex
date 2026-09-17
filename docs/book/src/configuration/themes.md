@@ -36,9 +36,10 @@ Ready-to-use examples live in the repo under `docs/examples/`:
 | `theme-orange.toml` | Dark orange, converted from a vim-airline theme: an orange block at each edge, then the greys stepping up from near-black toward the middle. |
 
 The Rosé Pine, Nord, and Jellybeans files share one arrangement and differ
-only by palette: a bright "mode" block at each outer edge, a mid-toned
-block beside it, and a base-toned block toward the middle, so the eye lands
-on the edges first. Orange keeps that idea but splits more pieces into
+only by palette: generally a bright "mode" block at each outer edge, a
+mid-toned block beside it, and a base-toned block toward the middle. The
+attached bottom bar instead starts with a dark Menu block. Orange keeps
+the airline layout but splits more pieces into
 their own blocks (view, repos and workspaces, and each item on the attached
 bottom bar's right side). Across all seven example themes, the attached
 bottom bar starts with Menu on the same dark background as the top agent

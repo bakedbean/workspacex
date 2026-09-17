@@ -5,6 +5,7 @@
 # Airline layout: a bright "mode" block at each outer edge (sections a / z),
 # a mid block beside it (b / y), and a base-toned block toward the middle
 # (c / x). Left chains point right; right chains point left.
+# Exception: the attached bottom bar starts with the dark agent-block tone.
 #
 # Install:  cp docs/examples/theme-rose-pine-moon.toml ~/.config/wsx/theme.toml
 #           wsx config set bar_theme on

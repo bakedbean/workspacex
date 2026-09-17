@@ -50,7 +50,7 @@ fill         = " "
 # the workspace block on `first` blends into the attention block on
 # `second` (which stays as a thin wedge when there is nothing to report).
 [attached_top]
-format       = "([ $agent_bar ](bg:zero)[](fg:zero bg:first))[ $workspace ](bg:first fg:orange bold)[](fg:first bg:second)[( $attention )](bg:second)[](fg:second)"
+format       = "([ $agent_bar ](bg:zero)[](fg:zero bg:first))[ $workspace ](bg:first fg:orange bold)[](fg:first bg:second)[( $attention )](bg:second)[](fg:second)"
 fill         = " "
 
 # --------------------------------------------------------- attached: bottom

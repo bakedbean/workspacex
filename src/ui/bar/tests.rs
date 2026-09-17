@@ -1925,6 +1925,7 @@ mod attention_tests {
 mod example_theme_tests {
     use super::*;
     use crate::config::theme_file::load;
+    use crate::pty::session::AgentKind;
     use crate::ui::bar::test_util::{plain, render_line};
     use crate::ui::dashboard::layout::GroupMode;
     use crate::ui::dashboard::sort::SortMode;
@@ -2052,6 +2053,93 @@ mod example_theme_tests {
             assert!(
                 text.trim_end().ends_with("0.1.0"),
                 "{name}: expected the version block to be the last thing rendered, got {text:?}"
+            );
+        }
+    }
+
+    /// Every example leads the attached top bar with the focused agent's
+    /// glyph on its own dark block, wedged (U+E0B0) into the workspace
+    /// block: the glyph in the agent's colour on the block, the wedge in
+    /// that block's tone on the workspace block's. Validation can't see a
+    /// missing wedge (`[]( … )` is legal and renders nothing), so this
+    /// checks the cells. With no agent the group drops, cap and padding
+    /// included, and the workspace block takes the edge.
+    #[test]
+    fn every_example_theme_leads_with_the_agent_glyph_on_its_own_block() {
+        let theme = Theme::wsx();
+        let claude = theme.agent_style(AgentKind::Claude).fg.unwrap();
+        for path in example_themes() {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let specs = load(&path, &theme).unwrap();
+            let render = |agent: Option<AgentKind>| {
+                let inputs = AttachedInputs {
+                    repo: "",
+                    name: "ws",
+                    version: "0.1.0",
+                    window_label: "24h",
+                    activity: &[],
+                    agent,
+                    attention: None,
+                    pinned: &[],
+                    tags: &[],
+                    procs: 0,
+                    diff: None,
+                    pr: None,
+                    model_tokens: None,
+                    agents: &[],
+                    active_agent: None,
+                    fleet: crate::ui::bar::fleet::empty(),
+                };
+                let bars = attached_bars(&specs, &theme, inputs, 80, 80);
+                (plain(&bars.top.line), render_line(&bars.top.line, 80))
+            };
+            let name_col = |buf: &ratatui::buffer::Buffer| {
+                (0..80).find(|&x| buf[(x, 0)].symbol() == "w").unwrap()
+            };
+
+            let (_, buf) = render(Some(AgentKind::Claude));
+            let ws = buf[(name_col(&buf), 0)].clone();
+            let glyph = buf[(1, 0)].clone();
+            let wedge = buf[(3, 0)].clone();
+            assert_eq!(
+                buf[(0, 0)].symbol(),
+                " ",
+                "{name}: block opens with padding"
+            );
+            assert_ne!(glyph.symbol(), " ", "{name}: agent glyph missing");
+            assert_eq!(glyph.fg, claude, "{name}: glyph must be the agent colour");
+            assert_ne!(
+                glyph.bg, ws.bg,
+                "{name}: glyph block must differ from workspace"
+            );
+            assert_eq!(
+                wedge.symbol(),
+                "\u{e0b0}",
+                "{name}: no wedge into the workspace block"
+            );
+            assert_eq!(
+                wedge.fg, glyph.bg,
+                "{name}: wedge fg must be the agent block"
+            );
+            assert_eq!(
+                wedge.bg, ws.bg,
+                "{name}: wedge bg must be the workspace block"
+            );
+
+            let (text, buf) = render(None);
+            let col = name_col(&buf);
+            assert!(
+                !text[..text.find("ws").unwrap()].contains('\u{e0b0}'),
+                "{name}: orphan cap before the workspace block: {text:?}"
+            );
+            assert_eq!(
+                buf[(0, 0)].bg,
+                ws.bg,
+                "{name}: workspace block must take the edge"
+            );
+            assert!(
+                col <= 2,
+                "{name}: agent padding left behind, name at col {col}"
             );
         }
     }

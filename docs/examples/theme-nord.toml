@@ -48,7 +48,7 @@ fill         = " "
 # colour, wedging into the nord8 workspace block; with no agent the group
 # drops and the workspace block takes the edge.
 [attached_top]
-format       = "([ $agent_bar ](bg:nord2)[](fg:nord2 bg:nord8))[ $workspace ](bg:nord8 fg:nord1 bold)[](fg:nord8 bg:nord2)[( $attention )](bg:nord2 fg:nord4)[](fg:nord2)"
+format       = "([ $agent_bar ](bg:nord2)[](fg:nord2 bg:nord8))[ $workspace ](bg:nord8 fg:nord1 bold)[](fg:nord8 bg:nord2)[( $attention )](bg:nord2 fg:nord4)[](fg:nord2)"
 fill         = " "
 
 [attached_bottom]

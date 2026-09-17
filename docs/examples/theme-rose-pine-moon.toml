@@ -46,7 +46,7 @@ fill         = " "
 # colour, wedging into the rose workspace block; with no agent the group
 # drops and the workspace block takes the edge.
 [attached_top]
-format       = "([ $agent_bar ](bg:hl_med)[](fg:hl_med bg:rose))[ $workspace ](bg:rose fg:base bold)[](fg:rose bg:hl_med)[( $attention )](bg:hl_med fg:text)[](fg:hl_med)"
+format       = "([ $agent_bar ](bg:hl_med)[](fg:hl_med bg:rose))[ $workspace ](bg:rose fg:base bold)[](fg:rose bg:hl_med)[( $attention )](bg:hl_med fg:text)[](fg:hl_med)"
 fill         = " "
 
 [attached_bottom]

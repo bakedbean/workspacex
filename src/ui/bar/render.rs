@@ -49,15 +49,42 @@ pub fn eval(
     resolver: &Resolver,
     base: Style,
 ) -> (Segment, bool) {
-    eval_excluding(nodes, vars, resolver, base, &[])
+    eval_full(nodes, vars, resolver, base, &[], &[])
 }
 
+/// `eval`, with `labels` naming variables that render but never count as
+/// having produced: a label is decoration for the value beside it — the
+/// `$icon_<kind>` glyph next to `$tokens_<kind>` — so, like literal text,
+/// it cannot keep a `( … )` group alive on its own.
+pub fn eval_with_labels(
+    nodes: &[Node],
+    vars: &SegmentMap,
+    resolver: &Resolver,
+    base: Style,
+    labels: &[&str],
+) -> (Segment, bool) {
+    eval_full(nodes, vars, resolver, base, &[], labels)
+}
+
+/// `eval`, with `excluded` naming variables to treat as absent — the
+/// segments `render_bar` has dropped for width.
 fn eval_excluding(
     nodes: &[Node],
     vars: &SegmentMap,
     resolver: &Resolver,
     base: Style,
     excluded: &[&str],
+) -> (Segment, bool) {
+    eval_full(nodes, vars, resolver, base, excluded, &[])
+}
+
+fn eval_full(
+    nodes: &[Node],
+    vars: &SegmentMap,
+    resolver: &Resolver,
+    base: Style,
+    excluded: &[&str],
+    labels: &[&str],
 ) -> (Segment, bool) {
     let mut out = Segment::default();
     let mut produced = false;
@@ -69,18 +96,18 @@ fn eval_excluding(
                     .get(name)
                     .filter(|segment| !segment.is_empty() && !excluded.contains(&name.as_str()))
                 {
-                    produced = true;
+                    produced |= !labels.contains(&name.as_str());
                     out.append(inherit(segment, base));
                 }
             }
             Node::Styled(children, spec) => {
                 let style = base.patch(resolver.resolve(spec).unwrap_or_default());
-                let (inner, has_var) = eval_excluding(children, vars, resolver, style, excluded);
+                let (inner, has_var) = eval_full(children, vars, resolver, style, excluded, labels);
                 produced |= has_var;
                 out.append(inner);
             }
             Node::Group(children) => {
-                let (inner, has_var) = eval_excluding(children, vars, resolver, base, excluded);
+                let (inner, has_var) = eval_full(children, vars, resolver, base, excluded, labels);
                 if has_var {
                     produced = true;
                     out.append(inner);

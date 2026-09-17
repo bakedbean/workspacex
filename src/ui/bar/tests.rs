@@ -2165,6 +2165,158 @@ mod module_tests {
         );
     }
 
+    /// `$icon_<kind>` is the kind's `[agent_bar.symbols]` glyph, so the
+    /// tokens preset can show each harness's icon in place of its name
+    /// without the theme spelling the glyph twice. Absent for a kind
+    /// without an entry: the count still renders, gap and all, since a
+    /// label can't gate a group of its own (see the test below).
+    #[test]
+    fn module_reads_its_kinds_icon_from_agent_bar_symbols() {
+        let specs = specs_with(
+            "[agent_bar.symbols]\nclaude = \"C\"\n[module.ctx]\nformat = \"([$icon_claude $tokens_claude]()  )([$icon_codex $tokens_codex]())\"\n[dashboard_footer]\nright_format = \"$ctx\"\n",
+        );
+        let theme = Theme::wsx();
+        let rows = [FleetRow {
+            context_tokens: vec![
+                (crate::pty::session::AgentKind::Claude, 1_000),
+                (crate::pty::session::AgentKind::Codex, 2_000),
+            ],
+            ..Default::default()
+        }];
+        let fleet = FleetStats::from_rows(rows, 1, 0).to_vars();
+        let out = dashboard_footer(
+            &specs,
+            &theme,
+            &DashboardFooterInputs {
+                activity: &[],
+                version: "0.1.0",
+                window_label: "24h",
+                workspace_selected: false,
+                fleet: &fleet,
+            },
+            100,
+        );
+        let text = plain(&out.line);
+        assert!(
+            text.ends_with("C 1k   2k"),
+            "claude wears its glyph, codex (no entry) just its count: {text:?}"
+        );
+    }
+
+    /// The example themes' tokens module pairs each icon with its count.
+    /// An icon is a label: it renders beside the count but, like the
+    /// bundled preset's literal word, never keeps the `( … )` group alive
+    /// on its own — otherwise an empty fleet would show every glyph bare.
+    #[test]
+    fn module_icon_never_keeps_a_group_alive_on_its_own() {
+        let specs = specs_with(
+            "[agent_bar.symbols]\nclaude = \"C\"\ncodex = \"X\"\n[module.ctx]\nformat = \"([$icon_claude $tokens_claude]()  )([$icon_codex $tokens_codex]())\"\n[dashboard_footer]\nright_format = \"$ctx\"\n",
+        );
+        let theme = Theme::wsx();
+        let footer = |fleet: &SegmentMap| {
+            plain(
+                &dashboard_footer(
+                    &specs,
+                    &theme,
+                    &DashboardFooterInputs {
+                        activity: &[],
+                        version: "0.1.0",
+                        window_label: "24h",
+                        workspace_selected: false,
+                        fleet,
+                    },
+                    100,
+                )
+                .line,
+            )
+        };
+        let empty = footer(crate::ui::bar::fleet::empty());
+        assert!(
+            !empty.contains('C') && !empty.contains('X'),
+            "empty fleet shows no bare glyphs: {empty:?}"
+        );
+        let rows = [FleetRow {
+            context_tokens: vec![(crate::pty::session::AgentKind::Codex, 2_000)],
+            ..Default::default()
+        }];
+        let one = footer(&FleetStats::from_rows(rows, 1, 0).to_vars());
+        assert!(
+            one.ends_with("X 2k") && !one.contains('C'),
+            "only the kind with tokens renders, icon and count together: {one:?}"
+        );
+    }
+
+    /// An explicit empty entry (`pi = ""`) is an override, not an absence,
+    /// same as for `$symbol` and `$icon`: the variable is present but
+    /// empty, so it draws nothing and its group is gated by the count.
+    #[test]
+    fn module_empty_icon_override_draws_nothing() {
+        let specs = specs_with(
+            "[agent_bar.symbols]\npi = \"\"\n[module.ctx]\nformat = \"[$tokens_pi( $icon_pi)]()\"\n[dashboard_footer]\nright_format = \"$ctx\"\n",
+        );
+        let theme = Theme::wsx();
+        let rows = [FleetRow {
+            context_tokens: vec![(crate::pty::session::AgentKind::Pi, 3_000)],
+            ..Default::default()
+        }];
+        let fleet = FleetStats::from_rows(rows, 1, 0).to_vars();
+        let out = dashboard_footer(
+            &specs,
+            &theme,
+            &DashboardFooterInputs {
+                activity: &[],
+                version: "0.1.0",
+                window_label: "24h",
+                workspace_selected: false,
+                fleet: &fleet,
+            },
+            100,
+        );
+        let text = plain(&out.line);
+        assert!(text.ends_with("3k"), "no glyph, no gap: {text:?}");
+    }
+
+    /// Same plumbing in the attached bars: `put_modules` is shared, so one
+    /// smoke test that the icon table reaches a module placed there.
+    #[test]
+    fn module_icon_renders_in_the_attached_bottom_bar() {
+        let specs = specs_with(
+            "[agent_bar.symbols]\nclaude = \"C\"\n[module.ctx]\nformat = \"([$icon_claude $tokens_claude]())\"\n[attached_bottom]\nright_format = \"$ctx\"\n",
+        );
+        let theme = Theme::wsx();
+        let rows = [FleetRow {
+            context_tokens: vec![(crate::pty::session::AgentKind::Claude, 5_000)],
+            ..Default::default()
+        }];
+        let f = FleetStats::from_rows(rows, 1, 0).to_vars();
+        let bars = attached_bars(
+            &specs,
+            &theme,
+            AttachedInputs {
+                repo: "wsx",
+                name: "foo",
+                version: "0.1.0",
+                window_label: "24h",
+                activity: &[],
+                agent: None,
+                attention: None,
+                pinned: &[],
+                tags: &[],
+                procs: 0,
+                diff: None,
+                pr: None,
+                model_tokens: None,
+                agents: &[],
+                active_agent: None,
+                fleet: &f,
+            },
+            80,
+            80,
+        );
+        let text = plain(&bars.bottom.line);
+        assert!(text.ends_with("C 5k"), "{text:?}");
+    }
+
     #[test]
     fn module_renders_in_the_attached_bottom_bar() {
         let specs = specs_with(

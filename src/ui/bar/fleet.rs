@@ -35,7 +35,9 @@ pub struct FleetRow {
     pub context_tokens: Vec<(AgentKind, u64)>,
 }
 
-/// Fleet-wide counts, one field per `registry::FLEET_VARS` entry.
+/// Fleet-wide counts, one field per `registry::FLEET_VARS` entry other
+/// than the label variables (`registry::fleet_label_names`), which are the
+/// theme's.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FleetStats {
     pub working: u32,
@@ -291,7 +293,10 @@ mod tests {
     #[test]
     fn every_fleet_var_has_an_entry_and_zero_counts_render_empty() {
         let vars = FleetStats::from_rows(Vec::new(), 0, 0).to_vars();
-        for v in FLEET_VARS {
+        // The label variables are the theme's, not the fleet's:
+        // `providers::module_vars` adds them from `[agent_bar.symbols]`.
+        let labels: Vec<&str> = crate::ui::bar::registry::fleet_label_names().collect();
+        for v in FLEET_VARS.iter().filter(|v| !labels.contains(&v.name)) {
             assert!(vars.contains_key(v.name), "missing {}", v.name);
         }
         assert_eq!(text(&vars, "working"), "");

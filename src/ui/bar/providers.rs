@@ -3,7 +3,8 @@
 //! `format` against its variables, with `$style` bound to the provider's
 //! state-derived default patched by the user's `style`.
 
-use super::render::eval;
+use super::registry;
+use super::render::{eval, eval_with_labels};
 use super::segment::{Hit, Segment, SegmentConfig, SegmentMap};
 use super::style::Resolver;
 use crate::commands::pinned::{PinnedCommand, truncate_label};
@@ -23,6 +24,7 @@ use crate::ui::theme::Theme;
 use crate::ui::updates_bar::{AttentionItems, format_age};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// A plain variable value.
@@ -72,15 +74,17 @@ fn item_colors(
 }
 
 /// Evaluate `cfg.format` against `vars` with `$style` bound to `style`,
-/// `extra` adding more named styles (`$mark_style`), and `colors` the
-/// per-evaluation colour names. `None` when the segment is disabled or
-/// renders empty.
+/// `extra` adding more named styles (`$mark_style`), `colors` the
+/// per-evaluation colour names, and `labels` the variables that render
+/// without keeping a group alive (`render::eval_with_labels`). `None`
+/// when the segment is disabled or renders empty.
 fn eval_format(
     cfg: &SegmentConfig,
     vars: &SegmentMap,
     style: Style,
     extra: &[(&str, Style)],
     colors: HashMap<String, Option<Color>>,
+    labels: &[&str],
     resolver: &Resolver,
 ) -> Option<Segment> {
     if cfg.disabled {
@@ -90,7 +94,7 @@ fn eval_format(
         extra.iter().map(|(k, v)| (k.to_string(), *v)).collect();
     styles.insert("style".to_string(), style);
     let r = resolver.with_colors(colors).with_styles(styles);
-    let (seg, _) = eval(&cfg.format, vars, &r, Style::default());
+    let (seg, _) = eval_with_labels(&cfg.format, vars, &r, Style::default(), labels);
     (!seg.is_empty()).then_some(seg)
 }
 
@@ -107,7 +111,7 @@ pub fn eval_segment(
 ) -> Option<Segment> {
     let resolver = &resolver.with_overlay(&cfg.palette);
     let style = segment_style(cfg, default_style, resolver);
-    eval_format(cfg, vars, style, extra, HashMap::new(), resolver)
+    eval_format(cfg, vars, style, extra, HashMap::new(), &[], resolver)
 }
 
 /// Multi-item segments (`keys`, `pins`, `agents`): `cfg.format` describes
@@ -134,7 +138,7 @@ pub fn eval_items(
         .filter(|&i| {
             let (vars, default_style, _) = &items[i];
             let none = item_colors(None, None, None);
-            eval_format(cfg, vars, *default_style, &[], none, resolver).is_some()
+            eval_format(cfg, vars, *default_style, &[], none, &[], resolver).is_some()
         })
         .collect();
     let styles: Vec<Style> = rendered
@@ -152,7 +156,7 @@ pub fn eval_items(
             out.append(eval(&cfg.separator, &SegmentMap::new(), &r, Style::default()).0);
         }
         let colors = item_colors(prev, Some(styles[n]), next);
-        let Some(seg) = eval_format(cfg, vars, styles[n], &[], colors, resolver) else {
+        let Some(seg) = eval_format(cfg, vars, styles[n], &[], colors, &[], resolver) else {
             continue;
         };
         let start = out.width;
@@ -439,8 +443,16 @@ pub fn attention(
     };
     let measure = |i: usize, name: &str| -> Segment {
         let none = item_colors(None, None, None);
-        eval_format(cfg, &item_vars(i, name), name_style(i), &[], none, resolver)
-            .unwrap_or_default()
+        eval_format(
+            cfg,
+            &item_vars(i, name),
+            name_style(i),
+            &[],
+            none,
+            &[],
+            resolver,
+        )
+        .unwrap_or_default()
     };
     let separator = |colors: HashMap<String, Option<Color>>| -> Segment {
         let r = resolver.with_colors(colors);
@@ -516,8 +528,16 @@ pub fn attention(
             out.append(separator(item_colors(prev, None, Some(styles[n]))));
         }
         let colors = item_colors(prev, Some(styles[n]), next);
-        let seg = eval_format(cfg, &item_vars(i, &name), styles[n], &[], colors, resolver)
-            .unwrap_or_default();
+        let seg = eval_format(
+            cfg,
+            &item_vars(i, &name),
+            styles[n],
+            &[],
+            colors,
+            &[],
+            resolver,
+        )
+        .unwrap_or_default();
         let start = out.width;
         out.append(seg);
         out.hit_from(start, Hit::Attention(entries[i].workspace_id));
@@ -551,10 +571,36 @@ pub fn usage(
     Some(seg)
 }
 
-/// A `[module.<name>]`: the user's `format` evaluated against the fleet
-/// variable map. No state colour of its own and no click target.
-pub fn module(cfg: &SegmentConfig, fleet: &SegmentMap, resolver: &Resolver) -> Option<Segment> {
-    eval_segment(cfg, fleet, Style::default(), &[], resolver)
+/// The variable map every module evaluates against: the fleet map plus
+/// `$icon_<kind>`, each kind's glyph from `icons` — `[agent_bar.symbols]`,
+/// the table the top bar and the pills read — and absent for a kind
+/// without one. Borrowed as-is when the theme draws no glyphs, so the
+/// bundled default clones nothing; built once per bar, not per module.
+pub fn module_vars<'a>(
+    fleet: &'a SegmentMap,
+    icons: &[(AgentKind, String)],
+) -> Cow<'a, SegmentMap> {
+    if icons.is_empty() {
+        return Cow::Borrowed(fleet);
+    }
+    let mut v = fleet.clone();
+    for (kind, icon) in icons {
+        v.insert(format!("icon_{}", kind.display_name()), var(icon.clone()));
+    }
+    Cow::Owned(v)
+}
+
+/// A `[module.<name>]`: the user's `format` evaluated against
+/// `module_vars`. The icon variables are labels — they render beside a
+/// count but never keep a `( … )` group alive on their own, so a kind with
+/// nothing to report drops out glyph and all, as it does under the
+/// bundled preset's literal words. No state colour of its own and no
+/// click target.
+pub fn module(cfg: &SegmentConfig, vars: &SegmentMap, resolver: &Resolver) -> Option<Segment> {
+    let resolver = &resolver.with_overlay(&cfg.palette);
+    let style = segment_style(cfg, Style::default(), resolver);
+    let labels: Vec<&str> = registry::fleet_label_names().collect();
+    eval_format(cfg, vars, style, &[], HashMap::new(), &labels, resolver)
 }
 
 /// Pinned-command chips, at most nine (they are keyed `1`–`9`).

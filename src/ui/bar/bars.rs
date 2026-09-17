@@ -28,19 +28,21 @@ fn put(map: &mut SegmentMap, name: &str, seg: Option<Segment>) {
 }
 
 /// Insert every `[module.<name>]` from `specs.modules`, so `$<name>` works
-/// in whichever bar the theme places it. Called by every composer.
+/// in whichever bar the theme places it. Called by every composer. The
+/// per-kind glyph table rides along for `$icon_<kind>`.
 pub(super) fn put_modules(
     segments: &mut SegmentMap,
     specs: &BarSpecs,
     fleet: &SegmentMap,
     resolver: &style::Resolver<'_>,
 ) {
+    let vars = providers::module_vars(fleet, &cfg(specs, "agent_bar").symbols);
     for name in &specs.modules {
-        put(
-            segments,
-            name,
-            providers::module(cfg(specs, name), fleet, resolver),
-        );
+        let module = cfg(specs, name);
+        if module.disabled {
+            continue;
+        }
+        put(segments, name, providers::module(module, &vars, resolver));
     }
 }
 

@@ -189,13 +189,18 @@ priority = 50
 # `priority`, `disabled` only. Counts render empty at zero, so wrap each item
 # in ( ) to drop it; `$workspaces` and `$repos` always render. The $tokens*
 # variables are context-size sums, abbreviated (77k, 1.2M), empty at zero.
+# The $icon_* variables are each kind's [agent_bar.symbols] glyph, absent
+# for a kind without one. An icon is a label: it renders beside a count but,
+# like literal text, never keeps a ( ) group alive by itself, so
+# `([$icon_pi $tokens_pi])` drops with the count exactly as `[pi $tokens_pi]`.
 #
 # Variables: $working $waiting $blocked $done $busy $unreported $alerts
 #   $awaiting $stalled $active $idle $live_agents $pr_none $pr_draft
 #   $pr_open $pr_conflicted $pr_merged $pr_closed $review_required
 #   $changes_requested $approved $unresolved $mergeable $dirty $msgs_queued
 #   $workspaces $repos $tokens_total $tokens_claude $tokens_pi $tokens_hermes
-#   $tokens_codex $tokens_omp
+#   $tokens_codex $tokens_omp $icon_claude $icon_pi $icon_hermes $icon_codex
+#   $icon_omp
 
 # The delivery funnel: how many workspaces sit at each stage of the
 # pipeline, from working through review to mergeable. Each item carries
@@ -214,6 +219,9 @@ priority = 60
 # module hugs the right edge whichever trailing kinds are absent; kinds are
 # ordered most- to least-common so the leading one is rarely the gap. Each
 # label wears its agent's identity colour via the `agent_<kind>` tokens.
+# The bundled [agent_bar.symbols] is empty, so the labels are words; a
+# theme that draws each harness's glyph there can swap in `$icon_<kind>`,
+# as the example themes do.
 [module.tokens]
 format   = "([claude $tokens_claude](fg:agent_claude))(  [codex $tokens_codex](fg:agent_codex))(  [omp $tokens_omp](fg:agent_omp))(  [pi $tokens_pi](fg:agent_pi))"
 # Between $version (50) and $funnel (60): the first of the two modules to

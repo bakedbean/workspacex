@@ -51,8 +51,9 @@ fill         = " "
 format       = "([ $agent_bar ](bg:nord2)[](fg:nord2 bg:nord8))[ $workspace ](bg:nord8 fg:nord1 bold)[](fg:nord8 bg:nord2)[( $attention )](bg:nord2 fg:nord4)[](fg:nord2)"
 fill         = " "
 
+# Menu matches the top agent block; pins and tags each have their own block.
 [attached_bottom]
-format       = "[ $keys ](bg:nord8 fg:nord1)[](fg:nord8 bg:nord2)[( $pins )( $tags )](bg:nord2 fg:nord4)[](fg:nord2)"
+format       = "[ $keys ](bg:nord2 fg:nord4)[](fg:nord2 bg:nord3)[( $pins )](bg:nord3 fg:nord4)[](fg:nord3 bg:nord1)[( $tags )](bg:nord1 fg:nord4)[](fg:nord1)"
 right_format = "[](fg:nord1)[( $agents )( $model_tokens )](bg:nord1 fg:nord4)[](fg:nord2 bg:nord1)[( $procs )( $diff )](bg:nord2 fg:nord4)[](fg:nord10 bg:nord2)[( $pr )](bg:nord10 fg:nord6)"
 fill         = " "
 
@@ -82,7 +83,7 @@ format   = "([$working working](fg:nord14)  )([$blocked blocked](fg:nord11)  )([
 priority = 60
 
 [keys]
-format    = "[$key](fg:nord0 bold) [$label]()"
+format    = "[$key](bold) [$label]()"
 separator = "  "
 
 [pins]

@@ -55,7 +55,8 @@ fill         = " "
 
 # --------------------------------------------------------- attached: bottom
 
-# Left chain: `^x menu` on `first` blends into pinned commands on `second`.
+# Left: Menu on `zero`, matching the top agent block, pins on `second`,
+# and tags on their own `first` block.
 # Right chain, greys DARKENING toward the edge (mirror of the left side, so
 # the diff and PR colours sit on dark blocks): agent pills on `third`,
 # model + tokens on `second`, procs + diff on `first`, the PR chip on `zero`. Optional
@@ -64,7 +65,7 @@ fill         = " "
 # Right-side transitions point left: fg is the block to the right, bg the block
 # to the left.
 [attached_bottom]
-format       = "[ $keys ](bg:first)[](fg:first bg:second)[( $pins )( $tags )](bg:second)[](fg:second)"
+format       = "[ $keys ](bg:zero)[](fg:zero bg:second)[( $pins )](bg:second)[](fg:second bg:first)[( $tags )](bg:first)[](fg:first)"
 right_format = "[](fg:third)[( $agents )](bg:third)[](fg:second bg:third)[( $model_tokens )](bg:second)[](fg:first bg:second)[( $procs )( $diff )](bg:first)[](fg:zero bg:first)[( $pr )](bg:zero)"
 fill         = " "
 

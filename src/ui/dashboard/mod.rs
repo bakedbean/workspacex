@@ -280,7 +280,7 @@ pub fn render_without_footer(
     );
 
     let (items, chip_spans, repo_link_spans) = match state.group_mode {
-        GroupMode::Repo => render_by_repo(inputs, state, tick, width, theme),
+        GroupMode::Repo => render_by_repo(inputs, state, tick, width, theme, specs),
         GroupMode::Attention => {
             let (items, chips) = render_by_attention(inputs, state, tick, width, theme);
             (items, chips, Vec::new())
@@ -717,6 +717,7 @@ fn render_by_repo<'a>(
     tick: u32,
     width: usize,
     theme: &Theme,
+    specs: &crate::config::theme_file::BarSpecs,
 ) -> (
     Vec<ratatui::widgets::ListItem<'static>>,
     Vec<PrChipSpan>,
@@ -805,7 +806,8 @@ fn render_by_repo<'a>(
     }
     state.list_state.select(selected_idx);
 
-    let (items, repo_links) = by_repo::render_list(&views, widths, tick, width, theme);
+    let (items, repo_links) =
+        by_repo::render_list(&views, widths, tick, width, theme, specs, inputs.fleet);
     (items, chip_spans, repo_links)
 }
 

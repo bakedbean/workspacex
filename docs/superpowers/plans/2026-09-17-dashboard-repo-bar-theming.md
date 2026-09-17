@@ -1058,9 +1058,9 @@ Claude-Session: https://claude.ai/code/session_01Kx4MjP6ySGuS716QEPAyUP"
 - Consumes: `crate::ui::bar::{dashboard_repo, DashboardRepoInputs, FoldState, PrLink}`, `Hit::RepoPrs`.
 - Produces:
   ```rust
-  fn list_has_pr_link(repos: &[RepoView<'_>]) -> bool
+  fn list_link_glyph(repos: &[RepoView<'_>]) -> Option<&'static str>
   fn link_glyph(nerd_fonts: bool) -> &'static str
-  fn header_line(view: &RepoView<'_>, name_width: usize, any_link: bool, width: usize, theme: &Theme, specs: &BarSpecs, fleet: &SegmentMap) -> (Line<'static>, Option<PrLinkSpan>)
+  fn header_line(view: &RepoView<'_>, name_width: usize, list_glyph: Option<&str>, width: usize, theme: &Theme, specs: &BarSpecs, fleet: &SegmentMap) -> (Line<'static>, Option<PrLinkSpan>)
   pub fn render_list(repos: &[RepoView<'_>], widths: row::ColumnWidths, tick: u32, width: usize, theme: &Theme, specs: &BarSpecs, fleet: &SegmentMap) -> (Vec<ListItem<'static>>, Vec<RepoPrLinkSpan>)
   ```
 
@@ -1081,7 +1081,7 @@ In the `tests` module of `src/ui/dashboard/by_repo.rs`, add a helper right after
         header_line(
             view,
             name_align_width(views),
-            list_has_pr_link(views),
+            list_link_glyph(views),
             width,
             &theme,
             &specs,
@@ -1092,7 +1092,7 @@ In the `tests` module of `src/ui/dashboard/by_repo.rs`, add a helper right after
 
 Then, test by test:
 - Every `header_line(&view, align, gutter, W, &theme)` / `header_line(&view, name_align_width(std::slice::from_ref(&view)), pr_link_gutter(...), W, &theme)` becomes `line(&view, std::slice::from_ref(&view), W)`; every `header_line(&views[i], name_width, gutter, W, &theme)` becomes `line(&views[i], &views, W)`. Delete the now-unused `let align = …`, `let gutter = …`, `let name_width = …` lines, and the `let theme = Theme::wsx();` lines that only fed `header_line` (keep the ones used for `theme.dim_style()` comparisons).
-- `paths_align_whether_or_not_a_repo_has_a_pr_link`: replace `let gutter = pr_link_gutter(&views); assert!(gutter > 0, ...)` with `assert!(list_has_pr_link(&views), "a linked repo in the list opens a gutter");`.
+- `paths_align_whether_or_not_a_repo_has_a_pr_link`: replace `let gutter = pr_link_gutter(&views); assert!(gutter > 0, ...)` with `assert!(list_link_glyph(&views), "a linked repo in the list opens a gutter");`.
 - `pr_link_style` helper: `let (line, _) = line(view, std::slice::from_ref(view), 120);` (rename the local to `l` to avoid shadowing the helper).
 - Both `render_list(...)` calls gain two trailing arguments: `&crate::config::theme_file::bundled_default(&theme), crate::ui::bar::fleet::empty()`.
 - Rewrite `counts_stay_flush_right_without_overflow` to the engine's overflow rule:
@@ -1135,7 +1135,7 @@ Then, test by test:
 - [ ] **Step 2: Run the tests to see them fail**
 
 Run: `cargo test --lib by_repo`
-Expected: compile errors (`list_has_pr_link` not found, wrong arity).
+Expected: compile errors (`list_link_glyph` not found, wrong arity).
 
 - [ ] **Step 3: Replace the builder with the adapter**
 
@@ -1157,7 +1157,7 @@ fn link_glyph(nerd_fonts: bool) -> &'static str {
 /// repo's `$pr_link` renders — a blank of the glyph's width for the
 /// others — so every path starts in the same column; when none does, the
 /// segment is absent everywhere and its group drops.
-fn list_has_pr_link(repos: &[RepoView<'_>]) -> bool {
+fn list_link_glyph(repos: &[RepoView<'_>]) -> Option<&'static str> {
     repos.iter().any(|v| v.show_pr_link)
 }
 ```
@@ -1170,7 +1170,7 @@ fn list_has_pr_link(repos: &[RepoView<'_>]) -> bool {
 /// span comes from the engine's own hit list, so the paint and the click
 /// target can't drift — the same contract `row::pr_chip_hit_span` keeps
 /// for workspace rows. `name_width` and `any_link` are the cross-repo
-/// alignment inputs (`name_align_width`, `list_has_pr_link`).
+/// alignment inputs (`name_align_width`, `list_link_glyph`).
 fn header_line(
     view: &RepoView<'_>,
     name_width: usize,
@@ -1225,7 +1225,7 @@ use crate::ui::bar::{DashboardRepoInputs, FoldState, PrLink, dashboard_repo};
 
 Drop the now-unused `Modifier`, `Span`, and `Status` imports if the compiler flags them. Update the module doc comment's second paragraph to say the header is drawn through the engine's `[dashboard_repo]` bar and point at the spec.
 
-- `render_list` gains `specs: &BarSpecs, fleet: &SegmentMap` and computes `let any_link = list_has_pr_link(repos);` in place of `gutter`, calling `header_line(view, name_width, any_link, width, theme, specs, fleet)`.
+- `render_list` gains `specs: &BarSpecs, fleet: &SegmentMap` and computes `let any_link = list_link_glyph(repos);` in place of `gutter`, calling `header_line(view, name_width, any_link, width, theme, specs, fleet)`.
 
 - [ ] **Step 4: Thread `specs` through the dashboard**
 
@@ -1236,7 +1236,7 @@ In `src/ui/dashboard/mod.rs`:
 - [ ] **Step 5: Run the dashboard tests**
 
 Run: `cargo test --lib dashboard`
-Expected: PASS, including `by_repo_render_includes_chrome_status_strip_and_a_repo_header`, the PR-link rect test near `src/ui/dashboard/tests.rs:126`, and all of `by_repo::tests`. If `header_shows_fold_glyph_and_counts` fails on the `"▾ wsx  /home/eben/workspace/wsx  "` prefix, the `($pr_link  )` group did not drop: check that `list_has_pr_link` is false for that fixture and that `pr_link` returns `None` for `link == None`.
+Expected: PASS, including `by_repo_render_includes_chrome_status_strip_and_a_repo_header`, the PR-link rect test near `src/ui/dashboard/tests.rs:126`, and all of `by_repo::tests`. If `header_shows_fold_glyph_and_counts` fails on the `"▾ wsx  /home/eben/workspace/wsx  "` prefix, the `($pr_link  )` group did not drop: check that `list_link_glyph` is false for that fixture and that `pr_link` returns `None` for `link == None`.
 
 - [ ] **Step 6: Full gate**
 
@@ -1623,4 +1623,4 @@ Claude-Session: https://claude.ai/code/session_01Kx4MjP6ySGuS716QEPAyUP"
 ## Self-review notes
 
 - Spec coverage: symbols generalisation (T1); `[dashboard_repo]`, `pad`, singleton scope, registry (T2); providers, `Hit::RepoPrs`, composer, pinned snapshot (T3); `by_repo.rs` adapter, parity tests, threading `specs` (T4); example themes + examples test (T5); book, manual test (T6). The spec's "accepted differences" are encoded in the rewritten overflow test in T4.
-- Names used consistently: `dashboard_repo`, `DashboardRepoInputs`, `FoldState`, `PrLink`, `Hit::RepoPrs`, `list_has_pr_link`, `link_glyph`, `symbol_for`, `symbol_keys`, `pad`.
+- Names used consistently: `dashboard_repo`, `DashboardRepoInputs`, `FoldState`, `PrLink`, `Hit::RepoPrs`, `list_link_glyph`, `link_glyph`, `symbol_for`, `symbol_keys`, `pad`.

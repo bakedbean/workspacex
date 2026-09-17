@@ -1020,7 +1020,14 @@ fn folded_repos_do_not_widen_the_strip() {
     let folded_repo_id = inputs.workspaces[0].repo.id;
     let mut state = DashboardState::default();
     state.folded.insert(folded_repo_id.0 as u64, true);
-    let (items, chips, _) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
+    let (items, chips, _) = render_by_repo(
+        &inputs,
+        &mut state,
+        0,
+        160,
+        &Theme::wsx(),
+        &crate::config::theme_file::bundled_default(&Theme::wsx()),
+    );
     assert!(!chips.is_empty(), "other repos still render rows");
     let (ws_id, flat_idx, (x, _w)) = chips[0];
     let rendered = item_text(&items[flat_idx]);
@@ -1050,7 +1057,14 @@ fn chip_hit_spans_use_the_widened_strip() {
     let mut inputs = fixture_dashboard_inputs_with_pr();
     give_workspace_peers(&mut inputs, 0, 2);
     let mut state = DashboardState::default();
-    let (items, chips, _) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
+    let (items, chips, _) = render_by_repo(
+        &inputs,
+        &mut state,
+        0,
+        160,
+        &Theme::wsx(),
+        &crate::config::theme_file::bundled_default(&Theme::wsx()),
+    );
     let (ws_id, flat_idx, (x, _w)) = chips[0];
     let rendered = item_text(&items[flat_idx]);
     assert_eq!(

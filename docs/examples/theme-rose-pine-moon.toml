@@ -42,8 +42,11 @@ format       = "[ $keys ](bg:rose fg:base)[](fg:rose)"
 right_format = "[](fg:hl_high)[( $version )](bg:hl_high fg:text)([](fg:pine bg:hl_high)[ $funnel ](bg:pine fg:text))"
 fill         = " "
 
+# The focused agent's glyph leads on its own hl_med block, in the agent's
+# colour, wedging into the rose workspace block; with no agent the group
+# drops and the workspace block takes the edge.
 [attached_top]
-format       = "[($agent_bar )$workspace ](bg:rose fg:base bold)[](fg:rose bg:hl_med)[( $attention )](bg:hl_med fg:text)[](fg:hl_med)"
+format       = "([ $agent_bar ](bg:hl_med)[](fg:hl_med bg:rose))[ $workspace ](bg:rose fg:base bold)[](fg:rose bg:hl_med)[( $attention )](bg:hl_med fg:text)[](fg:hl_med)"
 fill         = " "
 
 [attached_bottom]

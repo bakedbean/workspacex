@@ -41,8 +41,11 @@ format       = "[ $keys ](bg:blue fg:bg)[](fg:blue)"
 right_format = "[](fg:mid)[( $version )](bg:mid fg:fg)([](fg:green bg:mid)[ $funnel ](bg:green fg:bg))"
 fill         = " "
 
+# The focused agent's glyph leads on its own plum block, in the agent's
+# colour, wedging into the blue workspace block; with no agent the group
+# drops and the workspace block takes the edge.
 [attached_top]
-format       = "[($agent_bar )$workspace ](bg:blue fg:bg bold)[](fg:blue bg:plum)[( $attention )](bg:plum fg:fg)[](fg:plum)"
+format       = "([ $agent_bar ](bg:plum)[](fg:plum bg:blue))[ $workspace ](bg:blue fg:bg bold)[](fg:blue bg:plum)[( $attention )](bg:plum fg:fg)[](fg:plum)"
 fill         = " "
 
 [attached_bottom]

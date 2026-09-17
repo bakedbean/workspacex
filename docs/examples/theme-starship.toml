@@ -43,6 +43,18 @@ format       = "$brand [](fg:second)[ $group ](bg:second)[](fg:second bg:t
 right_format = "[](fg:fourth)[ $counts ](bg:fourth fg:label)"
 fill         = " "
 
+# ----------------------------------------------------------- repo bars
+
+# Each repo's header as a chain like the header's: the fold glyph flat on
+# the bar in `first`, the name on `first` in the accent (padded with plain
+# spaces inside its block), the PR link and path on `second`, and the
+# counts on `fourth` at the right edge — the block drops with them for an
+# empty repo.
+[dashboard_repo]
+format       = "$fold [](fg:first)[ $repo_name ](bg:first fg:orange bold)[](fg:first bg:second)[ ($pr_link )$repo_path ](bg:second fg:label)[](fg:second)"
+right_format = "([](fg:fourth)[ $status_counts ](bg:fourth fg:label))"
+fill         = " "
+
 # ------------------------------------------------------------ attached: top
 
 # Like starship's $directory -> $git chain, led by the focused agent's
@@ -150,3 +162,30 @@ format = "[+$added](fg:added bold) [−$removed](fg:deleted)"
 [pr]
 symbol = ""
 format = "[$symbol #$number $label]($style)( [$mark]($mark_style))"
+
+# ------------------------------------------------------ repo bar segments
+
+[fold]
+format = "[$symbol](fg:first)"
+
+[fold.symbols]
+expanded = ""
+folded   = ""
+
+[repo_name]
+pad    = " "
+format = "$pad$name"
+
+# Inherit the block's label colour when nothing is open; `added` (the
+# git_metrics green) when something is.
+[pr_link.palette]
+ok  = "added"
+dim = "label"
+
+[repo_path]
+format = "$path"
+
+# The counts block is a mid grey, so the base theme's status tints don't
+# carry: inherit the block's label colour and mark urgency with bold.
+[status_counts]
+format = "([? $question](bold)  )([! $stalled](bold)  )([… $waiting]()  )([⠋ $thinking]()  )([✓ $complete]()  )([· $idle]()  )  [$total ws]()"

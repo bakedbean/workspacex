@@ -37,6 +37,16 @@ format       = "$brand [](fg:plum)[ $group ](bg:plum fg:fg)[](fg:plum bg:d
 right_format = "[](fg:mid)[ $counts ](bg:mid fg:fg)"
 fill         = " "
 
+# The repo bar as a chain like the header's: the fold glyph flat on the
+# bar in the name block's colour, the name on blue (padded with plain spaces
+# inside its block, so every block is the same width), the PR link and
+# path together on plum, and the counts on mid at the right edge — that
+# block drops with them for an empty repo.
+[dashboard_repo]
+format       = "$fold [](fg:blue)[ $repo_name ](bg:blue fg:bg bold)[](fg:blue bg:plum)[ ($pr_link )$repo_path ](bg:plum fg:fg)[](fg:plum)"
+right_format = "([](fg:mid)[ $status_counts ](bg:mid fg:fg))"
+fill         = " "
+
 [dashboard_footer]
 format       = "[ $keys ](bg:blue fg:bg)[](fg:blue)"
 right_format = "[](fg:mid)[( $version )](bg:mid fg:fg)([](fg:green bg:mid)[ $funnel ](bg:green fg:bg))"
@@ -133,3 +143,25 @@ format = "[+$added](fg:green bold) [−$removed](fg:red)"
 
 [pr]
 format = "[$symbol #$number $label](bold)( [$mark]($mark_style))"
+
+# --- repo bar segments --------------------------------------------------
+
+[fold]
+format = "[$symbol](fg:blue)"
+
+[repo_name]
+pad    = " "
+format = "$pad$name"
+
+# The link takes the path's colour beside it when nothing is open; the
+# open-PR green stays the base theme's.
+[pr_link.palette]
+dim = "fg"
+
+[repo_path]
+format = "$path"
+
+# Status colours on the dark counts block; idle and the total inherit the
+# block's text colour instead of the base theme's dim.
+[status_counts]
+format = "([? $question](fg:question bold)  )([! $stalled](fg:stalled bold)  )([… $waiting](fg:waiting)  )([⠋ $thinking](fg:thinking)  )([✓ $complete](fg:complete)  )([· $idle]()  )  [$total ws]()"

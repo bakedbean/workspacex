@@ -47,6 +47,16 @@ format       = "$brand [](fg:nord1)[ $group ](bg:nord1 fg:nord4)[](fg:nord
 right_format = "[](fg:nord1)[ $counts ](bg:nord1 fg:nord4)"
 fill         = " "
 
+# The repo bar as a chain like the header's: the fold glyph flat on the
+# bar in the name block's colour, the name on nord8 (padded with plain spaces
+# inside its block, so every block is the same width), the PR link and
+# path together on nord1, and the counts on nord1 at the right edge — that
+# block drops with them for an empty repo.
+[dashboard_repo]
+format       = "$fold [](fg:nord8)[ $repo_name ](bg:nord8 fg:nord0 bold)[](fg:nord8 bg:nord1)[ ($pr_link )$repo_path ](bg:nord1 fg:nord4)[](fg:nord1)"
+right_format = "([](fg:nord1)[ $status_counts ](bg:nord1 fg:nord4))"
+fill         = " "
+
 [dashboard_footer]
 format       = "[ $keys ](bg:nord8 fg:nord0)[](fg:nord8)"
 right_format = "[](fg:nord1)[( $version )](bg:nord1 fg:nord4)([](fg:nord10 bg:nord1)[ $funnel ](bg:nord10 fg:nord6))"
@@ -141,3 +151,25 @@ format = "[+$added](fg:nord14 bold) [−$removed](fg:nord11)"
 
 [pr]
 format = "[$symbol #$number $label](bold)( [$mark]($mark_style))"
+
+# --- repo bar segments --------------------------------------------------
+
+[fold]
+format = "[$symbol](fg:nord8)"
+
+[repo_name]
+pad    = " "
+format = "$pad$name"
+
+# The link takes the path's colour beside it when nothing is open; the
+# open-PR green stays the base theme's.
+[pr_link.palette]
+dim = "nord4"
+
+[repo_path]
+format = "$path"
+
+# Status colours on the dark counts block; idle and the total inherit the
+# block's text colour instead of the base theme's dim.
+[status_counts]
+format = "([? $question](fg:question bold)  )([! $stalled](fg:stalled bold)  )([… $waiting](fg:waiting)  )([⠋ $thinking](fg:thinking)  )([✓ $complete](fg:complete)  )([· $idle]()  )  [$total ws]()"

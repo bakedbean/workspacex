@@ -80,6 +80,19 @@ format       = "[ $keys ](bg:ash fg:orange)[](fg:ash bg:soot)[( $pins )](bg:s
 right_format = "[](fg:ash)[( $agents )](bg:ash fg:cream)[](fg:charcoal bg:ash)[( $model_tokens )](bg:charcoal fg:cream)[](fg:soot bg:charcoal)[( $procs )](bg:soot fg:orange)[](fg:smoke bg:soot)[( $diff )](bg:smoke fg:orange)[](fg:orange bg:smoke)[( $pr )](bg:orange fg:black)"
 fill         = " "
 
+# The repo bar as one more airline chain. The fold glyph sits flat on the
+# bar in orange, then the name on the orange mode block (right-justified
+# inside it with plain spaces, so every block has the same width and a
+# straight edge), then the PR link and path together on smoke — the link
+# takes the path's cream when there is nothing open behind it, mint when
+# there is — capping into the bar. The status counts sit on an ash block
+# at the right edge, pointing left, and the block drops with them for an
+# empty repo.
+[dashboard_repo]
+format       = "$fold [ $repo_name ](bg:orange fg:black bold)[](fg:orange bg:smoke)[ ($pr_link )$repo_path ](bg:smoke fg:cream)[](fg:smoke)"
+right_format = "([](fg:ash)[ $status_counts ](bg:ash))"
+fill         = " "
+
 # --- segments (unset fields keep the bundled defaults) -------------------
 
 # Brand colours are theme tokens (`brand`, `wordmark`), same as the bundled
@@ -209,3 +222,31 @@ merged = "lilac"
 err    = "rose"
 warn   = "butter"
 dim    = "chalk"
+
+# --- repo bar segments --------------------------------------------------
+
+[fold]
+format = "[$symbol](fg:orange)"
+
+[fold.symbols]
+expanded = ""
+folded   = ""
+
+# Plain spaces pad the name inside its block.
+[repo_name]
+pad    = " "
+format = "$pad$name"
+
+# Inherit the block's cream; the open-PR tint is the same mint the
+# workspace and pr blocks use, and the closed/none case borrows cream.
+[pr_link.palette]
+ok  = "mint"
+dim = "cream"
+
+[repo_path]
+format = "$path"
+
+# Status colours on ash, with idle and the total in chalk instead of the
+# base theme's dim, which sinks into the block.
+[status_counts]
+format = "([? $question](fg:cream bold)  )([! $stalled](fg:blood bold)  )([… $waiting](fg:waiting)  )([⠋ $thinking](fg:thinking)  )([✓ $complete](fg:green)  )([· $idle](fg:chalk)  )  [$total ws](fg:chalk)"

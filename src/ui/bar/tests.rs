@@ -2208,6 +2208,75 @@ mod example_theme_tests {
         }
     }
 
+    /// Every example carries its look onto the repo bars: each places all
+    /// five repo segments in `[dashboard_repo]`, and a linked, expanded
+    /// repo renders its name, link, path, and counts through it.
+    #[test]
+    fn every_example_theme_themes_the_repo_bar() {
+        use crate::ui::bar::providers::{FoldState, PrLink};
+        use crate::ui::dashboard::sort::StatusCounts;
+        for path in example_themes() {
+            let theme = Theme::wsx();
+            let specs = load(&path, &theme).unwrap();
+            let placed = format::vars(&specs.dashboard_repo.format)
+                .into_iter()
+                .chain(format::vars(&specs.dashboard_repo.right_format))
+                .collect::<Vec<_>>();
+            for seg in ["fold", "repo_name", "pr_link", "repo_path", "status_counts"] {
+                assert!(
+                    placed.contains(&seg),
+                    "{}: ${seg} not placed",
+                    path.display()
+                );
+            }
+            assert_ne!(
+                specs.dashboard_repo.format,
+                crate::config::theme_file::bundled_default(&theme)
+                    .dashboard_repo
+                    .format,
+                "{}: repo bar left at the bundled default",
+                path.display()
+            );
+            let out = dashboard_repo(
+                &specs,
+                &theme,
+                &DashboardRepoInputs {
+                    fold: FoldState::Expanded,
+                    name: "wsx",
+                    pad_cells: 3,
+                    path: "/home/eben/wsx",
+                    pr_link: Some(PrLink {
+                        glyph: "PR",
+                        linked: true,
+                        open: true,
+                    }),
+                    counts: StatusCounts {
+                        question: 1,
+                        complete: 2,
+                        ..Default::default()
+                    },
+                    fleet: crate::ui::bar::fleet::empty(),
+                },
+                120,
+            );
+            let t = plain(&out.line);
+            for needle in ["wsx", "PR", "/home/eben/wsx", "3 ws"] {
+                assert!(
+                    t.contains(needle),
+                    "{}: {needle:?} missing from {t:?}",
+                    path.display()
+                );
+            }
+            assert_eq!(
+                out.hits.iter().filter(|h| h.hit == Hit::RepoPrs).count(),
+                1,
+                "{}",
+                path.display()
+            );
+            assert_eq!(out.line.width(), 120, "{}", path.display());
+        }
+    }
+
     /// The orange example puts the workspace name and the pr chip on
     /// orange mode blocks, where the base theme's lifecycle tints wash
     /// out; both blocks take the file's pale xterm-cube variants through

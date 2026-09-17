@@ -145,13 +145,22 @@ pub struct SegmentConfig {
     /// nowhere else. Lets a theme darken the lifecycle tints on one light
     /// block without touching the same tints on a dark one.
     pub palette: HashMap<String, Color>,
-    /// `[agent_bar.symbols]`: a glyph per agent kind, tried before
-    /// `symbol`. Only `agent_bar` reads it; the theme loader rejects the
-    /// table on any other segment.
-    pub symbols: Vec<(crate::pty::session::AgentKind, String)>,
+    /// `[<segment>.symbols]`: a glyph per key from the segment's
+    /// `SegmentDef::symbol_keys`, tried before `symbol`. `agent_bar` keys
+    /// it by agent kind; `fold` by `expanded`/`folded`.
+    pub symbols: Vec<(String, String)>,
 }
 
 impl SegmentConfig {
+    /// The glyph for `key` in this segment's `symbols` table, if set. An
+    /// empty entry is a deliberate override and comes back as `Some("")`.
+    pub fn symbol_for(&self, key: &str) -> Option<&str> {
+        self.symbols
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, glyph)| glyph.as_str())
+    }
+
     /// The base theme with this segment's palette shadowing its tokens:
     /// what a provider derives its state colours from, so `[pr.palette]
     /// ok = …` reaches `$style` and not only the format's own `fg:ok`.

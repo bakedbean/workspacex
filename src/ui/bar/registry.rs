@@ -29,10 +29,19 @@ pub struct SegmentDef {
     /// `check_singletons` in `config::theme_file` rejects a theme that
     /// does this.
     pub singleton: bool,
+    /// Keys a `[<segment>.symbols]` table may carry, in the order the
+    /// resolved entries come back. Empty for a segment that takes no such
+    /// table (the loader rejects one there).
+    pub symbol_keys: &'static [&'static str],
 }
 
 const STYLE: &[&str] = &["style"];
 const NO_TAIL: &[&str] = &[];
+const NO_SYMBOLS: &[&str] = &[];
+/// `[agent_bar.symbols]`: one glyph per agent kind, by display name. Kept
+/// in `AgentKind::ALL` order; `agent_bar_symbol_keys_are_the_agent_kind_names`
+/// pins the two together.
+const AGENT_KIND_SYMBOLS: &[&str] = &["claude", "pi", "hermes", "codex", "omp"];
 
 /// Colour names a multi-item segment's `format`, `separator`, and
 /// `more_format` may use, resolved per item from the final `$style` of the
@@ -53,6 +62,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         more_vars: NO_TAIL,
         items: false,
         singleton: false,
+        symbol_keys: NO_SYMBOLS,
     },
     SegmentDef {
         name: "group",
@@ -61,6 +71,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         more_vars: NO_TAIL,
         items: false,
         singleton: false,
+        symbol_keys: NO_SYMBOLS,
     },
     SegmentDef {
         name: "sort",
@@ -69,6 +80,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         more_vars: NO_TAIL,
         items: false,
         singleton: false,
+        symbol_keys: NO_SYMBOLS,
     },
     SegmentDef {
         name: "filter",
@@ -77,6 +89,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         more_vars: NO_TAIL,
         items: false,
         singleton: false,
+        symbol_keys: NO_SYMBOLS,
     },
     SegmentDef {
         name: "counts",
@@ -85,6 +98,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         more_vars: NO_TAIL,
         items: false,
         singleton: false,
+        symbol_keys: NO_SYMBOLS,
     },
     SegmentDef {
         name: "keys",
@@ -93,6 +107,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         more_vars: NO_TAIL,
         items: true,
         singleton: false,
+        symbol_keys: NO_SYMBOLS,
     },
     SegmentDef {
         name: "version",
@@ -101,6 +116,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         more_vars: NO_TAIL,
         items: false,
         singleton: false,
+        symbol_keys: NO_SYMBOLS,
     },
     SegmentDef {
         name: "usage",
@@ -109,6 +125,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         more_vars: NO_TAIL,
         items: false,
         singleton: true,
+        symbol_keys: NO_SYMBOLS,
     },
     SegmentDef {
         name: "agent_bar",
@@ -117,6 +134,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         more_vars: NO_TAIL,
         items: false,
         singleton: false,
+        symbol_keys: AGENT_KIND_SYMBOLS,
     },
     SegmentDef {
         name: "workspace",
@@ -125,6 +143,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         more_vars: NO_TAIL,
         items: false,
         singleton: false,
+        symbol_keys: NO_SYMBOLS,
     },
     SegmentDef {
         name: "attention",
@@ -133,6 +152,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         more_vars: &["count"],
         items: true,
         singleton: true,
+        symbol_keys: NO_SYMBOLS,
     },
     SegmentDef {
         name: "pins",
@@ -141,6 +161,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         more_vars: NO_TAIL,
         items: true,
         singleton: false,
+        symbol_keys: NO_SYMBOLS,
     },
     SegmentDef {
         name: "tags",
@@ -151,6 +172,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         items: true,
         // One un-indexed target (the manager chip), like `attention`'s tail.
         singleton: true,
+        symbol_keys: NO_SYMBOLS,
     },
     SegmentDef {
         name: "agents",
@@ -159,6 +181,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         more_vars: NO_TAIL,
         items: true,
         singleton: false,
+        symbol_keys: NO_SYMBOLS,
     },
     SegmentDef {
         name: "model_tokens",
@@ -167,6 +190,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         more_vars: NO_TAIL,
         items: false,
         singleton: false,
+        symbol_keys: NO_SYMBOLS,
     },
     SegmentDef {
         name: "procs",
@@ -175,6 +199,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         more_vars: NO_TAIL,
         items: false,
         singleton: true,
+        symbol_keys: NO_SYMBOLS,
     },
     SegmentDef {
         name: "diff",
@@ -183,6 +208,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         more_vars: NO_TAIL,
         items: false,
         singleton: false,
+        symbol_keys: NO_SYMBOLS,
     },
     SegmentDef {
         name: "pr",
@@ -191,6 +217,7 @@ pub const SEGMENTS: &[SegmentDef] = &[
         more_vars: NO_TAIL,
         items: false,
         singleton: true,
+        symbol_keys: NO_SYMBOLS,
     },
 ];
 
@@ -404,6 +431,27 @@ mod tests {
     fn singleton_names_matches_the_flagged_entries() {
         let names: Vec<&str> = singleton_names().collect();
         assert_eq!(names, vec!["usage", "attention", "tags", "procs", "pr"]);
+    }
+
+    /// `[agent_bar.symbols]` keys are the agent kinds by display name, in
+    /// `AgentKind::ALL` order; no other segment takes a symbols table yet.
+    #[test]
+    fn agent_bar_symbol_keys_are_the_agent_kind_names() {
+        let expected: Vec<&str> = crate::pty::session::AgentKind::ALL
+            .iter()
+            .map(|k| k.display_name())
+            .collect();
+        assert_eq!(
+            segment_def("agent_bar").unwrap().symbol_keys,
+            expected.as_slice()
+        );
+        for d in SEGMENTS.iter().filter(|d| d.name != "agent_bar") {
+            assert!(
+                d.symbol_keys.is_empty(),
+                "{} unexpectedly takes symbols",
+                d.name
+            );
+        }
     }
 
     #[test]

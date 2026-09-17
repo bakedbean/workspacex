@@ -348,10 +348,8 @@ pub fn agent_bar(
     let theme = &cfg.theme(theme);
     let agent = agent?;
     let symbol = cfg
-        .symbols
-        .iter()
-        .find(|(kind, _)| *kind == agent)
-        .map(|(_, glyph)| glyph.clone())
+        .symbol_for(agent.display_name())
+        .map(str::to_string)
         .or_else(|| cfg.symbol.clone())
         .unwrap_or_else(|| "▎".to_string());
     eval_segment(
@@ -597,16 +595,13 @@ pub fn usage(
 /// the table the top bar and the pills read — and absent for a kind
 /// without one. Borrowed as-is when the theme draws no glyphs, so the
 /// bundled default clones nothing; built once per bar, not per module.
-pub fn module_vars<'a>(
-    fleet: &'a SegmentMap,
-    icons: &[(AgentKind, String)],
-) -> Cow<'a, SegmentMap> {
+pub fn module_vars<'a>(fleet: &'a SegmentMap, icons: &[(String, String)]) -> Cow<'a, SegmentMap> {
     if icons.is_empty() {
         return Cow::Borrowed(fleet);
     }
     let mut v = fleet.clone();
-    for (kind, icon) in icons {
-        v.insert(format!("icon_{}", kind.display_name()), var(icon.clone()));
+    for (key, icon) in icons {
+        v.insert(format!("icon_{key}"), var(icon.clone()));
     }
     Cow::Owned(v)
 }
@@ -697,7 +692,7 @@ pub fn agents(
     cfg: &SegmentConfig,
     agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
     active: Option<AgentInstanceId>,
-    icons: &[(AgentKind, String)],
+    icons: &[(String, String)],
     theme: &Theme,
     resolver: &Resolver,
 ) -> Option<Segment> {
@@ -713,7 +708,7 @@ pub fn agents(
                 Style::default()
             };
             let mut v = vars(vec![("symbol", var(dot))]);
-            if let Some((_, icon)) = icons.iter().find(|(k, _)| k == kind) {
+            if let Some((_, icon)) = icons.iter().find(|(k, _)| k == kind.display_name()) {
                 v.insert("icon".to_string(), var(icon.clone()));
             }
             v.insert(
@@ -906,7 +901,7 @@ mod tests {
         let resolver = Resolver::new(&palette, &theme);
         let mut cfg = item_cfg("[$symbol]($style)", "");
         cfg.symbol = Some(">".to_string());
-        cfg.symbols = vec![(AgentKind::Codex, "X".to_string())];
+        cfg.symbols = vec![("codex".to_string(), "X".to_string())];
         let out = agent_bar(&cfg, Some(AgentKind::Codex), &theme, &resolver).unwrap();
         assert_eq!(out.plain_text(), "X");
         assert_eq!(
@@ -932,7 +927,7 @@ mod tests {
         let resolver = Resolver::new(&palette, &theme);
         let mut cfg = item_cfg("[$symbol]($style)", "");
         cfg.symbol = Some(">".to_string());
-        cfg.symbols = vec![(AgentKind::Pi, String::new())];
+        cfg.symbols = vec![("pi".to_string(), String::new())];
         assert!(agent_bar(&cfg, Some(AgentKind::Pi), &theme, &resolver).is_none());
         cfg.symbol = None;
         let out = agent_bar(&cfg, Some(AgentKind::Claude), &theme, &resolver).unwrap();

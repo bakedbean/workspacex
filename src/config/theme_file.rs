@@ -5,9 +5,8 @@
 //!
 //! See `docs/superpowers/specs/2026-09-13-bar-theming-design.md`.
 
-use crate::pty::session::AgentKind;
 use crate::ui::bar::format::{self, Node};
-use crate::ui::bar::registry::{ITEM_COLORS, SEGMENTS, segment_def, singleton_names};
+use crate::ui::bar::registry::{ITEM_COLORS, SEGMENTS, SegmentDef, segment_def, singleton_names};
 use crate::ui::bar::render::BarSpec;
 use crate::ui::bar::segment::SegmentConfig;
 use crate::ui::bar::style::{self, ColorRef, Resolver, StyleSpec};
@@ -473,7 +472,7 @@ fn resolve_segment(
         base_resolver,
         errors,
     );
-    let symbols = resolve_symbols(name, tbl.symbols.as_ref(), errors);
+    let symbols = resolve_symbols(name, def, tbl.symbols.as_ref(), errors);
     Some(SegmentConfig {
         style,
         symbol: tbl.symbol.clone(),
@@ -491,40 +490,46 @@ fn resolve_segment(
     })
 }
 
-/// Validate a `[<segment>.symbols]` table: only `agent_bar` reads one, and
-/// every key must name an `AgentKind`. Entries come back in `AgentKind::ALL`
-/// order regardless of the file's.
+/// Validate a `[<segment>.symbols]` table against the segment's
+/// `SegmentDef::symbol_keys`: a segment with no keys takes no table at
+/// all, and every key present must be one of its keys. Entries come back
+/// in `symbol_keys` order regardless of the file's.
 fn resolve_symbols(
     segment: &str,
+    def: &SegmentDef,
     tbl: Option<&BTreeMap<String, String>>,
     errors: &mut Vec<ThemeError>,
-) -> Vec<(AgentKind, String)> {
+) -> Vec<(String, String)> {
     let Some(tbl) = tbl else {
         return Vec::new();
     };
     let location = format!("[{segment}.symbols]");
-    if segment != "agent_bar" {
+    if def.symbol_keys.is_empty() {
+        let takers: Vec<String> = SEGMENTS
+            .iter()
+            .filter(|d| !d.symbol_keys.is_empty())
+            .map(|d| format!("[{}]", d.name))
+            .collect();
         errors.push(error(
             location,
-            "`symbols` is read by [agent_bar] only".to_string(),
+            format!("`symbols` is read by {} only", takers.join(" and ")),
         ));
         return Vec::new();
     }
-    let kind_names: Vec<&str> = AgentKind::ALL.iter().map(|k| k.display_name()).collect();
     for key in tbl.keys() {
-        if !kind_names.contains(&key.as_str()) {
+        if !def.symbol_keys.contains(&key.as_str()) {
             errors.push(error(
                 location.clone(),
                 format!(
-                    "unknown agent kind `{key}` (known: {})",
-                    kind_names.join(", ")
+                    "unknown key `{key}` (known: {})",
+                    def.symbol_keys.join(", ")
                 ),
             ));
         }
     }
-    AgentKind::ALL
+    def.symbol_keys
         .iter()
-        .filter_map(|&kind| tbl.get(kind.display_name()).map(|s| (kind, s.clone())))
+        .filter_map(|&key| tbl.get(key).map(|s| (key.to_string(), s.clone())))
         .collect()
 }
 
@@ -936,15 +941,14 @@ mod tests {
     /// default per kind, like `[<segment>.palette]`.
     #[test]
     fn agent_bar_symbols_parse_per_kind_and_keep_the_fallback_symbol() {
-        use crate::pty::session::AgentKind;
         let specs = ok("[agent_bar.symbols]\nclaude = \"C\"\ncodex = \"X\"\n");
         let bar = &specs.segments["agent_bar"];
         assert_eq!(bar.symbol.as_deref(), Some("▎"), "symbol keeps the default");
         assert_eq!(
             bar.symbols,
             vec![
-                (AgentKind::Claude, "C".to_string()),
-                (AgentKind::Codex, "X".to_string()),
+                ("claude".to_string(), "C".to_string()),
+                ("codex".to_string(), "X".to_string()),
             ]
         );
         assert!(specs.segments["pr"].symbols.is_empty());

@@ -1,7 +1,8 @@
 //! The themeable bar engine: a starship-style format grammar, segment
 //! providers that carry click hits, and one evaluator shared by the
 //! dashboard header and footer, the attached view's top and bottom bars,
-//! and the dashboard detail pane's pinned-chip row.
+//! the dashboard detail pane's pinned-chip row, and the by-repo view's
+//! repo bars.
 //!
 //! See `docs/superpowers/specs/2026-09-13-bar-theming-design.md`.
 
@@ -20,6 +21,7 @@ mod tests;
 
 pub(crate) use bars::{AttachedInputs, attached_bars, attention_width_budget};
 pub use bars::{
-    DashboardFooterInputs, DashboardHeaderInputs, cfg, dashboard_detail, dashboard_footer,
-    dashboard_header,
+    DashboardFooterInputs, DashboardHeaderInputs, DashboardRepoInputs, cfg, dashboard_detail,
+    dashboard_footer, dashboard_header, dashboard_repo,
 };
+pub use providers::{FoldState, PrLink};

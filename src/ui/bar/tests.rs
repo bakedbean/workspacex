@@ -1138,6 +1138,39 @@ mod segment_registry_drift_tests {
     const DASHBOARD_REPO_ONLY: [&str; 5] =
         ["fold", "repo_name", "pr_link", "repo_path", "status_counts"];
 
+    /// The repo bar composer must build every dashboard-repo-only segment.
+    #[test]
+    fn dashboard_repo_builds_every_repo_only_segment() {
+        use crate::ui::bar::providers::{FoldState, PrLink};
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        let out = dashboard_repo(
+            &specs,
+            &theme,
+            &DashboardRepoInputs {
+                fold: FoldState::Folded,
+                name: "a",
+                pad_cells: 2,
+                path: "/p",
+                pr_link: Some(PrLink {
+                    glyph: "PR",
+                    linked: true,
+                    open: false,
+                }),
+                counts: crate::ui::dashboard::sort::StatusCounts {
+                    idle: 1,
+                    ..Default::default()
+                },
+                fleet: crate::ui::bar::fleet::empty(),
+            },
+            80,
+        );
+        let t = crate::ui::bar::test_util::plain(&out.line);
+        for needle in ["▸", "─ a", "PR", "/p", "1 ws"] {
+            assert!(t.contains(needle), "{needle:?} missing from {t:?}");
+        }
+    }
+
     #[test]
     fn dashboard_repo_segments_are_all_registered_names() {
         for name in DASHBOARD_REPO_ONLY {
@@ -1169,6 +1202,96 @@ mod segment_registry_drift_tests {
                 "dashboard_header's `{name}` segment must be in registry::SEGMENTS"
             );
         }
+    }
+}
+
+/// The dashboard repo bar through the bundled default, pinned literally:
+/// the same line `by_repo::header_line` drew by hand before it moved onto
+/// the engine (its own tests remain the parity gate; this guards the
+/// engine's spacing and fill cell for cell).
+#[cfg(test)]
+mod dashboard_repo_tests {
+    use super::*;
+    use crate::config::theme_file::bundled_default;
+    use crate::ui::bar::providers::{FoldState, PrLink};
+    use crate::ui::bar::test_util::plain;
+    use crate::ui::dashboard::sort::StatusCounts;
+
+    fn repo_bar(width: u16, pr_link: Option<PrLink<'static>>, counts: StatusCounts) -> Rendered {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        dashboard_repo(
+            &specs,
+            &theme,
+            &DashboardRepoInputs {
+                fold: FoldState::Expanded,
+                name: "wsx",
+                pad_cells: 6,
+                path: "/home/eben/workspace/wsx",
+                pr_link,
+                counts,
+                fleet: crate::ui::bar::fleet::empty(),
+            },
+            width,
+        )
+    }
+
+    const COUNTS: StatusCounts = StatusCounts {
+        question: 1,
+        stalled: 1,
+        waiting: 1,
+        thinking: 0,
+        complete: 1,
+        idle: 0,
+    };
+
+    #[test]
+    fn engine_repo_bar_matches_the_legacy_header() {
+        let out = repo_bar(
+            120,
+            Some(PrLink {
+                glyph: "PR",
+                linked: true,
+                open: true,
+            }),
+            COUNTS,
+        );
+        let expected = format!(
+            "▾ ───── wsx  PR  /home/eben/workspace/wsx  {}  ? 1  ! 1  … 1  ✓ 1    4 ws",
+            "─".repeat(49)
+        );
+        assert_eq!(plain(&out.line), expected);
+        assert_eq!(out.line.width(), 120);
+        assert_eq!(out.hits.len(), 1);
+        assert_eq!(out.hits[0].hit, Hit::RepoPrs);
+        assert_eq!((out.hits[0].start_col, out.hits[0].width), (13, 2));
+    }
+
+    #[test]
+    fn unlinked_repo_in_a_linked_list_keeps_the_gutter_blank() {
+        let out = repo_bar(
+            120,
+            Some(PrLink {
+                glyph: "PR",
+                linked: false,
+                open: false,
+            }),
+            COUNTS,
+        );
+        assert!(plain(&out.line).starts_with("▾ ───── wsx      /home/eben/workspace/wsx  ─"));
+        assert!(out.hits.is_empty());
+    }
+
+    #[test]
+    fn empty_repo_runs_the_rule_to_the_edge() {
+        let out = repo_bar(80, None, StatusCounts::default());
+        let t = plain(&out.line);
+        assert!(
+            t.starts_with("▾ ───── wsx  /home/eben/workspace/wsx  ─"),
+            "{t:?}"
+        );
+        assert!(t.ends_with('─'), "{t:?}");
+        assert_eq!(out.line.width(), 80);
     }
 }
 

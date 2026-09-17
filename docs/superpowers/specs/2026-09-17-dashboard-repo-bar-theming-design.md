@@ -69,7 +69,7 @@ Bundled default (`src/ui/bar/default_theme.toml`):
 ```toml
 [dashboard_repo]
 format       = "$fold $repo_name  ($pr_link  )$repo_path  "
-right_format = " $status_counts"
+right_format = "( $status_counts)"
 fill         = "─"
 fill_style   = "fg:dim"
 
@@ -96,8 +96,9 @@ format = "([? $question](fg:question bold)  )([! $stalled](fg:stalled bold)  )([
 Parity with today's spacing: the two literal spaces at the end of `format`
 plus the engine's fill reproduce `path  ────`; the mandatory blank between
 sides plus the one leading space of `right_format` reproduce `────  counts`;
-for an empty repo `status_counts` is empty, so there is no right side, no
-mandatory blank, and the rule runs to the edge. Each count item carries its
+the right side is one conditional group, so for an empty repo
+`status_counts` is empty, the group and its literal space drop, there is
+no right side and no mandatory blank, and the rule runs to the edge. Each count item carries its
 own trailing two spaces, and the last is followed by two more, so the four
 spaces before `N ws` match today.
 

@@ -199,6 +199,72 @@ pub fn dashboard_detail(
     )
 }
 
+/// Everything one repo bar needs. The cross-repo alignment (`pad_cells`,
+/// and `pr_link` being `Some` for every repo once any has a link) is the
+/// view's to compute — the engine renders one line at a time.
+pub struct DashboardRepoInputs<'a> {
+    pub fold: providers::FoldState,
+    pub name: &'a str,
+    /// Cells this name falls short of the list's widest, for `$pad`.
+    pub pad_cells: usize,
+    pub path: &'a str,
+    /// `None` when no repo in the list has a PR link.
+    pub pr_link: Option<providers::PrLink<'a>>,
+    pub counts: crate::ui::dashboard::sort::StatusCounts,
+    pub fleet: &'a SegmentMap,
+}
+
+/// One repo's header line in the by-repo dashboard. Its five segments
+/// are built here and nowhere else; `Hit::RepoPrs` rides on `$pr_link`.
+pub fn dashboard_repo(
+    specs: &BarSpecs,
+    theme: &Theme,
+    inputs: &DashboardRepoInputs<'_>,
+    width: u16,
+) -> Rendered {
+    let resolver = specs.resolver(theme);
+    let mut segments = SegmentMap::new();
+    put(
+        &mut segments,
+        "fold",
+        providers::fold(cfg(specs, "fold"), inputs.fold, theme, &resolver),
+    );
+    put(
+        &mut segments,
+        "repo_name",
+        providers::repo_name(
+            cfg(specs, "repo_name"),
+            inputs.name,
+            inputs.pad_cells,
+            theme,
+            &resolver,
+        ),
+    );
+    put(
+        &mut segments,
+        "pr_link",
+        providers::pr_link(cfg(specs, "pr_link"), inputs.pr_link, theme, &resolver),
+    );
+    put(
+        &mut segments,
+        "repo_path",
+        providers::repo_path(cfg(specs, "repo_path"), inputs.path, theme, &resolver),
+    );
+    put(
+        &mut segments,
+        "status_counts",
+        providers::status_counts(cfg(specs, "status_counts"), inputs.counts, &resolver),
+    );
+    put_modules(&mut segments, specs, inputs.fleet, &resolver);
+    render_bar(
+        &specs.dashboard_repo,
+        &segments,
+        &specs.segments,
+        width,
+        &resolver,
+    )
+}
+
 /// Everything both attached bars need, so any attached segment can appear
 /// in either bar's format and keep its click. `pub(crate)`, not `pub`: it
 /// carries `ChipPr`/`ChipModelTokens`, which are themselves `pub(crate)`.

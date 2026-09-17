@@ -229,7 +229,7 @@ In the `tests` module of `src/config/theme_file.rs`, next to `partial_dashboard_
         assert_eq!(specs.dashboard_repo.fill, "─", "fill keeps the default");
         assert_eq!(
             specs.dashboard_repo.right_format,
-            format::parse(" $status_counts").unwrap(),
+            format::parse("( $status_counts)").unwrap(),
             "right side keeps the default"
         );
     }
@@ -425,7 +425,7 @@ In `src/ui/bar/default_theme.toml`, after the `[dashboard_detail]` table:
 # `$pad` and `$pr_link`'s blank placeholder.
 [dashboard_repo]
 format       = "$fold $repo_name  ($pr_link  )$repo_path  "
-right_format = " $status_counts"
+right_format = "( $status_counts)"
 fill         = "─"
 fill_style   = "fg:dim"
 ```
@@ -1509,7 +1509,7 @@ In the Bars code block, after the `[dashboard_detail]` table, add:
 ```toml
 [dashboard_repo]
 format       = "$fold $repo_name  ($pr_link  )$repo_path  "
-right_format = " $status_counts"
+right_format = "( $status_counts)"
 fill         = "─"
 fill_style   = "fg:dim"
 ```

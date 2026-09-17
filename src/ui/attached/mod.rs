@@ -94,6 +94,9 @@ fn route_hits(area: Rect, hits: &[crate::ui::bar::segment::HitSpan], out: &mut P
             Hit::Attention(id) => out.attention_rects.push((id, rect)),
             Hit::AttentionMore => out.attention_more_rect = Some(rect),
             Hit::UsageGraph => out.usage_graph_rect = Some(rect),
+            // Dashboard-repo-only: its segment renders empty in the
+            // attached bars, so this never fires here.
+            Hit::RepoPrs => {}
             Hit::ArmLeader | Hit::Key(_) => {
                 if let Some(action) = hit.footer_action() {
                     out.footer_hint_rects.push((rect, action));

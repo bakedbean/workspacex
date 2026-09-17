@@ -956,7 +956,7 @@ mod tests {
         assert_eq!(specs.dashboard_repo.fill, "─", "fill keeps the default");
         assert_eq!(
             specs.dashboard_repo.right_format,
-            format::parse(" $status_counts").unwrap(),
+            format::parse("( $status_counts)").unwrap(),
             "right side keeps the default"
         );
     }

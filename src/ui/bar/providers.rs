@@ -831,9 +831,276 @@ pub(crate) fn pr(
     Some(seg)
 }
 
+/// A repo bar's fold state, for `$fold`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FoldState {
+    Expanded,
+    Folded,
+    /// No workspaces: nothing to fold, so the glyph's cells stay blank.
+    Empty,
+}
+
+/// The fold glyph: `[fold.symbols]`' `expanded`/`folded` (bundled `▾`/`▸`),
+/// or a blank the width of the expanded glyph for an empty repo, so the
+/// name column stays aligned. `$style` is dim.
+pub fn fold(
+    cfg: &SegmentConfig,
+    state: FoldState,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
+    let glyph = |key: &str, fallback: &str| cfg.symbol_for(key).unwrap_or(fallback).to_string();
+    let symbol = match state {
+        FoldState::Expanded => glyph("expanded", "▾"),
+        FoldState::Folded => glyph("folded", "▸"),
+        FoldState::Empty => {
+            let expanded = glyph("expanded", "▾");
+            " ".repeat(Span::raw(expanded.as_str()).width().max(1))
+        }
+    };
+    eval_segment(
+        cfg,
+        &vars(vec![("symbol", var(symbol))]),
+        theme.dim_style(),
+        &[],
+        resolver,
+    )
+}
+
+/// The repo name, with `$pad` right-justifying it to the list's widest
+/// name: `pad_cells` is how many cells short this name is; the pad is
+/// `cfg.pad` (bundled `─`) repeated over all but the last of them, then
+/// one space, and absent at zero. `$style` is the header style.
+pub fn repo_name(
+    cfg: &SegmentConfig,
+    name: &str,
+    pad_cells: usize,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
+    let mut v = vars(vec![("name", var(name))]);
+    if pad_cells > 0 {
+        let ch = cfg.pad.unwrap_or('─');
+        let mut pad: String = std::iter::repeat_n(ch, pad_cells - 1).collect();
+        pad.push(' ');
+        v.insert("pad".to_string(), var(pad));
+    }
+    eval_segment(cfg, &v, theme.header_style(), &[], resolver)
+}
+
+/// What `$pr_link` draws for one repo. `None` at the composer means no
+/// repo in the list has a link, so the segment is absent everywhere.
+#[derive(Debug, Clone, Copy)]
+pub struct PrLink<'a> {
+    /// `PR`, or the Nerd Font pull-request glyph.
+    pub glyph: &'a str,
+    /// This repo has a GitHub remote, so the link is drawn and clickable.
+    pub linked: bool,
+    /// A workspace of this repo has an open, draft, or conflicted PR.
+    pub open: bool,
+}
+
+/// The clickable "my open PRs" link. `cfg.symbol` overrides the glyph.
+/// `$style` is the open-PR green when `open`, else dim — the same dim
+/// the path takes, so the two read as one quiet cluster. A repo that is
+/// not `linked` gets blanks of the glyph's width and no hit: the gutter
+/// stays open so every path starts in the same column.
+pub fn pr_link(
+    cfg: &SegmentConfig,
+    link: Option<PrLink<'_>>,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
+    let link = link?;
+    let glyph = cfg.symbol.clone().unwrap_or_else(|| link.glyph.to_string());
+    if !link.linked {
+        let blank = " ".repeat(Span::raw(glyph.as_str()).width());
+        return eval_segment(
+            cfg,
+            &vars(vec![("symbol", var(blank))]),
+            theme.dim_style(),
+            &[],
+            resolver,
+        );
+    }
+    let style = if link.open {
+        theme
+            .lifecycle_style(Some(BranchLifecycle::PrOpen))
+            .unwrap_or_else(|| theme.dim_style())
+    } else {
+        theme.dim_style()
+    };
+    let mut seg = eval_segment(
+        cfg,
+        &vars(vec![("symbol", var(glyph))]),
+        style,
+        &[],
+        resolver,
+    )?;
+    seg.hit_from(0, Hit::RepoPrs);
+    Some(seg)
+}
+
+/// The repo's display path. `$style` is dim.
+pub fn repo_path(
+    cfg: &SegmentConfig,
+    path: &str,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
+    eval_segment(
+        cfg,
+        &vars(vec![("path", var(path))]),
+        theme.dim_style(),
+        &[],
+        resolver,
+    )
+}
+
+/// This repo's workspaces by status. Each count is empty at zero, like
+/// the fleet variables, so a `( … )` group around it drops; a repo with
+/// no workspaces renders nothing at all. No state colour of its own: the
+/// bundled format colours each count by its status token.
+pub fn status_counts(
+    cfg: &SegmentConfig,
+    counts: crate::ui::dashboard::sort::StatusCounts,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    if counts.total() == 0 {
+        return None;
+    }
+    let count = |n: u32| if n == 0 { String::new() } else { n.to_string() };
+    let v = vars(vec![
+        ("question", var(count(counts.question))),
+        ("stalled", var(count(counts.stalled))),
+        ("waiting", var(count(counts.waiting))),
+        ("thinking", var(count(counts.thinking))),
+        ("complete", var(count(counts.complete))),
+        ("idle", var(count(counts.idle))),
+        ("total", var(count(counts.total()))),
+    ]);
+    let resolver = &resolver.with_overlay(&cfg.palette);
+    let style = segment_style(cfg, Style::default(), resolver);
+    eval_format(cfg, &v, style, &[], HashMap::new(), &[], resolver)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn plain_cfg(format_src: &str) -> SegmentConfig {
+        item_cfg(format_src, "")
+    }
+
+    static EMPTY_PALETTE: std::sync::OnceLock<HashMap<String, Color>> = std::sync::OnceLock::new();
+
+    fn resolver_for(theme: &Theme) -> Resolver<'_> {
+        Resolver::new(EMPTY_PALETTE.get_or_init(HashMap::new), theme)
+    }
+
+    #[test]
+    fn fold_uses_its_symbols_and_blanks_an_empty_repo() {
+        let theme = Theme::wsx();
+        let r = resolver_for(&theme);
+        let mut cfg = plain_cfg("[$symbol]($style)");
+        cfg.symbols = vec![
+            ("expanded".to_string(), "v".to_string()),
+            ("folded".to_string(), ">".to_string()),
+        ];
+        let text = |s| fold(&cfg, s, &theme, &r).unwrap().plain_text();
+        assert_eq!(text(FoldState::Expanded), "v");
+        assert_eq!(text(FoldState::Folded), ">");
+        assert_eq!(text(FoldState::Empty), " ", "a blank keeps the column");
+        let bare = plain_cfg("[$symbol]($style)");
+        assert_eq!(
+            fold(&bare, FoldState::Expanded, &theme, &r)
+                .unwrap()
+                .plain_text(),
+            "▾"
+        );
+        assert_eq!(
+            fold(&bare, FoldState::Folded, &theme, &r)
+                .unwrap()
+                .plain_text(),
+            "▸"
+        );
+    }
+
+    #[test]
+    fn repo_name_pads_with_the_configured_char_and_a_space() {
+        let theme = Theme::wsx();
+        let r = resolver_for(&theme);
+        let cfg = plain_cfg("[$pad](fg:dim)[$name]($style)");
+        let text =
+            |cfg: &SegmentConfig, n| repo_name(cfg, "wsx", n, &theme, &r).unwrap().plain_text();
+        assert_eq!(text(&cfg, 0), "wsx");
+        assert_eq!(text(&cfg, 1), " wsx");
+        assert_eq!(text(&cfg, 4), "─── wsx");
+        let mut spaced = plain_cfg("[$pad](fg:dim)[$name]($style)");
+        spaced.pad = Some(' ');
+        assert_eq!(text(&spaced, 4), "    wsx");
+    }
+
+    #[test]
+    fn pr_link_glyph_hit_and_gutter_placeholder() {
+        use crate::git::forge::BranchLifecycle::PrOpen;
+        let theme = Theme::wsx();
+        let r = resolver_for(&theme);
+        let cfg = plain_cfg("[$symbol]($style)");
+        assert!(
+            pr_link(&cfg, None, &theme, &r).is_none(),
+            "no links anywhere: absent"
+        );
+        let link = |linked, open| PrLink {
+            glyph: "PR",
+            linked,
+            open,
+        };
+
+        let linked = pr_link(&cfg, Some(link(true, true)), &theme, &r).unwrap();
+        assert_eq!(linked.plain_text(), "PR");
+        assert_eq!(linked.hits.len(), 1);
+        assert_eq!(linked.hits[0].hit, Hit::RepoPrs);
+        assert_eq!((linked.hits[0].start_col, linked.hits[0].width), (0, 2));
+        assert_eq!(
+            linked.spans[0].style.fg,
+            theme.lifecycle_style(Some(PrOpen)).unwrap().fg
+        );
+
+        let closed = pr_link(&cfg, Some(link(true, false)), &theme, &r).unwrap();
+        assert_eq!(closed.spans[0].style.fg, theme.dim_style().fg);
+
+        let bare = pr_link(&cfg, Some(link(false, false)), &theme, &r).unwrap();
+        assert_eq!(bare.plain_text(), "  ", "holds the gutter open");
+        assert!(bare.hits.is_empty(), "but nothing to click");
+
+        let mut custom = plain_cfg("[$symbol]($style)");
+        custom.symbol = Some("\u{f407}".to_string());
+        let seg = pr_link(&custom, Some(link(true, false)), &theme, &r).unwrap();
+        assert_eq!(seg.plain_text(), "\u{f407}", "symbol overrides the glyph");
+    }
+
+    #[test]
+    fn status_counts_empties_zeros_and_vanishes_for_an_empty_repo() {
+        use crate::ui::dashboard::sort::StatusCounts;
+        let theme = Theme::wsx();
+        let r = resolver_for(&theme);
+        let cfg = plain_cfg("([? $question]()  )([✓ $complete]()  )([· $idle]()  )  [$total ws]()");
+        let counts = StatusCounts {
+            question: 1,
+            complete: 2,
+            ..Default::default()
+        };
+        assert_eq!(
+            status_counts(&cfg, counts, &r).unwrap().plain_text(),
+            "? 1  ✓ 2    3 ws"
+        );
+        assert!(status_counts(&cfg, StatusCounts::default(), &r).is_none());
+    }
 
     fn item_cfg(format_src: &str, separator: &str) -> SegmentConfig {
         SegmentConfig {

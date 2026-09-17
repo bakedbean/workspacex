@@ -21,6 +21,9 @@ pub enum Hit {
     /// The trailing `<>` chip: opens the prompt-tag picker.
     TagsManager,
     Pr,
+    /// A repo bar's "my open PRs" link: opens the author-filtered PR list
+    /// for the repo the bar belongs to.
+    RepoPrs,
     Procs,
     Agent(AgentInstanceId),
     UsageGraph,

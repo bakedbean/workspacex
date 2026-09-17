@@ -70,14 +70,15 @@ fill_style = "fg:dim"
 # The by-repo dashboard's per-repo header line, drawn once per repo:
 # `▾ ── name  PR  /path/to/repo  ────  ? 1  ✓ 2    3 ws`. The two spaces
 # closing `format` and the one opening `right_format` (plus the engine's
-# mandatory blank) flank the rule with two cells each side; an empty repo
-# has no counts, so no right side, and the rule runs to the edge. Cross-
+# mandatory blank) flank the rule with two cells each side; the right
+# side is one group so that an empty repo, with no counts, has no right
+# side at all and the rule runs to the edge. Cross-
 # repo alignment (names right-justified to a shared column, one PR-link
 # gutter for every repo) is computed by the view and arrives through
 # `$pad` and `$pr_link`'s blank placeholder.
 [dashboard_repo]
 format       = "$fold $repo_name  ($pr_link  )$repo_path  "
-right_format = " $status_counts"
+right_format = "( $status_counts)"
 fill         = "─"
 fill_style   = "fg:dim"
 

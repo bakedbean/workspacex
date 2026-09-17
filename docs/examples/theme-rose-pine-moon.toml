@@ -5,6 +5,7 @@
 # Airline layout: a bright "mode" block at each outer edge (sections a / z),
 # a mid block beside it (b / y), and a base-toned block toward the middle
 # (c / x). Left chains point right; right chains point left.
+# Exception: the attached bottom bar starts with the dark agent-block tone.
 #
 # Install:  cp docs/examples/theme-rose-pine-moon.toml ~/.config/wsx/theme.toml
 #           wsx config set bar_theme on
@@ -49,8 +50,9 @@ fill         = " "
 format       = "([ $agent_bar ](bg:hl_med)[](fg:hl_med bg:rose))[ $workspace ](bg:rose fg:base bold)[](fg:rose bg:hl_med)[( $attention )](bg:hl_med fg:text)[](fg:hl_med)"
 fill         = " "
 
+# Menu matches the top agent block; pins and tags each have their own block.
 [attached_bottom]
-format       = "[ $keys ](bg:rose fg:base)[](fg:rose bg:hl_med)[( $pins )( $tags )](bg:hl_med fg:text)[](fg:hl_med)"
+format       = "[ $keys ](bg:hl_med fg:text)[](fg:hl_med bg:hl_high)[( $pins )](bg:hl_high fg:text)[](fg:hl_high bg:surface)[( $tags )](bg:surface fg:text)[](fg:surface)"
 right_format = "[](fg:surface)[( $agents )( $model_tokens )](bg:surface fg:subtle)[](fg:hl_high bg:surface)[( $procs )( $diff )](bg:hl_high fg:text)[](fg:pine bg:hl_high)[( $pr )](bg:pine fg:text)"
 fill         = " "
 
@@ -81,7 +83,7 @@ format   = "([$working working](fg:foam)  )([$blocked blocked](fg:love)  )([$rev
 priority = 60
 
 [keys]
-format    = "[$key](fg:base bold) [$label]()"
+format    = "[$key](bold) [$label]()"
 separator = "  "
 
 [pins]

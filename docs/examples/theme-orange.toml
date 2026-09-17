@@ -17,6 +17,7 @@
 # Airline layout: a "mode" block at each outer edge (sections a / z), a
 # mid block beside it (b / y), and a base-toned block toward the middle
 # (c / x). Left chains point right; right chains point left.
+# Exception: the attached bottom bar starts with the dark agent-block tone.
 #
 # Install:  cp docs/examples/theme-orange.toml ~/.config/wsx/theme.toml
 #           wsx config set bar_theme on
@@ -69,13 +70,13 @@ fill         = " "
 format       = "([ $agent_bar ](bg:ash)[\ue0b0](fg:ash bg:orange))[ $workspace  ](bg:orange fg:black bold)[\ue0b0](fg:orange bg:ash)[($attention )](bg:ash fg:orange)[\ue0b0](fg:ash)"
 fill         = " "
 
-# Left chain as in the footer: orange stub, key hints on smoke, then pinned
-# commands on soot. Right chain, orange at the edge then the greys
-# darkening toward the middle: pr on orange, diff on smoke, procs on soot,
+# Left: key hints on ash, matching the top bar's agent block, then pinned
+# commands on soot and tags on charcoal. Right chain, orange at the edge
+# then the greys darkening toward the middle: pr on orange, diff on smoke, procs on soot,
 # model + tokens on charcoal, agents on ash. Optional segments get their
 # own block so every step shows; a missing one collapses to its wedge.
 [attached_bottom]
-format       = "[  ](bg:orange)[](fg:orange bg:smoke)[ $keys ](bg:smoke fg:orange)[](fg:smoke bg:soot)[( $pins )( $tags )](bg:soot fg:orange)[](fg:soot)"
+format       = "[ $keys ](bg:ash fg:orange)[](fg:ash bg:soot)[( $pins )](bg:soot fg:orange)[](fg:soot bg:charcoal)[( $tags )](bg:charcoal fg:orange)[](fg:charcoal)"
 right_format = "[](fg:ash)[( $agents )](bg:ash fg:cream)[](fg:charcoal bg:ash)[( $model_tokens )](bg:charcoal fg:cream)[](fg:soot bg:charcoal)[( $procs )](bg:soot fg:orange)[](fg:smoke bg:soot)[( $diff )](bg:smoke fg:orange)[](fg:orange bg:smoke)[( $pr )](bg:orange fg:black)"
 fill         = " "
 

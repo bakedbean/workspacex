@@ -81,15 +81,15 @@ right_format = "[](fg:ash)[( $agents )](bg:ash fg:cream)[](fg:charcoal bg:
 fill         = " "
 
 # The repo bar as one more airline chain, on the greys only: one orange
-# block per repo row is hard on the eyes, so the name sits on smoke in
-# orange like the footer's key hints (right-justified inside the block
-# with plain spaces, so every block has the same width and a straight
-# edge), then the PR link and path together on soot — the link takes the
+# block per repo row is hard on the eyes, so the name sits on soot in
+# orange (right-justified inside the block with plain spaces, so every
+# block has the same width and a straight edge), then the PR link and
+# path together on charcoal — the link takes the
 # path's cream when there is nothing open behind it, mint when there is —
 # capping into the bar. The status counts sit on an ash block at the right
 # edge, pointing left, and the block drops with them for an empty repo.
 [dashboard_repo]
-format       = "$fold [ $repo_name ](bg:smoke fg:orange bold)[](fg:smoke bg:soot)[ ($pr_link )$repo_path ](bg:soot fg:cream)[](fg:soot)"
+format       = "$fold [ $repo_name ](bg:soot fg:orange bold)[](fg:soot bg:charcoal)[ ($pr_link )$repo_path ](bg:charcoal fg:cream)[](fg:charcoal)"
 right_format = "([](fg:ash)[ $status_counts ](bg:ash))"
 fill         = " "
 

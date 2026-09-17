@@ -87,15 +87,15 @@ fill         = " "
 # path together on charcoal — the link takes the path's cream when there
 # is nothing open behind it, mint when there is. The chain then caps onto
 # an ash band that runs the rest of the row, the airline base block: the
-# bar's fill painted ash rather than drawn as a rule, so the row reads as
-# one continuous line the way the stock rule does, with the status counts
-# right-justified inside it. An empty repo keeps the band, just without
-# the counts.
+# bar's fill on ash with a faint charcoal rule drawn across it, so the row
+# reads as one continuous line the way the stock rule does, with the
+# status counts right-justified inside it. An empty repo keeps the band,
+# just without the counts.
 [dashboard_repo]
 format       = "$fold [ $repo_name ](bg:soot fg:orange bold)[](fg:soot bg:charcoal)[ ($pr_link )$repo_path ](bg:charcoal fg:cream)[](fg:charcoal bg:ash)"
 right_format = "([ $status_counts ](bg:ash))"
-fill         = " "
-fill_style   = "bg:ash"
+fill         = "─"
+fill_style   = "fg:charcoal bg:ash"
 
 # --- segments (unset fields keep the bundled defaults) -------------------
 

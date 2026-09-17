@@ -112,7 +112,7 @@ spaces before `N ws` match today.
 | `repo_name` | `$pad $name` | header style | — | `$pad` right-justifies the name to the widest repo name: `pad` repeated `n-1` times then one space, for `n > 0` cells short; absent when the name is already the widest. `pad` is one character; the loader rejects anything else. |
 | `pr_link` | `$symbol` | open-PR green when the repo has an open, draft, or conflicted PR; dim otherwise | `Hit::RepoPrs`, over the whole rendered segment | `symbol` overrides the glyph (`PR`, or the Nerd Font glyph when nerd fonts are on). Empty for a repo without a GitHub remote when no repo in the list has one; otherwise renders blanks of the glyph's width and no hit, so the paths of linked and unlinked repos stay aligned. |
 | `repo_path` | `$path` | dim | — | The lossy display path. |
-| `status_counts` | `$question $stalled $waiting $thinking $complete $idle $total` | none | — | Counts of this repo's visible workspaces by dashboard status. Each is empty at zero; `$total` is empty when the repo has no workspaces, so the whole segment is. |
+| `status_counts` | `$question $stalled $waiting $thinking $complete $idle $total` | none | — | Counts of this repo's visible workspaces by dashboard status. Each is empty at zero; the provider renders nothing at all for a repo with no workspaces, whatever the format says. |
 
 All five are dashboard-repo-only: like the header's five, they render empty
 in every other bar, and no other segment produces output in

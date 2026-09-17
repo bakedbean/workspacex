@@ -547,7 +547,7 @@ pub fn attention(
         let next = styles
             .get(n + 1)
             .copied()
-            .or_else(|| tail_seg.as_ref().and_then(|_| tail_style));
+            .or(tail_seg.as_ref().and(tail_style));
         if n > 0 {
             out.append(separator(item_colors(prev, None, Some(styles[n]))));
         }

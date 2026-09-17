@@ -263,7 +263,8 @@ wants a literal `$`, `[`, `(`, or backslash must escape it (`$$`, `\[`,
 a plain run of spaces or box-drawing characters needs no change. `attention`
 alone also takes `more_format`, the tail drawn when entries don't fit the
 bar; its one variable is `$count`, the number of entries folded into it,
-and setting it on any other segment is an error. Likewise `agent_bar`
+and setting it on any other segment is an error. `attention` also takes
+`more_style`, the tail's own `$style` (see the caps below). Likewise `agent_bar`
 alone takes a `symbols` sub-table, one glyph per agent kind, tried ahead
 of `symbol`:
 
@@ -306,25 +307,34 @@ final `$style` colours, `prev_*` and `next_*` those of its rendered
 neighbours. `separator` sees `prev_*` and `next_*` (the items on each side
 of it); `more_format` sees `prev_*` (the last rendered entry). A colour
 that does not exist — the first item's `prev`, the last rendered item's
-`next` even when a tail follows, or a grade that never set that colour —
-carries nothing: that token sets nothing, whatever `$style` or an
-enclosing run already set stays, and where nothing set it the bar's own
-style shows through. That is what lets the last block's trailing wedge
-blend into the bar without the theme knowing how many entries there are,
-provided the wedge sits outside the graded background run (as below),
-not inside it:
+`next`, or a grade that never set that colour — carries nothing: that
+token sets nothing, whatever `$style` or an enclosing run already set
+stays, and where nothing set it the bar's own style shows through. That
+is what lets the last block's trailing wedge blend into the bar without
+the theme knowing how many entries there are, provided the wedge sits
+outside the graded background run (as below), not inside it.
+
+`attention`'s fold tail joins the run through `more_style`: a style
+string patched over the segment's `style`, like a grade. It is the tail's
+`$style` and its `item_*` colours, and the last rendered entry's `next_*`
+when the tail follows it — so that entry's trailing wedge points into the
+tail, and into the bar only when the entry really is last. Without
+`more_style` the tail has no colours of its own: `$style` there is empty,
+and the last entry's `next` is absent even when a tail follows. Like
+`styles`, it may not name the six colours.
 
 ```toml
 [attention]
 styles      = ["bg:charcoal fg:orange", "bg:slate fg:cream", "bg:grey fg:cream"]
+more_style  = "bg:orange fg:black"
 format      = "[ $glyph $repo/$name \\($age\\) ]($style)[\ue0b0](fg:item_bg bg:next_bg)"
 separator   = ""
-more_format = "[\ue0b0](fg:prev_bg bg:orange)[ +$count more ](bg:orange fg:black)[\ue0b0](fg:orange)"
+more_format = "[ +$count more ]($style)[\ue0b0](fg:item_bg)"
 ```
 
-Here each entry carries its own trailing wedge, coloured from its block
-into the next; the first block's leading cap belongs in the bar format,
-where `styles[0]` is known. The formats are TOML double-quoted strings so
+Here each block, entry or tail, carries its own trailing wedge, coloured
+from its block into the next; the first block's leading cap belongs in
+the bar format, where `styles[0]` is known. The formats are TOML double-quoted strings so
 that `\ue0b0` decodes to the wedge glyph and `\\(` reaches the grammar as
 `\(`; in a single-quoted literal string `\ue0b0` would stay as typed and
 render as the five characters `ue0b0`. `styles` entries may not use the

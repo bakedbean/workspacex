@@ -1796,6 +1796,60 @@ mod attention_tests {
         );
     }
 
+    /// With `more_style`, the tail is a graded block like the entries: its
+    /// `$style` and `item_*` are that style, and the last rendered entry's
+    /// `next_*` are the tail's colours when a tail follows — so its
+    /// trailing wedge points into the tail, and only into the bar when
+    /// the entry really is last.
+    #[test]
+    fn more_style_makes_the_tail_the_last_entrys_neighbour() {
+        use ratatui::style::Color;
+        let theme = Theme::wsx();
+        let specs = specs_with(
+            concat!(
+                "[attention]\nstyles = [\"bg:red\"]\n",
+                "more_style = \"bg:green fg:blue\"\n",
+                "format = '[ $name ]($style)[>](fg:item_bg bg:next_bg)'\n",
+                "separator = \"\"\n",
+                "more_format = \"[+$count]($style)[>](fg:item_bg)\"\n",
+            ),
+            &theme,
+        );
+        let span = |seg: &Segment, text: &str, nth: usize| {
+            seg.spans
+                .iter()
+                .filter(|s| s.content.as_ref() == text)
+                .nth(nth)
+                .map(|s| (s.style.fg, s.style.bg))
+                .unwrap_or_else(|| panic!("span {text:?} #{nth} in {:?}", seg.plain_text()))
+        };
+        // Everything fits: no tail, and the last wedge blends into the bar.
+        let all = render_attention(&specs, &theme, &three_entries(), 200).unwrap();
+        assert_eq!(all.plain_text(), " q > ss > ss >");
+        assert_eq!(span(&all, ">", 2), (Some(Color::Red), None));
+
+        // Width 8: " q >" (4) + "+2>" (3) fits; the survivor's wedge takes
+        // the tail's bg, the tail wears its own style and caps itself.
+        let folded = render_attention(&specs, &theme, &three_entries(), 8).unwrap();
+        assert_eq!(folded.plain_text(), " q >+2>");
+        assert_eq!(
+            span(&folded, ">", 0),
+            (Some(Color::Red), Some(Color::Green))
+        );
+        assert_eq!(
+            span(&folded, "+", 0),
+            (Some(Color::Blue), Some(Color::Green))
+        );
+        assert_eq!(span(&folded, ">", 1), (Some(Color::Green), None));
+        assert_eq!(
+            hits(&folded),
+            vec![
+                (0, 4, Hit::Attention(WorkspaceId(1))),
+                (4, 3, Hit::AttentionMore)
+            ]
+        );
+    }
+
     #[test]
     fn no_entries_renders_nothing() {
         let theme = Theme::wsx();

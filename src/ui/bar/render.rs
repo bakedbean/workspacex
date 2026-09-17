@@ -280,6 +280,7 @@ mod tests {
             priority,
             separator: Vec::new(),
             more_format: Vec::new(),
+            more_style: None,
             styles: Vec::new(),
             palette: Default::default(),
             symbols: Vec::new(),

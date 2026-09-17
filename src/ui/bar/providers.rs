@@ -402,9 +402,12 @@ pub fn workspace(
 ///
 /// Like `eval_items`, two passes: measure (no neighbour colours, ungraded
 /// style — neither changes a width) to drop empty items and fit, then
-/// paint with each survivor's grade and rendered neighbours. The last
-/// rendered entry's `next` is absent even when a tail follows; the tail's
-/// `prev` is that entry.
+/// paint with each survivor's grade and rendered neighbours. The tail's
+/// `prev` is the last rendered entry. With `cfg.more_style` the tail is a
+/// graded block too: that style is its `$style` and `item_*`, and the
+/// last rendered entry's `next` when the tail follows it. Without one the
+/// tail is unstyled and that entry's `next` is absent even when a tail
+/// follows.
 pub fn attention(
     cfg: &SegmentConfig,
     items: Option<&AttentionItems>,
@@ -458,9 +461,16 @@ pub fn attention(
         let r = resolver.with_colors(colors);
         eval(&cfg.separator, &SegmentMap::new(), &r, Style::default()).0
     };
+    let tail_style = cfg.more_style.as_ref().map(|spec| {
+        segment_style(cfg, Style::default(), resolver)
+            .patch(resolver.resolve(spec).unwrap_or_default())
+    });
     let tail = |remaining: usize, colors: HashMap<String, Option<Color>>| -> Segment {
         let v = vars(vec![("count", var(remaining.to_string()))]);
-        let r = resolver.with_colors(colors);
+        let r = resolver.with_colors(colors).with_styles(HashMap::from([(
+            "style".to_string(),
+            tail_style.unwrap_or_default(),
+        )]));
         eval(&cfg.more_format, &v, &r, Style::default()).0
     };
     let none = || item_colors(None, None, None);
@@ -523,7 +533,10 @@ pub fn attention(
     let mut out = Segment::default();
     for (n, (i, name, _)) in rendered.into_iter().take(included).enumerate() {
         let prev = (n > 0).then(|| styles[n - 1]);
-        let next = styles.get(n + 1).copied();
+        let next = styles
+            .get(n + 1)
+            .copied()
+            .or_else(|| (remaining > 0).then_some(tail_style).flatten());
         if n > 0 {
             out.append(separator(item_colors(prev, None, Some(styles[n]))));
         }
@@ -546,7 +559,7 @@ pub fn attention(
         let start = out.width;
         out.append(tail(
             remaining,
-            item_colors(styles.last().copied(), None, None),
+            item_colors(styles.last().copied(), tail_style, None),
         ));
         out.hit_from(start, Hit::AttentionMore);
     }
@@ -828,6 +841,7 @@ mod tests {
             priority: 100,
             separator: crate::ui::bar::format::parse(separator).unwrap(),
             more_format: Vec::new(),
+            more_style: None,
             styles: Vec::new(),
             palette: HashMap::new(),
             symbols: Vec::new(),

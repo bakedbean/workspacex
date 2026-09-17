@@ -192,7 +192,7 @@ separator = "   "
 format = "([$model](bold) )[$tokens]($style)"
 
 [diff]
-format = "[+$added](fg:green bold) [−$removed](fg:blood)"
+format = "[+$added](fg:green bold) [−$removed](fg:#ff8080)"
 
 # Keep the lifecycle tint ($style: mint open, lilac merged, rose closed)
 # on top of the block's orange, instead of the block's black text — the

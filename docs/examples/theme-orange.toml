@@ -84,14 +84,18 @@ fill         = " "
 # block per repo row is hard on the eyes, so the name sits on soot in
 # orange (right-justified inside the block with plain spaces, so every
 # block has the same width and a straight edge), then the PR link and
-# path together on charcoal — the link takes the
-# path's cream when there is nothing open behind it, mint when there is —
-# capping into the bar. The status counts sit on an ash block at the right
-# edge, pointing left, and the block drops with them for an empty repo.
+# path together on charcoal — the link takes the path's cream when there
+# is nothing open behind it, mint when there is. The chain then caps onto
+# an ash band that runs the rest of the row, the airline base block: the
+# bar's fill painted ash rather than drawn as a rule, so the row reads as
+# one continuous line the way the stock rule does, with the status counts
+# right-justified inside it. An empty repo keeps the band, just without
+# the counts.
 [dashboard_repo]
-format       = "$fold [ $repo_name ](bg:soot fg:orange bold)[](fg:soot bg:charcoal)[ ($pr_link )$repo_path ](bg:charcoal fg:cream)[](fg:charcoal)"
-right_format = "([](fg:ash)[ $status_counts ](bg:ash))"
+format       = "$fold [ $repo_name ](bg:soot fg:orange bold)[](fg:soot bg:charcoal)[ ($pr_link )$repo_path ](bg:charcoal fg:cream)[](fg:charcoal bg:ash)"
+right_format = "([ $status_counts ](bg:ash))"
 fill         = " "
+fill_style   = "bg:ash"
 
 # --- segments (unset fields keep the bundled defaults) -------------------
 

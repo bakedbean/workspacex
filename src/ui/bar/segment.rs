@@ -130,6 +130,11 @@ pub struct SegmentConfig {
     /// fit (`attention`'s ` … +N more`). Its variables are the segment's
     /// `SegmentDef::more_vars`; empty on segments without a tail.
     pub more_format: Vec<Node>,
+    /// The tail's own style, patched over `style` like a grade: its
+    /// `$style` and `item_*` colours, and the last rendered entry's
+    /// `next_*` when the tail follows it. `None` leaves the tail unstyled
+    /// and the last entry's `next` absent even when a tail follows.
+    pub more_style: Option<StyleSpec>,
     /// Per-position item styles for a multi-item segment: item `i` gets
     /// `styles[i]`, or the last entry once the list runs out, patched over
     /// the provider's default and `style`. Empty grades nothing.

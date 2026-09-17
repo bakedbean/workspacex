@@ -68,6 +68,7 @@ pub struct SegmentTable {
     pub priority: Option<u32>,
     pub separator: Option<String>,
     pub more_format: Option<String>,
+    pub more_style: Option<String>,
     pub styles: Option<Vec<String>>,
     /// `[<segment>.palette]`: colours that shadow `[palette]` and the theme
     /// tokens inside this segment only. Same value grammar as `[palette]`.
@@ -144,6 +145,7 @@ impl SegmentTable {
             priority: self.priority.or(base.priority),
             separator: self.separator.or(base.separator),
             more_format: self.more_format.or(base.more_format),
+            more_style: self.more_style.or(base.more_style),
             styles: self.styles.or(base.styles),
             palette: {
                 let mut palette = self.palette;
@@ -425,9 +427,25 @@ fn resolve_segment(
             .collect(),
         None => Vec::new(),
     };
-    // Likewise the overflow tail: no item, so no item `$style`. Only a
-    // segment that folds entries has one at all; a tail on any other is
-    // rejected outright rather than silently ignored.
+    // The tail's own grade: only `attention` folds entries into a tail
+    // that sits in the graded run, so only it takes one. A grade can't
+    // depend on the neighbours that depend on it, as with `styles`.
+    let more_style_loc = format!("[{name}].more_style");
+    let more_style = match tbl.more_style.as_deref() {
+        Some(_) if name != "attention" => {
+            errors.push(error(
+                &more_style_loc,
+                "this segment has no styled tail (only `attention` takes `more_style`)",
+            ));
+            None
+        }
+        Some(src) => Some(styled(&more_style_loc, Some(src), base_resolver, errors)),
+        None => None,
+    };
+    // Likewise the overflow tail. Only a segment that folds entries has
+    // one at all; a tail on any other is rejected outright rather than
+    // silently ignored. `attention`'s tail has a `$style` (`more_style`,
+    // or nothing); `tags`' manager chip has none.
     let more_loc = format!("[{name}].more_format");
     let more_format = match tbl.more_format.as_deref() {
         Some(_) if def.more_vars.is_empty() => {
@@ -439,7 +457,12 @@ fn resolve_segment(
         }
         Some(src) => {
             let nodes = parse_format(&more_loc, src, errors);
-            validate(&more_loc, &nodes, def.more_vars, resolver, errors);
+            let tail_resolver = if name == "attention" {
+                resolver.with_styles(placeholder_styles(&["style"]))
+            } else {
+                resolver.clone()
+            };
+            validate(&more_loc, &nodes, def.more_vars, &tail_resolver, errors);
             nodes
         }
         None => Vec::new(),
@@ -461,6 +484,7 @@ fn resolve_segment(
             .unwrap_or(crate::ui::bar::render::DEFAULT_PRIORITY),
         separator,
         more_format,
+        more_style,
         styles,
         palette,
         symbols,
@@ -545,6 +569,7 @@ fn resolve_module(
             .unwrap_or(crate::ui::bar::render::DEFAULT_PRIORITY),
         separator: Vec::new(),
         more_format: Vec::new(),
+        more_style: None,
         styles: Vec::new(),
         // A module has no `[module.<name>.palette]`: its format is
         // validated against the global resolver, so nothing to shadow.
@@ -1114,7 +1139,7 @@ mod tests {
         assert_eq!(e.len(), 1, "{e:?}");
         assert_eq!(e[0].location, "[attention].more_format");
         assert!(e[0].message.contains("nope"), "{}", e[0].message);
-        assert!(!errs("[attention]\nmore_format = \"[$count]($style)\"\n").is_empty());
+        ok("[attention]\nmore_format = \"[$count]($style)\"\n");
         // A tail on a segment that never folds is rejected outright, even
         // when it references nothing: "attention alone takes more_format".
         for src in [
@@ -1131,6 +1156,42 @@ mod tests {
                 e[0].message
             );
         }
+    }
+
+    /// `more_style` is the tail's own `$style`, exposed to the tail as
+    /// `item_*` and to the last rendered entry as `next_*`. Only
+    /// `attention` folds entries into a styled tail, so it is rejected on
+    /// every other segment, and like `styles` it may not name the
+    /// neighbour colours that depend on it.
+    #[test]
+    fn more_style_grades_the_attention_tail_and_nothing_elsewhere() {
+        let specs = ok(concat!(
+            "[attention]\nmore_style = \"bg:red fg:blue\"\n",
+            "more_format = \"[ +$count ]($style)[>](fg:item_bg)\"\n",
+        ));
+        assert_eq!(
+            specs.segments["attention"].more_style,
+            Some(StyleSpec::parse("bg:red fg:blue").unwrap())
+        );
+        assert_eq!(specs.segments["tags"].more_style, None);
+
+        let e = errs("[attention]\nmore_style = \"fg:nope\"\n");
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert_eq!(e[0].location, "[attention].more_style");
+        assert!(!errs("[attention]\nmore_style = \"bg:prev_bg\"\n").is_empty());
+
+        for src in [
+            "[tags]\nmore_style = \"bg:red\"\n",
+            "[pins]\nmore_style = \"bg:red\"\n",
+        ] {
+            let e = errs(src);
+            assert_eq!(e.len(), 1, "{src}: {e:?}");
+            assert!(e[0].location.ends_with(".more_style"), "{}", e[0].location);
+            assert!(e[0].message.contains("attention"), "{}", e[0].message);
+        }
+        // The tail's `$style` belongs to attention alone; tags' manager
+        // chip has none.
+        assert!(!errs("[tags]\nmore_format = \"[$count]($style)\"\n").is_empty());
     }
 
     /// `tags` folds nothing, but its manager chip is a tail all the same:

@@ -62,12 +62,12 @@ fill         = " "
 # colour, wedging into the orange workspace block; with no agent the group
 # drops and the workspace block takes the edge. The attention entries are
 # graded blocks (see [attention]). The orange block keeps one cell of
-# spacer and caps straight onto the first entry, whose grade is the run's
-# own ash; each block then draws its own trailing wedge, the last one
-# blending back into ash. With nothing to show, the run collapses to its
-# wedge like the other bars' blocks.
+# spacer and caps straight onto the first entry, whose grade is ash; each
+# block after that — entry or fold tail — draws its own trailing wedge,
+# the last one into the bar. With nothing to show, the chain collapses to
+# the orange wedge like the other bars' blocks.
 [attached_top]
-format       = "([ $agent_bar ](bg:ash)[\ue0b0](fg:ash bg:orange))[ $workspace  ](bg:orange fg:black bold)[\ue0b0](fg:orange bg:ash)[($attention )](bg:ash fg:orange)[\ue0b0](fg:ash)"
+format       = "([ $agent_bar ](bg:ash)[\ue0b0](fg:ash bg:orange))[ $workspace  ](bg:orange fg:black bold)[\ue0b0](fg:orange bg:ash)$attention"
 fill         = " "
 
 # Left: key hints on ash, matching the top bar's agent block, then pinned
@@ -169,21 +169,22 @@ err       = "rose"
 warn      = "butter"
 header_fg = "chalk"
 
-# Attention entries as graded airline blocks: the first on the run's own
-# ash, every one after on black, the base background (styles clamp to the
-# last grade), so the first entry reads as a block and the rest sit flat
-# on the bar.
+# Attention entries as graded airline blocks: the first on ash, every one
+# after on black, the base background (styles clamp to the last grade),
+# so the first entry reads as a block and the rest sit flat on the bar.
 # Grades set only the background, so each name keeps its PR-lifecycle
-# tint; the age is cream, dimmed. Every block draws its own trailing wedge from its bg
-# (item_bg) into the next block's (next_bg); the last block's next is
-# absent, so its wedge inherits the ash run. The fold tail is an orange
-# block whose leading wedge takes the last block's bg. Literal parens
-# around the age must be escaped: bare ( ) is the conditional group.
+# tint; the age is cream, dimmed. Every block draws its own trailing
+# wedge from its bg (item_bg) into the next block's (next_bg): the next
+# entry's grade, the fold tail's orange (more_style) when one follows, or
+# nothing — the bar — after the last. The tail is an orange block that
+# caps itself the same way. Literal parens around the age must be
+# escaped: bare ( ) is the conditional group.
 [attention]
 styles      = ["bg:ash", "bg:black"]
+more_style  = "bg:orange fg:black"
 format      = "[[ $glyph $repo/$name ]($style)[\\($age\\) ](fg:cream dimmed)](bg:item_bg)[\ue0b0](fg:item_bg bg:next_bg)"
 separator   = ""
-more_format = "[\ue0b0](fg:prev_bg bg:orange)[ +$count more ](bg:orange fg:black bold)[\ue0b0](fg:orange bg:ash)"
+more_format = "[ +$count more ]($style bold)[\ue0b0](fg:item_bg)"
 
 [agents]
 format    = "[$symbol($icon )]($style)$label ([$key](bold))"

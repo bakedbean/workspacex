@@ -1796,6 +1796,117 @@ mod attention_tests {
         );
     }
 
+    /// With `more_style`, the tail is a graded block like the entries: its
+    /// `$style` and `item_*` are that style, and the last rendered entry's
+    /// `next_*` are the tail's colours when a tail follows — so its
+    /// trailing wedge points into the tail, and only into the bar when
+    /// the entry really is last.
+    #[test]
+    fn more_style_makes_the_tail_the_last_entrys_neighbour() {
+        use ratatui::style::Color;
+        let theme = Theme::wsx();
+        let specs = specs_with(
+            concat!(
+                "[attention]\nstyles = [\"bg:red\"]\n",
+                "more_style = \"bg:green fg:blue\"\n",
+                "format = '[ $name ]($style)[>](fg:item_bg bg:next_bg)'\n",
+                "separator = \"\"\n",
+                "more_format = \"[+$count]($style)[>](fg:item_bg)\"\n",
+            ),
+            &theme,
+        );
+        let span = |seg: &Segment, text: &str, nth: usize| {
+            seg.spans
+                .iter()
+                .filter(|s| s.content.as_ref() == text)
+                .nth(nth)
+                .map(|s| (s.style.fg, s.style.bg))
+                .unwrap_or_else(|| panic!("span {text:?} #{nth} in {:?}", seg.plain_text()))
+        };
+        // Everything fits: no tail, and the last wedge blends into the bar.
+        let all = render_attention(&specs, &theme, &three_entries(), 200).unwrap();
+        assert_eq!(all.plain_text(), " q > ss > ss >");
+        assert_eq!(span(&all, ">", 2), (Some(Color::Red), None));
+
+        // Width 8: " q >" (4) + "+2>" (3) fits; the survivor's wedge takes
+        // the tail's bg, the tail wears its own style and caps itself.
+        let folded = render_attention(&specs, &theme, &three_entries(), 8).unwrap();
+        assert_eq!(folded.plain_text(), " q >+2>");
+        assert_eq!(
+            span(&folded, ">", 0),
+            (Some(Color::Red), Some(Color::Green))
+        );
+        assert_eq!(
+            span(&folded, "+", 0),
+            (Some(Color::Blue), Some(Color::Green))
+        );
+        assert_eq!(span(&folded, ">", 1), (Some(Color::Green), None));
+        assert_eq!(
+            hits(&folded),
+            vec![
+                (0, 4, Hit::Attention(WorkspaceId(1))),
+                (4, 3, Hit::AttentionMore)
+            ]
+        );
+    }
+
+    /// A tail that renders nothing is no neighbour: entries still fold,
+    /// but the survivor's wedge blends into the bar rather than into the
+    /// colour of a tail that isn't there, and there is no tail hit.
+    #[test]
+    fn an_empty_tail_is_not_the_last_entrys_neighbour() {
+        use ratatui::style::Color;
+        let theme = Theme::wsx();
+        let specs = specs_with(
+            concat!(
+                "[attention]\nstyles = [\"bg:red\"]\n",
+                "more_style = \"bg:green\"\n",
+                "format = '[ $name ]($style)[>](fg:item_bg bg:next_bg)'\n",
+                "separator = \"\"\n",
+                "more_format = \"\"\n",
+            ),
+            &theme,
+        );
+        let folded = render_attention(&specs, &theme, &three_entries(), 4).unwrap();
+        assert_eq!(folded.plain_text(), " q >");
+        let wedge = folded
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == ">")
+            .unwrap();
+        assert_eq!((wedge.style.fg, wedge.style.bg), (Some(Color::Red), None));
+        assert_eq!(hits(&folded), vec![(0, 4, Hit::Attention(WorkspaceId(1)))]);
+    }
+
+    /// `more_style` is a grade: patched over the segment's `style` (and
+    /// its palette), so a bg-only tail style keeps the segment's fg.
+    #[test]
+    fn more_style_patches_over_the_segment_style() {
+        use ratatui::style::Color;
+        let theme = Theme::wsx();
+        let specs = specs_with(
+            concat!(
+                "[attention]\nstyle = \"fg:blue\"\n",
+                "more_style = \"bg:tail\"\n",
+                "format = '$name'\n",
+                "more_format = \"[+$count]($style)\"\n",
+                "[attention.palette]\ntail = \"green\"\n",
+            ),
+            &theme,
+        );
+        let folded = render_attention(&specs, &theme, &three_entries(), 4).unwrap();
+        assert_eq!(folded.plain_text(), "q+2");
+        let tail = folded
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "+")
+            .unwrap();
+        assert_eq!(
+            (tail.style.fg, tail.style.bg),
+            (Some(Color::Blue), Some(Color::Green))
+        );
+    }
+
     #[test]
     fn no_entries_renders_nothing() {
         let theme = Theme::wsx();
@@ -2025,6 +2136,91 @@ mod example_theme_tests {
         let name = name_cell(&top);
         assert_eq!((name.fg, name.bg), (chalk, orange), "no-PR name");
         assert!(name.modifier.contains(Modifier::BOLD));
+    }
+
+    /// The orange example's attention run: the workspace block wedges
+    /// into the first (ash) entry, each block wedges into the next, and
+    /// whichever block comes last — the last entry, or the orange fold
+    /// tail — wedges straight into the bar. The tail used to end on an
+    /// ash wedge, a spacer, and the run's own cap: a dark, empty segment
+    /// after "+N more".
+    #[test]
+    fn orange_example_caps_the_attention_tail_straight_into_the_bar() {
+        use crate::data::store::WorkspaceId;
+        use crate::ui::dashboard::status::Status;
+        use crate::ui::updates_bar::{AttentionEntry, AttentionItems};
+        let theme = Theme::jellybeans();
+        let specs = load(&examples_dir().join("theme-orange.toml"), &theme).unwrap();
+        let orange = Some(Color::Rgb(0xd7, 0x5f, 0x00));
+        let ash = Some(Color::Rgb(0x1c, 0x1c, 0x1c));
+        let black = Some(Color::Rgb(0x15, 0x15, 0x15));
+        let entry = |id: i64| AttentionEntry {
+            workspace_id: WorkspaceId(id),
+            repo_name: "r".into(),
+            name: "n".into(),
+            age_anchor_ms: 9_000,
+            status: Status::Stalled,
+            lifecycle: None,
+        };
+        let render = |width: u16, entries: Vec<AttentionEntry>| {
+            let inputs = AttachedInputs {
+                repo: "",
+                name: "ws",
+                version: "0.1.0",
+                window_label: "24h",
+                activity: &[],
+                agent: None,
+                attention: Some(AttentionItems {
+                    entries,
+                    now_ms: 10_000,
+                    max_width: usize::from(width) - 8,
+                }),
+                pinned: &[],
+                tags: &[],
+                procs: 0,
+                diff: None,
+                pr: None,
+                model_tokens: None,
+                agents: &[],
+                active_agent: None,
+                fleet: crate::ui::bar::fleet::empty(),
+            };
+            let bars = attached_bars(&specs, &theme, inputs, width, width);
+            let wedges: Vec<(Option<Color>, Option<Color>)> = bars
+                .top
+                .line
+                .spans
+                .iter()
+                .filter(|s| s.content.as_ref() == "\u{e0b0}")
+                .map(|s| (s.style.fg, s.style.bg))
+                .collect();
+            (plain(&bars.top.line), wedges)
+        };
+
+        // Nothing to show: the chain collapses to the workspace block's
+        // own wedge, and nothing follows it.
+        let (text, wedges) = render(120, vec![]);
+        assert_eq!(text.trim_end(), " ws  \u{e0b0}");
+        assert_eq!(wedges, vec![(orange, ash)]);
+
+        // Wide enough for all three: ash, then two flat black blocks,
+        // the last wedging into the bar.
+        let (text, wedges) = render(120, vec![entry(1), entry(2), entry(3)]);
+        assert!(!text.contains("more"), "{text:?}");
+        assert_eq!(
+            wedges,
+            vec![(orange, ash), (ash, black), (black, black), (black, None)]
+        );
+
+        // Folded: the survivor wedges into the orange tail, which caps
+        // itself into the bar — no ash after it.
+        let (text, wedges) = render(40, vec![entry(1), entry(2), entry(3)]);
+        assert!(text.contains("+2 more"), "{text:?}");
+        assert_eq!(wedges, vec![(orange, ash), (ash, orange), (orange, None)]);
+        assert!(
+            text.trim_end().ends_with("more \u{e0b0}"),
+            "the tail's wedge must be the last thing on the bar: {text:?}"
+        );
     }
 
     /// With an empty fleet, `$funnel` is empty and its conditional group

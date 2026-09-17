@@ -839,6 +839,7 @@ mod tests {
         SegmentConfig {
             style: crate::ui::bar::style::StyleSpec::default(),
             symbol: None,
+            pad: None,
             format: crate::ui::bar::format::parse(format_src).unwrap(),
             disabled: false,
             priority: 100,

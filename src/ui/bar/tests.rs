@@ -1118,7 +1118,9 @@ mod segment_registry_drift_tests {
         let expected: BTreeSet<&str> = SEGMENTS
             .iter()
             .map(|d| d.name)
-            .filter(|name| !DASHBOARD_HEADER_ONLY.contains(name))
+            .filter(|name| {
+                !DASHBOARD_HEADER_ONLY.contains(name) && !DASHBOARD_REPO_ONLY.contains(name)
+            })
             .collect();
         assert_eq!(
             got, expected,
@@ -1130,6 +1132,21 @@ mod segment_registry_drift_tests {
     /// The dashboard header's five segments: registered like any other, but
     /// carrying dashboard-only state, so the attached bars never build them.
     const DASHBOARD_HEADER_ONLY: [&str; 5] = ["brand", "group", "sort", "filter", "counts"];
+
+    /// The dashboard repo bar's five segments: registered like any other,
+    /// but carrying per-repo state the attached bars never build.
+    const DASHBOARD_REPO_ONLY: [&str; 5] =
+        ["fold", "repo_name", "pr_link", "repo_path", "status_counts"];
+
+    #[test]
+    fn dashboard_repo_segments_are_all_registered_names() {
+        for name in DASHBOARD_REPO_ONLY {
+            assert!(
+                SEGMENTS.iter().any(|d| d.name == name),
+                "dashboard_repo's `{name}` segment must be in registry::SEGMENTS"
+            );
+        }
+    }
 
     /// The dashboard footer's three segments (`keys`, `version`, `usage`)
     /// must all be registered names, not private to `dashboard_footer`.

@@ -42,6 +42,8 @@ const NO_SYMBOLS: &[&str] = &[];
 /// in `AgentKind::ALL` order; `agent_bar_symbol_keys_are_the_agent_kind_names`
 /// pins the two together.
 const AGENT_KIND_SYMBOLS: &[&str] = &["claude", "pi", "hermes", "codex", "omp"];
+/// `[fold.symbols]`: the repo bar's fold glyphs.
+const FOLD_SYMBOLS: &[&str] = &["expanded", "folded"];
 
 /// Colour names a multi-item segment's `format`, `separator`, and
 /// `more_format` may use, resolved per item from the final `$style` of the
@@ -217,6 +219,54 @@ pub const SEGMENTS: &[SegmentDef] = &[
         more_vars: NO_TAIL,
         items: false,
         singleton: true,
+        symbol_keys: NO_SYMBOLS,
+    },
+    // --- the by-repo dashboard's per-repo header (`[dashboard_repo]`) ---
+    SegmentDef {
+        name: "fold",
+        vars: &["symbol"],
+        style_vars: STYLE,
+        more_vars: NO_TAIL,
+        items: false,
+        singleton: false,
+        symbol_keys: FOLD_SYMBOLS,
+    },
+    SegmentDef {
+        name: "repo_name",
+        vars: &["pad", "name"],
+        style_vars: STYLE,
+        more_vars: NO_TAIL,
+        items: false,
+        singleton: false,
+        symbol_keys: NO_SYMBOLS,
+    },
+    SegmentDef {
+        name: "pr_link",
+        vars: &["symbol"],
+        style_vars: STYLE,
+        more_vars: NO_TAIL,
+        items: false,
+        singleton: true,
+        symbol_keys: NO_SYMBOLS,
+    },
+    SegmentDef {
+        name: "repo_path",
+        vars: &["path"],
+        style_vars: STYLE,
+        more_vars: NO_TAIL,
+        items: false,
+        singleton: false,
+        symbol_keys: NO_SYMBOLS,
+    },
+    SegmentDef {
+        name: "status_counts",
+        vars: &[
+            "question", "stalled", "waiting", "thinking", "complete", "idle", "total",
+        ],
+        style_vars: STYLE,
+        more_vars: NO_TAIL,
+        items: false,
+        singleton: false,
         symbol_keys: NO_SYMBOLS,
     },
 ];
@@ -430,11 +480,15 @@ mod tests {
     #[test]
     fn singleton_names_matches_the_flagged_entries() {
         let names: Vec<&str> = singleton_names().collect();
-        assert_eq!(names, vec!["usage", "attention", "tags", "procs", "pr"]);
+        assert_eq!(
+            names,
+            vec!["usage", "attention", "tags", "procs", "pr", "pr_link"]
+        );
     }
 
     /// `[agent_bar.symbols]` keys are the agent kinds by display name, in
-    /// `AgentKind::ALL` order; no other segment takes a symbols table yet.
+    /// `AgentKind::ALL` order; `[fold.symbols]` keys are its two states;
+    /// no other segment takes a symbols table.
     #[test]
     fn agent_bar_symbol_keys_are_the_agent_kind_names() {
         let expected: Vec<&str> = crate::pty::session::AgentKind::ALL
@@ -445,7 +499,14 @@ mod tests {
             segment_def("agent_bar").unwrap().symbol_keys,
             expected.as_slice()
         );
-        for d in SEGMENTS.iter().filter(|d| d.name != "agent_bar") {
+        assert_eq!(
+            segment_def("fold").unwrap().symbol_keys,
+            &["expanded", "folded"]
+        );
+        for d in SEGMENTS
+            .iter()
+            .filter(|d| d.name != "agent_bar" && d.name != "fold")
+        {
             assert!(
                 d.symbol_keys.is_empty(),
                 "{} unexpectedly takes symbols",

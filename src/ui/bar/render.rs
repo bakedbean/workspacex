@@ -275,6 +275,7 @@ mod tests {
         SegmentConfig {
             style: StyleSpec::default(),
             symbol: None,
+            pad: None,
             format: vec![],
             disabled: false,
             priority,

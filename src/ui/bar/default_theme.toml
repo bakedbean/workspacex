@@ -20,8 +20,8 @@
 # segments at the default never drop, so the left side is clipped and the
 # right omitted if nothing droppable is left. Segments take `format`,
 # `style` (merged over the segment's own state color, available as $style),
-# `symbol`, `disabled`, `priority`, and `separator` (between items of
-# keys/pins/agents).
+# `symbol`, `pad` (repo_name only), `disabled`, `priority`, and
+# `separator` (between items of keys/pins/agents).
 #
 # The evaluator always keeps one blank cell between a nonempty `format` and
 # a nonempty `right_format`, so `right_format` groups need only one leading
@@ -66,6 +66,20 @@ fill_style   = "fg:dim"
 format     = "($pins  )"
 fill       = "─"
 fill_style = "fg:dim"
+
+# The by-repo dashboard's per-repo header line, drawn once per repo:
+# `▾ ── name  PR  /path/to/repo  ────  ? 1  ✓ 2    3 ws`. The two spaces
+# closing `format` and the one opening `right_format` (plus the engine's
+# mandatory blank) flank the rule with two cells each side; an empty repo
+# has no counts, so no right side, and the rule runs to the edge. Cross-
+# repo alignment (names right-justified to a shared column, one PR-link
+# gutter for every repo) is computed by the view and arrives through
+# `$pad` and `$pr_link`'s blank placeholder.
+[dashboard_repo]
+format       = "$fold $repo_name  ($pr_link  )$repo_path  "
+right_format = " $status_counts"
+fill         = "─"
+fill_style   = "fg:dim"
 
 # --- segments ---------------------------------------------------------
 
@@ -182,6 +196,44 @@ priority = 40
 [pr]
 format   = "[$symbol #$number $label]($style)( [$mark]($mark_style))"
 priority = 50
+
+# --- dashboard repo bar segments ---------------------------------------
+
+# The fold glyph: `expanded` or `folded` from the table below, or a blank
+# of the same width for a repo with no workspaces. Variables: $symbol
+[fold]
+format = "[$symbol]($style)"
+
+[fold.symbols]
+expanded = "▾"
+folded   = "▸"
+
+# The repo name, right-justified to the widest name in the list: `$pad`
+# is `pad` repeated over the shortfall less one, then a space, and absent
+# for the widest name. A space `pad` gives plain spaces, for a name on a
+# coloured block. Variables: $pad $name
+[repo_name]
+pad    = "─"
+format = "[$pad](fg:dim)[$name]($style)"
+
+# The clickable "my open PRs" link: `PR`, or the Nerd Font pull-request
+# glyph, lit in the open-PR green when a workspace has an open PR and dim
+# otherwise. Absent when no repo in the list has a GitHub remote; a blank
+# of the glyph's width, with no click, for a repo that has none while
+# another does, so every path starts in the same column. `symbol`
+# overrides the glyph. Variables: $symbol
+[pr_link]
+format = "[$symbol]($style)"
+
+# Variables: $path
+[repo_path]
+format = "[$path](fg:dim)"
+
+# This repo's workspaces by status, each count empty at zero so its group
+# drops, then the total. Nothing at all for a repo with no workspaces.
+# Variables: $question $stalled $waiting $thinking $complete $idle $total
+[status_counts]
+format = "([? $question](fg:question bold)  )([! $stalled](fg:stalled bold)  )([… $waiting](fg:waiting)  )([⠋ $thinking](fg:thinking)  )([✓ $complete](fg:complete)  )([· $idle](fg:dim)  )  [$total ws](fg:dim)"
 
 # --- modules ----------------------------------------------------------
 # A [module.<name>] table is a segment you compose yourself from fleet-wide

@@ -37,6 +37,10 @@ pub struct ThemeFile {
     /// part of the flattened `segments` map, like the other bars.
     #[serde(default)]
     pub dashboard_detail: BarTable,
+    /// The by-repo dashboard's per-repo header line. A named field, not
+    /// part of the flattened `segments` map, like the other bars.
+    #[serde(default)]
+    pub dashboard_repo: BarTable,
     /// User-composed modules, `[module.<name>]`. Declared before the
     /// flattened `segments` map so serde routes the `module` table here
     /// rather than treating it as a segment named `module`.
@@ -63,6 +67,9 @@ pub struct SegmentTable {
     pub format: Option<String>,
     pub style: Option<String>,
     pub symbol: Option<String>,
+    /// `[repo_name].pad`: the one character that fills `$pad`. Rejected on
+    /// every other segment.
+    pub pad: Option<String>,
     pub disabled: Option<bool>,
     pub priority: Option<u32>,
     pub separator: Option<String>,
@@ -140,6 +147,7 @@ impl SegmentTable {
             format: self.format.or(base.format),
             style: self.style.or(base.style),
             symbol: self.symbol.or(base.symbol),
+            pad: self.pad.or(base.pad),
             disabled: self.disabled.or(base.disabled),
             priority: self.priority.or(base.priority),
             separator: self.separator.or(base.separator),
@@ -182,6 +190,7 @@ impl ThemeFile {
         self.attached_top = self.attached_top.merge_over(base.attached_top);
         self.attached_bottom = self.attached_bottom.merge_over(base.attached_bottom);
         self.dashboard_detail = self.dashboard_detail.merge_over(base.dashboard_detail);
+        self.dashboard_repo = self.dashboard_repo.merge_over(base.dashboard_repo);
         for (name, tbl) in base.segments {
             let mine = self.segments.remove(&name).unwrap_or_default();
             self.segments.insert(name, mine.merge_over(tbl));
@@ -203,6 +212,8 @@ pub struct BarSpecs {
     pub attached_top: BarSpec,
     pub attached_bottom: BarSpec,
     pub dashboard_detail: BarSpec,
+    /// The by-repo dashboard's per-repo header line.
+    pub dashboard_repo: BarSpec,
     pub segments: HashMap<String, SegmentConfig>,
     /// Names of every `[module.<name>]`, sorted by name (the `BTreeMap`
     /// this is built from yields keys in that order, not table order).
@@ -472,10 +483,29 @@ fn resolve_segment(
         base_resolver,
         errors,
     );
+    let pad_loc = format!("[{name}].pad");
+    let pad = match tbl.pad.as_deref() {
+        Some(_) if name != "repo_name" => {
+            errors.push(error(&pad_loc, "only [repo_name] takes `pad`"));
+            None
+        }
+        Some(s) => {
+            let mut chars = s.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => Some(c),
+                _ => {
+                    errors.push(error(&pad_loc, "`pad` must be exactly one character"));
+                    None
+                }
+            }
+        }
+        None => None,
+    };
     let symbols = resolve_symbols(name, def, tbl.symbols.as_ref(), errors);
     Some(SegmentConfig {
         style,
         symbol: tbl.symbol.clone(),
+        pad,
         format: nodes,
         disabled: tbl.disabled.unwrap_or(false),
         priority: tbl
@@ -567,6 +597,7 @@ fn resolve_module(
     Some(SegmentConfig {
         style,
         symbol: None,
+        pad: None,
         format: nodes,
         disabled: tbl.disabled.unwrap_or(false),
         priority: tbl
@@ -645,17 +676,19 @@ fn check_singleton_scope(loc: &str, nodes: &[&[Node]], verb: &str, errors: &mut 
 }
 
 /// Reject a singleton segment placed more than once among the bars that
-/// would each try to route its one click target. Four independent
+/// would each try to route its one click target. Five independent
 /// scopes: the attached pair together, the dashboard footer's own two
-/// sides, the dashboard header's own two sides, and the dashboard detail
-/// pane's pinned-chip row on its own (a singleton may appear once in each
-/// without conflicting with the other scopes).
+/// sides, the dashboard header's own two sides, the dashboard detail
+/// pane's pinned-chip row on its own, and the dashboard repo bar on its
+/// own (a singleton may appear once in each without conflicting with the
+/// other scopes).
 fn check_singletons(
     dashboard: &BarSpec,
     header: &BarSpec,
     top: &BarSpec,
     bottom: &BarSpec,
     detail: &BarSpec,
+    repo: &BarSpec,
     errors: &mut Vec<ThemeError>,
 ) {
     let attached_nodes: [&[Node]; 4] = [
@@ -689,6 +722,13 @@ fn check_singletons(
         "[dashboard_detail]",
         &detail_nodes,
         "in the dashboard detail pane's pinned-chip row",
+        errors,
+    );
+    let repo_nodes: [&[Node]; 2] = [&repo.format, &repo.right_format];
+    check_singleton_scope(
+        "[dashboard_repo]",
+        &repo_nodes,
+        "in the dashboard repo bar",
         errors,
     );
 }
@@ -763,12 +803,21 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
         &mut errors,
     );
 
+    let dashboard_repo = resolve_bar(
+        "dashboard_repo",
+        &file.dashboard_repo,
+        &allowed_names,
+        &resolver,
+        &mut errors,
+    );
+
     check_singletons(
         &dashboard_footer,
         &dashboard_header,
         &attached_top,
         &attached_bottom,
         &dashboard_detail,
+        &dashboard_repo,
         &mut errors,
     );
 
@@ -780,6 +829,7 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
             attached_top,
             attached_bottom,
             dashboard_detail,
+            dashboard_repo,
             segments,
             modules,
         })
@@ -894,6 +944,65 @@ mod tests {
             format::parse("$counts").unwrap(),
             "unset fields keep the default"
         );
+    }
+
+    #[test]
+    fn partial_dashboard_repo_table_merges_over_the_default() {
+        let specs = ok("[dashboard_repo]\nformat = \"$repo_name\"\n");
+        assert_eq!(
+            specs.dashboard_repo.format,
+            format::parse("$repo_name").unwrap()
+        );
+        assert_eq!(specs.dashboard_repo.fill, "─", "fill keeps the default");
+        assert_eq!(
+            specs.dashboard_repo.right_format,
+            format::parse(" $status_counts").unwrap(),
+            "right side keeps the default"
+        );
+    }
+
+    #[test]
+    fn pr_link_twice_in_the_repo_bar_is_an_error() {
+        let e = errs("[dashboard_repo]\nright_format = \"$pr_link $status_counts\"\n");
+        assert!(
+            e.iter().any(|e| e.location == "[dashboard_repo]"
+                && e.message.contains("$pr_link")
+                && e.message.contains("in the dashboard repo bar")),
+            "{e:?}"
+        );
+    }
+
+    #[test]
+    fn pad_is_accepted_on_repo_name_only_and_must_be_one_char() {
+        assert_eq!(
+            ok("[repo_name]\npad = \" \"\n").segments["repo_name"].pad,
+            Some(' ')
+        );
+        assert_eq!(
+            bundled_default(&Theme::wsx()).segments["repo_name"].pad,
+            Some('─'),
+            "the bundled default pads with a rule"
+        );
+        let e = errs("[repo_name]\npad = \"--\"\n");
+        assert_eq!(e[0].location, "[repo_name].pad");
+        assert!(e[0].message.contains("one character"), "{}", e[0].message);
+        let e = errs("[pr]\npad = \"-\"\n");
+        assert_eq!(e[0].location, "[pr].pad");
+        assert!(e[0].message.contains("repo_name"), "{}", e[0].message);
+    }
+
+    #[test]
+    fn fold_symbols_take_expanded_and_folded_only() {
+        let specs = ok("[fold.symbols]\nexpanded = \"v\"\n");
+        assert_eq!(specs.segments["fold"].symbol_for("expanded"), Some("v"));
+        assert_eq!(
+            specs.segments["fold"].symbol_for("folded"),
+            Some("▸"),
+            "the other key keeps the bundled default"
+        );
+        let e = errs("[fold.symbols]\nclaude = \"C\"\n");
+        assert_eq!(e[0].location, "[fold.symbols]");
+        assert!(e[0].message.contains("expanded"), "{}", e[0].message);
     }
 
     #[test]

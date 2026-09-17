@@ -117,6 +117,9 @@ pub struct SegmentConfig {
     /// Patched over the provider's state-derived style to form `$style`.
     pub style: StyleSpec,
     pub symbol: Option<String>,
+    /// `[repo_name].pad`: the character that fills the name's left pad
+    /// (`$pad`). Only `repo_name` takes it; `None` on every other segment.
+    pub pad: Option<char>,
     pub format: Vec<Node>,
     pub disabled: bool,
     /// Below 100 the segment is droppable on overflow, lowest first and

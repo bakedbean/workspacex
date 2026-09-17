@@ -190,7 +190,9 @@ priority = 50
 # in ( ) to drop it; `$workspaces` and `$repos` always render. The $tokens*
 # variables are context-size sums, abbreviated (77k, 1.2M), empty at zero.
 # The $icon_* variables are each kind's [agent_bar.symbols] glyph, absent
-# for a kind without one, so `($icon_pi )` collapses like the pills' `($icon )`.
+# for a kind without one. An icon is a label: it renders beside a count but,
+# like literal text, never keeps a ( ) group alive by itself, so
+# `([$icon_pi $tokens_pi])` drops with the count exactly as `[pi $tokens_pi]`.
 #
 # Variables: $working $waiting $blocked $done $busy $unreported $alerts
 #   $awaiting $stalled $active $idle $live_agents $pr_none $pr_draft

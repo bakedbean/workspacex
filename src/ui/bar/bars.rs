@@ -36,13 +36,13 @@ pub(super) fn put_modules(
     fleet: &SegmentMap,
     resolver: &style::Resolver<'_>,
 ) {
-    let icons = &cfg(specs, "agent_bar").symbols;
+    let vars = providers::module_vars(fleet, &cfg(specs, "agent_bar").symbols);
     for name in &specs.modules {
-        put(
-            segments,
-            name,
-            providers::module(cfg(specs, name), fleet, icons, resolver),
-        );
+        let module = cfg(specs, name);
+        if module.disabled {
+            continue;
+        }
+        put(segments, name, providers::module(module, &vars, resolver));
     }
 }
 

@@ -217,8 +217,9 @@ pub struct FleetVar {
 /// around one drops; `workspaces` and `repos` always render a number. The
 /// `icon_<kind>` entries are the one exception to "derived from the fleet":
 /// they come from the theme's `[agent_bar.symbols]` table (see
-/// `providers::module`), so the tokens preset can name each harness by its
-/// glyph without the theme spelling it twice.
+/// `providers::module_vars`), so the tokens preset can name each harness
+/// by its glyph without the theme spelling it twice. They are labels: they
+/// render beside a count but never keep a group alive on their own.
 pub const FLEET_VARS: &[FleetVar] = &[
     FleetVar {
         name: "working",
@@ -354,7 +355,7 @@ pub const FLEET_VARS: &[FleetVar] = &[
     },
     FleetVar {
         name: "icon_claude",
-        doc: "the claude glyph from `[agent_bar.symbols]`; absent (its group collapsing) when the theme has none",
+        doc: "the claude glyph from `[agent_bar.symbols]`, absent when the theme has none; a label, so it never keeps a group alive on its own",
     },
     FleetVar {
         name: "icon_pi",
@@ -382,6 +383,17 @@ pub fn fleet_var(name: &str) -> Option<&'static FleetVar> {
 /// format validates against.
 pub fn fleet_var_names() -> Vec<&'static str> {
     FLEET_VARS.iter().map(|v| v.name).collect()
+}
+
+/// The fleet variables that are labels rather than fleet data: the
+/// `icon_<kind>` glyphs. `FleetStats::to_vars` does not produce them —
+/// `providers::module_vars` adds them from the theme — and the renderer
+/// never lets one keep a `( … )` group alive on its own.
+pub fn fleet_label_names() -> impl Iterator<Item = &'static str> {
+    FLEET_VARS
+        .iter()
+        .map(|v| v.name)
+        .filter(|n| n.starts_with("icon_"))
 }
 
 #[cfg(test)]

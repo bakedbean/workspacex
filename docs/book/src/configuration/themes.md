@@ -534,7 +534,7 @@ Modules carry no click target.
 | `workspaces` `repos` | totals (always rendered) |
 | `tokens_total` | Σ latest reported context size (prompt-side tokens) across every agent instance whose transcript is still cached, primary and peers |
 | `tokens_claude` `tokens_pi` `tokens_hermes` `tokens_codex` `tokens_omp` | the same, per agent kind (hermes reports no usage, so it is always empty) |
-| `icon_claude` `icon_pi` `icon_hermes` `icon_codex` `icon_omp` | the kind's glyph from `[agent_bar.symbols]` — the theme's, not the fleet's; absent for a kind without an entry, so `($icon_pi )` collapses like the pills' `($icon )` |
+| `icon_claude` `icon_pi` `icon_hermes` `icon_codex` `icon_omp` | the kind's glyph from `[agent_bar.symbols]` — the theme's, not the fleet's; absent for a kind without an entry. A *label*: it renders beside a count but, like literal text, never keeps a `( … )` group alive by itself, so `([$icon_pi $tokens_pi])` drops with the count exactly as `[pi $tokens_pi]` does |
 
 ### A powerline example
 

@@ -57,13 +57,16 @@ format       = "[  ](bg:orange)[](fg:orange bg:smoke)[ $keys ](bg:smoke fg:or
 right_format = "[](fg:smoke)[( $version )](bg:smoke fg:orange)([](fg:orange bg:smoke)[ $funnel ](bg:orange fg:black))"
 fill         = " "
 
-# The attention entries are graded blocks (see [attention]). The orange
-# block keeps one cell of spacer and caps straight onto the first entry,
-# whose grade is the run's own ash; each block then draws its own trailing
-# wedge, the last one blending back into ash. With nothing to show, the
-# run collapses to its wedge like the other bars' blocks.
+# The focused agent's glyph leads on its own ash block, in the agent's
+# colour, wedging into the orange workspace block; with no agent the group
+# drops and the workspace block takes the edge. The attention entries are
+# graded blocks (see [attention]). The orange block keeps one cell of
+# spacer and caps straight onto the first entry, whose grade is the run's
+# own ash; each block then draws its own trailing wedge, the last one
+# blending back into ash. With nothing to show, the run collapses to its
+# wedge like the other bars' blocks.
 [attached_top]
-format       = "[($agent_bar )$workspace  ](bg:orange fg:black bold)[\ue0b0](fg:orange bg:ash)[($attention )](bg:ash fg:orange)[\ue0b0](fg:ash)"
+format       = "([ $agent_bar ](bg:ash)[\ue0b0](fg:ash bg:orange))[ $workspace  ](bg:orange fg:black bold)[\ue0b0](fg:orange bg:ash)[($attention )](bg:ash fg:orange)[\ue0b0](fg:ash)"
 fill         = " "
 
 # Left chain as in the footer: orange stub, key hints on smoke, then pinned

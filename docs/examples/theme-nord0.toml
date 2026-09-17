@@ -51,8 +51,11 @@ format       = "[ $keys ](bg:nord8 fg:nord0)[](fg:nord8)"
 right_format = "[](fg:nord1)[( $version )](bg:nord1 fg:nord4)([](fg:nord10 bg:nord1)[ $funnel ](bg:nord10 fg:nord6))"
 fill         = " "
 
+# The focused agent's glyph leads on its own nord1 block, in the agent's
+# colour, wedging into the nord8 workspace block; with no agent the group
+# drops and the workspace block takes the edge.
 [attached_top]
-format       = "[($agent_bar )$workspace ](bg:nord8 fg:nord0 bold)[](fg:nord8 bg:nord1)[( $attention )](bg:nord1 fg:nord4)[](fg:nord1)"
+format       = "([ $agent_bar ](bg:nord1)[](fg:nord1 bg:nord8))[ $workspace ](bg:nord8 fg:nord0 bold)[](fg:nord8 bg:nord1)[( $attention )](bg:nord1 fg:nord4)[](fg:nord1)"
 fill         = " "
 
 [attached_bottom]

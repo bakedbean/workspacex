@@ -150,6 +150,29 @@ impl AttachedState {
         }
     }
 
+    /// Whether any pane targets `instance`.
+    pub fn has_instance(&self, instance: AgentInstanceId) -> bool {
+        self.leaves().iter().any(|t| t.instance == instance)
+    }
+
+    /// Point every pane targeting `from` at `to` instead, keeping the tree
+    /// shape and `focus` intact. Returns `true` if any pane changed.
+    ///
+    /// Used when an agent is removed but its workspace's primary isn't
+    /// visible anywhere else: the pane hands itself back to the primary
+    /// rather than disappearing (which would collapse the surrounding
+    /// split). Like `switch_focused_pane_to`, this doesn't deduplicate.
+    pub fn retarget_instance(&mut self, from: AgentInstanceId, to: AttachTarget) -> bool {
+        let mut changed = false;
+        for path in self.tree.leaf_paths() {
+            if self.tree.leaf_at(&path).is_some_and(|t| t.instance == from) {
+                self.set_leaf_target(&path, to);
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// Drop every pane targeting `instance` — an agent that was just
     /// removed from its workspace — and repair `focus`.
     ///

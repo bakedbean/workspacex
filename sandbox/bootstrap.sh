@@ -141,6 +141,36 @@ done
 # dashboard +N/-M column and the RECENT FILES +X −Y counts) only runs when a
 # repo's base_branch is Some — `repo add` leaves it None. The repos are created
 # on `main` (gen-repos.sh: git init -b main), so point base_branch there.
+# --- Warm the Codex home ---
+# Codex's first launch under a fresh CODEX_HOME creates its sqlite stores
+# (state_*.sqlite and friends). Two Codex agents booting at once on a never-
+# used home race that setup and one of them exits within a second; wsx then
+# logs "PTY writer died before the submitting CR" for the message it was
+# about to inject and the workspace shows the mail as stuck. Run the TUI once
+# in a scratch pty until the stores exist, so the scene's first launches are
+# ordinary ones.
+if command -v codex >/dev/null 2>&1; then
+  python3 - "$REPOS/toy-api" "$CODEX_HOME" <<'PY' || echo "WARN: codex warm-up did not finish; a scene with two Codex agents may lose one at boot" >&2
+import os, pty, signal, sys, time
+cwd, home = sys.argv[1:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.chdir(cwd)
+    os.execvp("codex", ["codex"])
+deadline = time.time() + 30
+while time.time() < deadline and not os.path.exists(os.path.join(home, "version.json")):
+    try:
+        os.read(fd, 4096)  # drain so the TUI keeps painting
+    except OSError:
+        break
+    time.sleep(0.2)
+ok = os.path.exists(os.path.join(home, "version.json"))
+os.kill(pid, signal.SIGKILL)
+os.waitpid(pid, 0)
+sys.exit(0 if ok else 1)
+PY
+fi
+
 "$WSX_BIN" repo set-base-branch toy-api main
 "$WSX_BIN" repo set-base-branch toy-cli main
 "$WSX_BIN" repo set-base-branch toy-web main

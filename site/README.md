@@ -13,10 +13,20 @@ Cloudflare Web Analytics beacon (cookieless) at the end of `index.html`.
         01-hero.mp4       screencast 01 — Claude hands a fix to Codex, one workspace
         02-parallel.mp4   screencast 02 — parallel agents across isolated worktrees
         og-cover.png      Open Graph / Twitter card image
-        dashboard-hero.{png,webp}  hero still — the dashboard under load
-                          (regenerate with `make -C demo hero-still`)
+        dashboard-hero.{png,webp}  hero still — the dashboard under load, stock bars
+                          (regenerate with `STILL_THEME= make -C demo hero-still`)
         agent-chat.{png,webp}      still in #see — the attached view, two agents
-                          coordinating (`make -C demo agent-chat-still`)
+                          coordinating, stock bars (`STILL_THEME= make -C demo agent-chat-still`)
+        *-orange.{png,webp}        the same two views in the orange bar theme —
+                          the clickable thumbnails under the hero, full size
+                          in the lightbox (`make -C demo hero-still` /
+                          `agent-chat-still` with the default STILL_THEME)
+
+To publish a take: copy the chosen `demo/out/<name>-N.png` to `assets/` and
+re-encode the webp losslessly — a text UI compresses far better that way than
+with lossy encoding:
+
+    cwebp -lossless -z 9 site/assets/<name>.png -o site/assets/<name>.webp
 
 `site.js` sends a HEAD request per `<video data-src>` and only sets `src`
 when the file responds 2xx/3xx; a missing file shows the diagonal-hatch

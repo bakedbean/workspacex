@@ -104,8 +104,38 @@
       </picture>
       <figcaption>three repos · nine live workspaces · Claude and Codex sharing one of them · every row is a real agent session</figcaption>
     </figure>
+
+    <!-- bar-theme thumbnails: the same two views in a starship-style theme; click opens the full still in a lightbox -->
+    <div class="thumbs reveal" data-d="3">
+      <p class="thumbs-label">the same views in a bar theme · powerline blocks, starship's format grammar, your palette · <a href="docs/configuration/themes.html" target="_blank" rel="noopener">themes</a></p>
+      <div class="thumb-row">
+        <button class="thumb term" type="button" data-full="assets/dashboard-hero-orange.png" data-full-webp="assets/dashboard-hero-orange.webp" data-caption="dashboard · orange bar theme over the jellybeans palette · fleet token, alert and dirty-tree counts along the footer">
+          <picture>
+            <source srcset="assets/dashboard-hero-orange.webp" type="image/webp" />
+            <img src="assets/dashboard-hero-orange.png" width="2728" height="1196" alt="The same dashboard in the orange bar theme: powerline header and footer, Claude and Codex both on one workspace, per-workspace diff counts and recaps, and fleet-wide token, alert and dirty-tree counts along the bottom. Opens full size." loading="lazy" decoding="async" />
+          </picture>
+          <span class="thumb-cap">dashboard · orange bar theme</span>
+        </button>
+        <button class="thumb term" type="button" data-full="assets/agent-chat-orange.png" data-full-webp="assets/agent-chat-orange.webp" data-caption="attached view · orange bar theme · the workspace on an orange block, the other workspaces that need you folding into the bar, each agent under its own icon">
+          <picture>
+            <source srcset="assets/agent-chat-orange.webp" type="image/webp" />
+            <img src="assets/agent-chat-orange.png" width="2730" height="1196" alt="The attached view in the orange bar theme: the workspace name on an orange block, the other workspaces needing attention beside it, a [message from codex] commit report in Claude's chat, and the agents row with Claude and Codex under their own icons. Opens full size." loading="lazy" decoding="async" />
+          </picture>
+          <span class="thumb-cap">attached view · orange bar theme</span>
+        </button>
+      </div>
+    </div>
   </div>
 </header>
+
+<dialog class="lightbox" id="lightbox" aria-label="Full-size still">
+  <button class="lightbox-close" type="button" aria-label="Close" data-close>&times;</button>
+  <picture>
+    <source type="image/webp" />
+    <img alt="" decoding="async" />
+  </picture>
+  <p class="lightbox-cap"></p>
+</dialog>
 
 <hr class="divider" />
 

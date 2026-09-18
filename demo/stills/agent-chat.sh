@@ -12,18 +12,23 @@
 # Progress is tracked through wsx's own agent_messages table rather than fixed
 # sleeps, so a take waits exactly as long as the agents do.
 #
+# The bars wear the orange example bar theme over the jellybeans palette;
+# STILL_THEME=<file> shoots another theme.toml, STILL_THEME= the stock bars.
+#
 # Needs tmux, Chrome/Chromium, sqlite3 and logged-in `claude` + `codex` CLIs.
 # Spawns ten agent sessions.
 #
 # Usage: demo/stills/agent-chat.sh           # after sandbox/bootstrap.sh
 #        WSX_BIN=./target/debug/wsx demo/stills/agent-chat.sh
 #        PEER=claude demo/stills/agent-chat.sh  # second Claude instead of Codex
+#        STILL_THEME=~/.config/wsx/theme.toml demo/stills/agent-chat.sh
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 # shellcheck source=/dev/null
 source "$ROOT/sandbox/env.sh"
 WSX="$(command -v "${WSX_BIN:-wsx}")"
+WSX="$(cd "$(dirname "$WSX")" && pwd)/$(basename "$WSX")"   # in_ws cd's away from ./target
 DB="$XDG_STATE_HOME/wsx/state.db"
 OUT="$ROOT/demo/out"; mkdir -p "$OUT"
 PEER="${PEER:-codex}"                       # kind of the attached teammate
@@ -44,6 +49,7 @@ wait_sql() {
 
 # No claude.ai session URL in the banner — a still is public.
 "$WSX" config set remote_control off >/dev/null
+scene_bar_theme
 
 # --- pinned commands: the chips under the chat pane ---
 "$WSX" config set pinned_commands "$(printf '%s\n' \

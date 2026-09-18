@@ -38,8 +38,16 @@ make -C demo agent-chat-still   # bootstrap + demo/stills/agent-chat.sh
 
 `demo/stills/dashboard-hero.sh` seeds the whole scene from the CLI — workspaces
 are created with `--prompt`, so the dashboard spawns every agent in the
-background on launch and no per-row attach choreography is needed — then renders
-`demo/stills/dashboard-hero.tape.in` with the sandbox paths substituted in.
+background on launch and no per-row attach choreography is needed — then drives
+the TUI in tmux and renders the colored capture through headless Chrome
+(`demo/stills/still.sh`).
+
+Both stills dress the bars in the orange example bar theme
+(`docs/examples/theme-orange.toml`) over the jellybeans palette, installed into
+the sandbox's own `$XDG_CONFIG_HOME/wsx/theme.toml`. `STILL_THEME=<file>` shoots
+another theme file (`STILL_PALETTE` picks the base palette it pairs with);
+`STILL_THEME=` (empty) shoots the stock bars. The rendering font is
+`FiraCode Nerd Font` when installed, so the powerline caps come out as glyphs.
 
 ## Prerequisites
 

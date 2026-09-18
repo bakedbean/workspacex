@@ -8,7 +8,9 @@
 #   in_ws <repo> <slug> <wsx args…>            run wsx with cwd inside that worktree
 #   recap <repo> <slug> <goal> <goal-short> <state> <state-short> <next> <next-short>
 #   status <repo> <slug> <state> <message>
+#   scene_bar_theme                             install $STILL_THEME and turn bar_theme on
 #   scene_background_workspaces                 stage the eight background workspaces
+SCENE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 ws() { # <repo> <slug> <agent> <prompt>
   "$WSX" workspace create "$1" --name "$2" --yolo --agent "$3" --prompt "$4" >/dev/null
@@ -23,6 +25,23 @@ recap() { # <repo> <slug> <goal> <goal-short> <state> <state-short> <next> <next
     --state "$5" --state-short "$6" --next "$7" --next-short "$8" >/dev/null
 }
 status() { in_ws "$1" "$2" status set "$3" --message "$4" >/dev/null; }
+
+# Bar theme for the stills. STILL_THEME is a theme.toml to install into the
+# sandbox's config dir — the orange example by default; set it empty for the
+# stock bars. STILL_PALETTE is the base palette (`theme` setting) it pairs
+# with. The file is validated before the switch is flipped, so a bad theme
+# fails the take here rather than showing up as a red footer notice.
+STILL_THEME="${STILL_THEME-$SCENE_ROOT/docs/examples/theme-orange.toml}"
+STILL_PALETTE="${STILL_PALETTE:-jellybeans}"
+scene_bar_theme() {
+  [ -n "$STILL_THEME" ] || return 0
+  mkdir -p "$XDG_CONFIG_HOME/wsx"
+  cp "$STILL_THEME" "$XDG_CONFIG_HOME/wsx/theme.toml"
+  "$WSX" config set bar_theme on >/dev/null
+  "$WSX" config set theme "$STILL_PALETTE" >/dev/null
+  "$WSX" theme check >/dev/null
+  echo "bar theme: $STILL_THEME ($STILL_PALETTE palette)"
+}
 
 # Tail for every "just do it" prompt; the stills' own workspaces reuse it.
 FIX_AND_COMMIT="Work autonomously and ask no questions. Set your wsx recap and status as you go."

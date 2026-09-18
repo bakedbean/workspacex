@@ -9,6 +9,7 @@ Set TypingSpeed 55ms
 Set WaitTimeout 175s
 
 Env XDG_STATE_HOME "/tmp/wsx-demo/state"
+Env XDG_CONFIG_HOME "/tmp/wsx-demo/config"
 Env CLAUDE_CONFIG_DIR "/tmp/wsx-demo/claude-config"
 
 # Create the review workspace (shown as a real CLI command).

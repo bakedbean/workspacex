@@ -14,24 +14,30 @@
 #   - one agent is told to ask a question (the `?` status), one finishes at
 #     once (`✓`), the rest are mid-task (spinner)
 #
+# The bars wear the orange example bar theme over the jellybeans palette;
+# STILL_THEME=<file> shoots another theme.toml, STILL_THEME= the stock bars.
+#
 # Needs tmux and Chrome/Chromium (CHROME_BIN to override the lookup).
 #
 # Usage: demo/stills/dashboard-hero.sh          # after sandbox/bootstrap.sh
 #        WSX_BIN=./target/debug/wsx demo/stills/dashboard-hero.sh
+#        STILL_THEME=~/.config/wsx/theme.toml demo/stills/dashboard-hero.sh
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 # shellcheck source=/dev/null
 source "$ROOT/sandbox/env.sh"
-WSX="${WSX_BIN:-wsx}"
-WSX="$(command -v "$WSX")"
-WSX_BIN_DIR="$(cd "$(dirname "$WSX")" && pwd)"
+# Absolute: in_ws runs wsx from inside a worktree, where ./target/debug/wsx
+# would not resolve.
+WSX="$(command -v "${WSX_BIN:-wsx}")"
+WSX="$(cd "$(dirname "$WSX")" && pwd)/$(basename "$WSX")"
 
 # shellcheck source=/dev/null
 source "$HERE/scene.sh"
 
 # Taller detail bar: at ~36 rows the default 30% leaves a gap under the list.
 "$WSX" config set detail_bar_config '{"height": {"percent": 45, "max_rows": 18}}' >/dev/null
+scene_bar_theme
 
 ws toy-api security-review claude \
   "Review src/auth.py and src/app.py for security bugs. Report each finding with file and line. Do NOT edit files — your Codex teammate owns the fix. $FIX_AND_COMMIT"

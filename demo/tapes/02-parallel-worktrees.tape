@@ -14,6 +14,7 @@ Set TypingSpeed 35ms
 Set WaitTimeout 120s
 
 Env XDG_STATE_HOME "/tmp/wsx-demo/state"
+Env XDG_CONFIG_HOME "/tmp/wsx-demo/config"
 Env CLAUDE_CONFIG_DIR "/tmp/wsx-demo/claude-config"
 
 Type "wsx"

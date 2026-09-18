@@ -1,4 +1,4 @@
-// workspace-x.com — nav shadow, lazy video, copy button, scroll reveal.
+// workspace-x.com — nav shadow, lazy video, copy button, lightbox, scroll reveal.
 (function () {
   'use strict';
   const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -51,6 +51,30 @@
       setTimeout(() => { btn.classList.remove('copied'); btn.innerHTML = orig; }, 1400);
     });
   });
+
+  // lightbox — each .thumb opens the full-size still named by its data-* in
+  // the one <dialog>; the sources are swapped in on open and cleared on close
+  // so a closed dialog holds no image.
+  const box = document.getElementById('lightbox');
+  if (box && typeof box.showModal === 'function') {
+    const src = box.querySelector('source');
+    const img = box.querySelector('img');
+    const cap = box.querySelector('.lightbox-cap');
+    document.querySelectorAll('.thumb[data-full]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const thumbImg = btn.querySelector('img');
+        src.srcset = btn.getAttribute('data-full-webp') || '';
+        img.src = btn.getAttribute('data-full');
+        img.alt = thumbImg ? thumbImg.alt.replace(/\s*Opens full size\.$/, '') : '';
+        cap.textContent = btn.getAttribute('data-caption') || '';
+        box.showModal();
+      });
+    });
+    box.querySelector('[data-close]').addEventListener('click', () => box.close());
+    // a click on the backdrop lands on the dialog element itself, not its children
+    box.addEventListener('click', (e) => { if (e.target === box) box.close(); });
+    box.addEventListener('close', () => { src.srcset = ''; img.removeAttribute('src'); img.alt = ''; });
+  }
 
   // scroll reveal
   const reveals = document.querySelectorAll('.reveal');

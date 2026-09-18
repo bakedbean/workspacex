@@ -6,6 +6,8 @@
 #   still_keys <key...>         tmux send-keys (e.g. `still_keys z a`, `still_keys Down`)
 #   still_open <repo> <slug>    attach to a workspace by name over the TUI's IPC socket
 #   still_shot <out.png>        capture-pane -e -> ansi2html.py -> Chrome PNG (2x)
+#   still_render <in.txt> <out.png>   the render half of still_shot, for re-rendering a
+#                               saved capture (e.g. after an ansi2html.py change)
 #   still_down                  kill the tmux server (and every agent under it)
 #
 # Why not VHS: it needs its own browser+ffmpeg stack and on some hosts fails
@@ -38,6 +40,7 @@ still_up() { # <cols> <rows>
   local bindir; bindir="$(cd "$(dirname "$wsx")" && pwd)"
   env "${unset_args[@]}" tmux -L "$STILL_SOCK" new-session -d -x "$STILL_COLS" -y "$STILL_ROWS" \
     -e "XDG_STATE_HOME=$XDG_STATE_HOME" \
+    -e "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" \
     -e "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR" \
     -e "CODEX_HOME=$CODEX_HOME" \
     -e "ZDOTDIR=$ZDOTDIR" \
@@ -70,9 +73,14 @@ PYSOCK
 }
 
 still_shot() { # <out.png>
-  local png="$1" txt html size chrome
-  txt="${png%.png}.txt"; html="${png%.png}.html"
+  local txt="${1%.png}.txt"
   tmux -L "$STILL_SOCK" capture-pane -e -p > "$txt"
+  still_render "$txt" "$1"
+}
+
+still_render() { # <in.txt> <out.png>
+  local txt="$1" png="$2" html size chrome
+  html="${png%.png}.html"
   size="$(python3 "$STILL_ROOT/demo/stills/ansi2html.py" "$txt" "$html" \
             --cols "$STILL_COLS" --rows "$STILL_ROWS" --font-size "$STILL_FONT_SIZE")"
   chrome="$(_still_chrome)" || return 1

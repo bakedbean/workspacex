@@ -58,6 +58,7 @@ case "$cmd" in
     # Launch the sandboxed TUI in a detached tmux session, passing the isolated env.
     tmux -L "$sock" new-session -d -x 200 -y 50 \
       -e "XDG_STATE_HOME=$XDG_STATE_HOME" \
+    -e "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" \
       -e "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR" \
       -e "CODEX_HOME=$CODEX_HOME" \
       "$WSX_BIN"

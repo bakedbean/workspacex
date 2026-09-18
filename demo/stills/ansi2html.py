@@ -95,6 +95,18 @@ def style_of(st):
 
 
 CSI = re.compile(r"\x1b\[([0-9;]*)([A-Za-z])")
+# Nerd Font icons (private-use glyphs: the harness icons the bar themes put
+# in front of workspace and agent names). The terminal gives each exactly one
+# cell; in the non-Mono Nerd Font families the glyph is drawn wider than that
+# advance, and in HTML the next span's background would paint over the
+# overflow, cutting the icon in half. Box each one to a cell and lift it
+# above its neighbours. The powerline caps (U+E0B0..E0BF) are cell-exact by
+# design and stay as plain text so they keep butting against their blocks.
+PUA = re.compile(r"[\ue000-\ue0af\ue0c0-\uf8ff\U000f0000-\U000ffffd]")
+
+
+def cells(chunk):
+    return PUA.sub(lambda m: f'<i>{m.group(0)}</i>', html.escape(chunk))
 
 
 def convert(text, cols):
@@ -104,14 +116,14 @@ def convert(text, cols):
         for m in CSI.finditer(line):
             chunk = line[pos:m.start()]
             if chunk:
-                out.append(f'<span style="{style_of(st)}">{html.escape(chunk)}</span>')
+                out.append(f'<span style="{style_of(st)}">{cells(chunk)}</span>')
                 width += len(chunk)
             if m.group(2) == "m":
                 apply_sgr(m.group(1), st)
             pos = m.end()
         chunk = line[pos:]
         if chunk:
-            out.append(f'<span style="{style_of(st)}">{html.escape(chunk)}</span>')
+            out.append(f'<span style="{style_of(st)}">{cells(chunk)}</span>')
             width += len(chunk)
         # Pad to the full width so row backgrounds (selection bars) span the pane.
         if width < cols:
@@ -140,6 +152,7 @@ html,body{{margin:0;background:{BG}}}
 pre{{display:inline-block;margin:0;padding:{PAD}px;width:max-content;overflow:hidden;vertical-align:top;
 background:{BG};color:{FG};font:{fs}px/{LINE_HEIGHT} "FiraCode Nerd Font","JetBrains Mono",ui-monospace,monospace;
 font-variant-ligatures:none;white-space:pre}}
+pre i{{display:inline-block;width:{CHAR_WIDTH}em;overflow:visible;text-align:center;font-style:inherit;position:relative;z-index:1}}
 </style><pre id="t">{body}</pre>
 <script>var r=document.getElementById("t").getBoundingClientRect();
 document.body.dataset.size=Math.ceil(r.width)+"x"+Math.ceil(r.height);</script>"""

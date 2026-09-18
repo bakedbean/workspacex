@@ -7,6 +7,7 @@
 - **Project manager digest**: an instant, native pane summarizing what every workspace is for, where it's at, and what's next — no agent session required.
 - **Remote control**: attach from claude.ai/code or the mobile app; or run wsx in tmux+ssh for full-fidelity desktop access; store and access remote connection commands via the `remote` CLI.
 - **Pinned commands**: define your `/pull-request`, `/feedback`, `/ultrareview` shortcuts once; fire them with `Ctrl-x <digit>` or a click while attached or from the workspace details bar.
+- **Bundled agent skills**: `wsx` (drive the CLI), `agent-review` (spawn a peer reviewer), and `handoff` (continue a finished workspace's epic in a fresh one, briefed with a summary of the old session). Installed with `wsx setup install-skill`; pin them as chips. See [Agent skill](../integrations/agent-skill.md).
 - **Prompt tags**: wrap a body in an XML tag and insert it unsubmitted with one keystroke. See [Prompt tags](../daily-use/prompt-tags.md).
 - **Related repos**: declare related wsx repos per primary repo; workspaces spawn with `--add-dir` for each and a read-only system prompt so claude can read but won't edit them.  Agent is provided with the wsx skill to use the CLI to orchestrate between repos.
 - **Keyboard first navigation**: comprehensive keybindings for every action, from workspace creation to process killing to digest refreshes.

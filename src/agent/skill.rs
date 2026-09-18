@@ -4,8 +4,9 @@
 //! so `wsx setup install-skill` can write each one to every supported agent's
 //! skill directory on any machine where wsx is installed. Currently: the `wsx`
 //! skill (drives the `wsx` CLI — workspace operations, slug-vs-branch naming,
-//! cross-repo orchestration) and the `agent-review` skill (spawns a peer review
-//! agent for the current branch).
+//! cross-repo orchestration), the `agent-review` skill (spawns a peer review
+//! agent for the current branch), and the `handoff` skill (continues a finished
+//! workspace's epic in a fresh same-repo workspace, briefing its agent).
 
 use crate::error::{Error, Result};
 use std::io::Write;
@@ -17,6 +18,9 @@ pub const SKILL_CONTENT: &str = include_str!("../../skills/wsx/SKILL.md");
 
 /// The agent-review skill content, embedded from `skills/agent-review/SKILL.md`.
 pub const AGENT_REVIEW_SKILL_CONTENT: &str = include_str!("../../skills/agent-review/SKILL.md");
+
+/// The handoff skill content, embedded from `skills/handoff/SKILL.md`.
+pub const HANDOFF_SKILL_CONTENT: &str = include_str!("../../skills/handoff/SKILL.md");
 
 /// A skill bundled into the binary and installed by `wsx setup install-skill`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,13 +41,17 @@ pub const BUNDLED_SKILLS: &[BundledSkill] = &[
         name: "agent-review",
         content: AGENT_REVIEW_SKILL_CONTENT,
     },
+    BundledSkill {
+        name: "handoff",
+        content: HANDOFF_SKILL_CONTENT,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallTarget {
     /// Display name of the agent (`"Claude"`, `"Codex"`, `"Hermes"`).
     pub agent: &'static str,
-    /// The bundled skill's directory name (`"wsx"`, `"agent-review"`).
+    /// The bundled skill's directory name (`"wsx"`, `"agent-review"`, `"handoff"`).
     pub skill: &'static str,
     /// The content to write for this skill.
     pub content: &'static str,
@@ -231,6 +239,58 @@ mod tests {
         );
     }
 
+    #[test]
+    fn handoff_skill_has_frontmatter() {
+        assert!(
+            HANDOFF_SKILL_CONTENT.starts_with("---\n"),
+            "handoff skill missing YAML frontmatter"
+        );
+        assert!(
+            HANDOFF_SKILL_CONTENT.contains("name: handoff"),
+            "handoff skill frontmatter missing name field"
+        );
+        assert!(
+            HANDOFF_SKILL_CONTENT.contains("description:"),
+            "handoff skill frontmatter missing description field (needed for discovery)"
+        );
+    }
+
+    /// The three facts a drifting rewrite of the handoff skill is most likely
+    /// to lose: the argument-less chip form asks the user for the request,
+    /// the new workspace is created with an explicit `--name`, and the brief
+    /// goes to that workspace's `primary` agent.
+    #[test]
+    fn handoff_skill_asks_then_briefs_the_primary_agent_of_a_new_workspace() {
+        assert!(
+            HANDOFF_SKILL_CONTENT.contains("What should the new workspace implement?"),
+            "handoff skill must ask for the request when fired without an argument"
+        );
+        assert!(
+            HANDOFF_SKILL_CONTENT.contains("wsx workspace create <repo> --name <new-slug>"),
+            "handoff skill must create the new workspace with an explicit --name"
+        );
+        assert!(
+            HANDOFF_SKILL_CONTENT.contains("wsx agent send --workspace <repo>/<new-slug> primary"),
+            "handoff skill must brief the new workspace's primary agent"
+        );
+    }
+
+    /// Renaming a workspace leaves its worktree directory behind, so both
+    /// skills must send agents to wsx for the slug rather than the path.
+    #[test]
+    fn skills_resolve_the_slug_from_wsx_not_the_directory() {
+        for (name, content) in [("wsx", SKILL_CONTENT), ("handoff", HANDOFF_SKILL_CONTENT)] {
+            assert!(
+                content.contains("wsx context show | head -1"),
+                "{name} skill must resolve the current slug via `wsx context show`"
+            );
+        }
+        assert!(
+            !SKILL_CONTENT.contains("read it from the path"),
+            "wsx skill must not tell agents to read the slug from the worktree path"
+        );
+    }
+
     /// The reviewer-kind lists in the skill are prose, so the compiler can't
     /// catch a new `AgentKind` variant that never made it into the skill.
     /// Derive the expected list from `AgentKind::ALL` and require the
@@ -350,6 +410,11 @@ mod tests {
                 && t.path == claude_skills.join("agent-review").join("SKILL.md")
                 && t.content == AGENT_REVIEW_SKILL_CONTENT
         }));
+        assert!(targets.iter().any(|t| {
+            t.skill == "handoff"
+                && t.path == claude_skills.join("handoff").join("SKILL.md")
+                && t.content == HANDOFF_SKILL_CONTENT
+        }));
     }
 
     #[test]
@@ -385,6 +450,7 @@ mod tests {
         assert_eq!(codex_targets.len(), BUNDLED_SKILLS.len());
         assert!(codex_targets.iter().any(|t| t.skill == "agent-review"));
         assert!(codex_targets.iter().any(|t| t.skill == "wsx"));
+        assert!(codex_targets.iter().any(|t| t.skill == "handoff"));
     }
 
     #[test]

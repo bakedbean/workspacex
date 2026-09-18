@@ -26,3 +26,5 @@ UR=/ultrareview
 `Label=command` shows the label as the chip; a bare line uses the command itself. Labels are truncated past 14 columns. Both sides of `=` are trimmed.
 
 At narrow terminal widths trailing chips drop from view; their keyboard shortcuts still work.
+
+Chips always submit — there is no way to leave a half-typed command for you to finish. A command that needs input should ask for it instead: the bundled [`handoff`](../integrations/agent-skill.md#bundled-skills) skill is the pattern, asking "what should the new workspace implement?" when fired with no argument.

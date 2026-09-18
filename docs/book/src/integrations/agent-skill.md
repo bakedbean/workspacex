@@ -16,11 +16,13 @@ Idempotent: re-running when an installed copy already matches reports "already u
 
 - **`wsx`** — drives the wsx CLI (workspace ops, slug-vs-`branch_prefix` naming, cross-repo orchestration).
 - **`agent-review`** — run inside a workspace to spin up a peer review agent. It takes the reviewer kind (`claude` | `pi` | `hermes` | `codex` | `omp`, default `claude`), spawns it with `wsx agent add`, hands it the branch diff vs `main`, and has it report a risk assessment + gap analysis back via `wsx agent send`.
+- **`handoff`** — run inside a *finished* workspace (PR merged, work wrapping up) to continue the same feature or epic in a fresh workspace. The agent asks what the new workspace should implement (or takes it as the argument: `/handoff add a --json flag`), creates a same-repo workspace with `wsx workspace create <repo> --name <slug>`, and briefs its primary agent with a distilled summary of the session — decisions and why, rejected approaches, gotchas, file:line pointers, follow-ups — plus the request as its task. Reply `defer` to have the new agent wait for your request instead. The outgoing agent sets itself `done` and does not archive the old workspace.
 
-Pin `agent-review` to a chip so a review is one click away — add a line to your [pinned commands](../daily-use/pinned-commands.md). Use `wsx config edit pinned_commands` to append without clobbering existing chips (`wsx config set` replaces the whole value):
+Pin either skill to a chip so it is one click away — add a line to your [pinned commands](../daily-use/pinned-commands.md). Use `wsx config edit pinned_commands` to append without clobbering existing chips (`wsx config set` replaces the whole value):
 
 ```
 agent-review=/agent-review
+handoff=/handoff
 ```
 
-Because chips auto-submit, the chip runs `/agent-review` (defaulting to a `claude` reviewer); type `/agent-review codex` manually for a different kind.
+Because chips auto-submit, the `agent-review` chip runs `/agent-review` (defaulting to a `claude` reviewer); type `/agent-review codex` manually for a different kind. The `handoff` chip runs `/handoff` with no request, so the agent asks for one before creating the workspace — the question is the chip's way of taking input.

@@ -1444,10 +1444,12 @@ mod tests {
             crate::commands::pinned::PinnedCommand {
                 label: "PR".into(),
                 command: "/pull-request".into(),
+                submit: true,
             },
             crate::commands::pinned::PinnedCommand {
                 label: "FB".into(),
                 command: "/feedback".into(),
+                submit: true,
             },
         ];
         let mut offsets = [0u16; 4];
@@ -1676,6 +1678,7 @@ mod tests {
         let pinned = vec![crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
             command: "/pr".into(),
+            submit: true,
         }];
         let mut offsets = [0u16; 4];
         let specs = bar_specs();

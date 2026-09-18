@@ -175,8 +175,7 @@ pub(in crate::app::input) async fn dispatch_leader_action(
         KeyCode::Char(c @ '1'..='9') => {
             let idx = (c as u8 - b'1') as usize;
             if let Some(cmd) = app.pinned_commands_cache.get(idx) {
-                let mut bytes = cmd.command.as_bytes().to_vec();
-                bytes.push(b'\r');
+                let bytes = cmd.pty_bytes();
                 session.scroll_to_live();
                 let _ = session
                     .writer

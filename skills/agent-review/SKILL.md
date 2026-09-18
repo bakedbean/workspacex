@@ -1,6 +1,6 @@
 ---
 name: agent-review
-description: Use in a wsx workspace to spin up a peer review agent that code-reviews the current branch. Takes the reviewer kind (claude|pi|hermes|codex|omp, default claude); spawns the peer, hands it branch-diff-vs-main context, and has it report findings back to you.
+description: Use in a wsx workspace to spin up a peer review agent that code-reviews the current branch. Takes the reviewer kind (claude|pi|hermes|codex|omp; asks which when omitted); spawns the peer, hands it branch-diff-vs-main context, and has it report findings back to you.
 ---
 
 # agent-review
@@ -13,15 +13,23 @@ its findings.
 ## Argument
 
 A single optional argument: the reviewer **kind**, one of `claude`, `pi`,
-`hermes`, `codex`, `omp`. Defaults to `claude` when omitted (e.g. when fired from the
-`agent-review` pinned chip, which submits `/agent-review` with no argument).
+`hermes`, `codex`, `omp`.
 
-- `/agent-review` → spawn a `claude` reviewer
 - `/agent-review codex` → spawn a `codex` reviewer
 - `/agent-review omp` → spawn an `omp` (oh-my-pi) reviewer
+- `/agent-review` → ask which kind (below), then spawn it
 
-If an argument is given that is not one of the kinds listed above, stop and
-tell the user the valid kinds. Do not guess.
+When the argument is empty (e.g. the `agent-review` pinned chip was fired and
+submitted without a kind), **ask the user** before doing anything else. Use a
+single-choice prompt if your harness has one (Claude Code: `AskUserQuestion`),
+otherwise ask in plain text:
+
+> Which reviewer kind? `claude` / `pi` / `hermes` / `codex` / `omp`
+
+List `claude` first as the usual choice. Wait for the answer; do not default.
+
+If an argument (or answer) is given that is not one of the kinds listed above,
+stop and tell the user the valid kinds. Do not guess.
 
 ## Steps
 
@@ -30,7 +38,8 @@ tell the user the valid kinds. Do not guess.
    `~/.local/state/wsx/worktrees/`. If neither holds, stop and tell the user
    this skill must run inside a wsx workspace.
 
-2. **Resolve the kind** from the argument (default `claude`; validate as above).
+2. **Resolve the kind** from the argument, or from the user's answer when the
+   argument was empty (validate as above).
 
 3. **Spawn the reviewer peer:**
 

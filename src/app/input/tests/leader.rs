@@ -563,6 +563,7 @@ async fn leader_digit_sends_pinned_command_to_pty() {
     app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
         label: "PR".into(),
         command: "/pull-request".into(),
+        submit: true,
     }];
 
     // Ctrl-x leader.
@@ -601,6 +602,54 @@ async fn leader_digit_sends_pinned_command_to_pty() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn leader_digit_no_submit_chip_types_without_cr() {
+    use crossterm::event::{KeyCode, KeyEvent};
+    let store = Store::open_in_memory().unwrap();
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    let ws_id = spawn_attached_workspace(&mut app);
+    let target = test_target(&app, ws_id);
+
+    app.pinned_commands_cache = crate::commands::pinned::parse("rev=/agent-review ...");
+
+    handle_key_attached(
+        &mut app,
+        target,
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+    )
+    .await
+    .unwrap();
+    handle_key_attached(
+        &mut app,
+        target,
+        KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE),
+    )
+    .await
+    .unwrap();
+
+    // cat echoes the typed text but, with no `\r`, never sees a complete
+    // line: the text appears once and the cursor stays on the input row,
+    // right after the trailing space, ready for the argument.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let session = app
+        .sessions
+        .get(test_primary_instance(&app, ws_id))
+        .unwrap();
+    let parser = session.parser.lock().unwrap();
+    let screen = parser.screen();
+    let screen_text = screen.contents();
+    assert_eq!(
+        screen_text.matches("/agent-review").count(),
+        1,
+        "no-submit chip must be echoed once, not run; got: {screen_text:?}"
+    );
+    assert_eq!(
+        screen.cursor_position(),
+        (0, "/agent-review ".len() as u16),
+        "cursor must sit after the typed text on the input row"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn leader_digit_out_of_range_is_noop() {
     use crossterm::event::{KeyCode, KeyEvent};
     let store = Store::open_in_memory().unwrap();
@@ -612,6 +661,7 @@ async fn leader_digit_out_of_range_is_noop() {
     app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
         label: "PR".into(),
         command: "/pull-request".into(),
+        submit: true,
     }];
 
     // Ctrl-x leader.
@@ -663,6 +713,7 @@ async fn dashboard_ctrl_x_then_digit_fires_pinned_chip() {
     app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
         label: "PR".into(),
         command: "/pull-request".into(),
+        submit: true,
     }];
     app.chip_rects = vec![(
         0,
@@ -709,6 +760,92 @@ async fn dashboard_ctrl_x_then_digit_fires_pinned_chip() {
     );
 }
 
+/// A no-submit chip on the dashboard stages its text in the reply input
+/// instead of writing to the PTY: the user finishes the argument there and
+/// Enter sends the whole line exactly once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dashboard_no_submit_chip_stages_reply_draft_then_enter_sends_once() {
+    use crossterm::event::{KeyCode, KeyEvent};
+    let store = Store::open_in_memory().unwrap();
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    let ws_id = spawn_attached_workspace(&mut app);
+
+    app.view = crate::ui::View::Dashboard;
+    app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];
+    app.select_index(0);
+    app.pinned_commands_cache = crate::commands::pinned::parse("rev=/agent-review ...");
+
+    handle_key_dashboard(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+    )
+    .await
+    .unwrap();
+    handle_key_dashboard(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(app.dashboard.reply_draft, "/agent-review ");
+    assert_eq!(
+        app.dashboard.reply_draft_clear_at_ms, None,
+        "a staged prefix must not auto-clear out from under the user"
+    );
+    assert_eq!(app.focus, crate::ui::PaneFocus::DetailBarReply);
+
+    // Nothing reached the PTY yet.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    {
+        let session = app
+            .sessions
+            .get(test_primary_instance(&app, ws_id))
+            .unwrap();
+        let parser = session.parser.lock().unwrap();
+        let screen_text = parser.screen().contents();
+        assert!(
+            !screen_text.contains("/agent-review"),
+            "no-submit chip must not write to the PTY from the dashboard; got: {screen_text:?}"
+        );
+    }
+
+    // Type the argument in the reply input and submit.
+    for c in "codex".chars() {
+        assert!(
+            handle_detail_bar_reply_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+            )
+            .await
+        );
+    }
+    assert!(
+        handle_detail_bar_reply_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .await
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let session = app
+        .sessions
+        .get(test_primary_instance(&app, ws_id))
+        .unwrap();
+    let parser = session.parser.lock().unwrap();
+    let screen_text = parser.screen().contents();
+    // cat echoes the submitted line and prints it back: the prefix appears
+    // exactly twice, both times followed by the argument.
+    assert_eq!(
+        screen_text.matches("/agent-review codex").count(),
+        2,
+        "expected echo + cat output of the single submitted line; got: {screen_text:?}"
+    );
+    assert_eq!(
+        screen_text.matches("/agent-review").count(),
+        2,
+        "prefix must not be sent on its own; got: {screen_text:?}"
+    );
+}
+
 /// Ctrl-X then a non-digit key clears the leader without firing any chip.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dashboard_ctrl_x_then_non_digit_clears_leader_no_fire() {
@@ -724,6 +861,7 @@ async fn dashboard_ctrl_x_then_non_digit_clears_leader_no_fire() {
     app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
         label: "PR".into(),
         command: "/pull-request".into(),
+        submit: true,
     }];
     app.chip_rects = vec![(
         0,
@@ -791,10 +929,12 @@ async fn dashboard_ctrl_x_digit_beyond_cached_commands_is_noop() {
         crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
             command: "/pull-request".into(),
+            submit: true,
         },
         crate::commands::pinned::PinnedCommand {
             label: "B".into(),
             command: "/build".into(),
+            submit: true,
         },
     ];
     app.chip_rects = vec![
@@ -865,10 +1005,12 @@ async fn dashboard_ctrl_x_digit_fires_without_any_chip_rects() {
         crate::commands::pinned::PinnedCommand {
             label: "PR".into(),
             command: "/pull-request".into(),
+            submit: true,
         },
         crate::commands::pinned::PinnedCommand {
             label: "B".into(),
             command: "/build".into(),
+            submit: true,
         },
     ];
     // The bars drew no chips at all.

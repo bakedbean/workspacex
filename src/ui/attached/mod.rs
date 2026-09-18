@@ -404,10 +404,12 @@ mod tests {
             crate::commands::pinned::PinnedCommand {
                 label: "PR".into(),
                 command: "/pr".into(),
+                submit: true,
             },
             crate::commands::pinned::PinnedCommand {
                 label: "feedback".into(),
                 command: "/fb".into(),
+                submit: true,
             },
         ];
         let diff = Some(crate::git::DiffStats {

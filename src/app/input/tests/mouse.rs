@@ -72,6 +72,7 @@ async fn click_in_chip_rect_fires_pinned_command() {
     app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
         label: "PR".into(),
         command: "/pull-request".into(),
+        submit: true,
     }];
     // Place a 7-wide chip at (5, 30): "[1] PR " = 7 cols.
     app.chip_rects = vec![(
@@ -113,6 +114,7 @@ async fn click_outside_chip_rect_does_nothing() {
     app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
         label: "PR".into(),
         command: "/pull-request".into(),
+        submit: true,
     }];
     app.chip_rects = vec![(
         0,
@@ -531,6 +533,7 @@ async fn click_chip_in_dashboard_view_fires_pinned_command() {
     app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
         label: "PR".into(),
         command: "/pull-request".into(),
+        submit: true,
     }];
     app.chip_rects = vec![(
         0,
@@ -585,6 +588,7 @@ async fn chip_dispatch_echoes_command_into_reply_input() {
     app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
         label: "PR".into(),
         command: "/pull-request".into(),
+        submit: true,
     }];
     app.chip_rects = vec![(
         0,
@@ -731,6 +735,7 @@ async fn click_chip_auto_spawns_session_when_missing() {
     app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
         label: "PR".into(),
         command: "/pull-request".into(),
+        submit: true,
     }];
     app.chip_rects = vec![(
         0,
@@ -792,6 +797,7 @@ async fn attached_chip_click_preserves_dashboard_draft_and_focus() {
     app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
         label: "PR".into(),
         command: "/pull-request".into(),
+        submit: true,
     }];
     app.chip_rects = vec![(
         0,

@@ -27,4 +27,12 @@ UR=/ultrareview
 
 At narrow terminal widths trailing chips drop from view; their keyboard shortcuts still work.
 
-Chips always submit — there is no way to leave a half-typed command for you to finish. A command that needs input should ask for it instead: the bundled [`handoff`](../integrations/agent-skill.md#bundled-skills) skill is the pattern, asking "what should the new workspace implement?" when fired with no argument.
+Chips submit by default. To leave a command typed but unsubmitted — for one that takes an argument you want to choose each time — end it with `...` (or `…`):
+
+```
+review=/agent-review ...
+```
+
+Firing that chip writes `/agent-review ` (the marker is stripped; the space before it is kept) and leaves the cursor there, so you type the reviewer kind and press enter. Put the marker in the label too (`review…=/agent-review ...`) if you want the chip itself to show it won't submit; a bare `/agent-review ...` line does that automatically.
+
+A command that needs input can also ask for it instead: the bundled [`handoff`](../integrations/agent-skill.md#bundled-skills) skill asks "what should the new workspace implement?" when fired with no argument, and [`agent-review`](../integrations/agent-skill.md#bundled-skills) asks which reviewer kind to spawn.

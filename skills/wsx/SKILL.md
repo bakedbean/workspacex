@@ -9,7 +9,12 @@ Drives the `wsx` CLI to manage workspaces (git worktrees + per-workspace Claude 
 
 ## Detecting context
 
-You are in a wsx workspace if your CWD matches `~/.local/state/wsx/worktrees/<repo>/<slug>`. The trailing `<slug>` is the workspace name; the branch is `<branch_prefix>/<slug>` where `<branch_prefix>` is set per-repo. **Do not infer the slug from the branch name** — read it from the path or `wsx workspace list <repo>`.
+You are in a wsx workspace if your CWD is under `~/.local/state/wsx/worktrees/<repo>/`. The branch is `<branch_prefix>/<slug>` where `<branch_prefix>` is set per-repo. **Do not infer the slug from the branch name or the directory name** — `wsx workspace rename` changes the slug and branch but never moves the worktree, so a renamed workspace's directory keeps its old name. Read the slug from wsx:
+
+```
+wsx context show | head -1     # "# wsx workspace: <repo>/<slug>"
+wsx workspace list <repo>      # or match your cwd against the path column
+```
 
 When orienting, run these first — they're cheap and authoritative:
 

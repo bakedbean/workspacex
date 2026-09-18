@@ -255,11 +255,16 @@ mod tests {
         );
     }
 
-    /// The skill's own doc claims the chip form is argument-less and the
-    /// handoff goes to the new workspace's `primary` agent — the two facts a
-    /// drifting rewrite is most likely to lose.
+    /// The three facts a drifting rewrite of the handoff skill is most likely
+    /// to lose: the argument-less chip form asks the user for the request,
+    /// the new workspace is created with an explicit `--name`, and the brief
+    /// goes to that workspace's `primary` agent.
     #[test]
-    fn handoff_skill_briefs_the_primary_agent_of_a_new_workspace() {
+    fn handoff_skill_asks_then_briefs_the_primary_agent_of_a_new_workspace() {
+        assert!(
+            HANDOFF_SKILL_CONTENT.contains("What should the new workspace implement?"),
+            "handoff skill must ask for the request when fired without an argument"
+        );
         assert!(
             HANDOFF_SKILL_CONTENT.contains("wsx workspace create <repo> --name <new-slug>"),
             "handoff skill must create the new workspace with an explicit --name"
@@ -267,6 +272,22 @@ mod tests {
         assert!(
             HANDOFF_SKILL_CONTENT.contains("wsx agent send --workspace <repo>/<new-slug> primary"),
             "handoff skill must brief the new workspace's primary agent"
+        );
+    }
+
+    /// Renaming a workspace leaves its worktree directory behind, so both
+    /// skills must send agents to wsx for the slug rather than the path.
+    #[test]
+    fn skills_resolve_the_slug_from_wsx_not_the_directory() {
+        for (name, content) in [("wsx", SKILL_CONTENT), ("handoff", HANDOFF_SKILL_CONTENT)] {
+            assert!(
+                content.contains("wsx context show | head -1"),
+                "{name} skill must resolve the current slug via `wsx context show`"
+            );
+        }
+        assert!(
+            !SKILL_CONTENT.contains("read it from the path"),
+            "wsx skill must not tell agents to read the slug from the worktree path"
         );
     }
 

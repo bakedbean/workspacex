@@ -36,9 +36,16 @@ is to await the user's request; otherwise the answer *is* the task.
 
 2. **Resolve the request** — from the argument, or by asking (see above).
 
-3. **Resolve the repo and current slug** from the worktree path
-   `~/.local/state/wsx/worktrees/<repo>/<slug>` (do not infer the slug from
-   the branch name). Confirm with `wsx workspace list <repo>` if unsure.
+3. **Resolve the repo and current slug** from wsx, not from the filesystem:
+
+   ```
+   wsx context show | head -1        # "# wsx workspace: <repo>/<slug>"
+   ```
+
+   Renaming a workspace changes its slug and branch but **not** its worktree
+   directory, so the path's trailing component and the branch name can both
+   be stale. If in doubt, match the cwd against the path column of
+   `wsx workspace list <repo>`.
 
 4. **Pick a slug for the new workspace**: a 2-4 word kebab-case summary of the
    request (`add-json-list-flag`), or of the epic with a continuation hint
@@ -54,15 +61,24 @@ is to await the user's request; otherwise the answer *is* the task.
    Do not pass `--yolo` or `--agent`; the new workspace inherits this one's
    yolo mode and agent kind.
 
+   If `create` fails, stop and report — do not send a brief. On a slug
+   collision pick a different slug and retry; never brief a workspace you did
+   not just create, even if one with that name exists. A setup-script warning
+   after a successful create is worth relaying to the user but does not block
+   the handoff.
+
 6. **Gather the handoff context.** Pull from your own session memory first —
    that is the whole point of this skill — and check it against the repo:
 
    ```
    wsx recap show
-   git log main..HEAD --oneline        # usually empty if the PR merged
    git log --oneline -15               # what this workspace shipped
-   gh pr list --state merged --head "$(git branch --show-current)" 2>/dev/null
+   gh pr list --state all --head "$(git branch --show-current)"
    ```
+
+   If `gh` is missing or errors, the PR state is *unknown* — say so in the
+   brief rather than asserting "merged". A non-empty `git log main..HEAD` does
+   not mean unmerged either (squash merges, stale local `main`).
 
    Distil, do not dump. The new agent shares the repo and can read code; it
    cannot read your conversation. Capture what is *not* in the repo:
@@ -72,8 +88,15 @@ is to await the user's request; otherwise the answer *is* the task.
 7. **Send the brief** to the new workspace's primary agent:
 
    ```
-   wsx agent send --workspace <repo>/<new-slug> primary "<brief>"
+   wsx agent send --workspace <repo>/<new-slug> primary "$(cat <<'EOF'
+   <brief>
+   EOF
+   )"
    ```
+
+   The quoted heredoc (`<<'EOF'`) passes the brief through verbatim — the
+   user's request and your pointers may contain `$`, backticks, or quotes
+   that a plain double-quoted string would mangle or execute.
 
    Use the wsx skill's brief format. The brief is the new agent's *only*
    context — write it so it still makes sense if this session were deleted:
@@ -99,12 +122,15 @@ is to await the user's request; otherwise the answer *is* the task.
    START:       the first concrete step.
    ```
 
-   If `agent send` warns that no `wsx` dashboard is running, tell the user to
-   open `wsx` — the TUI is what delivers queued messages.
+   `agent send` *queues* the brief; the dashboard delivers it when the new
+   agent's session is up. If it warns that no `wsx` dashboard is running, tell
+   the user to open `wsx` — until then the brief sits undelivered. If `send`
+   itself fails, fix and resend to the workspace you created; do not mark this
+   workspace done until the brief is queued.
 
-8. **Close out here.** Tell the user the new workspace `<repo>/<new-slug>` has
-   the brief and what it will do (start on the request, or wait for one). Set
-   this workspace's status:
+8. **Close out here.** Tell the user the brief is queued for
+   `<repo>/<new-slug>` and what its agent will do once it starts (work the
+   request, or wait for one). Set this workspace's status:
 
    ```
    wsx status set done --message "handed off to <repo>/<new-slug>"
@@ -120,8 +146,8 @@ User fires the chip; you ask; they reply
 
 ```
 wsx workspace create backend --name add-json-list-flag
-wsx agent send --workspace backend/add-json-list-flag primary "
-TASK: Add a --json flag to \`widgets list\` emitting one object per widget
+wsx agent send --workspace backend/add-json-list-flag primary "$(cat <<'EOF'
+TASK: Add a --json flag to `widgets list` emitting one object per widget
 (id, name, qty, created_at), and document it in docs/cli/widgets.md. Done
 when the flag, a test for the JSON shape, and the docs are in and a PR is
 open.
@@ -131,11 +157,12 @@ CONTEXT: The TSV writer is src/cli/widgets.rs:140-188 — add a sibling
 formatter rather than branching inside it; we tried a single fn with a mode
 enum and it read worse. Field names come from Widget::FIELDS
 (src/model/widget.rs:22); reuse them, do not invent new spellings. Gotcha:
-\`widgets list --repo X\` filters BEFORE formatting — keep that order.
+`widgets list --repo X` filters BEFORE formatting — keep that order.
 CONSTRAINTS: Don't change the default (TSV) output; scripts depend on it.
 Follow the arg pattern at src/cli/mod.rs:210 for the new flag.
 START: read src/cli/widgets.rs:140-188, then the test module below it.
-"
+EOF
+)"
 wsx status set done --message "handed off to backend/add-json-list-flag"
 ```
 
@@ -144,6 +171,8 @@ wsx status set done --message "handed off to backend/add-json-list-flag"
 - `wsx workspace create` from inside a workspace inherits yolo mode and agent
   kind — do not pass those flags.
 - `wsx agent send` is asynchronous; the new agent receives the brief once its
-  session is up, tagged `[message from <repo>/<slug> <label>]`.
+  session is up, tagged `[message from <repo>/<slug> <label>]`. `wsx workspace
+  create --prompt <text>` is the same queue in one step; this skill keeps the
+  two commands separate so a failed create is never followed by a brief.
 - Do not `cd` into the new worktree or start the work there yourself. Create,
   brief, hand off, return.

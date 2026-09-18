@@ -538,3 +538,47 @@ async fn agents_panel_x_on_sole_pane_with_unspawnable_primary_shows_agent_missin
         app.view
     );
 }
+
+/// A peer reaches the screen by *retargeting* an existing pane
+/// (`switch_focused_pane_to`), not by splitting. Removing it must hand
+/// that pane back to the workspace's primary, not prune the pane — pruning
+/// collapses a `(ws A | ws B)` split down to a lone `ws B` pane.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agents_panel_x_retargets_pane_to_primary_when_primary_not_visible() {
+    use crate::pty::session::{AgentKind, SessionStatus};
+    let (mut app, ws, primary, peer) = app_with_primary_and_peer();
+    let other_ws = app.test_workspace("peer-remove-other");
+    let other_primary = app
+        .store
+        .add_primary_agent(other_ws, AgentKind::Claude, 1)
+        .unwrap()
+        .id;
+    app.test_spawn_session(other_primary, SessionStatus::Running { pid: 3 });
+    app.refresh().unwrap();
+    // (ws primary | other primary), then switch the left pane to the peer.
+    let mut state = crate::ui::AttachedState::single(target(ws, primary));
+    assert!(state.split(SplitDirection::Vertical, target(other_ws, other_primary)));
+    state.focus = vec![0];
+    app.view = View::Attached(state);
+    app.switch_focused_pane_to(peer).unwrap();
+    let View::Attached(state) = &app.view else {
+        panic!("expected attached view, got {:?}", app.view);
+    };
+    assert_eq!(
+        state.leaves(),
+        vec![target(ws, peer), target(other_ws, other_primary)]
+    );
+
+    press_x_in_agents_panel(&mut app, ws).await;
+
+    assert!(app.modal.is_none());
+    let View::Attached(state) = &app.view else {
+        panic!("expected to stay attached, got {:?}", app.view);
+    };
+    assert_eq!(
+        state.leaves(),
+        vec![target(ws, primary), target(other_ws, other_primary)],
+        "split must survive with the peer's pane handed back to the primary"
+    );
+    assert_eq!(state.focused_target(), Some(target(ws, primary)));
+}

@@ -5,9 +5,9 @@ use crate::app::{
     ensure_workspace_session,
 };
 use crate::error::Result;
+use crate::ui::View;
 use crate::ui::modal::Modal;
 use crate::ui::split::{AttachTarget, PruneOutcome};
-use crate::ui::{AttachedState, View};
 use crossterm::event::KeyCode;
 // Test-only imports: the moved test modules access `draw_for_test`,
 // `AttachedState`, `Arc`, and `Mutex` through `super::*` glob imports
@@ -154,30 +154,51 @@ pub(super) async fn agents_panel(
                 // nothing else on this path goes through `refresh()`.
                 app.refresh()?;
                 app.modal = None;
-                // Drop the removed instance's pane(s) from the split tree
-                // in this same keystroke. `draw_attached` bounces the
-                // whole view to the dashboard on any leaf whose session
-                // is gone, so leaving the dead pane in place would eject
-                // the user instead of moving them to the next agent.
+                // The removed instance's pane(s) can't stay in the split
+                // tree: `draw_attached` bounces the whole view to the
+                // dashboard on any leaf whose session is gone. What
+                // replaces them depends on whether the workspace's
+                // primary is already on screen:
+                //
+                // - Primary visible elsewhere: the peer had a pane of its
+                //   own, so drop it and let focus settle on a survivor.
+                // - Primary not visible: the peer got there by retargeting
+                //   a pane (`switch_focused_pane_to`), so hand that pane
+                //   back to the primary in place. Pruning instead would
+                //   collapse a `(ws A | ws B)` split down to a lone
+                //   `ws B` pane.
+                //
+                // The retarget is deliberately a plain in-place swap
+                // rather than `attach_workspace`: that restores the saved
+                // layout, whose side panes may fail to spawn and leave a
+                // sessionless leaf that `draw_attached` would eject on.
+                // The saved layout itself is left untouched.
+                let primary = app.primary_instance(workspace_id);
+                let primary_visible = match (&app.view, primary) {
+                    (View::Attached(state), Some(p)) => state.has_instance(p),
+                    _ => true,
+                };
+                if !primary_visible
+                    && let Some(primary) = primary
+                    && let AttachReady::Ok = ensure_workspace_session(app, workspace_id)?
+                    && let View::Attached(state) = &mut app.view
+                {
+                    state.retarget_instance(
+                        last.id,
+                        AttachTarget {
+                            workspace_id,
+                            instance: primary,
+                        },
+                    );
+                }
+                // Prune whatever still targets the removed instance: the
+                // primary-visible case, or a primary that couldn't be
+                // spawned (AgentMissing modal is already up) or was
+                // refused. If nothing survives, fall to the dashboard.
                 if let View::Attached(state) = &mut app.view
                     && let PruneOutcome::Empty = state.remove_instance(last.id)
                 {
-                    // The removed peer was the only pane: re-target to
-                    // the workspace's primary (which can't be removed).
-                    // Deliberately a single-pane attach rather than
-                    // `attach_workspace`: that restores the saved layout,
-                    // whose side panes may fail to spawn and leave a
-                    // sessionless leaf that `draw_attached` would eject
-                    // on. The saved layout itself is left untouched.
                     app.view = View::Dashboard;
-                    if let AttachReady::Ok = ensure_workspace_session(app, workspace_id)?
-                        && let Some(primary) = app.primary_instance(workspace_id)
-                    {
-                        app.view = View::Attached(AttachedState::single(AttachTarget {
-                            workspace_id,
-                            instance: primary,
-                        }));
-                    }
                 }
             }
         }

@@ -197,6 +197,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_marker_mid_command_stays_literal() {
+        let out = parse("X=/say ... and more");
+        assert_eq!(out[0].command, "/say ... and more");
+        assert!(out[0].submit);
+    }
+
+    #[test]
+    fn parse_marker_then_trailing_whitespace_still_no_submit() {
+        // The line is trimmed before the suffix check, so whitespace after
+        // the marker doesn't hide it.
+        let out = parse("rev=/agent-review ...   ");
+        assert_eq!(out[0].command, "/agent-review ");
+        assert!(!out[0].submit);
+    }
+
+    #[test]
     fn parse_drops_bare_marker() {
         assert!(parse("X=...").is_empty());
         assert!(parse("...").is_empty());

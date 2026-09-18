@@ -61,7 +61,9 @@ pub(in crate::app::input) fn chip_target_session(
 ///   - no chip target can be resolved.
 ///
 /// When dispatched from `View::Dashboard`, also clears any in-flight
-/// reply draft and returns focus to the dashboard. In other views
+/// reply draft and returns focus to the dashboard — except for a
+/// no-submit chip, which is staged in the reply input (focused) instead
+/// of being written to the PTY. In other views
 /// (attached, attached-PM) the dispatch is byte-only so it matches the
 /// attached-view keyboard chord and doesn't trample dashboard state the
 /// user can't see.
@@ -70,6 +72,17 @@ pub(in crate::app::input) async fn fire_chip(app: &mut App, idx: usize) {
         Some(c) => c.clone(),
         None => return,
     };
+    // On the dashboard the PTY isn't visible, so a no-submit chip can't
+    // leave its text in the agent's prompt for the user to finish. Stage
+    // it in the reply input instead: the user completes the line there
+    // and Enter sends it (with `\r`) in one write, auto-spawning the
+    // session if needed. No auto-clear — the draft is theirs to edit now.
+    if !cmd.submit && matches!(app.view, View::Dashboard) {
+        app.dashboard.reply_draft = cmd.command;
+        app.dashboard.reply_draft_clear_at_ms = None;
+        app.focus = crate::ui::PaneFocus::DetailBarReply;
+        return;
+    }
     // On the dashboard the selected workspace may not have a live
     // session yet (the user hasn't attached). Auto-spawn one in place
     // so the chip command isn't silently dropped. In the attached

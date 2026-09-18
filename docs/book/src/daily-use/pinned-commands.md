@@ -4,7 +4,7 @@ If `pinned_commands` is configured (globally or per-repo), a one-row chip strip 
 [1] PR   [2] FB   [3] /loop /baby…   [4] UR
 ```
 
-Fire a chip with `Ctrl-x <digit>` (1-9) or by clicking on it. The chip's command + `\r` is written to claude exactly as if you'd typed and submitted it.
+Fire a chip with `Ctrl-x <digit>` (1-9) or by clicking on it. By default the chip's command + `\r` is written to claude exactly as if you'd typed and submitted it (see below for chips that only type).
 
 Configure via the standard config CLI:
 
@@ -33,6 +33,6 @@ Chips submit by default. To leave a command typed but unsubmitted — for one th
 review=/agent-review ...
 ```
 
-Firing that chip writes `/agent-review ` (the marker is stripped; the space before it is kept) and leaves the cursor there, so you type the reviewer kind and press enter. Put the marker in the label too (`review…=/agent-review ...`) if you want the chip itself to show it won't submit; a bare `/agent-review ...` line does that automatically.
+Firing that chip while attached writes `/agent-review ` (the marker is stripped; the space before it is kept) and leaves the cursor there, so you type the reviewer kind and press enter. Fired from the dashboard, where the agent's prompt isn't visible, the text is staged in the detail bar's reply input instead — finish the line there and press enter to send it. The `...` / `…` suffix is reserved: a command that genuinely ends in one can't be pinned as a submitting chip. Put the marker in the label too (`review…=/agent-review ...`) if you want the chip itself to show it won't submit; a bare `/agent-review ...` line does that automatically.
 
 A command that needs input can also ask for it instead: the bundled [`handoff`](../integrations/agent-skill.md#bundled-skills) skill asks "what should the new workspace implement?" when fired with no argument, and [`agent-review`](../integrations/agent-skill.md#bundled-skills) asks which reviewer kind to spawn.

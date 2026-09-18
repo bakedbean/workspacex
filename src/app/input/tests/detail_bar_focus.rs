@@ -232,6 +232,7 @@ async fn ctrl_x_digit_works_while_reply_focused() {
     app.pinned_commands_cache = vec![crate::commands::pinned::PinnedCommand {
         label: "PR".into(),
         command: "/pull-request".into(),
+        submit: true,
     }];
     app.chip_rects = vec![(
         0,

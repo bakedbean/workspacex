@@ -565,6 +565,7 @@ mod bottom_tests {
             .map(|(l, c)| PinnedCommand {
                 label: (*l).into(),
                 command: (*c).into(),
+                submit: true,
             })
             .collect()
     }
@@ -935,6 +936,7 @@ mod dashboard_detail_parity_tests {
             .map(|(l, c)| PinnedCommand {
                 label: (*l).into(),
                 command: (*c).into(),
+                submit: true,
             })
             .collect()
     }
@@ -1049,6 +1051,7 @@ mod segment_registry_drift_tests {
         let pinned = vec![PinnedCommand {
             label: "PR".into(),
             command: "/pr".into(),
+            submit: true,
         }];
         let agents = vec![
             (

@@ -84,8 +84,7 @@ pub(in crate::app::input) async fn fire_chip(app: &mut App, idx: usize) {
         None => return,
     };
     let command_text = cmd.command.clone();
-    let mut bytes = cmd.command.into_bytes();
-    bytes.push(b'\r');
+    let bytes = cmd.pty_bytes();
     session.scroll_to_live();
     let _ = session
         .writer
@@ -262,8 +261,7 @@ pub(in crate::app::input) async fn handle_key_attached_remote(
         if let KeyCode::Char(c @ '1'..='9') = k.code {
             let idx = (c as u8 - b'1') as usize;
             if let Some(cmd) = app.pinned_commands_cache.get(idx) {
-                let mut bytes = cmd.command.as_bytes().to_vec();
-                bytes.push(b'\r');
+                let bytes = cmd.pty_bytes();
                 session.scroll_to_live();
                 let _ = session
                     .writer

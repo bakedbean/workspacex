@@ -6,8 +6,27 @@ pub struct PinnedCommand {
     /// Text shown in the chip. Already trimmed; not yet width-truncated
     /// (render decides what fits).
     pub label: String,
-    /// Bytes sent to the claude PTY (sans the trailing `\r`).
+    /// Text written to the agent PTY (sans any trailing `\r`).
     pub command: String,
+    /// Whether firing the chip also submits: `true` appends `\r` so the
+    /// agent runs the command; `false` leaves it typed in the prompt for
+    /// the user to finish (a config line ending in `...` or `…`).
+    pub submit: bool,
+}
+
+/// Trailing markers that turn a chip into "type but don't submit".
+const NO_SUBMIT_MARKERS: [&str; 2] = ["...", "\u{2026}"];
+
+impl PinnedCommand {
+    /// Bytes to write to the PTY when the chip fires: the command, plus a
+    /// carriage return when the chip submits.
+    pub fn pty_bytes(&self) -> Vec<u8> {
+        let mut bytes = self.command.as_bytes().to_vec();
+        if self.submit {
+            bytes.push(b'\r');
+        }
+        bytes
+    }
 }
 
 pub fn parse(text: &str) -> Vec<PinnedCommand> {
@@ -21,10 +40,23 @@ pub fn parse(text: &str) -> Vec<PinnedCommand> {
                 Some((lhs, rhs)) => (lhs.trim().to_string(), rhs.trim().to_string()),
                 None => (line.to_string(), line.to_string()),
             };
-            if label.is_empty() || command.is_empty() {
+            // `/agent-review ...` strips the marker but keeps the trailing
+            // space so the cursor lands where the argument goes.
+            let (command, submit) = match NO_SUBMIT_MARKERS
+                .iter()
+                .find_map(|m| command.strip_suffix(m))
+            {
+                Some(rest) => (rest.to_string(), false),
+                None => (command, true),
+            };
+            if label.is_empty() || command.trim().is_empty() {
                 return None;
             }
-            Some(PinnedCommand { label, command })
+            Some(PinnedCommand {
+                label,
+                command,
+                submit,
+            })
         })
         .collect()
 }
@@ -60,6 +92,7 @@ mod tests {
             vec![PinnedCommand {
                 label: "PR".into(),
                 command: "/pull-request".into(),
+                submit: true,
             }]
         );
     }
@@ -72,6 +105,7 @@ mod tests {
             vec![PinnedCommand {
                 label: "/feedback".into(),
                 command: "/feedback".into(),
+                submit: true,
             }]
         );
     }
@@ -92,6 +126,7 @@ mod tests {
             vec![PinnedCommand {
                 label: "Loop".into(),
                 command: "/loop /babysit-prs".into(),
+                submit: true,
             }]
         );
     }
@@ -107,6 +142,7 @@ mod tests {
             vec![PinnedCommand {
                 label: "Kv".into(),
                 command: "/set FOO=bar".into(),
+                submit: true,
             }]
         );
     }
@@ -128,6 +164,58 @@ mod tests {
         assert!(parse("=").is_empty());
         assert!(parse("Label=").is_empty());
         assert!(parse("=cmd").is_empty()); // label is empty after trim
+    }
+
+    #[test]
+    fn parse_trailing_dots_marks_no_submit_and_keeps_space() {
+        let out = parse("agent-review=/agent-review ...");
+        assert_eq!(
+            out,
+            vec![PinnedCommand {
+                label: "agent-review".into(),
+                command: "/agent-review ".into(),
+                submit: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_trailing_ellipsis_char_marks_no_submit() {
+        let out = parse("rev=/agent-review\u{2026}");
+        assert_eq!(out[0].command, "/agent-review");
+        assert!(!out[0].submit);
+    }
+
+    #[test]
+    fn parse_unlabeled_no_submit_keeps_marker_in_label() {
+        // The label is the raw line so the chip shows the user it won't
+        // submit; only the command loses the marker.
+        let out = parse("/agent-review ...");
+        assert_eq!(out[0].label, "/agent-review ...");
+        assert_eq!(out[0].command, "/agent-review ");
+        assert!(!out[0].submit);
+    }
+
+    #[test]
+    fn parse_drops_bare_marker() {
+        assert!(parse("X=...").is_empty());
+        assert!(parse("...").is_empty());
+    }
+
+    #[test]
+    fn pty_bytes_appends_cr_only_when_submitting() {
+        let submit = PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+            submit: true,
+        };
+        assert_eq!(submit.pty_bytes(), b"/pull-request\r");
+        let typed = PinnedCommand {
+            label: "rev".into(),
+            command: "/agent-review ".into(),
+            submit: false,
+        };
+        assert_eq!(typed.pty_bytes(), b"/agent-review ");
     }
 
     #[test]

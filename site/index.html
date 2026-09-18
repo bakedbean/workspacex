@@ -1,282 +1,588 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>workspacex · terminal-native multi-agent orchestration</title>
-<meta name="description" content="A stripped-down terminal interface for massively parallel agentic development. Keyboard-driven, local-first, no browser required." />
-<link rel="canonical" href="https://workspace-x.com/" />
-<meta name="theme-color" content="#0a0d12" />
-<link rel="icon" href="/favicon.ico" sizes="16x16 32x32" />
-<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>workspacex · terminal-native multi-agent orchestration</title>
+    <meta
+      name="description"
+      content="A stripped-down terminal interface for massively parallel agentic development. Keyboard-driven, local-first, no browser required."
+    />
+    <link rel="canonical" href="https://workspace-x.com/" />
+    <meta name="theme-color" content="#0a0d12" />
+    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 
-<!-- Open Graph -->
-<meta property="og:type" content="website" />
-<meta property="og:site_name" content="workspacex" />
-<meta property="og:title" content="workspacex · terminal-native multi-agent orchestration" />
-<meta property="og:description" content="Massively parallel agentic development, from a single terminal. Keyboard-driven, local-first, no browser required." />
-<meta property="og:url" content="https://workspace-x.com/" />
-<meta property="og:image" content="https://workspace-x.com/assets/og-cover.png" />
-<meta property="og:image:width" content="1200" />
-<meta property="og:image:height" content="630" />
-<meta property="og:image:alt" content="workspacex — massively parallel agentic development, from a single terminal" />
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="workspacex" />
+    <meta
+      property="og:title"
+      content="workspacex · terminal-native multi-agent orchestration"
+    />
+    <meta
+      property="og:description"
+      content="Massively parallel agentic development, from a single terminal. Keyboard-driven, local-first, no browser required."
+    />
+    <meta property="og:url" content="https://workspace-x.com/" />
+    <meta
+      property="og:image"
+      content="https://workspace-x.com/assets/og-cover.png"
+    />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="workspacex — massively parallel agentic development, from a single terminal"
+    />
 
-<!-- Twitter / X card -->
-<meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="workspacex · terminal-native multi-agent orchestration" />
-<meta name="twitter:description" content="Massively parallel agentic development, from a single terminal. Keyboard-driven, local-first, no browser required." />
-<meta name="twitter:image" content="https://workspace-x.com/assets/og-cover.png" />
+    <!-- Twitter / X card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="workspacex · terminal-native multi-agent orchestration"
+    />
+    <meta
+      name="twitter:description"
+      content="Massively parallel agentic development, from a single terminal. Keyboard-driven, local-first, no browser required."
+    />
+    <meta
+      name="twitter:image"
+      content="https://workspace-x.com/assets/og-cover.png"
+    />
 
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="site.css" />
-<noscript><style>.reveal{opacity:1;transform:none}</style></noscript>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="site.css" />
+    <noscript
+      ><style>
+        .reveal {
+          opacity: 1;
+          transform: none;
+        }
+      </style></noscript
+    >
 
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "SoftwareApplication",
-  "name": "workspacex",
-  "alternateName": "wsx",
-  "description": "Terminal-native multi-agent orchestration for Claude Code, Codex, Pi, and other coding agents. Local-first, remote-ready, keyboard-driven.",
-  "url": "https://workspace-x.com/",
-  "image": "https://workspace-x.com/assets/og-cover.png",
-  "applicationCategory": "DeveloperApplication",
-  "operatingSystem": "Linux, macOS",
-  "offers": {
-    "@type": "Offer",
-    "price": "0",
-    "priceCurrency": "USD"
-  },
-  "license": "https://github.com/bakedbean/workspacex/blob/main/LICENSE",
-  "codeRepository": "https://github.com/bakedbean/workspacex"
-}
-</script>
-</head>
-<body>
-
-<!-- ── nav ─────────────────────────────────────────────────────────────── -->
-<nav class="nav">
-  <div class="nav-inner">
-    <a class="brand" href="#top"><span class="blink"></span>workspace<b>x</b></a>
-    <div class="nav-links">
-      <a href="#how">Quickstart</a>
-      <a href="#features">Features</a>
-      <a href="docs/" target="_blank" rel="noopener">Docs</a>
-      <a class="btn btn-ghost" href="https://github.com/bakedbean/workspacex" target="_blank" rel="noopener">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2 0 1.8 1.2 1.8 1.2 1 .7 2.1.5 2.6.4.1-.7.4-1.2.7-1.5-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11 11 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
-        Star
-      </a>
-    </div>
-  </div>
-</nav>
-
-<span id="top"></span>
-
-<!-- ── hero ────────────────────────────────────────────────────────────── -->
-<header class="hero">
-  <div class="wrap">
-    <h1 class="reveal">Massively parallel agentic development,<br /><span class="dim">from a single terminal.</span></h1>
-    <p class="sub reveal" data-d="1">keyboard-driven · local-first · no browser, no daemon, no config server</p>
-
-    <div class="hero-term reveal" data-d="1">
-      <div class="shell">
-        <div class="ln"><span class="pfx">$ </span>wsx<span class="cur"></span></div>
-        <p class="hint">one command in. everything after it is a keystroke.</p>
-        <p class="hint hint-2">Claude Code, Codex, oh-my-pi and Hermes agents supported out of the box. Want to add another harness? MIT licensed, <a href="https://github.com/bakedbean/workspacex/pulls" target="_blank" rel="noopener">Open a PR.</a></p>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "workspacex",
+        "alternateName": "wsx",
+        "description": "Terminal-native multi-agent orchestration for Claude Code, Codex, Pi, and other coding agents. Local-first, remote-ready, keyboard-driven.",
+        "url": "https://workspace-x.com/",
+        "image": "https://workspace-x.com/assets/og-cover.png",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Linux, macOS",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "license": "https://github.com/bakedbean/workspacex/blob/main/LICENSE",
+        "codeRepository": "https://github.com/bakedbean/workspacex"
+      }
+    </script>
+  </head>
+  <body>
+    <!-- ── nav ─────────────────────────────────────────────────────────────── -->
+    <nav class="nav">
+      <div class="nav-inner">
+        <a class="brand" href="#top"
+          ><span class="blink"></span>workspace<b>x</b></a
+        >
+        <div class="nav-links">
+          <a href="#how">Quickstart</a>
+          <a href="#features">Features</a>
+          <a href="docs/" target="_blank" rel="noopener">Docs</a>
+          <a
+            class="btn btn-ghost"
+            href="https://github.com/bakedbean/workspacex"
+            target="_blank"
+            rel="noopener"
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path
+                d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2 0 1.8 1.2 1.8 1.2 1 .7 2.1.5 2.6.4.1-.7.4-1.2.7-1.5-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11 11 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"
+              />
+            </svg>
+            Star
+          </a>
+        </div>
       </div>
-    </div>
+    </nav>
 
-    <div class="hero-cta reveal" data-d="2">
-      <a class="btn btn-primary" href="#how">Get started</a>
-      <a class="btn" href="https://github.com/bakedbean/workspacex" target="_blank" rel="noopener">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2 0 1.8 1.2 1.8 1.2 1 .7 2.1.5 2.6.4.1-.7.4-1.2.7-1.5-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11 11 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
-        GitHub
-      </a>
-    </div>
+    <span id="top"></span>
 
-    <figure class="still term reveal" data-d="3">
-      <picture>
-        <source srcset="assets/dashboard-hero.webp" type="image/webp" />
-        <img src="assets/dashboard-hero.png" width="2730" height="1196" alt="The wsx dashboard with three repos and nine workspaces: agents thinking, one waiting on a question, per-workspace diff counts, goal/state/next recaps inline, and the selected workspace's session summary, recent chat and recent files in the detail bar." loading="eager" decoding="async" />
-      </picture>
-      <figcaption>three repos · nine live workspaces · Claude and Codex sharing one of them · every row is a real agent session</figcaption>
-    </figure>
+    <!-- ── hero ────────────────────────────────────────────────────────────── -->
+    <header class="hero">
+      <div class="wrap">
+        <h1 class="reveal">
+          Massively parallel agentic development,<br /><span class="dim"
+            >from a single terminal.</span
+          >
+        </h1>
+        <p class="sub reveal" data-d="1">
+          keyboard-driven · local-first · no browser, no daemon, no config
+          server
+        </p>
 
-    <!-- bar-theme thumbnails: the same two views in a starship-style theme; click opens the full still in a lightbox -->
-    <div class="thumbs reveal" data-d="3">
-      <p class="thumbs-label">the same views in a bar theme · powerline blocks, starship's format grammar, your palette · <a href="docs/configuration/themes.html" target="_blank" rel="noopener">themes</a></p>
-      <div class="thumb-row">
-        <button class="thumb term" type="button" data-full="assets/dashboard-hero-orange.png" data-full-webp="assets/dashboard-hero-orange.webp" data-caption="dashboard · orange bar theme over the jellybeans palette · fleet token, alert and dirty-tree counts along the footer">
+        <div class="hero-term reveal" data-d="1">
+          <div class="shell">
+            <div class="ln">
+              <span class="pfx">$ </span>wsx<span class="cur"></span>
+            </div>
+            <p class="hint">
+              one command in. everything after it is a keystroke.
+            </p>
+            <p class="hint hint-2">
+              Claude Code, Codex, oh-my-pi and Hermes agents supported out of
+              the box. Want to add another harness? MIT licensed,
+              <a
+                href="https://github.com/bakedbean/workspacex/pulls"
+                target="_blank"
+                rel="noopener"
+                >Open a PR.</a
+              >
+            </p>
+          </div>
+        </div>
+
+        <div class="hero-cta reveal" data-d="2">
+          <a class="btn btn-primary" href="#how">Get started</a>
+          <a
+            class="btn"
+            href="https://github.com/bakedbean/workspacex"
+            target="_blank"
+            rel="noopener"
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path
+                d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2 0 1.8 1.2 1.8 1.2 1 .7 2.1.5 2.6.4.1-.7.4-1.2.7-1.5-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11 11 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"
+              />
+            </svg>
+            GitHub
+          </a>
+        </div>
+
+        <figure class="still term reveal" data-d="3">
           <picture>
-            <source srcset="assets/dashboard-hero-orange.webp" type="image/webp" />
-            <img src="assets/dashboard-hero-orange.png" width="2728" height="1196" alt="The same dashboard in the orange bar theme: powerline header and footer, Claude and Codex both on one workspace, per-workspace diff counts and recaps, and fleet-wide token, alert and dirty-tree counts along the bottom. Opens full size." loading="lazy" decoding="async" />
+            <source srcset="assets/dashboard-hero.webp" type="image/webp" />
+            <img
+              src="assets/dashboard-hero.png"
+              width="2730"
+              height="1196"
+              alt="The wsx dashboard with three repos and nine workspaces: agents thinking, one waiting on a question, per-workspace diff counts, goal/state/next recaps inline, and the selected workspace's session summary, recent chat and recent files in the detail bar."
+              loading="eager"
+              decoding="async"
+            />
           </picture>
-          <span class="thumb-cap">dashboard · orange bar theme</span>
-        </button>
-        <button class="thumb term" type="button" data-full="assets/agent-chat-orange.png" data-full-webp="assets/agent-chat-orange.webp" data-caption="attached view · orange bar theme · the workspace on an orange block, the other workspaces that need you folding into the bar, each agent under its own icon">
-          <picture>
-            <source srcset="assets/agent-chat-orange.webp" type="image/webp" />
-            <img src="assets/agent-chat-orange.png" width="2730" height="1196" alt="The attached view in the orange bar theme: the workspace name on an orange block, the other workspaces needing attention beside it, a [message from codex] commit report in Claude's chat, and the agents row with Claude and Codex under their own icons. Opens full size." loading="lazy" decoding="async" />
-          </picture>
-          <span class="thumb-cap">attached view · orange bar theme</span>
-        </button>
+          <figcaption>
+            three repos · nine live workspaces · Claude and Codex sharing one of
+            them · every row is a real agent session
+          </figcaption>
+        </figure>
+
+        <!-- bar-theme thumbnails: the same two views in a starship-style theme; click opens the full still in a lightbox -->
+        <div class="thumbs reveal" data-d="3">
+          <p class="thumbs-label">
+            Starship/Powerline/Airline style themes are also available with
+            configurable segments, showing a custom "orange" theme ·
+            <a
+              href="docs/configuration/themes.html"
+              target="_blank"
+              rel="noopener"
+              >themes</a
+            >
+          </p>
+          <div class="thumb-row">
+            <button
+              class="thumb term"
+              type="button"
+              data-full="assets/dashboard-hero-orange.png"
+              data-full-webp="assets/dashboard-hero-orange.webp"
+              data-caption="dashboard · orange bar theme over the jellybeans palette · fleet token, alert and dirty-tree counts along the footer"
+            >
+              <picture>
+                <source
+                  srcset="assets/dashboard-hero-orange.webp"
+                  type="image/webp"
+                />
+                <img
+                  src="assets/dashboard-hero-orange.png"
+                  width="2728"
+                  height="1196"
+                  alt="The same dashboard in the orange bar theme: powerline header and footer, Claude and Codex both on one workspace, per-workspace diff counts and recaps, and fleet-wide token, alert and dirty-tree counts along the bottom. Opens full size."
+                  loading="lazy"
+                  decoding="async"
+                />
+              </picture>
+              <span class="thumb-cap">dashboard · orange bar theme</span>
+            </button>
+            <button
+              class="thumb term"
+              type="button"
+              data-full="assets/agent-chat-orange.png"
+              data-full-webp="assets/agent-chat-orange.webp"
+              data-caption="attached view · orange bar theme · the workspace on an orange block, the other workspaces that need you folding into the bar, each agent under its own icon"
+            >
+              <picture>
+                <source
+                  srcset="assets/agent-chat-orange.webp"
+                  type="image/webp"
+                />
+                <img
+                  src="assets/agent-chat-orange.png"
+                  width="2730"
+                  height="1196"
+                  alt="The attached view in the orange bar theme: the workspace name on an orange block, the other workspaces needing attention beside it, a [message from codex] commit report in Claude's chat, and the agents row with Claude and Codex under their own icons. Opens full size."
+                  loading="lazy"
+                  decoding="async"
+                />
+              </picture>
+              <span class="thumb-cap">attached view · orange bar theme</span>
+            </button>
+          </div>
+        </div>
       </div>
-    </div>
-  </div>
-</header>
+    </header>
 
-<dialog class="lightbox" id="lightbox" aria-label="Full-size still">
-  <button class="lightbox-close" type="button" aria-label="Close" data-close>&times;</button>
-  <picture>
-    <source type="image/webp" />
-    <img alt="" decoding="async" />
-  </picture>
-  <p class="lightbox-cap"></p>
-</dialog>
-
-<hr class="divider" />
-
-<!-- ── value props ─────────────────────────────────────────────────────── -->
-<section id="features">
-  <div class="wrap">
-    <div class="sec-head reveal">
-      <h2 class="mono"><span class="pfx">$ </span>wsx --features</h2>
-      <span class="rule"></span>
-      <p class="note">every session is an isolated worktree</p>
-    </div>
-
-    <ul class="props">
-      <li class="prop reveal"><span class="g g-green mono">▮</span><span class="name">no extra API cost</span><p class="desc">Each agent's own CLI runs in a PTY on the subscription you already pay for. wsx never calls a model API and adds zero token usage.</p></li>
-      <li class="prop reveal"><span class="g g-blue mono">⇄</span><span class="name">multi-agent workspaces</span><p class="desc">Add multiple agent types to a workspace and coordinate them via the wsx CLI</p></li>
-      <li class="prop reveal"><span class="g g-violet mono">✓</span><span class="name">pinned commands</span><p class="desc">Pin frequently used commands and skills to each workspace, activate with a click or keybind</p></li>
-      <li class="prop reveal"><span class="g g-green mono">▤</span><span class="name">one scannable view</span><p class="desc">Original prompt, latest agent update, git diff and workspace details, sorted so questions and stalls surface first.</p></li>
-      <li class="prop reveal"><span class="g g-amber mono">⎇</span><span class="name">local-first git</span><p class="desc">Real-time diff counts and pull-request status, reflected on the dashboard and inside agent chats.</p></li>
-      <li class="prop reveal"><span class="g g-blue mono">⌘</span><span class="name">keybind launchers</span><p class="desc">Send a workspace to your editor, a diff viewer, or lazygit without lifting your hands from the keyboard.</p></li>
-      <li class="prop reveal"><span class="g g-violet mono">◫</span><span class="name">split views &amp; layouts</span><p class="desc">Split the attached view vim-style (<span class="mono">v</span> side-by-side, <span class="mono">s</span> stacked), nest freely, and save the arrangement so it restores when you re-enter the workspace.</p></li>
-      <li class="prop reveal"><span class="g g-red mono">⊞</span><span class="name">process management</span><p class="desc">Start a dev server from the dashboard or the chat view, then watch and kill it from the same pane.</p></li>
-      <li class="prop reveal"><span class="g g-green mono">⇡</span><span class="name">remote-first sessions</span><p class="desc">Start sessions with tmux enabled, attach from wsx on another machine or run wsx in full fidelity tmux. Access anywhere via Tailscale.</p></li>
-    </ul>
-  </div>
-</section>
-
-<hr class="divider" />
-
-<!-- ── quickstart ──────────────────────────────────────────────────────── -->
-<section id="how">
-  <div class="wrap">
-    <div class="sec-head reveal">
-      <h2 class="mono"><span class="pfx">$ </span>wsx --quickstart</h2>
-      <span class="rule"></span>
-      <p class="note">one static rust binary · no runtime deps</p>
-    </div>
-    <div class="cmd reveal" data-d="1">
-      <button class="copy-btn" data-copy="cargo build --release&#10;export PATH=&quot;$PWD/target/release:$PATH&quot;&#10;wsx repo add /path/to/repo&#10;wsx" aria-label="Copy install commands">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+    <dialog class="lightbox" id="lightbox" aria-label="Full-size still">
+      <button
+        class="lightbox-close"
+        type="button"
+        aria-label="Close"
+        data-close
+      >
+        &times;
       </button>
-      <div class="cmd-row"><span class="pfx">$</span><span class="txt">cargo build --release</span><span class="cmt"># build the binary</span></div>
-      <div class="cmd-row"><span class="pfx">$</span><span class="txt">export PATH="$PWD/target/release:$PATH"</span><span class="cmt"># put wsx on your PATH</span></div>
-      <div class="cmd-row"><span class="pfx">$</span><span class="txt">wsx repo add /path/to/repo</span><span class="cmt"># worktrees auto-discovered</span></div>
-      <div class="cmd-row"><span class="pfx">$</span><span class="txt">wsx</span><span class="cmt"># launch the TUI</span></div>
-    </div>
-    <p class="hero-note reveal" data-d="2">The <span class="accent">wsx</span> and <span class="accent">agent-review</span> skills install during setup.</p>
-  </div>
-</section>
-
-<hr class="divider" />
-
-<!-- ── screencasts ─────────────────────────────────────────────────────── -->
-<section id="see">
-  <div class="wrap">
-    <div class="sec-head reveal">
-      <h2 class="mono"><span class="pfx">$ </span>wsx --demo</h2>
-      <span class="rule"></span>
-      <p class="note">a live session and two short screencasts, unedited</p>
-    </div>
-    <figure class="still term reveal">
       <picture>
-        <source srcset="assets/agent-chat.webp" type="image/webp" />
-        <img src="assets/agent-chat.png" width="2730" height="1196" alt="The wsx attached view: the top bar lists the other workspaces that need you, a question first and then by recency; below it the primary Claude agent's chat, where a [message from codex] banner reports the commit hash for the SQL-injection fix it was handed and the primary verifies it with git show; along the bottom the pinned-command chips /pr, /rebase, /feedback and /agent-review plus the agents row listing both attached agents." loading="lazy" decoding="async" />
+        <source type="image/webp" />
+        <img alt="" decoding="async" />
       </picture>
-      <figcaption>the attached view · the other workspaces that need you, along the top · a second agent, briefed over <span class="accent">wsx agent send</span>, reports its commit back into the primary's chat · <span class="accent">/pr</span> <span class="accent">/rebase</span> <span class="accent">/feedback</span> <span class="accent">/agent-review</span> pinned one keystroke away</figcaption>
-    </figure>
-    <div class="casts">
-      <div class="reveal">
-        <div class="term">
-          <div class="cast-media">
-            <video controls muted loop playsinline preload="metadata" data-src="assets/01-hero.mp4"></video>
-            <div class="cast-ph">
-              <span class="play"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
-              <span>screencast coming soon</span>
-            </div>
+      <p class="lightbox-cap"></p>
+    </dialog>
+
+    <hr class="divider" />
+
+    <!-- ── value props ─────────────────────────────────────────────────────── -->
+    <section id="features">
+      <div class="wrap">
+        <div class="sec-head reveal">
+          <h2 class="mono"><span class="pfx">$ </span>wsx --features</h2>
+          <span class="rule"></span>
+          <p class="note">every session is an isolated worktree</p>
+        </div>
+
+        <ul class="props">
+          <li class="prop reveal">
+            <span class="g g-green mono">▮</span
+            ><span class="name">no extra API cost</span>
+            <p class="desc">
+              Each agent's own CLI runs in a PTY on the subscription you already
+              pay for. wsx never calls a model API and adds zero token usage.
+            </p>
+          </li>
+          <li class="prop reveal">
+            <span class="g g-blue mono">⇄</span
+            ><span class="name">multi-agent workspaces</span>
+            <p class="desc">
+              Add multiple agent types to a workspace and coordinate them via
+              the wsx CLI
+            </p>
+          </li>
+          <li class="prop reveal">
+            <span class="g g-violet mono">✓</span
+            ><span class="name">pinned commands</span>
+            <p class="desc">
+              Pin frequently used commands and skills to each workspace,
+              activate with a click or keybind
+            </p>
+          </li>
+          <li class="prop reveal">
+            <span class="g g-green mono">▤</span
+            ><span class="name">one scannable view</span>
+            <p class="desc">
+              Original prompt, latest agent update, git diff and workspace
+              details, sorted so questions and stalls surface first.
+            </p>
+          </li>
+          <li class="prop reveal">
+            <span class="g g-amber mono">⎇</span
+            ><span class="name">local-first git</span>
+            <p class="desc">
+              Real-time diff counts and pull-request status, reflected on the
+              dashboard and inside agent chats.
+            </p>
+          </li>
+          <li class="prop reveal">
+            <span class="g g-blue mono">⌘</span
+            ><span class="name">keybind launchers</span>
+            <p class="desc">
+              Send a workspace to your editor, a diff viewer, or lazygit without
+              lifting your hands from the keyboard.
+            </p>
+          </li>
+          <li class="prop reveal">
+            <span class="g g-violet mono">◫</span
+            ><span class="name">split views &amp; layouts</span>
+            <p class="desc">
+              Split the attached view vim-style (<span class="mono">v</span>
+              side-by-side, <span class="mono">s</span> stacked), nest freely,
+              and save the arrangement so it restores when you re-enter the
+              workspace.
+            </p>
+          </li>
+          <li class="prop reveal">
+            <span class="g g-red mono">⊞</span
+            ><span class="name">process management</span>
+            <p class="desc">
+              Start a dev server from the dashboard or the chat view, then watch
+              and kill it from the same pane.
+            </p>
+          </li>
+          <li class="prop reveal">
+            <span class="g g-green mono">⇡</span
+            ><span class="name">remote-first sessions</span>
+            <p class="desc">
+              Start sessions with tmux enabled, attach from wsx on another
+              machine or run wsx in full fidelity tmux. Access anywhere via
+              Tailscale.
+            </p>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- ── quickstart ──────────────────────────────────────────────────────── -->
+    <section id="how">
+      <div class="wrap">
+        <div class="sec-head reveal">
+          <h2 class="mono"><span class="pfx">$ </span>wsx --quickstart</h2>
+          <span class="rule"></span>
+          <p class="note">one static rust binary · no runtime deps</p>
+        </div>
+        <div class="cmd reveal" data-d="1">
+          <button
+            class="copy-btn"
+            data-copy='cargo build --release&#10;export PATH="$PWD/target/release:$PATH"&#10;wsx repo add /path/to/repo&#10;wsx'
+            aria-label="Copy install commands"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect x="9" y="9" width="13" height="13" rx="2" />
+              <path
+                d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+              />
+            </svg>
+          </button>
+          <div class="cmd-row">
+            <span class="pfx">$</span
+            ><span class="txt">cargo build --release</span
+            ><span class="cmt"># build the binary</span>
+          </div>
+          <div class="cmd-row">
+            <span class="pfx">$</span
+            ><span class="txt">export PATH="$PWD/target/release:$PATH"</span
+            ><span class="cmt"># put wsx on your PATH</span>
+          </div>
+          <div class="cmd-row">
+            <span class="pfx">$</span
+            ><span class="txt">wsx repo add /path/to/repo</span
+            ><span class="cmt"># worktrees auto-discovered</span>
+          </div>
+          <div class="cmd-row">
+            <span class="pfx">$</span><span class="txt">wsx</span
+            ><span class="cmt"># launch the TUI</span>
           </div>
         </div>
-        <span class="cast-cap"><span class="n">01</span> · claude hands a fix to codex, one workspace</span>
+        <p class="hero-note reveal" data-d="2">
+          The <span class="accent">wsx</span> and
+          <span class="accent">agent-review</span> skills install during setup.
+        </p>
       </div>
-      <div class="reveal" data-d="1">
-        <div class="term">
-          <div class="cast-media">
-            <video controls muted loop playsinline preload="metadata" data-src="assets/02-parallel.mp4"></video>
-            <div class="cast-ph">
-              <span class="play"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></span>
-              <span>screencast coming soon</span>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- ── screencasts ─────────────────────────────────────────────────────── -->
+    <section id="see">
+      <div class="wrap">
+        <div class="sec-head reveal">
+          <h2 class="mono"><span class="pfx">$ </span>wsx --demo</h2>
+          <span class="rule"></span>
+          <p class="note">a live session and two short screencasts, unedited</p>
+        </div>
+        <figure class="still term reveal">
+          <picture>
+            <source srcset="assets/agent-chat.webp" type="image/webp" />
+            <img
+              src="assets/agent-chat.png"
+              width="2730"
+              height="1196"
+              alt="The wsx attached view: the top bar lists the other workspaces that need you, a question first and then by recency; below it the primary Claude agent's chat, where a [message from codex] banner reports the commit hash for the SQL-injection fix it was handed and the primary verifies it with git show; along the bottom the pinned-command chips /pr, /rebase, /feedback and /agent-review plus the agents row listing both attached agents."
+              loading="lazy"
+              decoding="async"
+            />
+          </picture>
+          <figcaption>
+            the attached view · the other workspaces that need you, along the
+            top · a second agent, briefed over
+            <span class="accent">wsx agent send</span>, reports its commit back
+            into the primary's chat · <span class="accent">/pr</span>
+            <span class="accent">/rebase</span>
+            <span class="accent">/feedback</span>
+            <span class="accent">/agent-review</span> pinned one keystroke away
+          </figcaption>
+        </figure>
+        <div class="casts">
+          <div class="reveal">
+            <div class="term">
+              <div class="cast-media">
+                <video
+                  controls
+                  muted
+                  loop
+                  playsinline
+                  preload="metadata"
+                  data-src="assets/01-hero.mp4"
+                ></video>
+                <div class="cast-ph">
+                  <span class="play"
+                    ><svg viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M8 5v14l11-7z" /></svg
+                  ></span>
+                  <span>screencast coming soon</span>
+                </div>
+              </div>
             </div>
+            <span class="cast-cap"
+              ><span class="n">01</span> · claude hands a fix to codex, one
+              workspace</span
+            >
+          </div>
+          <div class="reveal" data-d="1">
+            <div class="term">
+              <div class="cast-media">
+                <video
+                  controls
+                  muted
+                  loop
+                  playsinline
+                  preload="metadata"
+                  data-src="assets/02-parallel.mp4"
+                ></video>
+                <div class="cast-ph">
+                  <span class="play"
+                    ><svg viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M8 5v14l11-7z" /></svg
+                  ></span>
+                  <span>screencast coming soon</span>
+                </div>
+              </div>
+            </div>
+            <span class="cast-cap"
+              ><span class="n">02</span> · parallel agents across isolated
+              worktrees</span
+            >
           </div>
         </div>
-        <span class="cast-cap"><span class="n">02</span> · parallel agents across isolated worktrees</span>
       </div>
-    </div>
-  </div>
-</section>
+    </section>
 
-<hr class="divider" />
+    <hr class="divider" />
 
-<!-- ── closing ─────────────────────────────────────────────────────────── -->
-<section id="cta">
-  <div class="wrap">
-    <p class="cta-line reveal"><span class="pfx">$ </span>git clone https://github.com/bakedbean/workspacex</p>
-    <div class="hero-cta reveal" data-d="1" style="margin:0">
-      <a class="btn btn-primary" href="https://github.com/bakedbean/workspacex" target="_blank" rel="noopener">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2 0 1.8 1.2 1.8 1.2 1 .7 2.1.5 2.6.4.1-.7.4-1.2.7-1.5-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11 11 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
-        Star on GitHub
-      </a>
-      <a class="btn" href="docs/" target="_blank" rel="noopener">Read the docs</a>
-    </div>
-  </div>
-</section>
-
-<!-- ── footer ──────────────────────────────────────────────────────────── -->
-<footer>
-  <div class="wrap foot-inner">
-    <div class="foot-brand">
-      <a class="brand" href="#top"><span class="blink"></span>workspace<b>x</b></a>
-      <p>Terminal-native multi-agent orchestration for Claude Code, Codex, Pi, and other coding agents. Local-first, remote-ready, keyboard-driven.</p>
-    </div>
-    <div class="foot-cols">
-      <div class="foot-col">
-        <h4>Product</h4>
-        <a href="#how">Quickstart</a>
-        <a href="#features">Features</a>
-        <a href="#see">Screencasts</a>
+    <!-- ── closing ─────────────────────────────────────────────────────────── -->
+    <section id="cta">
+      <div class="wrap">
+        <p class="cta-line reveal">
+          <span class="pfx">$ </span>git clone
+          https://github.com/bakedbean/workspacex
+        </p>
+        <div class="hero-cta reveal" data-d="1" style="margin: 0">
+          <a
+            class="btn btn-primary"
+            href="https://github.com/bakedbean/workspacex"
+            target="_blank"
+            rel="noopener"
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <path
+                d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2 0 1.8 1.2 1.8 1.2 1 .7 2.1.5 2.6.4.1-.7.4-1.2.7-1.5-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11 11 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"
+              />
+            </svg>
+            Star on GitHub
+          </a>
+          <a class="btn" href="docs/" target="_blank" rel="noopener"
+            >Read the docs</a
+          >
+        </div>
       </div>
-      <div class="foot-col">
-        <h4>Resources</h4>
-        <a href="https://github.com/bakedbean/workspacex" target="_blank" rel="noopener">GitHub</a>
-        <a href="docs/" target="_blank" rel="noopener">Documentation</a>
-        <a href="https://github.com/bakedbean/workspacex/issues" target="_blank" rel="noopener">Issues</a>
-      </div>
-    </div>
-  </div>
-  <div class="wrap foot-bottom">
-    <span>© 2026 workspacex · MIT licensed</span>
-    <span>workspace-x.com</span>
-  </div>
-</footer>
+    </section>
 
-<script src="site.js"></script>
-<!-- Cloudflare Web Analytics (cookieless). Token: Cloudflare dashboard → Analytics & Logs → Web Analytics → workspace-x.com. -->
-<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js" data-cf-beacon='{"token": "f4af87acd28e490593656ca9636659f8"}'></script>
-</body>
+    <!-- ── footer ──────────────────────────────────────────────────────────── -->
+    <footer>
+      <div class="wrap foot-inner">
+        <div class="foot-brand">
+          <a class="brand" href="#top"
+            ><span class="blink"></span>workspace<b>x</b></a
+          >
+          <p>
+            Terminal-native multi-agent orchestration for Claude Code, Codex,
+            Pi, and other coding agents. Local-first, remote-ready,
+            keyboard-driven.
+          </p>
+        </div>
+        <div class="foot-cols">
+          <div class="foot-col">
+            <h4>Product</h4>
+            <a href="#how">Quickstart</a>
+            <a href="#features">Features</a>
+            <a href="#see">Screencasts</a>
+          </div>
+          <div class="foot-col">
+            <h4>Resources</h4>
+            <a
+              href="https://github.com/bakedbean/workspacex"
+              target="_blank"
+              rel="noopener"
+              >GitHub</a
+            >
+            <a href="docs/" target="_blank" rel="noopener">Documentation</a>
+            <a
+              href="https://github.com/bakedbean/workspacex/issues"
+              target="_blank"
+              rel="noopener"
+              >Issues</a
+            >
+          </div>
+        </div>
+      </div>
+      <div class="wrap foot-bottom">
+        <span>© 2026 workspacex · MIT licensed</span>
+        <span>workspace-x.com</span>
+      </div>
+    </footer>
+
+    <script src="site.js"></script>
+    <!-- Cloudflare Web Analytics (cookieless). Token: Cloudflare dashboard → Analytics & Logs → Web Analytics → workspace-x.com. -->
+    <script
+      type="module"
+      src="https://static.cloudflareinsights.com/beacon.min.js"
+      data-cf-beacon='{"token": "f4af87acd28e490593656ca9636659f8"}'
+    ></script>
+  </body>
 </html>

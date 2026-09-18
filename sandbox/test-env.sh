@@ -7,11 +7,12 @@ root="$(mktemp -d)/wsx-sb"
 ( unset WSX_SANDBOX_ROOT WSX_DEMO_ROOT; source "$HERE/env.sh"
   [ "$WSX_SANDBOX_ROOT" = "/tmp/wsx-demo" ] || { echo "FAIL: default root"; exit 1; }
   [ "$XDG_STATE_HOME" = "/tmp/wsx-demo/state" ] || { echo "FAIL: default XDG"; exit 1; } )
-# explicit path: WSX_SANDBOX_ROOT wins and derives the other three
+# explicit path: WSX_SANDBOX_ROOT wins and derives the other four
 # shellcheck disable=SC1091,SC2030
 ( export WSX_SANDBOX_ROOT="$root"; source "$HERE/env.sh"
   # shellcheck disable=SC2031
   [ "$XDG_STATE_HOME" = "$root/state" ] || { echo "FAIL: XDG"; exit 1; }
+  [ "$XDG_CONFIG_HOME" = "$root/config" ] || { echo "FAIL: XDG config"; exit 1; }
   [ "$CLAUDE_CONFIG_DIR" = "$root/claude-config" ] || { echo "FAIL: claude dir"; exit 1; }
   [ "$CODEX_HOME" = "$root/codex-home" ] || { echo "FAIL: codex home"; exit 1; } )
 # back-compat: WSX_DEMO_ROOT honored when WSX_SANDBOX_ROOT unset

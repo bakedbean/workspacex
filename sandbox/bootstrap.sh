@@ -29,6 +29,7 @@ case "$WSX_SANDBOX_ROOT" in
   *) echo "FATAL: WSX_SANDBOX_ROOT too shallow to remove safely: '$WSX_SANDBOX_ROOT'" >&2; exit 1;;
 esac
 export XDG_STATE_HOME="$WSX_SANDBOX_ROOT/state"
+export XDG_CONFIG_HOME="$WSX_SANDBOX_ROOT/config"
 export CLAUDE_CONFIG_DIR="$WSX_SANDBOX_ROOT/claude-config"
 export CODEX_HOME="$WSX_SANDBOX_ROOT/codex-home"
 REPOS="$WSX_SANDBOX_ROOT/repos"
@@ -36,7 +37,7 @@ WSX_BIN="${WSX_BIN:-wsx}"
 
 # Fresh state each run.
 rm -rf -- "$WSX_SANDBOX_ROOT"
-mkdir -p "$XDG_STATE_HOME" "$REPOS" "$CLAUDE_CONFIG_DIR" "$CODEX_HOME"
+mkdir -p "$XDG_STATE_HOME" "$XDG_CONFIG_HOME/wsx" "$REPOS" "$CLAUDE_CONFIG_DIR" "$CODEX_HOME"
 
 # --- Isolated Claude config (auth + bypass pre-accepted) ---
 # Copy credentials so the demo agents are authenticated without a login prompt.
@@ -219,6 +220,7 @@ echo "bridged ${#DEMO_PATHS[@]} session-log dirs into ~/.claude/projects (symlin
 
 echo "sandbox ready at $WSX_SANDBOX_ROOT"
 echo "  XDG_STATE_HOME=$XDG_STATE_HOME"
+echo "  XDG_CONFIG_HOME=$XDG_CONFIG_HOME"
 echo "  CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR"
 echo "  CODEX_HOME=$CODEX_HOME"
 echo "  ZDOTDIR=$ZDOT"

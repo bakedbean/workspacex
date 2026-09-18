@@ -3,8 +3,8 @@
 Stands up a fully isolated, live `wsx` install with synthetic repos and
 pre-authenticated agents, so anything that needs to *run the real app* — the
 screencast recordings under `demo/` and the e2e harness under `test/` — can build
-on it. Nothing here touches your real `~/.local/state/wsx`, `~/.claude.json`,
-`~/.claude/settings.json`, or `~/.codex`.
+on it. Nothing here touches your real `~/.local/state/wsx`, `~/.config/wsx`,
+`~/.claude.json`, `~/.claude/settings.json`, or `~/.codex`.
 
 ## Pieces
 
@@ -23,6 +23,7 @@ on it. Nothing here touches your real `~/.local/state/wsx`, `~/.claude.json`,
 | `WSX_SANDBOX_ROOT` | Root of the sandbox; everything lives under it. `WSX_DEMO_ROOT` is honored as a back-compat fallback. | `/tmp/wsx-demo` |
 | `WSX_BIN` | The `wsx` binary `bootstrap.sh` provisions with — point it at a local build to exercise local changes. | `wsx` (PATH) |
 | `XDG_STATE_HOME` | Isolated wsx `state.db`, worktrees, logs. | `$WSX_SANDBOX_ROOT/state` |
+| `XDG_CONFIG_HOME` | Isolated user config: wsx reads its bar theme from `$XDG_CONFIG_HOME/wsx/theme.toml`. Note that anything else run under the sandbox (git, gh, …) resolves its XDG config here too. | `$WSX_SANDBOX_ROOT/config` |
 | `CLAUDE_CONFIG_DIR` | Isolated Claude config (copied creds + settings + per-worktree trust). | `$WSX_SANDBOX_ROOT/claude-config` |
 | `CODEX_HOME` | Isolated Codex config (copied auth + per-repo trust). | `$WSX_SANDBOX_ROOT/codex-home` |
 

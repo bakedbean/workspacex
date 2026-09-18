@@ -8,6 +8,7 @@ Set Padding 16
 Set TypingSpeed 60ms
 
 Env XDG_STATE_HOME "/tmp/wsx-demo/state"
+Env XDG_CONFIG_HOME "/tmp/wsx-demo/config"
 
 Type "wsx"
 Enter

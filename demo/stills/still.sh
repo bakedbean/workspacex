@@ -38,6 +38,7 @@ still_up() { # <cols> <rows>
   local bindir; bindir="$(cd "$(dirname "$wsx")" && pwd)"
   env "${unset_args[@]}" tmux -L "$STILL_SOCK" new-session -d -x "$STILL_COLS" -y "$STILL_ROWS" \
     -e "XDG_STATE_HOME=$XDG_STATE_HOME" \
+    -e "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" \
     -e "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR" \
     -e "CODEX_HOME=$CODEX_HOME" \
     -e "ZDOTDIR=$ZDOTDIR" \

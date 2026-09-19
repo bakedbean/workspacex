@@ -847,7 +847,7 @@ mod tests {
         assert_eq!(specs.segments["funnel"].priority, 60);
         assert_eq!(
             specs.dashboard_footer.right_format,
-            format::parse("$version(  $funnel)").unwrap()
+            format::parse("$funnel").unwrap()
         );
         for def in SEGMENTS {
             assert!(

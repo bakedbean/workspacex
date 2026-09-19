@@ -42,7 +42,7 @@ fill         = " "
 
 [dashboard_footer]
 format       = "[ $keys ](bg:nord8 fg:nord1)[](fg:nord8)"
-right_format = "[](fg:nord2)[( $version )](bg:nord2 fg:nord4)([](fg:nord10 bg:nord2)[ $funnel ](bg:nord10 fg:nord6))"
+right_format = "([](fg:nord10)[ $funnel ](bg:nord10 fg:nord6))"
 fill         = " "
 
 # The focused agent's glyph leads on its own nord2 block, in the agent's

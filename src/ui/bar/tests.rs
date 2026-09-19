@@ -296,8 +296,12 @@ mod footer_tests {
             "{text:?}"
         );
         assert!(
-            text.trim_end().ends_with("0.1.0"),
-            "empty fleet: version only: {text:?}"
+            text.trim_end().ends_with("q  quit"),
+            "empty fleet: nothing on the right: {text:?}"
+        );
+        assert!(
+            !text.contains("0.1.0"),
+            "the version is no longer in the default footer: {text:?}"
         );
         assert!(
             !text.contains('▁'),
@@ -337,10 +341,8 @@ mod footer_tests {
         ];
         let fleet = FleetStats::from_rows(rows, 1, 0).to_vars();
         let text = plain(&footer(false, "24h", 140, &fleet).line);
-        assert!(
-            text.ends_with("0.1.0  2 working  1 blocked  1 ready"),
-            "{text:?}"
-        );
+        assert!(text.ends_with("2 working  1 blocked  1 ready"), "{text:?}");
+        assert!(!text.contains("0.1.0"), "{text:?}");
     }
 
     #[test]
@@ -489,14 +491,59 @@ mod footer_tests {
         assert_eq!(cells, " o  order");
     }
 
-    // At 85 columns, keys (71) + the mandatory 1-cell gap + the funnel's
-    // group "  2 working" (11, including its own grouped leading gap) = 83,
-    // which fits with room to spare; adding `$version`'s "0.1.0" (5 more, 88
-    // total) does not. `$version`'s lower priority (50 vs. the funnel's 60)
-    // drops it first, so the funnel survives alone — the same slot `$usage`
-    // used to hold.
+    // A theme that places `$version(  $funnel)` gets the old layout back,
+    // overflow priorities included: at 85 columns, keys (71) + the mandatory
+    // 1-cell gap + the funnel's group "  2 working" (11, including its own
+    // grouped leading gap) = 83 fits, but adding `$version`'s "0.1.0" (5
+    // more, 88 total) does not. `$version`'s lower priority (50 vs. the
+    // funnel's 60) drops it first, so the funnel survives alone.
     #[test]
-    fn narrow_footer_drops_version_before_funnel() {
+    fn narrow_footer_drops_placed_version_before_funnel() {
+        use crate::ui::bar::fleet::{FleetRow, FleetStats};
+        let theme = Theme::wsx();
+        let specs = crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse(
+                "[dashboard_footer]\nright_format = \"$version(  $funnel)\"\n",
+            )
+            .unwrap(),
+            &theme,
+        )
+        .unwrap();
+        let rows = vec![
+            FleetRow {
+                reported: Some(crate::data::store::ReportedState::Working),
+                ..Default::default()
+            },
+            FleetRow {
+                reported: Some(crate::data::store::ReportedState::Working),
+                ..Default::default()
+            },
+        ];
+        let fleet = FleetStats::from_rows(rows, 1, 0).to_vars();
+        let activity: Vec<u32> = (0..24).collect();
+        let inputs = DashboardFooterInputs {
+            activity: &activity,
+            version: "0.1.0",
+            window_label: "24h",
+            workspace_selected: false,
+            fleet: &fleet,
+        };
+        let wide = plain(&dashboard_footer(&specs, &theme, &inputs, 120).line);
+        assert!(wide.trim_end().ends_with("0.1.0  2 working"), "{wide:?}");
+        let narrow = dashboard_footer(&specs, &theme, &inputs, 85);
+        let text = plain(&narrow.line);
+        assert!(!text.contains("0.1.0"), "{text:?}");
+        assert!(text.trim_end().ends_with("2 working"), "{text:?}");
+        assert_eq!(narrow.line.width(), 85);
+    }
+
+    // At 85 columns, keys (71) + the mandatory 1-cell gap + the funnel's
+    // "2 working" (9) = 81 fits. The version used to share this slot and
+    // was the first to drop when the footer got narrow; it is no longer
+    // placed at all, so the funnel is the right side's only content — the
+    // same slot `$usage` used to hold.
+    #[test]
+    fn narrow_footer_shows_funnel_without_version() {
         use crate::ui::bar::fleet::{FleetRow, FleetStats};
         let rows = vec![
             FleetRow {
@@ -516,11 +563,10 @@ mod footer_tests {
         assert_eq!(out.line.width(), 85);
     }
 
-    // At 110 columns the bundled default's full content (keys 71 + gap 1
-    // + version 5 = 77, well under 110) always fits with an empty fleet:
-    // `(  $funnel)` drops entirely — leading gap included — since $funnel
-    // renders nothing to drop against. Pinned here so a future change to
-    // the bundled default's overflow priorities gets caught at this width.
+    // At 110 columns the bundled default's full content (keys 71, well
+    // under 110) always fits with an empty fleet: `$funnel` renders nothing,
+    // so the right side is empty. Pinned here so a future change to the
+    // bundled default's overflow priorities gets caught at this width.
     #[test]
     fn default_footer_snapshot_at_110() {
         let out = footer(false, "24h", 110, crate::ui::bar::fleet::empty());
@@ -532,9 +578,10 @@ mod footer_tests {
             "{text:?}"
         );
         assert!(
-            text.trim_end().ends_with("0.1.0"),
-            "empty fleet: version only: {text:?}"
+            text.trim_end().ends_with("q  quit"),
+            "empty fleet: nothing on the right: {text:?}"
         );
+        assert!(!text.contains("0.1.0"), "no version: {text:?}");
         assert!(!text.contains('▁'), "no sparkline: {text:?}");
         assert_eq!(out.line.width(), 110);
         assert_eq!(
@@ -2228,7 +2275,8 @@ mod example_theme_tests {
 
     /// With an empty fleet, `$funnel` is empty and its conditional group
     /// must drop *with* the arrow that leads into it — not leave a bare
-    /// coloured stub dangling past the version block.
+    /// coloured stub dangling on the right. Nothing else is placed there,
+    /// so the keys block's wedge is the last thing on the bar.
     #[test]
     fn every_example_theme_drops_the_funnel_block_when_empty() {
         for path in example_themes() {
@@ -2250,8 +2298,12 @@ mod example_theme_tests {
             );
             let text = plain(&out.line);
             assert!(
-                text.trim_end().ends_with("0.1.0"),
-                "{name}: expected the version block to be the last thing rendered, got {text:?}"
+                text.trim_end().ends_with('\u{e0b0}'),
+                "{name}: expected the keys wedge to be the last thing rendered, got {text:?}"
+            );
+            assert!(
+                !text.contains("0.1.0"),
+                "{name}: the version is no longer placed in the footer, got {text:?}"
             );
         }
     }

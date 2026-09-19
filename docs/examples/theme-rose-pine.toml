@@ -40,7 +40,7 @@ fill         = " "
 
 [dashboard_footer]
 format       = "[ $keys ](bg:rose fg:base)[](fg:rose)"
-right_format = "[](fg:hl_high)[( $version )](bg:hl_high fg:text)([](fg:pine bg:hl_high)[ $funnel ](bg:pine fg:text))"
+right_format = "([](fg:pine)[ $funnel ](bg:pine fg:text))"
 fill         = " "
 
 # The focused agent's glyph leads on its own hl_med block, in the agent's

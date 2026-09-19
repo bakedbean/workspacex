@@ -157,7 +157,7 @@ fill         = " "
 
 [dashboard_footer]
 format       = "$keys"
-right_format = "$version(  $funnel)"
+right_format = "$funnel"
 
 [attached_top]
 format = "($agent_bar )$workspace(   $attention)"
@@ -174,9 +174,15 @@ fill       = "─"
 fill_style = "fg:dim"
 ```
 
-`[dashboard_footer]`'s right side is `$version` and the bundled `funnel`
-module — see [Modules](#modules) below for what a module is and how to
-replace or restyle it.
+`[dashboard_footer]`'s right side is the bundled `funnel` module — see
+[Modules](#modules) below for what a module is and how to replace or
+restyle it. `$version` (the running wsx version) is registered but not
+placed; `right_format = "$version(  $funnel)"` brings it back. There the
+group around `$funnel` and its leading two spaces means that separator drops
+along with `$funnel` itself when the fleet is empty or the funnel is dropped
+for width — the same "put separators inside the group" rule described under
+Grammar below. (`$version`'s lower priority means it is the first of the two
+to go on a narrow footer.)
 
 `[dashboard_header]` is the dashboard's top line: the wordmark, the `group:`
 and `sort:` mode tabs, the live filter echo, and the repo/workspace counts
@@ -192,11 +198,6 @@ a workspace row is selected, distinct from the attached view): its
 pinned-command chip row, followed by a rule to the edge. `$pins` is the only
 data-bearing segment there — every other registered segment renders empty if
 you put it in this bar's format.
-
-The `($version  )` group around `$version` and its trailing two spaces means
-that separator drops along with `$version` itself when the footer is too
-narrow for both — the same "put separators inside the group" rule described
-under Grammar below.
 
 | Key | Meaning |
 |---|---|
@@ -506,7 +507,7 @@ format   = "([$working working](fg:ok)  )([$blocked blocked](fg:err)  )([$mergea
 priority = 60
 
 [dashboard_footer]
-right_format = "$version(  $funnel)"
+right_format = "$funnel"
 ```
 
 A module table takes `format`, `style` (patched over the bar style to form
@@ -528,7 +529,7 @@ place `$tokens` or `$usage`:
 
 ```toml
 [dashboard_footer]
-right_format = "$version(  $tokens)(  $funnel)(  $usage)"
+right_format = "$tokens(  $funnel)(  $usage)"
 ```
 
 Modules carry no click target.

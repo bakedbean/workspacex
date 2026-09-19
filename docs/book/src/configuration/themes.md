@@ -179,9 +179,10 @@ fill_style = "fg:dim"
 restyle it. `$version` (the running wsx version) is registered but not
 placed; `right_format = "$version(  $funnel)"` brings it back. There the
 group around `$funnel` and its leading two spaces means that separator drops
-along with `$funnel` itself when the fleet is empty or the footer is too
-narrow for both — the same "put separators inside the group" rule described
-under Grammar below.
+along with `$funnel` itself when the fleet is empty or the funnel is dropped
+for width — the same "put separators inside the group" rule described under
+Grammar below. (`$version`'s lower priority means it is the first of the two
+to go on a narrow footer.)
 
 `[dashboard_header]` is the dashboard's top line: the wordmark, the `group:`
 and `sort:` mode tabs, the live filter echo, and the repo/workspace counts

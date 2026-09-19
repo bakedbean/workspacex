@@ -491,6 +491,52 @@ mod footer_tests {
         assert_eq!(cells, " o  order");
     }
 
+    // A theme that places `$version(  $funnel)` gets the old layout back,
+    // overflow priorities included: at 85 columns, keys (71) + the mandatory
+    // 1-cell gap + the funnel's group "  2 working" (11, including its own
+    // grouped leading gap) = 83 fits, but adding `$version`'s "0.1.0" (5
+    // more, 88 total) does not. `$version`'s lower priority (50 vs. the
+    // funnel's 60) drops it first, so the funnel survives alone.
+    #[test]
+    fn narrow_footer_drops_placed_version_before_funnel() {
+        use crate::ui::bar::fleet::{FleetRow, FleetStats};
+        let theme = Theme::wsx();
+        let specs = crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse(
+                "[dashboard_footer]\nright_format = \"$version(  $funnel)\"\n",
+            )
+            .unwrap(),
+            &theme,
+        )
+        .unwrap();
+        let rows = vec![
+            FleetRow {
+                reported: Some(crate::data::store::ReportedState::Working),
+                ..Default::default()
+            },
+            FleetRow {
+                reported: Some(crate::data::store::ReportedState::Working),
+                ..Default::default()
+            },
+        ];
+        let fleet = FleetStats::from_rows(rows, 1, 0).to_vars();
+        let activity: Vec<u32> = (0..24).collect();
+        let inputs = DashboardFooterInputs {
+            activity: &activity,
+            version: "0.1.0",
+            window_label: "24h",
+            workspace_selected: false,
+            fleet: &fleet,
+        };
+        let wide = plain(&dashboard_footer(&specs, &theme, &inputs, 120).line);
+        assert!(wide.trim_end().ends_with("0.1.0  2 working"), "{wide:?}");
+        let narrow = dashboard_footer(&specs, &theme, &inputs, 85);
+        let text = plain(&narrow.line);
+        assert!(!text.contains("0.1.0"), "{text:?}");
+        assert!(text.trim_end().ends_with("2 working"), "{text:?}");
+        assert_eq!(narrow.line.width(), 85);
+    }
+
     // At 85 columns, keys (71) + the mandatory 1-cell gap + the funnel's
     // "2 working" (9) = 81 fits. The version used to share this slot and
     // was the first to drop when the footer got narrow; it is no longer

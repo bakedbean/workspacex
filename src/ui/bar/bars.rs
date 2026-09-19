@@ -55,7 +55,7 @@ pub struct DashboardFooterInputs<'a> {
     pub fleet: &'a SegmentMap,
 }
 
-/// The dashboard footer: key hints left, version + usage graph right.
+/// The dashboard footer: key hints left, the funnel module right.
 pub fn dashboard_footer(
     specs: &BarSpecs,
     theme: &Theme,

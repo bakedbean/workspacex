@@ -31,10 +31,9 @@
 
 [dashboard_footer]
 format = "$keys"
-# The leading "  " gap is grouped with $funnel so it drops along with it (not
-# left as an orphaned gap) when the funnel is empty or the terminal is too
-# narrow for both.
-right_format = "$version(  $funnel)"
+# The right side is the funnel module alone. $version is registered but not
+# placed; see [version] below to bring it back.
+right_format = "$funnel"
 fill = " "
 
 # The dashboard's top line: wordmark, group and sort tabs, the live filter
@@ -102,6 +101,9 @@ format    = "[ $key ](bg:bg_soft fg:dim bold)[ $label](fg:path)"
 separator = "  "
 
 # Variables: $version
+# The running wsx version. Defined but not placed — add `$version` to a bar
+# to show it, e.g.
+#   right_format = "$version(  $funnel)"
 [version]
 format   = "[$version](fg:path)"
 # Least useful right-side element on the dashboard footer, so it drops
@@ -208,13 +210,13 @@ priority = 50
 # has none so the module hugs the right edge.
 [module.funnel]
 format   = "([$working working](fg:ok)  )([$blocked blocked](fg:err)  )([$review_required review](fg:waiting)  )([$changes_requested changes](fg:warn)  )([$mergeable ready](fg:merged))"
-# Same slot as $usage had: $version drops first on a narrow footer.
+# Same slot as $usage had.
 priority = 60
 
 # Context fill by agent kind: how many prompt-side tokens each harness has
 # loaded across the fleet right now (not cumulative spend). Defined but not
 # placed — add `$tokens` to a bar to show it, e.g.
-#   right_format = "$version(  $tokens)(  $funnel)"
+#   right_format = "$tokens(  $funnel)"
 # Gaps lead each item after the first (the opposite of the funnel) so the
 # module hugs the right edge whichever trailing kinds are absent; kinds are
 # ordered most- to least-common so the leading one is rarely the gap. Each
@@ -224,6 +226,6 @@ priority = 60
 # as the example themes do.
 [module.tokens]
 format   = "([claude $tokens_claude](fg:agent_claude))(  [codex $tokens_codex](fg:agent_codex))(  [omp $tokens_omp](fg:agent_omp))(  [pi $tokens_pi](fg:agent_pi))"
-# Between $version (50) and $funnel (60): the first of the two modules to
-# drop when the footer is narrow.
+# Below $funnel (60): the first of the two modules to drop when the footer
+# is narrow.
 priority = 55

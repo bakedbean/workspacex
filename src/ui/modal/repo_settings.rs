@@ -2,12 +2,11 @@
 
 use super::*;
 
-/// Render the floating repo-settings modal. Live state — reads
-/// current values from the borrowed `Repo` struct.
+/// Render repo-local values, with global previews for inherited settings.
 pub fn render_repo_settings(
     f: &mut Frame,
     area: Rect,
-    repo_name: &str,
+    store: &crate::data::store::Store,
     repo: &crate::data::store::Repo,
     selected: usize,
     theme: &Theme,
@@ -19,7 +18,7 @@ pub fn render_repo_settings(
         area,
         w,
         h,
-        format!(" Repo settings — {repo_name} "),
+        format!(" Repo settings — {} ", repo.name),
         theme,
     );
 
@@ -61,7 +60,9 @@ pub fn render_repo_settings(
         ),
         (
             crate::app::RepoSettingField::PinnedCommands,
-            repo.pinned_commands.as_deref(),
+            repo.pinned_commands
+                .as_deref()
+                .filter(|value| !value.trim().is_empty()),
         ),
         (
             crate::app::RepoSettingField::RelatedRepos,
@@ -76,10 +77,33 @@ pub fn render_repo_settings(
     let mut lines: Vec<Line> = Vec::new();
     for (i, (field, value)) in rows.iter().enumerate() {
         let label_pad = 22; // width of the longest label + breathing room
+        let global = if value.is_none()
+            && matches!(
+                field,
+                crate::app::RepoSettingField::BranchPrefix
+                    | crate::app::RepoSettingField::CustomInstructions
+                    | crate::app::RepoSettingField::PinnedCommands
+                    | crate::app::RepoSettingField::DetailBarConfig
+            ) {
+            store.get_setting(field.label()).ok().flatten()
+        } else {
+            None
+        };
+        let inherited = global.as_deref().filter(|value| !value.trim().is_empty());
+        let source = if inherited.is_some() {
+            "(inherited) "
+        } else {
+            ""
+        };
         let preview = value
+            .or(inherited)
             .map(|v| preview_value(v, 60))
             .unwrap_or_else(|| "(unset)".to_string());
-        let body = format!("  {:<width$} {}", field.label(), preview, width = label_pad);
+        let body = format!(
+            "  {:<width$} {source}{preview}",
+            field.label(),
+            width = label_pad
+        );
         let style = if value.is_none() {
             theme.dim_style()
         } else {
@@ -90,6 +114,12 @@ pub fn render_repo_settings(
         } else {
             lines.push(Line::from(Span::styled(body, style)));
         }
+    }
+    if body_area.height > rows.len() as u16 {
+        lines.push(Line::from(Span::styled(
+            "  Inherited from global config; edit sets a repo value.",
+            theme.dim_style(),
+        )));
     }
     f.render_widget(Paragraph::new(lines), body_area);
 

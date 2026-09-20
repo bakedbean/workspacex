@@ -63,9 +63,8 @@ pub(super) fn draw_modal(f: &mut ratatui::Frame, app: &mut App, area: ratatui::l
         }
         crate::ui::modal::Modal::RepoSettings { repo_id, selected } => {
             if let Some(repo) = app.repos.iter().find(|r| r.id == *repo_id) {
-                let repo_name = repo.name.clone();
                 crate::ui::modal::render_repo_settings(
-                    f, area, &repo_name, repo, *selected, &app.theme,
+                    f, area, &app.store, repo, *selected, &app.theme,
                 );
             }
         }

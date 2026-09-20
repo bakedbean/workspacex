@@ -31,10 +31,21 @@ row's repo. The modal lists the per-repo fields:
 - `detail_bar_config` (see [Workspace detail bar](../daily-use/detail-bar.md))
 - `chronology_config` (see [Change chronology](change-chronology.md))
 
+When no repo value is set, `branch_prefix`, `custom_instructions`,
+`pinned_commands`, and `detail_bar_config` preview the global value with
+an `(inherited)` label, if one is configured. Fields without a configured
+value show `(unset)`. A blank or whitespace-only `pinned_commands` value
+also inherits from global config.
+
 `↑/↓` selects a field. Press `Enter` to edit — wsx temporarily leaves
 the TUI, opens `$EDITOR` (or `vi` if unset) on a tempfile prepopulated
-with the current value, and saves whatever you write when the editor
-exits. Press `d` to clear the highlighted field. `Esc` closes.
+with the repo-local value, and saves whatever you write when the editor
+exits. Inherited previews are not copied into the editor. Press `d` to
+clear the highlighted repo value, restoring inheritance where supported;
+the global config is unchanged. `Esc` closes.
+
+Repo custom instructions supplement global instructions rather than
+replacing them. Repo detail-bar settings merge with the global config.
 
 The editor needs to be a terminal-native editor that returns when you
 quit (vim, nvim, helix, micro, nano). GUI editors that return

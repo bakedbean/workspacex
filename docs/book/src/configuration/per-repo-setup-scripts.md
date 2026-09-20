@@ -37,6 +37,11 @@ an `(inherited)` label, if one is configured. Fields without a configured
 value show `(unset)`. A blank or whitespace-only `pinned_commands` value
 also inherits from global config.
 
+The `pinned_commands` preview lists command labels, separated by commas.
+If the labels do not all fit, `+N more` counts the commands not shown
+(`+N` when space is especially tight).
+A configured list with no valid commands shows `(none)`.
+
 `↑/↓` selects a field. Press `Enter` to edit — wsx temporarily leaves
 the TUI, opens `$EDITOR` (or `vi` if unset) on a tempfile prepopulated
 with the repo-local value, and saves whatever you write when the editor

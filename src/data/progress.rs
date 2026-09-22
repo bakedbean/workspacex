@@ -65,6 +65,18 @@ impl SetupProgress {
     /// Strip ANSI escapes, trim trailing whitespace, and append. Drops the
     /// oldest line once at capacity. Blank results are ignored.
     pub fn push_line(&mut self, raw: &str) {
+        self.push(raw, false);
+    }
+
+    /// As `push_line`, but marks the line as stderr with the same `! ` prefix
+    /// `setup_log::write_line` uses for the file. The live tail and the
+    /// persisted log are read by one viewer, which colors `! ` lines as
+    /// errors; without this, stderr stood out only after the run had ended.
+    pub fn push_stderr_line(&mut self, raw: &str) {
+        self.push(raw, true);
+    }
+
+    fn push(&mut self, raw: &str, is_err: bool) {
         let clean = strip_ansi_escapes::strip_str(raw);
         let clean = clean.trim_end();
         if clean.is_empty() {
@@ -73,7 +85,11 @@ impl SetupProgress {
         if self.lines.len() == CAP {
             self.lines.pop_front();
         }
-        self.lines.push_back(clean.to_string());
+        if is_err {
+            self.lines.push_back(format!("! {clean}"));
+        } else {
+            self.lines.push_back(clean.to_string());
+        }
     }
 
     /// The last `n` lines, oldest-first, for the modal tail.
@@ -103,6 +119,28 @@ mod tests {
         let p = SetupProgress::shared();
         p.lock().unwrap().push_line("\x1b[32mgreen text\x1b[0m   ");
         assert_eq!(p.lock().unwrap().recent(5), vec!["green text"]);
+    }
+
+    /// The live tail and the persisted log feed one viewer, which colors
+    /// `! ` lines as errors. Both sides must mark stderr the same way.
+    #[test]
+    fn push_stderr_line_marks_the_line_like_the_file_does() {
+        let p = SetupProgress::shared();
+        p.lock().unwrap().push_line("compiling");
+        p.lock()
+            .unwrap()
+            .push_stderr_line("\x1b[31mwarning: unused\x1b[0m");
+        assert_eq!(
+            p.lock().unwrap().recent(5),
+            vec!["compiling", "! warning: unused"]
+        );
+    }
+
+    #[test]
+    fn push_stderr_line_still_skips_blank() {
+        let p = SetupProgress::shared();
+        p.lock().unwrap().push_stderr_line("   ");
+        assert!(p.lock().unwrap().recent(5).is_empty());
     }
 
     #[test]

@@ -264,6 +264,40 @@ mod tests {
     /// showed create's default phase ("Fetching base…") while a worktree was
     /// mid-deletion. The status line must come from the entry's
     /// `InFlightKind` instead.
+    /// Stderr is marked `! ` by both sinks, so the viewer highlights a
+    /// failing script's complaints while it is still running — not only once
+    /// the log has been written.
+    #[test]
+    fn live_stderr_is_highlighted_like_the_persisted_log() {
+        let progress = SetupProgress::shared();
+        {
+            let mut p = progress.lock().unwrap();
+            p.push_line("compiling");
+            p.push_stderr_line("error: no such file");
+        }
+        let f = InFlight::create(progress, CancellationToken::new());
+        let theme = Theme::wsx();
+        let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        term.draw(|f2| {
+            render_setup_log(f2, f2.area(), &view(Some(&f), None, 0), &theme);
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        let err_row = (0..buf.area.height)
+            .find(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, *y)].symbol().to_string())
+                    .collect::<String>()
+                    .contains("no such file")
+            })
+            .expect("the stderr line should be on screen");
+        assert_eq!(
+            buf[(1, err_row)].style().fg,
+            theme.err_style().fg,
+            "live stderr must render in the error style"
+        );
+    }
+
     #[test]
     fn live_archive_is_labelled_truthfully_not_as_setup() {
         let f = live(true, &["removing worktree"], SetupPhase::Fetching);

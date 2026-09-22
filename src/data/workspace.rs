@@ -184,13 +184,15 @@ async fn run_setup_logged(
     };
     let log_ref = &mut log;
     let result = setup::run_setup(script, repo_root, worktree, cancel, |line| {
-        // `push_line` only needs the text; `write_line` below gets the whole
-        // `SetupLine` so it can prefix stderr lines with `! `.
-        let text = match &line {
-            SetupLine::Stdout(s) | SetupLine::Stderr(s) => s.as_str(),
-        };
+        // Both sinks keep the stream apart: the file writes stderr with a
+        // `! ` prefix, and the live buffer marks it the same way, so the
+        // viewer highlights a failing script's complaints while it is still
+        // running and not only once the log has been written.
         if let Ok(mut p) = progress.lock() {
-            p.push_line(text);
+            match &line {
+                SetupLine::Stdout(s) => p.push_line(s),
+                SetupLine::Stderr(s) => p.push_stderr_line(s),
+            }
         }
         if let Some(w) = log_ref.as_mut() {
             let _ = crate::data::setup_log::write_line(w, &line);

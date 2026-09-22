@@ -200,11 +200,31 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
         &app.bar_specs,
         window.label(),
         matches!(app.selected_target(), Some(SelectionTarget::Workspace(_))),
+        selected_badge_offers_setup_log(app),
         notice.as_deref(),
         &fleet,
     );
     app.usage_graph_rect = graph_rect;
     app.footer_hint_rects = footer_hint_rects;
+}
+
+/// Whether the selected workspace's lifecycle badge points at a setup log,
+/// which is what puts the `? o  setup log` hint in the footer. The badge is
+/// a two-cell glyph with nowhere to put that, and `[setup-failed]` with no
+/// route to the reason is a dead end.
+fn selected_badge_offers_setup_log(app: &App) -> bool {
+    let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() else {
+        return false;
+    };
+    let Some((_, ws)) = app.workspaces.iter().find(|(_, w)| w.id == ws_id) else {
+        return false;
+    };
+    lifecycle_badge_for(
+        &ws.state,
+        &ws.setup_status,
+        app.in_flight.get(&ws_id).map(|f| f.kind),
+    )
+    .is_some_and(|b| b.offers_setup_log())
 }
 
 /// Derive a row's lifecycle badge. A live `in_flight` entry always wins:
@@ -1102,5 +1122,97 @@ pub(super) fn refresh_activity(app: &mut App) {
             }
             app.workspace_activity.insert(ws.id, activity);
         }
+    }
+}
+
+/// `selected_badge_offers_setup_log` — which selections put the
+/// `? o  setup log` hint in the footer.
+#[cfg(test)]
+mod setup_log_hint_tests {
+    use super::*;
+    use crate::data::in_flight::InFlight;
+    use crate::data::progress::SetupProgress;
+    use crate::data::store::{NewWorkspace, SetupStatus, WorkspaceState};
+
+    fn app_with_workspace() -> (App, crate::data::store::WorkspaceId) {
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        let ws_id = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "alpha",
+                branch: "repo/alpha",
+                worktree_path: std::path::Path::new("."),
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        let mut app = App::new(store, std::path::PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.refresh().unwrap();
+        app.selectable = vec![SelectionTarget::Workspace(ws_id)];
+        app.select_index(0);
+        (app, ws_id)
+    }
+
+    /// The point of the hint: a `[setup-failed]` workspace is exactly the one
+    /// whose user needs to be told the log exists.
+    #[test]
+    fn a_failed_setup_offers_its_log() {
+        let (mut app, ws_id) = app_with_workspace();
+        app.store
+            .set_setup_status(ws_id, SetupStatus::Failed)
+            .unwrap();
+        app.refresh().unwrap();
+        assert!(selected_badge_offers_setup_log(&app));
+    }
+
+    #[test]
+    fn a_healthy_workspace_gets_no_hint() {
+        let (mut app, ws_id) = app_with_workspace();
+        app.store.set_setup_status(ws_id, SetupStatus::Ok).unwrap();
+        app.refresh().unwrap();
+        assert!(
+            !selected_badge_offers_setup_log(&app),
+            "no badge, nothing to point at"
+        );
+    }
+
+    /// A create still running has a live tail to offer, so the hint shows
+    /// while it provisions too.
+    #[test]
+    fn work_in_flight_offers_its_live_tail() {
+        let (mut app, ws_id) = app_with_workspace();
+        app.in_flight.insert(
+            ws_id,
+            InFlight::create(
+                SetupProgress::shared(),
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        assert!(selected_badge_offers_setup_log(&app));
+    }
+
+    /// A worktree that was never created never reached the setup phase, so
+    /// there is no log and the hint would be a dead end.
+    #[test]
+    fn a_missing_worktree_offers_nothing() {
+        let (mut app, ws_id) = app_with_workspace();
+        app.store
+            .set_workspace_state(ws_id, WorkspaceState::Failed)
+            .unwrap();
+        app.refresh().unwrap();
+        assert!(!selected_badge_offers_setup_log(&app));
+    }
+
+    #[test]
+    fn a_repo_header_selection_offers_nothing() {
+        let (mut app, _) = app_with_workspace();
+        let repo_id = app.repos[0].id;
+        app.selectable = vec![SelectionTarget::Repo(repo_id)];
+        app.select_index(0);
+        assert!(!selected_badge_offers_setup_log(&app));
     }
 }

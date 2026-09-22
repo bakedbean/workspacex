@@ -51,6 +51,10 @@ pub struct DashboardFooterInputs<'a> {
     pub version: &'a str,
     pub window_label: &'a str,
     pub workspace_selected: bool,
+    /// The selected workspace carries a lifecycle badge that points at a
+    /// setup log (`LifecycleBadge::offers_setup_log`). The badge itself is
+    /// two cells with no room to say so, so the footer carries the hint.
+    pub setup_log_available: bool,
     /// Fleet variables for `[module.*]` segments — `fleet::FleetStats::to_vars()`.
     pub fleet: &'a SegmentMap,
 }
@@ -73,6 +77,12 @@ pub fn dashboard_footer(
     ];
     if inputs.workspace_selected {
         keys.push(("?", "actions"));
+    }
+    // Informational, not clickable: `key_for_glyph` only resolves a single
+    // glyph, and this is a two-key path. It is what turns the `⚙!` badge
+    // from a symptom into something the user can act on.
+    if inputs.setup_log_available {
+        keys.push(("? o", "setup log"));
     }
     keys.push(("q", "quit"));
     let items: Vec<(&str, &str, Option<Hit>)> = keys

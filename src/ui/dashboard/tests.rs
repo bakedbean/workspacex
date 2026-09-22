@@ -1312,6 +1312,7 @@ fn footer_shows_a_theme_notice_instead_of_hints() {
             &specs,
             "24h",
             true,
+            false,
             Some("theme.toml: [pr].format: col 3: unknown `$nope`"),
             crate::ui::bar::fleet::empty(),
         ));

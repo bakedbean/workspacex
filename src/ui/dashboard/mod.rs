@@ -171,6 +171,7 @@ pub fn render(
         specs,
         "24h",
         matches!(state.selection, Some(SelectionTarget::Workspace(_))),
+        false,
         None,
         inputs.fleet,
     );
@@ -338,6 +339,7 @@ pub fn render_footer(
     specs: &crate::config::theme_file::BarSpecs,
     window_label: &str,
     workspace_selected: bool,
+    setup_log_available: bool,
     notice: Option<&str>,
     fleet: &crate::ui::bar::segment::SegmentMap,
 ) -> (
@@ -360,6 +362,7 @@ pub fn render_footer(
             version: env!("CARGO_PKG_VERSION"),
             window_label,
             workspace_selected,
+            setup_log_available,
             fleet,
         },
         area.width,

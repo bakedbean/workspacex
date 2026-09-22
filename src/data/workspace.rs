@@ -13,6 +13,16 @@ use std::path::{Path, PathBuf};
 pub struct CreatedWorkspace {
     pub workspace: Workspace,
     pub setup_result: SetupResult,
+    /// Where the setup log was actually written, when one was. `None` when the
+    /// repo has no setup script, or when the log could not be opened at all —
+    /// logging is best-effort and never fails a create, so a caller that wants
+    /// to point at the log must be told whether there is one to point at.
+    ///
+    /// This is the path the log was *opened* under, not one recomputed from the
+    /// workspace row afterwards: a rename racing a slow setup script moves the
+    /// row's name out from under the file, and a recomputed path would name a
+    /// file that does not exist.
+    pub setup_log: Option<PathBuf>,
 }
 
 /// Compose a workspace's git branch from its repo's branch prefix and the
@@ -48,6 +58,7 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
     yolo: bool,
     shared: bool,
     agent: AgentKind,
+    log_dir: &Path,
     cancel: tokio_util::sync::CancellationToken,
     on_setup_line: F,
 ) -> Result<CreatedWorkspace> {
@@ -118,15 +129,18 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
     }
 
     store.set_setup_status(id, SetupStatus::Running)?;
-    let setup_result = setup::run_setup(
+    let setup_result = run_setup_logged(
         repo.setup_script.as_deref(),
         &repo.path,
         &worktree_path,
-        cancel.clone(),
+        &repo.name,
+        &name,
+        log_dir,
         on_setup_line,
+        cancel.clone(),
     )
     .await;
-    let setup_result = match setup_result {
+    let (setup_result, setup_log) = match setup_result {
         Ok(r) => r,
         Err(Error::Cancelled) => {
             store.set_setup_status(id, SetupStatus::Cancelled)?;
@@ -152,26 +166,32 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
     Ok(CreatedWorkspace {
         workspace: ws,
         setup_result,
+        setup_log,
     })
 }
 
 /// Run the setup script while teeing each captured line to two consumers: the
-/// live `progress` sink (drives the creation modal) and a best-effort per-
-/// workspace log file under `log_dir` (so a failed setup is inspectable after
-/// the modal closes). The log is opened only when a setup script is present;
-/// all log I/O is best-effort and never affects the returned result. Returns
-/// the same `Result<SetupResult>` as `setup::run_setup`.
+/// caller's live sink (`on_line` — the creation modal's progress buffer in the
+/// TUI, a no-op in the CLI) and a best-effort per-workspace log file under
+/// `log_dir` (so a failed setup is inspectable after the modal closes, or after
+/// a CLI create has already printed and exited). The log is opened only when a
+/// setup script is present; all log I/O is best-effort and never affects the
+/// returned result. Returns the same `Result<SetupResult>` as
+/// `setup::run_setup`.
+///
+/// Both creation paths go through here: a setup failure is equally opaque
+/// whichever one produced it, so neither may skip the log.
 #[allow(clippy::too_many_arguments)]
-async fn run_setup_logged(
+async fn run_setup_logged<F: FnMut(SetupLine) + Send>(
     script: Option<&str>,
     repo_root: &Path,
     worktree: &Path,
     repo_name: &str,
     ws_name: &str,
     log_dir: &Path,
-    progress: &SharedProgress,
+    mut on_line: F,
     cancel: tokio_util::sync::CancellationToken,
-) -> Result<SetupResult> {
+) -> Result<(SetupResult, Option<PathBuf>)> {
     let mut log = match script {
         Some(s) if !s.trim().is_empty() => crate::data::setup_log::create(
             log_dir,
@@ -182,27 +202,28 @@ async fn run_setup_logged(
         ),
         _ => None,
     };
+    // Only claim a path once the file is actually open: `setup_log::create`
+    // returns `None` for an unwritable log directory, and reporting a path in
+    // that case would send a reader to a file that was never created.
+    let log_path = log
+        .is_some()
+        .then(|| crate::data::setup_log::setup_log_path(log_dir, repo_name, ws_name));
     let log_ref = &mut log;
     let result = setup::run_setup(script, repo_root, worktree, cancel, |line| {
         // Both sinks keep the stream apart: the file writes stderr with a
         // `! ` prefix, and the live buffer marks it the same way, so the
         // viewer highlights a failing script's complaints while it is still
         // running and not only once the log has been written.
-        if let Ok(mut p) = progress.lock() {
-            match &line {
-                SetupLine::Stdout(s) => p.push_line(s),
-                SetupLine::Stderr(s) => p.push_stderr_line(s),
-            }
-        }
         if let Some(w) = log_ref.as_mut() {
             let _ = crate::data::setup_log::write_line(w, &line);
         }
+        on_line(line);
     })
     .await?;
     if let Some(mut w) = log {
         let _ = crate::data::setup_log::write_footer(&mut w, &result);
     }
-    Ok(result)
+    Ok((result, log_path))
 }
 
 /// TUI-friendly variant of `create` that interleaves App lock acquisition
@@ -357,11 +378,18 @@ pub async fn create_with_app(
             &repo.name,
             &final_name,
             &log_dir,
-            &progress,
+            |line| {
+                if let Ok(mut p) = progress.lock() {
+                    match &line {
+                        SetupLine::Stdout(s) => p.push_line(s),
+                        SetupLine::Stderr(s) => p.push_stderr_line(s),
+                    }
+                }
+            },
             cancel.clone(),
         )
         .await;
-        let setup_result = match setup_result {
+        let (setup_result, setup_log) = match setup_result {
             Ok(r) => r,
             Err(Error::Cancelled) => {
                 let g = app.lock().await;
@@ -393,6 +421,7 @@ pub async fn create_with_app(
         Ok(CreatedWorkspace {
             workspace: ws,
             setup_result,
+            setup_log,
         })
     }
     .await;
@@ -751,6 +780,7 @@ mod tests {
             .unwrap();
         let base = TempDir::new().unwrap();
 
+        let log_dir_tmp = tempfile::TempDir::new().unwrap();
         let err = create(
             &store,
             &repo,
@@ -759,6 +789,7 @@ mod tests {
             false,
             false,
             crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
             tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
@@ -790,6 +821,7 @@ mod tests {
             .unwrap();
         let base = TempDir::new().unwrap();
 
+        let log_dir_tmp = tempfile::TempDir::new().unwrap();
         let created = create(
             &store,
             &repo,
@@ -798,6 +830,7 @@ mod tests {
             false,
             false,
             crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
             tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
@@ -826,6 +859,7 @@ mod tests {
             .unwrap();
         let base = TempDir::new().unwrap();
 
+        let log_dir_tmp = tempfile::TempDir::new().unwrap();
         let created = create(
             &store,
             &repo,
@@ -834,6 +868,7 @@ mod tests {
             true,
             false,
             crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
             tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
@@ -856,6 +891,7 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         let base = TempDir::new().unwrap();
+        let log_dir_tmp = tempfile::TempDir::new().unwrap();
         let created = create(
             &store,
             &repo,
@@ -864,6 +900,7 @@ mod tests {
             false,
             false,
             crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
             tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
@@ -887,6 +924,7 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         let base = TempDir::new().unwrap();
+        let log_dir_tmp = tempfile::TempDir::new().unwrap();
         let created = create(
             &store,
             &repo,
@@ -895,6 +933,7 @@ mod tests {
             false,
             false,
             crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
             tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
@@ -918,6 +957,7 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         let base = TempDir::new().unwrap();
+        let log_dir_tmp = tempfile::TempDir::new().unwrap();
         let created = create(
             &store,
             &repo,
@@ -926,6 +966,7 @@ mod tests {
             false,
             false,
             crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
             tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
@@ -1043,6 +1084,7 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         let base = TempDir::new().unwrap();
+        let log_dir_tmp = tempfile::TempDir::new().unwrap();
         let created = create(
             &store,
             &repo,
@@ -1051,6 +1093,7 @@ mod tests {
             false,
             false,
             crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
             tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
@@ -1182,6 +1225,7 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         let base = TempDir::new().unwrap();
+        let log_dir_tmp = tempfile::TempDir::new().unwrap();
         let created = create(
             &store,
             &repo,
@@ -1190,6 +1234,7 @@ mod tests {
             false,
             false,
             crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
             tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
@@ -1263,6 +1308,7 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         let base = TempDir::new().unwrap();
+        let log_dir_tmp = tempfile::TempDir::new().unwrap();
         let created = create(
             &store,
             &repo,
@@ -1271,6 +1317,7 @@ mod tests {
             false,
             false,
             crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
             tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
@@ -1354,6 +1401,7 @@ mod tests {
             .into_iter()
             .find(|r| r.id == id)
             .unwrap();
+        let log_dir_tmp = tempfile::TempDir::new().unwrap();
         let created = create(
             &store,
             &repo,
@@ -1362,6 +1410,7 @@ mod tests {
             false,
             false,
             crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
             tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
@@ -1395,6 +1444,7 @@ mod tests {
             .into_iter()
             .find(|r| r.id == id)
             .unwrap();
+        let log_dir_tmp = tempfile::TempDir::new().unwrap();
         let created = create(
             &store,
             &repo,
@@ -1403,6 +1453,7 @@ mod tests {
             false,
             false,
             crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
             tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
@@ -1439,6 +1490,7 @@ mod tests {
             .into_iter()
             .find(|r| r.id == id)
             .unwrap();
+        let log_dir_tmp = tempfile::TempDir::new().unwrap();
         let created = create(
             &store,
             &repo,
@@ -1447,6 +1499,7 @@ mod tests {
             false,
             false,
             crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
             tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
@@ -1510,6 +1563,7 @@ mod tests {
             .into_iter()
             .find(|r| r.id == id)
             .unwrap();
+        let log_dir_tmp = tempfile::TempDir::new().unwrap();
         let created = create(
             &store,
             &repo,
@@ -1518,6 +1572,7 @@ mod tests {
             false,
             false,
             crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
             tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
@@ -1581,6 +1636,7 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         let base = TempDir::new().unwrap();
+        let log_dir_tmp = TempDir::new().unwrap();
         let cancel = CancellationToken::new();
         cancel.cancel();
         let result = create(
@@ -1591,6 +1647,7 @@ mod tests {
             false,
             false,
             crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
             cancel,
             |_| {},
         )
@@ -1635,6 +1692,7 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         let base = TempDir::new().unwrap();
+        let log_dir_tmp = TempDir::new().unwrap();
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
         let marker_clone = marker.clone();
@@ -1653,6 +1711,7 @@ mod tests {
             false,
             false,
             crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
             cancel,
             |_| {},
         )
@@ -2027,6 +2086,172 @@ mod tests {
         assert!(g.in_flight.is_empty());
     }
 
+    /// The CLI's `wsx workspace create` discards setup output (its sink is
+    /// `|_| {}`), so before this the only trace of a failing setup script was
+    /// an exit code — the log the TUI wrote did not exist for CLI-created
+    /// workspaces, and `wsx` had nothing to show for them.
+    #[tokio::test]
+    async fn create_writes_setup_log_for_the_cli_path() {
+        use crate::data::setup_log::setup_log_path;
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        store
+            .set_repo_setup_script(id, Some("echo hello-stdout; echo oops-stderr 1>&2; exit 3"))
+            .unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let log_dir_tmp = TempDir::new().unwrap();
+
+        let created = create(
+            &store,
+            &repo,
+            Some("alpha"),
+            base.path(),
+            false,
+            false,
+            crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(created.workspace.setup_status, SetupStatus::Failed);
+        let body =
+            std::fs::read_to_string(setup_log_path(log_dir_tmp.path(), "demo", "alpha")).unwrap();
+        assert!(body.contains("=== setup: demo/alpha ==="), "{body}");
+        assert!(body.contains("hello-stdout"), "{body}");
+        assert!(body.contains("! oops-stderr"), "{body}");
+        assert!(body.contains("=== FAILED (exit 3) ==="), "{body}");
+    }
+
+    /// Logging is best-effort: an unwritable log directory must not fail the
+    /// create, must not swallow the setup outcome, and must not report a log
+    /// path — a caller that points the user at `setup_log` would otherwise send
+    /// them to a file that was never created.
+    #[tokio::test]
+    async fn create_survives_an_unwritable_log_dir() {
+        use std::sync::{Arc, Mutex};
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        store
+            .set_repo_setup_script(id, Some("echo still-streaming; exit 4"))
+            .unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let base = TempDir::new().unwrap();
+
+        // A regular file where the log directory should be: `setup_log::create`
+        // cannot `create_dir_all` through it, so it hands back `None`.
+        let blocker = TempDir::new().unwrap();
+        let log_dir = blocker.path().join("not-a-dir");
+        std::fs::write(&log_dir, b"i am a file").unwrap();
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_w = Arc::clone(&seen);
+        let created = create(
+            &store,
+            &repo,
+            Some("alpha"),
+            base.path(),
+            false,
+            false,
+            crate::pty::session::AgentKind::Claude,
+            &log_dir,
+            tokio_util::sync::CancellationToken::new(),
+            move |line| {
+                if let SetupLine::Stdout(l) = line {
+                    seen_w.lock().unwrap().push(l);
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            matches!(created.setup_result, SetupResult::Failed { exit_code: 4 }),
+            "{:?}",
+            created.setup_result
+        );
+        assert_eq!(created.workspace.setup_status, SetupStatus::Failed);
+        assert!(
+            created.setup_log.is_none(),
+            "no log was written, so none may be reported: {:?}",
+            created.setup_log
+        );
+        // The live sink is independent of the log and must still see the run.
+        let seen = seen.lock().unwrap();
+        assert!(
+            seen.iter().any(|l| l.contains("still-streaming")),
+            "{seen:?}"
+        );
+    }
+
+    /// The log is named for the workspace's *final* name, so an auto-generated
+    /// slug must not write its log under the empty/absent requested name.
+    #[tokio::test]
+    async fn create_logs_under_the_generated_name() {
+        use crate::data::setup_log::setup_log_path;
+
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        store
+            .set_repo_setup_script(id, Some("echo generated"))
+            .unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let log_dir_tmp = TempDir::new().unwrap();
+
+        let created = create(
+            &store,
+            &repo,
+            None,
+            base.path(),
+            false,
+            false,
+            crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        let path = setup_log_path(log_dir_tmp.path(), "demo", &created.workspace.name);
+        assert!(path.exists(), "no log at {}", path.display());
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("generated")
+        );
+    }
+
     #[tokio::test]
     async fn run_setup_logged_writes_failure_log() {
         use crate::data::progress::SetupProgress;
@@ -2039,14 +2264,21 @@ mod tests {
         let progress = SetupProgress::shared();
         let script = "echo hello-stdout; echo oops-stderr 1>&2; exit 3";
 
-        let result = run_setup_logged(
+        let (result, log_path) = run_setup_logged(
             Some(script),
             work.path(),
             work.path(),
             "myrepo",
             "foo",
             logs.path(),
-            &progress,
+            |line| {
+                if let Ok(mut p) = progress.lock() {
+                    match &line {
+                        SetupLine::Stdout(s) => p.push_line(s),
+                        SetupLine::Stderr(s) => p.push_stderr_line(s),
+                    }
+                }
+            },
             CancellationToken::new(),
         )
         .await
@@ -2056,6 +2288,9 @@ mod tests {
             matches!(result, SetupResult::Failed { exit_code: 3 }),
             "{result:?}"
         );
+        // The reported path is the one actually written, so a caller can point
+        // at it without recomputing (and guessing) it.
+        assert_eq!(log_path, Some(setup_log_path(logs.path(), "myrepo", "foo")));
         let body = std::fs::read_to_string(setup_log_path(logs.path(), "myrepo", "foo")).unwrap();
         assert!(body.contains("=== setup: myrepo/foo ==="), "{body}");
         assert!(body.contains("hello-stdout"), "{body}");
@@ -2081,20 +2316,28 @@ mod tests {
         let logs = TempDir::new().unwrap();
         let progress = SetupProgress::shared();
 
-        let result = run_setup_logged(
+        let (result, log_path) = run_setup_logged(
             None,
             work.path(),
             work.path(),
             "myrepo",
             "bar",
             logs.path(),
-            &progress,
+            |line| {
+                if let Ok(mut p) = progress.lock() {
+                    match &line {
+                        SetupLine::Stdout(s) => p.push_line(s),
+                        SetupLine::Stderr(s) => p.push_stderr_line(s),
+                    }
+                }
+            },
             CancellationToken::new(),
         )
         .await
         .unwrap();
 
         assert!(matches!(result, SetupResult::Skipped), "{result:?}");
+        assert!(log_path.is_none(), "no script must report no log");
         assert!(!setup_log_path(logs.path(), "myrepo", "bar").exists());
     }
 
@@ -2136,6 +2379,7 @@ mod tests {
             .unwrap();
         let wt_root = TempDir::new().unwrap();
 
+        let log_dir_tmp = tempfile::TempDir::new().unwrap();
         let created = create(
             &store,
             &repo,
@@ -2144,6 +2388,7 @@ mod tests {
             false,
             false,
             crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
             tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
@@ -2493,6 +2738,7 @@ mod tests {
             .into_iter()
             .find(|r| r.id == id)
             .unwrap();
+        let log_dir_tmp = tempfile::TempDir::new().unwrap();
         let created = create(
             &store,
             &repo,
@@ -2501,6 +2747,7 @@ mod tests {
             false,
             false,
             crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
             tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
@@ -2559,6 +2806,7 @@ mod tests {
             .into_iter()
             .find(|r| r.id == id)
             .unwrap();
+        let log_dir_tmp = tempfile::TempDir::new().unwrap();
         let created = create(
             &store,
             &repo,
@@ -2567,6 +2815,7 @@ mod tests {
             false,
             false,
             crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
             tokio_util::sync::CancellationToken::new(),
             |_| {},
         )

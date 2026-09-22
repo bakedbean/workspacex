@@ -40,6 +40,7 @@ async fn dashboard_renders_with_one_repo_one_workspace() {
         .find(|r| r.id == repo_id)
         .unwrap();
     let base = TempDir::new().unwrap();
+    let log_dir_tmp = tempfile::TempDir::new().unwrap();
     wsx::data::workspace::create(
         &store,
         &repo,
@@ -48,6 +49,7 @@ async fn dashboard_renders_with_one_repo_one_workspace() {
         false,
         false,
         wsx::pty::session::AgentKind::Claude,
+        log_dir_tmp.path(),
         tokio_util::sync::CancellationToken::new(),
         |_| {},
     )

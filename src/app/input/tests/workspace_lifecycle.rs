@@ -264,6 +264,7 @@ async fn y_in_confirm_archive_backgrounds_immediately_and_spawns_task() {
         .into_iter()
         .find(|r| r.id == repo_id)
         .unwrap();
+    let log_dir_tmp = tempfile::TempDir::new().unwrap();
     let created = crate::data::workspace::create(
         &store,
         &repo,
@@ -272,6 +273,7 @@ async fn y_in_confirm_archive_backgrounds_immediately_and_spawns_task() {
         false,
         false,
         crate::pty::session::AgentKind::Claude,
+        log_dir_tmp.path(),
         tokio_util::sync::CancellationToken::new(),
         |_| {},
     )
@@ -353,6 +355,7 @@ async fn y_in_confirm_archive_registers_in_flight_and_keeps_running_past_esc() {
         .into_iter()
         .find(|r| r.id == repo_id)
         .unwrap();
+    let log_dir_tmp = tempfile::TempDir::new().unwrap();
     let created = crate::data::workspace::create(
         &store,
         &repo,
@@ -361,6 +364,7 @@ async fn y_in_confirm_archive_registers_in_flight_and_keeps_running_past_esc() {
         false,
         false,
         crate::pty::session::AgentKind::Claude,
+        log_dir_tmp.path(),
         tokio_util::sync::CancellationToken::new(),
         |_| {},
     )
@@ -766,6 +770,7 @@ async fn create_in_folded_repo_unfolds_and_keeps_new_workspace_selected() {
         .find(|r| r.id == repo_id)
         .unwrap();
     // Create the workspace up front, since App::new consumes the store.
+    let log_dir_tmp = tempfile::TempDir::new().unwrap();
     let created = crate::data::workspace::create(
         &store,
         &repo,
@@ -774,6 +779,7 @@ async fn create_in_folded_repo_unfolds_and_keeps_new_workspace_selected() {
         false,
         false,
         crate::pty::session::AgentKind::Claude,
+        log_dir_tmp.path(),
         tokio_util::sync::CancellationToken::new(),
         |_| {},
     )

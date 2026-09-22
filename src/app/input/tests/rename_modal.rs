@@ -591,6 +591,7 @@ async fn rename_modal_enter_renames_workspace_and_branch() {
         .find(|r| r.id == repo_id)
         .unwrap();
     let base = tempfile::TempDir::new().unwrap();
+    let log_dir_tmp = tempfile::TempDir::new().unwrap();
     let created = crate::data::workspace::create(
         &store,
         &repo,
@@ -599,6 +600,7 @@ async fn rename_modal_enter_renames_workspace_and_branch() {
         false,
         false,
         crate::pty::session::AgentKind::Claude,
+        log_dir_tmp.path(),
         tokio_util::sync::CancellationToken::new(),
         |_| {},
     )

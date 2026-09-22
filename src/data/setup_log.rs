@@ -5,7 +5,7 @@
 
 use crate::data::setup::{SetupLine, SetupResult};
 use std::fs::File;
-use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 /// `<log_dir>/setup-<repo>-<name>.log`, with repo/name sanitized to a safe
@@ -56,7 +56,7 @@ fn write_header(
     worktree: &Path,
     started_secs: u64,
 ) -> io::Result<()> {
-    writeln!(w, "=== setup: {repo}/{name} ===")?;
+    writeln!(w, "{}", header_line(repo, name))?;
     writeln!(w, "worktree: {}", worktree.display())?;
     writeln!(w, "started:  {started_secs} (unix seconds)")?;
     writeln!(w)
@@ -165,18 +165,65 @@ pub fn read(log_dir: &Path, repo: &str, name: &str) -> Option<Vec<String>> {
     Some(lines)
 }
 
+/// The `=== setup: <repo>/<name> ===` line `write_header` puts first.
+fn header_line(repo: &str, name: &str) -> String {
+    format!("=== setup: {repo}/{name} ===")
+}
+
+/// Whether the log at `path` says it belongs to `repo`/`name`.
+///
+/// The filename encoding is ambiguous: `sanitize` maps `/` and `-` alike, so
+/// repo `foo-bar` + workspace `baz` and repo `foo` + workspace `bar-baz` both
+/// address `setup-foo-bar-baz.log`. That ambiguity predates this function —
+/// two such workspaces have always shared one file — but MOVING a file is
+/// destructive in a way that overwriting your own log on the next run is not,
+/// so a rename checks the header before touching anything. A log too short to
+/// carry a header, or one that cannot be read, is treated as not ours.
+fn belongs_to(path: &Path, repo: &str, name: &str) -> bool {
+    let Ok(f) = File::open(path) else {
+        return false;
+    };
+    let mut first = String::new();
+    // The header is the first line; a bounded read keeps a huge log from
+    // being pulled in just to check ownership.
+    let mut reader = std::io::BufReader::new(f.take(4096));
+    matches!(reader.read_line(&mut first), Ok(n) if n > 0)
+        && first.trim_end() == header_line(repo, name)
+}
+
 /// Move a workspace's log to its new name. The log path is derived from the
 /// workspace name, so without this a rename would orphan the file and `o` on
 /// the dashboard would report "no setup log" for a workspace that has one.
-/// Best-effort like the rest of this module: a missing or unmovable log is
-/// silently left alone rather than failing the rename.
+///
+/// Best-effort like the rest of this module: a log that cannot be moved is
+/// left alone rather than failing the rename. Refuses to move a log whose
+/// header names a different workspace, and refuses to overwrite an existing
+/// destination — see `belongs_to` for why the filename alone can't be
+/// trusted. Both refusals cost nothing: they leave a stale log behind, where
+/// the alternative destroys a live one.
 pub fn rename(log_dir: &Path, repo: &str, old_name: &str, new_name: &str) {
     let from = setup_log_path(log_dir, repo, old_name);
     let to = setup_log_path(log_dir, repo, new_name);
     if from == to || !from.exists() {
         return;
     }
-    let _ = std::fs::rename(&from, &to);
+    if !belongs_to(&from, repo, old_name) {
+        tracing::debug!(
+            path = %from.display(),
+            "setup log does not name this workspace; leaving it in place"
+        );
+        return;
+    }
+    if to.exists() {
+        tracing::debug!(
+            path = %to.display(),
+            "a setup log already exists under the new name; not overwriting it"
+        );
+        return;
+    }
+    if let Err(e) = std::fs::rename(&from, &to) {
+        tracing::warn!(error = %e, from = %from.display(), to = %to.display(), "setup log rename failed");
+    }
 }
 
 #[cfg(test)]
@@ -409,5 +456,56 @@ mod tests {
         let logs = TempDir::new().unwrap();
         rename(logs.path(), "myrepo", "old", "new");
         assert!(read(logs.path(), "myrepo", "new").is_none());
+    }
+
+    /// `sanitize` maps `/` and `-` alike, so repo `foo-bar` + workspace `baz`
+    /// and repo `foo` + workspace `bar-baz` address the same file. Renaming
+    /// the second must not carry the first one's log away with it.
+    #[test]
+    fn rename_leaves_a_colliding_workspaces_log_alone() {
+        let logs = TempDir::new().unwrap();
+        // Owned by foo-bar/baz, which is NOT the workspace being renamed.
+        let mut w = create(logs.path(), "foo-bar", "baz", Path::new("/wt/baz"), 1).unwrap();
+        write_line(&mut w, &SetupLine::Stdout("belongs to foo-bar/baz".into())).unwrap();
+        drop(w);
+        assert_eq!(
+            setup_log_path(logs.path(), "foo-bar", "baz"),
+            setup_log_path(logs.path(), "foo", "bar-baz"),
+            "the test premise is that these collide"
+        );
+
+        rename(logs.path(), "foo", "bar-baz", "renamed");
+
+        let kept = read(logs.path(), "foo-bar", "baz").expect("the owner's log must survive");
+        assert!(
+            kept.contains(&"belongs to foo-bar/baz".to_string()),
+            "{kept:?}"
+        );
+        assert!(
+            read(logs.path(), "foo", "renamed").is_none(),
+            "nothing should have been moved"
+        );
+    }
+
+    /// The mirror case: the destination name collides with a log that is
+    /// already someone else's. Leaving a stale log behind beats destroying a
+    /// live one.
+    #[test]
+    fn rename_refuses_to_overwrite_an_existing_destination() {
+        let logs = TempDir::new().unwrap();
+        let mut mine = create(logs.path(), "repo", "old", Path::new("/wt/old"), 1).unwrap();
+        write_line(&mut mine, &SetupLine::Stdout("mine".into())).unwrap();
+        drop(mine);
+        let mut theirs = create(logs.path(), "repo", "new", Path::new("/wt/new"), 1).unwrap();
+        write_line(&mut theirs, &SetupLine::Stdout("theirs".into())).unwrap();
+        drop(theirs);
+
+        rename(logs.path(), "repo", "old", "new");
+
+        let dest = read(logs.path(), "repo", "new").unwrap();
+        assert!(
+            dest.contains(&"theirs".to_string()),
+            "destination was overwritten: {dest:?}"
+        );
     }
 }

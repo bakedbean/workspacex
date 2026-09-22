@@ -9,6 +9,33 @@
 
 use super::*;
 
+/// The persisted side of a workspace's setup log, resolved once when it
+/// becomes the viewer's source.
+///
+/// `Missing` and `Unreadable` are deliberately separate. Folding a permission
+/// or decode failure into "there is no log" tells the user their repo has no
+/// setup script, which sends them looking in entirely the wrong place; both
+/// carry the path so they can go and look themselves.
+#[derive(Debug, Clone)]
+pub enum StoredLog {
+    /// The log's tail, newest-last. May legitimately be empty if the file is.
+    Lines(Vec<String>),
+    /// Nothing at the log path. The normal state for a repo with no setup
+    /// script, since nothing is written in that case.
+    Missing { path: String },
+    /// The file is there but could not be read.
+    Unreadable { path: String, error: String },
+}
+
+impl StoredLog {
+    fn lines(&self) -> &[String] {
+        match self {
+            StoredLog::Lines(l) => l,
+            _ => &[],
+        }
+    }
+}
+
 /// Everything the panel draws, gathered by the caller so the renderer itself
 /// touches no App state.
 pub struct SetupLogView<'a> {
@@ -17,7 +44,7 @@ pub struct SetupLogView<'a> {
     /// The in-flight entry being tailed, when there is one.
     pub live: Option<&'a crate::data::in_flight::InFlight>,
     /// The persisted log; `None` while `live` is the source.
-    pub stored: Option<&'a [String]>,
+    pub stored: Option<&'a StoredLog>,
     /// Lines scrolled up from the end. Clamped here and returned.
     pub scroll: usize,
     /// Spinner frame counter.
@@ -76,7 +103,7 @@ pub fn render_setup_log(f: &mut Frame, area: Rect, view: &SetupLogView, theme: &
             )
         }
         None => {
-            let lines = view.stored.unwrap_or(&[]).to_vec();
+            let lines = view.stored.map(StoredLog::lines).unwrap_or(&[]).to_vec();
             // The file is truncated on each run, so what is on disk is always
             // the most recent build and nothing older.
             let status = match lines.len() {
@@ -95,19 +122,29 @@ pub fn render_setup_log(f: &mut Frame, area: Rect, view: &SetupLogView, theme: &
     let body_h = body_area.height as usize;
     let scroll = view.scroll.min(lines.len().saturating_sub(body_h));
     if lines.is_empty() {
-        let empty = match view.live {
-            // A live entry with nothing captured yet, rather than a log that
-            // does not exist.
-            Some(_) => "(waiting for output…)",
-            None => {
-                "(no setup log)\n\nNothing was captured for this workspace — \
-                 either its repo has no setup script, or it was created before \
-                 setup logging."
-            }
+        // Four distinct reasons the body is empty; saying the wrong one sends
+        // the user somewhere useless.
+        let (empty, style) = match (view.live, view.stored) {
+            // A live entry that has not printed anything yet, rather than a
+            // log that does not exist.
+            (Some(_), _) => ("(waiting for output…)".to_string(), theme.dim_style()),
+            (None, Some(StoredLog::Unreadable { path, error })) => (
+                format!("(setup log could not be read)\n\n{error}\n\n{path}"),
+                theme.err_style(),
+            ),
+            (None, Some(StoredLog::Missing { path })) => (
+                format!(
+                    "(no setup log)\n\nNothing was captured for this workspace — either its \
+                     repo has no setup script, or it was created before setup logging.\n\n{path}"
+                ),
+                theme.dim_style(),
+            ),
+            // The file exists and read cleanly, but holds nothing.
+            (None, _) => ("(setup log is empty)".to_string(), theme.dim_style()),
         };
         f.render_widget(
             Paragraph::new(empty)
-                .style(theme.dim_style())
+                .style(style)
                 .wrap(ratatui::widgets::Wrap { trim: false }),
             body_area,
         );
@@ -193,7 +230,7 @@ mod tests {
 
     fn view<'a>(
         live: Option<&'a InFlight>,
-        stored: Option<&'a [String]>,
+        stored: Option<&'a StoredLog>,
         scroll: usize,
     ) -> SetupLogView<'a> {
         SetupLogView {
@@ -256,11 +293,11 @@ mod tests {
     /// still opens onto its persisted log.
     #[test]
     fn stored_log_renders_without_any_in_flight_work() {
-        let stored: Vec<String> = vec![
+        let stored = StoredLog::Lines(vec![
             "=== setup: myrepo/foo ===".into(),
             "npm ci".into(),
             "=== OK ===".into(),
-        ];
+        ]);
         let (text, _) = render_to_text(&view(None, Some(&stored), 0), 24);
         assert!(text.contains("npm ci"), "{text}");
         assert!(text.contains("=== OK ==="), "{text}");
@@ -271,17 +308,48 @@ mod tests {
     }
 
     /// The other half of "behaves the way a user expects": a workspace whose
-    /// repo has no setup script says so instead of showing an empty box.
+    /// repo has no setup script says so instead of showing an empty box, and
+    /// names the path so the user can go and look.
     #[test]
-    fn empty_stored_log_explains_itself() {
-        let (text, _) = render_to_text(&view(None, Some(&[]), 0), 24);
+    fn a_missing_log_explains_itself_and_names_the_path() {
+        let missing = StoredLog::Missing {
+            path: "/logs/setup-myrepo-foo.log".into(),
+        };
+        let (text, _) = render_to_text(&view(None, Some(&missing), 0), 24);
         assert!(text.contains("(no setup log)"), "{text}");
         assert!(text.contains("no setup script"), "{text}");
+        assert!(text.contains("setup-myrepo-foo.log"), "{text}");
+    }
+
+    /// A permission or decode failure must NOT read as "this repo has no
+    /// setup script" — that sends the user looking in the wrong place.
+    #[test]
+    fn an_unreadable_log_says_so_rather_than_claiming_there_is_none() {
+        let broken = StoredLog::Unreadable {
+            path: "/logs/setup-myrepo-foo.log".into(),
+            error: "Permission denied (os error 13)".into(),
+        };
+        let (text, _) = render_to_text(&view(None, Some(&broken), 0), 24);
+        assert!(text.contains("could not be read"), "{text}");
+        assert!(text.contains("Permission denied"), "{text}");
+        assert!(text.contains("setup-myrepo-foo.log"), "{text}");
+        assert!(
+            !text.contains("no setup script"),
+            "must not blame a missing script for a read failure:\n{text}"
+        );
+    }
+
+    #[test]
+    fn an_empty_file_is_not_a_missing_one() {
+        let empty = StoredLog::Lines(Vec::new());
+        let (text, _) = render_to_text(&view(None, Some(&empty), 0), 24);
+        assert!(text.contains("(setup log is empty)"), "{text}");
     }
 
     #[test]
     fn scroll_moves_the_window_up_through_the_log() {
-        let stored: Vec<String> = (0..60).map(|i| format!("line {i}")).collect();
+        let all: Vec<String> = (0..60).map(|i| format!("line {i}")).collect();
+        let stored = StoredLog::Lines(all.clone());
         let (bottom, _) = render_to_text(&view(None, Some(&stored), 0), 12);
         assert!(
             bottom.contains("line 59"),
@@ -301,23 +369,24 @@ mod tests {
     /// until the counter had been walked back down from MAX.
     #[test]
     fn scroll_is_clamped_to_the_top_and_reported_back() {
-        let stored: Vec<String> = (0..60).map(|i| format!("line {i}")).collect();
+        let all: Vec<String> = (0..60).map(|i| format!("line {i}")).collect();
+        let stored = StoredLog::Lines(all.clone());
         let (text, clamped) = render_to_text(&view(None, Some(&stored), usize::MAX), 12);
         assert!(
             text.contains("line 0"),
             "clamped view shows the head:\n{text}"
         );
         assert!(
-            clamped < stored.len(),
+            clamped < all.len(),
             "clamp must be a real offset, got {clamped}"
         );
         // One line of status, one of footer, two of border.
-        assert_eq!(clamped, stored.len() - (12 - 4));
+        assert_eq!(clamped, all.len() - (12 - 4));
     }
 
     #[test]
     fn a_log_that_fits_needs_no_scroll_hint() {
-        let stored: Vec<String> = vec!["one".into(), "two".into()];
+        let stored = StoredLog::Lines(vec!["one".into(), "two".into()]);
         let (text, clamped) = render_to_text(&view(None, Some(&stored), 0), 24);
         assert_eq!(clamped, 0);
         assert!(

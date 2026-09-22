@@ -128,7 +128,7 @@ fn draw_setup_log(f: &mut ratatui::Frame, app: &mut App, area: ratatui::layout::
         let view = crate::ui::modal::SetupLogView {
             label: &label,
             live: app.in_flight.get(workspace_id),
-            stored: stored.as_deref(),
+            stored: stored.as_ref(),
             scroll: *scroll,
             tick: app.tick,
         };

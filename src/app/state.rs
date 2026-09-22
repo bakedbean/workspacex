@@ -177,17 +177,34 @@ impl App {
         true
     }
 
-    /// The persisted setup log for `ws_id`, newest-last. Empty when there is
-    /// none — either the workspace is gone, its repo has no setup script (so
-    /// nothing was ever written), or it predates log persistence.
-    pub fn stored_setup_log(&self, ws_id: WorkspaceId) -> Vec<String> {
+    /// The persisted setup log for `ws_id`, newest-last, or why there isn't
+    /// one. A read failure that is NOT "no such file" is reported as such
+    /// rather than as an absent log: telling someone their repo has no setup
+    /// script when the real problem is a permission error sends them looking
+    /// in the wrong place entirely.
+    pub fn stored_setup_log(&self, ws_id: WorkspaceId) -> crate::ui::modal::StoredLog {
+        use crate::ui::modal::StoredLog;
         let Some((repo_id, ws)) = self.workspaces.iter().find(|(_, w)| w.id == ws_id) else {
-            return Vec::new();
+            return StoredLog::Missing {
+                path: String::new(),
+            };
         };
         let Some(repo) = self.repos.iter().find(|r| r.id == *repo_id) else {
-            return Vec::new();
+            return StoredLog::Missing {
+                path: String::new(),
+            };
         };
-        crate::data::setup_log::read(&self.log_dir, &repo.name, &ws.name).unwrap_or_default()
+        let path = crate::data::setup_log::setup_log_path(&self.log_dir, &repo.name, &ws.name);
+        match crate::data::setup_log::read(&self.log_dir, &repo.name, &ws.name) {
+            Ok(lines) => StoredLog::Lines(lines),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => StoredLog::Missing {
+                path: path.display().to_string(),
+            },
+            Err(e) => StoredLog::Unreadable {
+                path: path.display().to_string(),
+                error: e.to_string(),
+            },
+        }
     }
 
     /// Hand an open setup-log viewer its persisted source once the live work

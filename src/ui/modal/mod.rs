@@ -27,7 +27,7 @@ pub use process_list::render_process_list;
 pub use prompt_tag::{EnterAction, PromptTagModal, TagStage, render_prompt_tag};
 pub use remote_workspace_list::render_remote_workspace_list;
 pub use repo_settings::render_repo_settings;
-pub use setup_log::{SetupLogView, render_setup_log};
+pub use setup_log::{SetupLogView, StoredLog, render_setup_log};
 pub use textarea::TextArea;
 pub use updates_panel::{
     PANEL_MAX_WIDTH, PanelInputs, PanelView, ordered_workspaces_for_panel, panel_sections,
@@ -72,9 +72,8 @@ pub enum Modal {
         workspace_id: crate::data::store::WorkspaceId,
         /// The persisted log, read once when this became the source. `None`
         /// means the live `in_flight` tail is what's on screen — the file is
-        /// still buffered mid-run and would read back empty. `Some(vec![])`
-        /// is a real state: the log was looked for and there is none.
-        stored: Option<Vec<String>>,
+        /// still buffered mid-run and would read back empty.
+        stored: Option<StoredLog>,
         /// Lines scrolled up from the end of the log; 0 follows the tail.
         /// Clamped by the renderer against the body height it lays out, and
         /// written back so Up/Down always move what the user can see.

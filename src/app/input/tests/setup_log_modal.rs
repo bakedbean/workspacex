@@ -9,7 +9,7 @@ use super::*;
 use crate::data::in_flight::InFlight;
 use crate::data::progress::SetupProgress;
 use crate::data::store::{NewWorkspace, Store};
-use crate::ui::modal::Modal;
+use crate::ui::modal::{Modal, StoredLog};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -144,7 +144,7 @@ fn viewer_switches_to_the_persisted_log_when_the_work_ends() {
     app.in_flight.remove(&ws_id);
     app.sync_setup_log_viewer();
     let Some(Modal::SetupLog {
-        stored: Some(lines),
+        stored: Some(StoredLog::Lines(lines)),
         ..
     }) = &app.modal
     else {
@@ -170,7 +170,7 @@ fn viewer_switches_to_the_persisted_log_when_the_work_ends() {
     .unwrap();
     app.sync_setup_log_viewer();
     assert!(
-        matches!(&app.modal, Some(Modal::SetupLog { stored: Some(l), .. })
+        matches!(&app.modal, Some(Modal::SetupLog { stored: Some(StoredLog::Lines(l)), .. })
             if l.contains(&"compiled 41 crates".to_string())),
         "a loaded viewer must not re-read on every tick: {:?}",
         app.modal
@@ -182,7 +182,9 @@ async fn scroll_keys_move_the_window_and_esc_closes() {
     let (mut app, ws_id, _logs) = app_with_workspace();
     app.modal = Some(Modal::SetupLog {
         workspace_id: ws_id,
-        stored: Some((0..50).map(|i| format!("line {i}")).collect()),
+        stored: Some(StoredLog::Lines(
+            (0..50).map(|i| format!("line {i}")).collect(),
+        )),
         scroll: 0,
     });
     let s = shared_app();
@@ -247,7 +249,9 @@ async fn a_scroll_burst_with_no_draw_between_keys_cannot_overflow() {
     let (mut app, ws_id, _logs) = app_with_workspace();
     app.modal = Some(Modal::SetupLog {
         workspace_id: ws_id,
-        stored: Some((0..50).map(|i| format!("line {i}")).collect()),
+        stored: Some(StoredLog::Lines(
+            (0..50).map(|i| format!("line {i}")).collect(),
+        )),
         scroll: 0,
     });
     let s = shared_app();

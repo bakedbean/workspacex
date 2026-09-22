@@ -115,10 +115,12 @@ const MAX_LINE_CHARS: usize = 2048;
 /// Read the tail of a workspace's persisted setup log, newest-last, for the
 /// TUI viewer.
 ///
-/// `None` means there is no log on disk — either the repo has no setup script
-/// (nothing is ever written in that case, see `workspace::run_setup_logged`)
-/// or the workspace predates log persistence. That is a normal state, not an
-/// error, so an unreadable file is reported the same way for now.
+/// `Err(NotFound)` means there is no log on disk — either the repo has no
+/// setup script (nothing is ever written in that case, see
+/// `workspace::run_setup_logged`) or the workspace predates log persistence.
+/// That is a normal state. Every OTHER error is kept distinct rather than
+/// folded into it: a permission error reported as "no setup script" sends the
+/// user looking in entirely the wrong place.
 ///
 /// Bounded twice over, because this runs on the UI path: at most
 /// `READ_TAIL_BYTES` are read from the end of the file, then at most
@@ -126,16 +128,16 @@ const MAX_LINE_CHARS: usize = 2048;
 /// larger than the byte budget loses its head, including the `=== setup: ===`
 /// header — the same trade `READ_CAP` already makes, and the tail is the part
 /// that says how the run ended.
-pub fn read(log_dir: &Path, repo: &str, name: &str) -> Option<Vec<String>> {
+pub fn read(log_dir: &Path, repo: &str, name: &str) -> io::Result<Vec<String>> {
     let path = setup_log_path(log_dir, repo, name);
-    let mut f = File::open(&path).ok()?;
-    let len = f.metadata().ok()?.len();
+    let mut f = File::open(&path)?;
+    let len = f.metadata()?.len();
     let truncated = len > READ_TAIL_BYTES;
     if truncated {
-        f.seek(SeekFrom::Start(len - READ_TAIL_BYTES)).ok()?;
+        f.seek(SeekFrom::Start(len - READ_TAIL_BYTES))?;
     }
     let mut buf = Vec::with_capacity(len.min(READ_TAIL_BYTES) as usize + 1);
-    f.take(READ_TAIL_BYTES).read_to_end(&mut buf).ok()?;
+    f.take(READ_TAIL_BYTES).read_to_end(&mut buf)?;
     // Seeking to a byte offset can land mid-codepoint, so decode lossily
     // rather than failing the whole read over one split character.
     let body = String::from_utf8_lossy(&buf);
@@ -162,7 +164,7 @@ pub fn read(log_dir: &Path, repo: &str, name: &str) -> Option<Vec<String>> {
     if lines.len() > READ_CAP {
         lines.drain(..lines.len() - READ_CAP);
     }
-    Some(lines)
+    Ok(lines)
 }
 
 /// The `=== setup: <repo>/<name> ===` line `write_header` puts first.
@@ -310,7 +312,12 @@ mod tests {
     #[test]
     fn read_returns_none_when_no_log_was_ever_written() {
         let logs = TempDir::new().unwrap();
-        assert!(read(logs.path(), "myrepo", "never-ran").is_none());
+        let e = read(logs.path(), "myrepo", "never-ran").unwrap_err();
+        assert_eq!(
+            e.kind(),
+            io::ErrorKind::NotFound,
+            "a missing log must stay distinguishable from an unreadable one"
+        );
     }
 
     #[test]
@@ -446,7 +453,7 @@ mod tests {
 
         rename(logs.path(), "myrepo", "old", "new");
 
-        assert!(read(logs.path(), "myrepo", "old").is_none());
+        assert!(read(logs.path(), "myrepo", "old").is_err());
         let lines = read(logs.path(), "myrepo", "new").expect("log should follow the rename");
         assert!(lines.contains(&"kept".to_string()), "{lines:?}");
     }
@@ -455,7 +462,7 @@ mod tests {
     fn rename_is_a_noop_without_a_log() {
         let logs = TempDir::new().unwrap();
         rename(logs.path(), "myrepo", "old", "new");
-        assert!(read(logs.path(), "myrepo", "new").is_none());
+        assert!(read(logs.path(), "myrepo", "new").is_err());
     }
 
     /// `sanitize` maps `/` and `-` alike, so repo `foo-bar` + workspace `baz`
@@ -482,7 +489,7 @@ mod tests {
             "{kept:?}"
         );
         assert!(
-            read(logs.path(), "foo", "renamed").is_none(),
+            read(logs.path(), "foo", "renamed").is_err(),
             "nothing should have been moved"
         );
     }

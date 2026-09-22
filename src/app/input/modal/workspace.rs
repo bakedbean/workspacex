@@ -297,20 +297,28 @@ pub(super) async fn setup_log(
         app.modal = None;
         return Ok(());
     }
-    // `scroll` counts lines up from the end of the log. The renderer knows
-    // the body height and clamps against it each frame, writing the clamp
-    // back, so a bare `+ 1` here can never outrun what is on screen.
+    // `scroll` counts lines up from the end of the log; the renderer clamps
+    // it against the body height each frame and writes the clamp back.
+    //
+    // The increments MUST saturate. A clamping draw is not guaranteed to run
+    // between two key events: the event loop deliberately handles input at
+    // full speed and only redraws once the frame floor expires (`app::run`),
+    // and `handle_paste` dispatches a whole pasted string through
+    // `dispatch_key` without drawing at all. So `g` (which asks for
+    // `usize::MAX`) followed by `k` in the same burst reaches this arm with
+    // `scroll` still at MAX — a panic in debug, a silent wrap to the tail in
+    // release.
     let Some(Modal::SetupLog { scroll, .. }) = &mut app.modal else {
         return Ok(());
     };
     match k.code {
-        KeyCode::Up | KeyCode::Char('k') => *scroll += 1,
+        KeyCode::Up | KeyCode::Char('k') => *scroll = scroll.saturating_add(1),
         KeyCode::Down | KeyCode::Char('j') => *scroll = scroll.saturating_sub(1),
-        KeyCode::PageUp => *scroll += SETUP_LOG_PAGE,
+        KeyCode::PageUp => *scroll = scroll.saturating_add(SETUP_LOG_PAGE),
         KeyCode::PageDown => *scroll = scroll.saturating_sub(SETUP_LOG_PAGE),
         // `g`/`Home` jump to the oldest line, `G`/`End` back to the tail.
-        // usize::MAX is safe as "as far up as it goes" precisely because the
-        // renderer clamps it on the next frame.
+        // `usize::MAX` means "as far up as it goes"; the renderer resolves it
+        // to a real offset on the next frame.
         KeyCode::Char('g') | KeyCode::Home => *scroll = usize::MAX,
         KeyCode::Char('G') | KeyCode::End => *scroll = 0,
         _ => {}

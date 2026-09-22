@@ -188,3 +188,41 @@ async fn scroll_keys_move_the_window_and_esc_closes() {
         .unwrap();
     assert!(app.modal.is_none(), "esc closes the viewer");
 }
+
+/// A clamping draw is NOT guaranteed between two key events — the event loop
+/// handles input at full speed and redraws on a frame floor, and `handle_paste`
+/// dispatches a whole pasted string without drawing at all. So the scroll
+/// increments have to survive landing on the `usize::MAX` that `g` parks there.
+/// Before this was saturating, `g` then `k` panicked in debug and wrapped to
+/// the tail in release.
+#[tokio::test]
+async fn a_scroll_burst_with_no_draw_between_keys_cannot_overflow() {
+    let (mut app, ws_id) = app_with_workspace();
+    app.modal = Some(Modal::SetupLog {
+        workspace_id: ws_id,
+        stored: Some((0..50).map(|i| format!("line {i}")).collect()),
+        scroll: 0,
+    });
+    let s = shared_app();
+
+    // No render runs between any of these, exactly as in a paste burst.
+    for k in [
+        KeyCode::Char('g'),
+        KeyCode::Char('k'),
+        KeyCode::Up,
+        KeyCode::PageUp,
+    ] {
+        handle_key_modal(&mut app, &s, key(k)).await.unwrap();
+    }
+    assert!(
+        matches!(
+            &app.modal,
+            Some(Modal::SetupLog {
+                scroll: usize::MAX,
+                ..
+            })
+        ),
+        "scrolling up past the top must stick at MAX, not wrap: {:?}",
+        app.modal
+    );
+}

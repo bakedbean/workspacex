@@ -366,12 +366,12 @@
         <div class="sec-head reveal">
           <h2 class="mono"><span class="pfx">$ </span>wsx --quickstart</h2>
           <span class="rule"></span>
-          <p class="note">one static rust binary · no runtime deps</p>
+          <p class="note">one static rust binary · needs git on your PATH</p>
         </div>
         <div class="cmd reveal" data-d="1">
           <button
             class="copy-btn"
-            data-copy='cargo build --release&#10;export PATH="$PWD/target/release:$PATH"&#10;wsx repo add /path/to/repo&#10;wsx'
+            data-copy='brew tap bakedbean/workspacex https://github.com/bakedbean/workspacex&#10;brew install bakedbean/workspacex/wsx&#10;wsx repo add /path/to/repo&#10;wsx'
             aria-label="Copy install commands"
           >
             <svg
@@ -390,13 +390,15 @@
           </button>
           <div class="cmd-row">
             <span class="pfx">$</span
-            ><span class="txt">cargo build --release</span
-            ><span class="cmt"># build the binary</span>
+            ><span class="txt"
+              >brew tap bakedbean/workspacex
+              https://github.com/bakedbean/workspacex</span
+            ><span class="cmt"># add the tap</span>
           </div>
           <div class="cmd-row">
             <span class="pfx">$</span
-            ><span class="txt">export PATH="$PWD/target/release:$PATH"</span
-            ><span class="cmt"># put wsx on your PATH</span>
+            ><span class="txt">brew install bakedbean/workspacex/wsx</span
+            ><span class="cmt"># or nix, cargo-binstall, a tarball</span>
           </div>
           <div class="cmd-row">
             <span class="pfx">$</span
@@ -411,6 +413,9 @@
         <p class="hero-note reveal" data-d="2">
           The <span class="accent">wsx</span> and
           <span class="accent">agent-review</span> skills install during setup.
+          See the
+          <a href="docs/overview/installation.html">installation guide</a> for
+          Nix, cargo-binstall, prebuilt tarballs, and building from source.
         </p>
       </div>
     </section>

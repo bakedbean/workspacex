@@ -11,22 +11,22 @@ class Wsx < Formula
   on_macos do
     on_arm do
       url "https://github.com/bakedbean/workspacex/releases/download/v0.1.0/wsx-0.1.0-aarch64-apple-darwin.tar.gz"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+      sha256 "af4724f88c4411dfb1005684e0a60d782de3945a2de78af90b9a1d881a87809f"
     end
     on_intel do
       url "https://github.com/bakedbean/workspacex/releases/download/v0.1.0/wsx-0.1.0-x86_64-apple-darwin.tar.gz"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+      sha256 "20c2e1b54826edbcac0102bd5ebeb95a3bd27fda1cb30d25acf9d8f89c296e38"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/bakedbean/workspacex/releases/download/v0.1.0/wsx-0.1.0-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+      sha256 "837e5c067789817e246bf0c4aa5562aff508347414774b5704f36525dc80ae21"
     end
     on_intel do
       url "https://github.com/bakedbean/workspacex/releases/download/v0.1.0/wsx-0.1.0-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+      sha256 "0bd35fd1c505fc2dc1821dcce73e16afd8f7602ee8cbaaa92ec9dedb8106296e"
     end
   end
 

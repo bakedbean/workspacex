@@ -286,7 +286,7 @@ pub(super) async fn confirm_share(
     Ok(())
 }
 
-pub(super) async fn setup_progress(
+pub(super) async fn setup_log(
     app: &mut App,
     _shared: &SharedApp,
     k: crossterm::event::KeyEvent,
@@ -363,7 +363,7 @@ pub(super) async fn workspace_actions(
             if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target()
                 && app.in_flight.contains_key(&ws_id)
             {
-                app.modal = Some(Modal::SetupProgress {
+                app.modal = Some(Modal::SetupLog {
                     workspace_id: ws_id,
                 });
             }

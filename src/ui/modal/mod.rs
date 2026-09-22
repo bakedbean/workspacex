@@ -64,7 +64,9 @@ pub enum Modal {
         /// and the confirmation message must say so.
         stopped_count: usize,
     },
-    SetupProgress {
+    /// Viewer for a workspace's setup log: the live tail while a create or
+    /// archive is in flight, the persisted log file otherwise.
+    SetupLog {
         workspace_id: crate::data::store::WorkspaceId,
     },
     /// Shown when `q` is pressed while `App::in_flight` is non-empty.
@@ -323,7 +325,7 @@ pub fn render(
                 ),
             )
         }
-        Modal::SetupProgress { workspace_id } => match in_flight.get(workspace_id) {
+        Modal::SetupLog { workspace_id } => match in_flight.get(workspace_id) {
             // The task finished while the viewer was open. Say so rather than
             // rendering a stale tail; the reconciler has already dropped the entry.
             None => (
@@ -586,7 +588,7 @@ mod tests {
                 tokio_util::sync::CancellationToken::new(),
             ),
         );
-        let modal = Modal::SetupProgress { workspace_id };
+        let modal = Modal::SetupLog { workspace_id };
         let text = render_to_text(&modal, &in_flight);
         assert!(text.contains("Running setup"), "missing phase:\n{text}");
         assert!(
@@ -603,7 +605,7 @@ mod tests {
     /// derive both the title and the status line from the entry's
     /// `InFlightKind` instead, so an archive viewer reads truthfully.
     #[test]
-    fn setup_progress_labels_archive_truthfully_not_as_workspace_setup() {
+    fn setup_log_labels_archive_truthfully_not_as_workspace_setup() {
         use crate::data::progress::SetupProgress;
         let progress = SetupProgress::shared();
         progress.lock().unwrap().push_line("removing worktree");
@@ -616,7 +618,7 @@ mod tests {
                 tokio_util::sync::CancellationToken::new(),
             ),
         );
-        let modal = Modal::SetupProgress { workspace_id };
+        let modal = Modal::SetupLog { workspace_id };
         let text = render_to_text(&modal, &in_flight);
         assert!(
             text.contains("archiving workspace"),
@@ -713,7 +715,7 @@ mod tests {
                 tokio_util::sync::CancellationToken::new(),
             ),
         );
-        let modal = Modal::SetupProgress { workspace_id };
+        let modal = Modal::SetupLog { workspace_id };
         let text = render_to_text(&modal, &in_flight);
         assert!(
             text.contains('…'),

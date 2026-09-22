@@ -78,7 +78,7 @@ pub(in crate::app::input) async fn handle_key_modal(
         Modal::ConfirmShare { workspace_id, .. } => {
             workspace::confirm_share(app, shared, k, workspace_id).await?
         }
-        Modal::SetupProgress { .. } => workspace::setup_progress(app, shared, k).await?,
+        Modal::SetupLog { .. } => workspace::setup_log(app, shared, k).await?,
         Modal::Error { .. } => workspace::error(app, shared, k).await?,
         Modal::NameColorPicker {
             workspace_id,

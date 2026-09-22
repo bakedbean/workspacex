@@ -52,7 +52,9 @@ Other keys (`e`, `t`, `v`, `g`, `c`, `enter`) are forwarded to the dashboard and
 
 Whenever the selected workspace carries a lifecycle badge — `⚙!` (setup failed), `⚙?` (setup cancelled), or a spinner (being created or archived) — the footer shows a `? o  setup log` hint, since the badge itself has no room to say where the reason lives.
 
-The viewer shows the [setup script](../configuration/per-repo-setup-scripts.md)'s output for the selected workspace, whatever state it is in: the live tail while the workspace is still being created (or archived), and the persisted log from `~/.local/state/wsx/logs/` once it has finished. Stderr lines are marked `!` and highlighted. A workspace whose repo has no setup script says so rather than showing an empty pane.
+The viewer shows the [setup script](../configuration/per-repo-setup-scripts.md)'s output for the selected workspace, whatever state it is in: the live tail while the workspace is still being created, and the persisted log from `~/.local/state/wsx/logs/` once it has finished. Stderr lines are marked `!` and highlighted in both. Only the last 256 KiB of a log is read, and at most 2000 lines are shown, so a very verbose setup script loses the start of its output — the end, which says how the run finished, is always kept.
+
+A workspace with no log to show says which case it is rather than showing an empty pane: no setup script was ever run, the file could not be read (with the path and the error), or — while archiving — that archive output is not kept at all.
 
 | Key                    | Action                    |
 | ---------------------- | ------------------------- |

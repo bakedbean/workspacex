@@ -15,6 +15,7 @@ mod process_list;
 mod prompt_tag;
 mod remote_workspace_list;
 mod repo_settings;
+mod setup_log;
 mod textarea;
 mod updates_panel;
 mod usage_picker;
@@ -26,6 +27,7 @@ pub use process_list::render_process_list;
 pub use prompt_tag::{EnterAction, PromptTagModal, TagStage, render_prompt_tag};
 pub use remote_workspace_list::render_remote_workspace_list;
 pub use repo_settings::render_repo_settings;
+pub use setup_log::{SetupLogView, render_setup_log};
 pub use textarea::TextArea;
 pub use updates_panel::{
     PANEL_MAX_WIDTH, PanelInputs, PanelView, ordered_workspaces_for_panel, panel_sections,
@@ -68,6 +70,15 @@ pub enum Modal {
     /// archive is in flight, the persisted log file otherwise.
     SetupLog {
         workspace_id: crate::data::store::WorkspaceId,
+        /// The persisted log, read once when this became the source. `None`
+        /// means the live `in_flight` tail is what's on screen — the file is
+        /// still buffered mid-run and would read back empty. `Some(vec![])`
+        /// is a real state: the log was looked for and there is none.
+        stored: Option<Vec<String>>,
+        /// Lines scrolled up from the end of the log; 0 follows the tail.
+        /// Clamped by the renderer against the body height it lays out, and
+        /// written back so Up/Down always move what the user can see.
+        scroll: usize,
     },
     /// Shown when `q` is pressed while `App::in_flight` is non-empty.
     /// `y` cancels any in-flight creates and quits; archive is abandoned
@@ -218,14 +229,10 @@ fn panel_frame<'a>(
     inner
 }
 
-pub fn render(
-    f: &mut Frame,
-    area: Rect,
-    modal: &Modal,
-    in_flight: &HashMap<crate::data::store::WorkspaceId, crate::data::in_flight::InFlight>,
-    tick: u32,
-    theme: &Theme,
-) {
+/// Render the small fixed-size modals — confirmations, prompts, reference
+/// cards. Anything that tails live App state (the panels, and the setup-log
+/// viewer) has its own renderer called from `draw_modal` instead.
+pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
     // UpdatesPanel, ProcessList, and RemoteWorkspaceList are rendered by
     // their dedicated helpers directly from `draw()` because they need live
     // App state. This function should never be called with those variants;
@@ -239,6 +246,7 @@ pub fn render(
             | Modal::UsageWindowPicker { .. }
             | Modal::NameColorPicker { .. }
             | Modal::RemoteWorkspaceList { .. }
+            | Modal::SetupLog { .. }
             | Modal::PromptTag(..)
     ) {
         return;
@@ -325,51 +333,6 @@ pub fn render(
                 ),
             )
         }
-        Modal::SetupLog { workspace_id } => match in_flight.get(workspace_id) {
-            // The task finished while the viewer was open. Say so rather than
-            // rendering a stale tail; the reconciler has already dropped the entry.
-            None => (
-                "workspace setup",
-                "  setup finished.\n\n  [esc] close".to_string(),
-            ),
-            Some(f) => {
-                use crate::data::in_flight::InFlightKind;
-                let frame = crate::ui::dashboard::spinner::frame(tick);
-                // Archive never sets a `SetupPhase` (there is no phase concept
-                // for it), so reading `p.phase().label()` unconditionally
-                // always shows create's default phase ("Fetching base…")
-                // even while a worktree is mid-deletion. Derive both the
-                // title and the status line from the entry's `InFlightKind`
-                // instead so archive gets something truthful; create's
-                // rendering is unchanged.
-                let (title, status_label) = match f.kind {
-                    InFlightKind::Create => {
-                        let label = match f.progress.lock() {
-                            Ok(p) => p.phase().label(),
-                            Err(_) => "Working",
-                        };
-                        ("workspace setup", label)
-                    }
-                    InFlightKind::Archive => ("archiving workspace", "Archiving"),
-                };
-                let tail = match f.progress.lock() {
-                    Ok(p) => p.recent(6),
-                    Err(_) => Vec::new(),
-                };
-                let secs = f.started.elapsed().as_secs();
-                let elapsed = format!("{:02}:{:02}", secs / 60, secs % 60);
-                let mut body = format!("  {frame} {status_label}…   ({elapsed})\n\n");
-                if tail.is_empty() {
-                    body.push_str("  (waiting for output…)\n");
-                } else {
-                    for line in &tail {
-                        body.push_str(&format!("  {}\n", truncate_to(line, 54)));
-                    }
-                }
-                body.push_str("\n  [esc] close");
-                (title, body)
-            }
-        },
         Modal::ConfirmQuit { creates, archives } => {
             let mut what = Vec::new();
             if *creates > 0 {
@@ -395,6 +358,7 @@ pub fn render(
         Modal::UpdatesPanel { .. } => unreachable!("UpdatesPanel must not reach render()"),
         Modal::ProcessList { .. } => unreachable!("ProcessList must not reach render()"),
         Modal::RepoSettings { .. } => unreachable!("RepoSettings must not reach render()"),
+        Modal::SetupLog { .. } => unreachable!("SetupLog must not reach render()"),
         Modal::AgentsPanel { .. } => unreachable!("AgentsPanel must not reach render()"),
         Modal::UsageWindowPicker { .. } => {
             unreachable!("UsageWindowPicker must not reach render()")
@@ -550,14 +514,10 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
-    fn render_to_text(
-        modal: &Modal,
-        in_flight: &HashMap<crate::data::store::WorkspaceId, crate::data::in_flight::InFlight>,
-    ) -> String {
+    fn render_to_text(modal: &Modal) -> String {
         let theme = Theme::wsx();
         let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        term.draw(|f| render(f, f.area(), modal, in_flight, 0, &theme))
-            .unwrap();
+        term.draw(|f| render(f, f.area(), modal, &theme)).unwrap();
         let buf = term.backend().buffer();
         (0..buf.area.height)
             .map(|y| {
@@ -567,75 +527,6 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
-    }
-
-    #[test]
-    fn setup_running_shows_phase_and_recent_lines() {
-        use crate::data::progress::{SetupPhase, SetupProgress};
-        let progress = SetupProgress::shared();
-        {
-            let mut p = progress.lock().unwrap();
-            p.set_phase(SetupPhase::RunningSetup);
-            p.push_line("mise install");
-            p.push_line("Installing dependencies");
-        }
-        let workspace_id = crate::data::store::WorkspaceId(1);
-        let mut in_flight = HashMap::new();
-        in_flight.insert(
-            workspace_id,
-            crate::data::in_flight::InFlight::create(
-                progress,
-                tokio_util::sync::CancellationToken::new(),
-            ),
-        );
-        let modal = Modal::SetupLog { workspace_id };
-        let text = render_to_text(&modal, &in_flight);
-        assert!(text.contains("Running setup"), "missing phase:\n{text}");
-        assert!(
-            text.contains("Installing dependencies"),
-            "missing line:\n{text}"
-        );
-        assert!(text.contains("[esc] close"), "missing footer:\n{text}");
-    }
-
-    /// F7 regression: an archive entry never sets a `SetupPhase` (there is no
-    /// phase concept for it), so reading `p.phase().label()` unconditionally
-    /// showed create's default phase ("Fetching base…") while a worktree was
-    /// mid-deletion, under a "workspace setup" title. The renderer must
-    /// derive both the title and the status line from the entry's
-    /// `InFlightKind` instead, so an archive viewer reads truthfully.
-    #[test]
-    fn setup_log_labels_archive_truthfully_not_as_workspace_setup() {
-        use crate::data::progress::SetupProgress;
-        let progress = SetupProgress::shared();
-        progress.lock().unwrap().push_line("removing worktree");
-        let workspace_id = crate::data::store::WorkspaceId(1);
-        let mut in_flight = HashMap::new();
-        in_flight.insert(
-            workspace_id,
-            crate::data::in_flight::InFlight::archive(
-                progress,
-                tokio_util::sync::CancellationToken::new(),
-            ),
-        );
-        let modal = Modal::SetupLog { workspace_id };
-        let text = render_to_text(&modal, &in_flight);
-        assert!(
-            text.contains("archiving workspace"),
-            "expected an archive-truthful title:\n{text}"
-        );
-        assert!(
-            !text.contains("workspace setup"),
-            "must not show create's title for an archive:\n{text}"
-        );
-        assert!(
-            !text.contains("Fetching base"),
-            "must not show create's default phase for an archive:\n{text}"
-        );
-        assert!(
-            text.contains("removing worktree"),
-            "missing appended progress line:\n{text}"
-        );
     }
 
     /// Sharing eagerly starts stopped agents (see `toggle_workspace_shared`),
@@ -652,7 +543,7 @@ mod tests {
             running_count: 1,
             stopped_count: 2,
         };
-        let text = render_to_text(&modal, &HashMap::new());
+        let text = render_to_text(&modal);
         assert!(
             text.contains("Restarts 1 running session(s)"),
             "missing running-restart note:\n{text}"
@@ -674,7 +565,7 @@ mod tests {
             running_count: 0,
             stopped_count: 2,
         };
-        let text = render_to_text(&modal, &HashMap::new());
+        let text = render_to_text(&modal);
         assert!(
             text.contains("No running sessions to restart."),
             "missing no-op note:\n{text}"
@@ -702,30 +593,8 @@ mod tests {
     }
 
     #[test]
-    fn setup_running_truncates_overwide_line() {
-        use crate::data::progress::SetupProgress;
-        let progress = SetupProgress::shared();
-        progress.lock().unwrap().push_line(&"x".repeat(200));
-        let workspace_id = crate::data::store::WorkspaceId(1);
-        let mut in_flight = HashMap::new();
-        in_flight.insert(
-            workspace_id,
-            crate::data::in_flight::InFlight::create(
-                progress,
-                tokio_util::sync::CancellationToken::new(),
-            ),
-        );
-        let modal = Modal::SetupLog { workspace_id };
-        let text = render_to_text(&modal, &in_flight);
-        assert!(
-            text.contains('…'),
-            "over-wide line should be truncated:\n{text}"
-        );
-    }
-
-    #[test]
     fn workspace_actions_overlay_lists_all_actions() {
-        let text = render_to_text(&Modal::WorkspaceActions, &HashMap::new());
+        let text = render_to_text(&Modal::WorkspaceActions);
         assert!(text.contains("edit"), "missing 'edit':\n{text}");
         assert!(text.contains("term"), "missing 'term':\n{text}");
         assert!(text.contains("diff"), "missing 'diff':\n{text}");

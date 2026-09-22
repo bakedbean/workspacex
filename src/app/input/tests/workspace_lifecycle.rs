@@ -214,7 +214,7 @@ async fn create_registers_in_flight_and_keeps_running_past_esc() {
     .await;
     // Press Esc — there is no modal open, so this is a no-op; in
     // particular it must NOT cancel the running create (Esc only
-    // cancels when it closes a SetupProgress viewer, which requires the
+    // cancels when it closes a SetupLog viewer, which requires the
     // modal to be open).
     {
         let mut g = app.lock().await;

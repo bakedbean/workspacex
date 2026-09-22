@@ -1,0 +1,190 @@
+//! `o` on the workspace-actions card: the setup-log viewer.
+//!
+//! The key used to be inert unless the workspace had work in flight, which
+//! made the card's "setup log" label wrong for every workspace that had
+//! finished building. These cover the states it now has to handle.
+
+use super::common::shared_app;
+use super::*;
+use crate::data::in_flight::InFlight;
+use crate::data::progress::SetupProgress;
+use crate::data::store::{NewWorkspace, Store};
+use crate::ui::modal::Modal;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::path::PathBuf;
+
+fn key(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+fn app_with_workspace() -> (App, crate::data::store::WorkspaceId) {
+    let store = Store::open_in_memory().unwrap();
+    let repo_id = store
+        .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+        .unwrap();
+    let ws_id = store
+        .insert_workspace(&NewWorkspace {
+            repo_id,
+            name: "alpha",
+            branch: "repo/alpha",
+            worktree_path: std::path::Path::new("."),
+            yolo: false,
+            agent: crate::pty::session::AgentKind::Claude,
+            shared: false,
+        })
+        .unwrap();
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    app.refresh().unwrap();
+    app.selectable = vec![SelectionTarget::Workspace(ws_id)];
+    app.select_index(0);
+    (app, ws_id)
+}
+
+/// The regression this change is about: nothing in flight, `o` must still
+/// open the viewer rather than silently doing nothing.
+#[tokio::test]
+async fn o_opens_the_viewer_for_a_workspace_with_nothing_in_flight() {
+    let (mut app, ws_id) = app_with_workspace();
+    app.modal = Some(Modal::WorkspaceActions);
+    handle_key_modal(&mut app, &shared_app(), key(KeyCode::Char('o')))
+        .await
+        .unwrap();
+    match &app.modal {
+        Some(Modal::SetupLog {
+            workspace_id,
+            stored,
+            scroll,
+        }) => {
+            assert_eq!(*workspace_id, ws_id);
+            assert!(
+                stored.is_some(),
+                "with no live work the persisted log is the source"
+            );
+            assert_eq!(*scroll, 0, "opens at the tail");
+        }
+        other => panic!("expected the setup-log viewer, got {other:?}"),
+    }
+}
+
+/// While a create is running the live ring buffer is the source, so `stored`
+/// stays `None` — the log file is still buffered and would read back empty.
+#[tokio::test]
+async fn o_tails_live_work_rather_than_the_file() {
+    let (mut app, ws_id) = app_with_workspace();
+    app.in_flight.insert(
+        ws_id,
+        InFlight::create(
+            SetupProgress::shared(),
+            tokio_util::sync::CancellationToken::new(),
+        ),
+    );
+    app.modal = Some(Modal::WorkspaceActions);
+    handle_key_modal(&mut app, &shared_app(), key(KeyCode::Char('o')))
+        .await
+        .unwrap();
+    assert!(
+        matches!(&app.modal, Some(Modal::SetupLog { stored: None, .. })),
+        "expected a live tail, got {:?}",
+        app.modal
+    );
+}
+
+/// A viewer opened mid-build must pick up the persisted log once the build
+/// ends, instead of going blank when the ring buffer is dropped with the
+/// `in_flight` entry.
+#[test]
+fn viewer_switches_to_the_persisted_log_when_the_work_ends() {
+    let (mut app, ws_id) = app_with_workspace();
+    app.in_flight.insert(
+        ws_id,
+        InFlight::create(
+            SetupProgress::shared(),
+            tokio_util::sync::CancellationToken::new(),
+        ),
+    );
+    app.modal = Some(Modal::SetupLog {
+        workspace_id: ws_id,
+        stored: None,
+        scroll: 0,
+    });
+
+    // Still running: the live tail stays the source.
+    app.sync_setup_log_viewer();
+    assert!(matches!(
+        &app.modal,
+        Some(Modal::SetupLog { stored: None, .. })
+    ));
+
+    app.in_flight.remove(&ws_id);
+    app.sync_setup_log_viewer();
+    assert!(
+        matches!(
+            &app.modal,
+            Some(Modal::SetupLog {
+                stored: Some(_),
+                ..
+            })
+        ),
+        "expected the persisted log to take over, got {:?}",
+        app.modal
+    );
+}
+
+#[tokio::test]
+async fn scroll_keys_move_the_window_and_esc_closes() {
+    let (mut app, ws_id) = app_with_workspace();
+    app.modal = Some(Modal::SetupLog {
+        workspace_id: ws_id,
+        stored: Some((0..50).map(|i| format!("line {i}")).collect()),
+        scroll: 0,
+    });
+    let s = shared_app();
+
+    handle_key_modal(&mut app, &s, key(KeyCode::Up))
+        .await
+        .unwrap();
+    handle_key_modal(&mut app, &s, key(KeyCode::Up))
+        .await
+        .unwrap();
+    assert!(matches!(
+        &app.modal,
+        Some(Modal::SetupLog { scroll: 2, .. })
+    ));
+
+    handle_key_modal(&mut app, &s, key(KeyCode::Down))
+        .await
+        .unwrap();
+    assert!(matches!(
+        &app.modal,
+        Some(Modal::SetupLog { scroll: 1, .. })
+    ));
+
+    // Down at the tail saturates rather than wrapping.
+    handle_key_modal(&mut app, &s, key(KeyCode::Char('G')))
+        .await
+        .unwrap();
+    handle_key_modal(&mut app, &s, key(KeyCode::Down))
+        .await
+        .unwrap();
+    assert!(matches!(
+        &app.modal,
+        Some(Modal::SetupLog { scroll: 0, .. })
+    ));
+
+    // `g` asks for the top; the renderer is what clamps it.
+    handle_key_modal(&mut app, &s, key(KeyCode::Char('g')))
+        .await
+        .unwrap();
+    assert!(matches!(
+        &app.modal,
+        Some(Modal::SetupLog {
+            scroll: usize::MAX,
+            ..
+        })
+    ));
+
+    handle_key_modal(&mut app, &s, key(KeyCode::Esc))
+        .await
+        .unwrap();
+    assert!(app.modal.is_none(), "esc closes the viewer");
+}

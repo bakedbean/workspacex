@@ -291,15 +291,37 @@ pub(super) async fn setup_log(
     _shared: &SharedApp,
     k: crossterm::event::KeyEvent,
 ) -> Result<()> {
-    // A viewer onto App::in_flight, not an owner: Esc/Enter just
-    // closes it, leaving the background create running. Every other
-    // key is ignored.
+    // A viewer, not an owner: closing it leaves any background create
+    // running, exactly as before.
     if matches!(k.code, KeyCode::Esc | KeyCode::Enter) {
         app.modal = None;
+        return Ok(());
+    }
+    // `scroll` counts lines up from the end of the log. The renderer knows
+    // the body height and clamps against it each frame, writing the clamp
+    // back, so a bare `+ 1` here can never outrun what is on screen.
+    let Some(Modal::SetupLog { scroll, .. }) = &mut app.modal else {
+        return Ok(());
+    };
+    match k.code {
+        KeyCode::Up | KeyCode::Char('k') => *scroll += 1,
+        KeyCode::Down | KeyCode::Char('j') => *scroll = scroll.saturating_sub(1),
+        KeyCode::PageUp => *scroll += SETUP_LOG_PAGE,
+        KeyCode::PageDown => *scroll = scroll.saturating_sub(SETUP_LOG_PAGE),
+        // `g`/`Home` jump to the oldest line, `G`/`End` back to the tail.
+        // usize::MAX is safe as "as far up as it goes" precisely because the
+        // renderer clamps it on the next frame.
+        KeyCode::Char('g') | KeyCode::Home => *scroll = usize::MAX,
+        KeyCode::Char('G') | KeyCode::End => *scroll = 0,
+        _ => {}
     }
 
     Ok(())
 }
+
+/// Lines moved by PageUp/PageDown in the setup-log viewer. A fixed jump
+/// rather than a viewport height, which the key handler does not know.
+const SETUP_LOG_PAGE: usize = 10;
 
 pub(super) async fn error(
     app: &mut App,
@@ -358,13 +380,22 @@ pub(super) async fn workspace_actions(
                 notice: None,
             });
         }
-        // Open the progress viewer for a workspace with work in flight.
+        // Open the setup-log viewer. It used to require an in-flight entry,
+        // which made the card's "setup log" label a lie for every workspace
+        // that had finished building — the common case. The viewer now tails
+        // live work when there is any and falls back to the persisted log
+        // otherwise, so the key means one thing in every state.
         KeyCode::Char('o') => {
-            if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target()
-                && app.in_flight.contains_key(&ws_id)
-            {
+            if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() {
+                let stored = if app.in_flight.contains_key(&ws_id) {
+                    None
+                } else {
+                    Some(app.stored_setup_log(ws_id))
+                };
                 app.modal = Some(Modal::SetupLog {
                     workspace_id: ws_id,
+                    stored,
+                    scroll: 0,
                 });
             }
         }

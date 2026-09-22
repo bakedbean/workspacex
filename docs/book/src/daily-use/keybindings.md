@@ -27,7 +27,7 @@
 | `q` / `p` (when digest focused)   | Close the digest (`q` only closes it while the digest is focused — dashboard-focused `q` quits wsx)          |
 | `r` (when digest visible)         | Force a git/PR cache refresh                                                                                 |
 
-### New Workspace / Confirm Archive / Setup Running modals
+### New Workspace / Confirm Archive modals
 
 | Key                           | Action                              |
 | ----------------------------- | ----------------------------------- |
@@ -35,6 +35,30 @@
 | `esc`                         | Cancel                              |
 | `y` / `n`                     | Confirm/cancel on ConfirmArchive    |
 | Printable chars / `backspace` | Edit the name field on NewWorkspace |
+
+### Workspace actions card (`?` on a workspace)
+
+| Key   | Action                                                                                  |
+| ----- | --------------------------------------------------------------------------------------- |
+| `r`   | Rename the workspace (and its git branch)                                                |
+| `C`   | Pick a name color for its dashboard row                                                  |
+| `o`   | Open its setup log — see below                                                            |
+| `x`   | Cancel an in-flight setup (creates only; archive is not cancellable)                     |
+| `?` / `esc` | Close the card                                                                     |
+
+Other keys (`e`, `t`, `v`, `g`, `c`, `enter`) are forwarded to the dashboard and act on the selected workspace.
+
+### Setup log viewer (`o`)
+
+Shows the [setup script](../configuration/per-repo-setup-scripts.md)'s output for the selected workspace, whatever state it is in: the live tail while the workspace is still being created (or archived), and the persisted log from `~/.local/state/wsx/logs/` once it has finished. Stderr lines are marked `!` and highlighted. A workspace whose repo has no setup script says so rather than showing an empty pane.
+
+| Key                    | Action                    |
+| ---------------------- | ------------------------- |
+| `Up` / `Down` (`k`/`j`)| Scroll one line           |
+| `PageUp` / `PageDown`  | Scroll ten lines          |
+| `g` / `Home`           | Jump to the start of the log |
+| `G` / `End`            | Jump back to the end      |
+| `esc` / `enter`        | Close (background work keeps running) |
 
 ### Attached workspace
 

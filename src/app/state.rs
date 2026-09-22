@@ -165,6 +165,49 @@ impl App {
         true
     }
 
+    /// The persisted setup log for `ws_id`, newest-last. Empty when there is
+    /// none — either the workspace is gone, its repo has no setup script (so
+    /// nothing was ever written), or it predates log persistence.
+    pub fn stored_setup_log(&self, ws_id: WorkspaceId) -> Vec<String> {
+        let Some((repo_id, ws)) = self.workspaces.iter().find(|(_, w)| w.id == ws_id) else {
+            return Vec::new();
+        };
+        let Some(repo) = self.repos.iter().find(|r| r.id == *repo_id) else {
+            return Vec::new();
+        };
+        crate::data::setup_log::read(
+            &crate::config::Dirs::discover().log_dir(),
+            &repo.name,
+            &ws.name,
+        )
+        .unwrap_or_default()
+    }
+
+    /// Hand an open setup-log viewer its persisted source once the live work
+    /// it was tailing ends. The ring buffer it reads while a create runs is
+    /// dropped with the `in_flight` entry, so without this a viewer left open
+    /// across a finishing build would simply go blank; instead it lands on the
+    /// full log the build just wrote. Cheap: the file read happens on the one
+    /// tick where `stored` is still `None` and the entry has gone.
+    pub fn sync_setup_log_viewer(&mut self) {
+        let Some(Modal::SetupLog {
+            workspace_id,
+            stored: None,
+            ..
+        }) = &self.modal
+        else {
+            return;
+        };
+        let ws_id = *workspace_id;
+        if self.in_flight.contains_key(&ws_id) {
+            return;
+        }
+        let lines = self.stored_setup_log(ws_id);
+        if let Some(Modal::SetupLog { stored, .. }) = &mut self.modal {
+            *stored = Some(lines);
+        }
+    }
+
     pub fn refresh(&mut self) -> Result<()> {
         self.repos = self.store.repos()?;
         // Probes only repos it hasn't seen before, so this stays free after

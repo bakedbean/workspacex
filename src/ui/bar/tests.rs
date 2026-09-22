@@ -268,6 +268,16 @@ mod footer_tests {
         width: u16,
         fleet: &crate::ui::bar::segment::SegmentMap,
     ) -> Rendered {
+        footer_with_setup_log(selected, false, label, width, fleet)
+    }
+
+    fn footer_with_setup_log(
+        selected: bool,
+        setup_log_available: bool,
+        label: &str,
+        width: u16,
+        fleet: &crate::ui::bar::segment::SegmentMap,
+    ) -> Rendered {
         let theme = Theme::wsx();
         let specs = bundled_default(&theme);
         let activity: Vec<u32> = (0..24).collect();
@@ -279,10 +289,29 @@ mod footer_tests {
                 version: "0.1.0",
                 window_label: label,
                 workspace_selected: selected,
+                setup_log_available,
                 fleet,
             },
             width,
         )
+    }
+
+    /// A `⚙!` badge is two cells with nowhere to say what to press, so the
+    /// footer carries the route to the log while such a workspace is
+    /// selected — and stays out of the way otherwise.
+    #[test]
+    fn setup_log_hint_appears_only_for_a_badged_selection() {
+        let with = plain(
+            &footer_with_setup_log(true, true, "24h", 120, crate::ui::bar::fleet::empty()).line,
+        );
+        assert!(with.contains("? o  setup log"), "{with:?}");
+        assert!(
+            with.contains("?  actions"),
+            "the hint is additional, not a replacement: {with:?}"
+        );
+
+        let without = plain(&footer(true, "24h", 120, crate::ui::bar::fleet::empty()).line);
+        assert!(!without.contains("setup log"), "{without:?}");
     }
 
     #[test]
@@ -365,6 +394,7 @@ mod footer_tests {
                 version: "0.1.0",
                 window_label: "24h",
                 workspace_selected: false,
+                setup_log_available: false,
                 fleet: crate::ui::bar::fleet::empty(),
             },
             120,
@@ -417,6 +447,7 @@ mod footer_tests {
                 version: "0.1.0",
                 window_label: "24h",
                 workspace_selected: false,
+                setup_log_available: false,
                 fleet: &fleet,
             },
             140,
@@ -444,6 +475,7 @@ mod footer_tests {
                 version: "0.1.0",
                 window_label: "24h",
                 workspace_selected: false,
+                setup_log_available: false,
                 fleet: crate::ui::bar::fleet::empty(),
             },
             140,
@@ -526,6 +558,7 @@ mod footer_tests {
             version: "0.1.0",
             window_label: "24h",
             workspace_selected: false,
+            setup_log_available: false,
             fleet: &fleet,
         };
         let wide = plain(&dashboard_footer(&specs, &theme, &inputs, 120).line);
@@ -2292,6 +2325,7 @@ mod example_theme_tests {
                     version: "0.1.0",
                     window_label: "24h",
                     workspace_selected: true,
+                    setup_log_available: false,
                     fleet: crate::ui::bar::fleet::empty(),
                 },
                 120,
@@ -2488,6 +2522,7 @@ mod module_tests {
                 version: "0.1.0",
                 window_label: "24h",
                 workspace_selected: false,
+                setup_log_available: false,
                 fleet: &fleet(3, 0),
             },
             80,
@@ -2531,6 +2566,7 @@ mod module_tests {
                 version: "0.1.0",
                 window_label: "24h",
                 workspace_selected: false,
+                setup_log_available: false,
                 fleet: &fleet,
             },
             100,
@@ -2562,6 +2598,7 @@ mod module_tests {
                         version: "0.1.0",
                         window_label: "24h",
                         workspace_selected: false,
+                        setup_log_available: false,
                         fleet,
                     },
                     100,
@@ -2607,6 +2644,7 @@ mod module_tests {
                 version: "0.1.0",
                 window_label: "24h",
                 workspace_selected: false,
+                setup_log_available: false,
                 fleet: &fleet,
             },
             100,
@@ -2711,6 +2749,7 @@ mod module_tests {
                         version: "0.1.0",
                         window_label: "24h",
                         workspace_selected: false,
+                        setup_log_available: false,
                         fleet: &f,
                     },
                     w,

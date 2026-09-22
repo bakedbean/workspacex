@@ -27,7 +27,7 @@
 | `q` / `p` (when digest focused)   | Close the digest (`q` only closes it while the digest is focused — dashboard-focused `q` quits wsx)          |
 | `r` (when digest visible)         | Force a git/PR cache refresh                                                                                 |
 
-### New Workspace / Confirm Archive / Setup Running modals
+### New Workspace / Confirm Archive modals
 
 | Key                           | Action                              |
 | ----------------------------- | ----------------------------------- |
@@ -35,6 +35,34 @@
 | `esc`                         | Cancel                              |
 | `y` / `n`                     | Confirm/cancel on ConfirmArchive    |
 | Printable chars / `backspace` | Edit the name field on NewWorkspace |
+
+### Workspace actions card (`?` on a workspace)
+
+| Key   | Action                                                                                  |
+| ----- | --------------------------------------------------------------------------------------- |
+| `r`   | Rename the workspace (and its git branch)                                                |
+| `C`   | Pick a name color for its dashboard row                                                  |
+| `o`   | Open its setup log — see below                                                            |
+| `x`   | Cancel an in-flight setup (creates only; archive is not cancellable)                     |
+| `?` / `esc` | Close the card                                                                     |
+
+Other keys (`e`, `t`, `v`, `g`, `c`, `enter`) are forwarded to the dashboard and act on the selected workspace.
+
+### Setup log viewer (`o`)
+
+Whenever the selected workspace carries a lifecycle badge — `⚙!` (setup failed), `⚙?` (setup cancelled), or a spinner (being created or archived) — the footer shows a `? o  setup log` hint, since the badge itself has no room to say where the reason lives.
+
+The viewer shows the [setup script](../configuration/per-repo-setup-scripts.md)'s output for the selected workspace, whatever state it is in: the live tail while the workspace is still being created, and the persisted log from `~/.local/state/wsx/logs/` once it has finished. Stderr lines are marked `!` and highlighted in both. Only the last 256 KiB of a log is read, and at most 2000 lines are shown, so a very verbose setup script loses the start of its output — the end, which says how the run finished, is always kept.
+
+A workspace with no log to show says which case it is rather than showing an empty pane: no setup script was ever run, the file could not be read (with the path and the error), or — while archiving — that archive output is not kept at all.
+
+| Key                    | Action                    |
+| ---------------------- | ------------------------- |
+| `Up` / `Down` (`k`/`j`)| Scroll one line           |
+| `PageUp` / `PageDown`  | Scroll ten lines          |
+| `g` / `Home`           | Jump to the start of the log |
+| `G` / `End`            | Jump back to the end      |
+| `esc` / `enter`        | Close (background work keeps running) |
 
 ### Attached workspace
 

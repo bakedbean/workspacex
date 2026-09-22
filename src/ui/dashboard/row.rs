@@ -133,6 +133,15 @@ impl LifecycleBadge {
         }
     }
 
+    /// Whether this badge points at a setup log the user can open (`?` then
+    /// `o`). The two setup outcomes obviously do — the log is where the
+    /// reason lives — and so do the in-flight spinners, whose viewer tails
+    /// the run as it happens. `NoWorktree` does not: a failed fetch or
+    /// checkout never reached the setup phase, so no log was ever written.
+    pub fn offers_setup_log(self) -> bool {
+        !matches!(self, LifecycleBadge::NoWorktree)
+    }
+
     /// Foreground for the badge. Provisioning spins in the theme's `ok`
     /// green (something is being added); archiving spins in `err` red
     /// (something is being removed) — the same additive/destructive pairing
@@ -856,6 +865,22 @@ mod tests {
             gutter.style.fg,
             Some(theme.status_style(inputs.status).fg.unwrap()),
             "gutter keeps the status color even when selected"
+        );
+    }
+
+    #[test]
+    fn only_a_badge_with_a_log_behind_it_offers_one() {
+        for b in [
+            LifecycleBadge::Provisioning,
+            LifecycleBadge::Archiving,
+            LifecycleBadge::SetupFailed,
+            LifecycleBadge::SetupCancelled,
+        ] {
+            assert!(b.offers_setup_log(), "{b:?} has a log to show");
+        }
+        assert!(
+            !LifecycleBadge::NoWorktree.offers_setup_log(),
+            "a worktree that was never created never ran setup"
         );
     }
 

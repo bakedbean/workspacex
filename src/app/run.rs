@@ -242,6 +242,11 @@ pub async fn run<B: Backend + std::io::Write>(
                 dirty = true;
                 let mut g = app.lock().await;
                 g.tick = g.tick.wrapping_add(1);
+                // An open setup-log viewer switches from the live tail to the
+                // persisted log the moment the work it was watching ends, so
+                // a user who opened it mid-build keeps reading rather than
+                // watching the panel go blank.
+                g.sync_setup_log_viewer();
                 // Expire any ephemeral chip-dispatch echo in the reply
                 // input. Set by `fire_chip` so the user briefly sees
                 // which command was sent; wiped here once the deadline

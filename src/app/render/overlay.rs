@@ -7,6 +7,15 @@ use crate::app::{ActivityState, App};
 /// The active modal, if any.
 pub(super) fn draw_modal(f: &mut ratatui::Frame, app: &mut App, area: ratatui::layout::Rect) {
     use crate::ui::modal;
+    // The setup-log viewer is handled before the borrow of `app.modal` below,
+    // because its renderer clamps `scroll` against the body height it just
+    // laid out and we store that clamp back. Without it, holding Up past the
+    // top of a short log would run the counter away and the first several
+    // Downs would look like no-ops.
+    if matches!(app.modal, Some(modal::Modal::SetupLog { .. })) {
+        draw_setup_log(f, app, area);
+        return;
+    }
     let Some(m) = &app.modal else {
         return;
     };
@@ -85,7 +94,49 @@ pub(super) fn draw_modal(f: &mut ratatui::Frame, app: &mut App, area: ratatui::l
             let tags = crate::commands::tags::load(&app.store).unwrap_or_default();
             crate::ui::modal::render_prompt_tag(f, area, modal, &tags, &app.theme);
         }
-        other => modal::render(f, area, other, &app.in_flight, app.tick, &app.theme),
+        other => modal::render(f, area, other, &app.theme),
+    }
+}
+
+/// Draw `Modal::SetupLog` and write the renderer's clamped scroll back onto
+/// the modal. Split out so the immutable borrow of `app` ends before that
+/// write.
+fn draw_setup_log(f: &mut ratatui::Frame, app: &mut App, area: ratatui::layout::Rect) {
+    let clamped = {
+        let Some(crate::ui::modal::Modal::SetupLog {
+            workspace_id,
+            stored,
+            scroll,
+            ..
+        }) = &app.modal
+        else {
+            return;
+        };
+        let label = app
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == *workspace_id)
+            .map(|(repo_id, w)| {
+                let repo = app
+                    .repos
+                    .iter()
+                    .find(|r| r.id == *repo_id)
+                    .map(|r| r.name.as_str())
+                    .unwrap_or("?");
+                format!("{repo}/{}", w.name)
+            })
+            .unwrap_or_default();
+        let view = crate::ui::modal::SetupLogView {
+            label: &label,
+            live: app.in_flight.get(workspace_id),
+            stored: stored.as_ref(),
+            scroll: *scroll,
+            tick: app.tick,
+        };
+        crate::ui::modal::render_setup_log(f, area, &view, &app.theme)
+    };
+    if let Some(crate::ui::modal::Modal::SetupLog { scroll, .. }) = &mut app.modal {
+        *scroll = clamped;
     }
 }
 

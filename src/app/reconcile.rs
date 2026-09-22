@@ -12,7 +12,7 @@ use super::*;
 /// A blanket removal here could delete a different, still-running create's
 /// entry. There is no modal bookkeeping either: a failed create is carried
 /// by the row badge (not the transient error modal this replaced), and
-/// `Modal::SetupProgress` is a viewer the user may already have closed, so
+/// `Modal::SetupLog` is a viewer the user may already have closed, so
 /// it is never touched here — EXCEPT for the `Err(_)` backstop below.
 /// Regardless of outcome, `refresh()` runs so the dashboard reflects any
 /// state written to the store.

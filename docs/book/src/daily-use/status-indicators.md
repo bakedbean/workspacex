@@ -4,7 +4,7 @@
 | `↻`                    | Resumable — a prior claude session exists for this worktree; attach to continue |
 | `○`                    | No session ever started here                                                    |
 | `✕`                    | Workspace state is `Failed` (worktree creation didn't succeed)                  |
-| `[setup-failed]` badge | Setup script exited non-zero; workspace is otherwise usable                     |
+| `[setup-failed]` badge | Setup script exited non-zero; workspace is otherwise usable (`?` then `o` shows the log) |
 
 Activity column for running sessions:
 

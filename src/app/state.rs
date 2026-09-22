@@ -19,8 +19,20 @@ impl App {
         crate::ui::detail_modules::register_builtins(&mut registry);
         let mut dashboard = DashboardState::default();
         dashboard.load_ordering_prefs(&store);
+        // Several tests construct an `App` only incidentally and then create
+        // a workspace through it, which writes a setup log. Defaulting those
+        // to the real `Dirs::log_dir()` puts `cargo test` in the developer's
+        // own `~/.local/state/wsx/logs`; a scratch path makes "tests never
+        // touch real state" true by construction. Tests that assert on log
+        // contents set `log_dir` to a `TempDir` explicitly.
+        let log_dir = if cfg!(test) {
+            std::env::temp_dir().join("wsx-test-logs")
+        } else {
+            crate::config::Dirs::discover().log_dir()
+        };
         let mut app = Self {
             store,
+            log_dir,
             sessions: SessionManager::new(),
             resize_debounce: Default::default(),
             frame_size: None,
@@ -163,6 +175,73 @@ impl App {
         }
         self.last_data_version = v;
         true
+    }
+
+    /// The persisted setup log for `ws_id`, newest-last, or why there isn't
+    /// one. A read failure that is NOT "no such file" is reported as such
+    /// rather than as an absent log: telling someone their repo has no setup
+    /// script when the real problem is a permission error sends them looking
+    /// in the wrong place entirely.
+    pub fn stored_setup_log(&self, ws_id: WorkspaceId) -> crate::ui::modal::StoredLog {
+        use crate::ui::modal::StoredLog;
+        let Some((repo_id, ws)) = self.workspaces.iter().find(|(_, w)| w.id == ws_id) else {
+            return StoredLog::Missing {
+                path: String::new(),
+            };
+        };
+        let Some(repo) = self.repos.iter().find(|r| r.id == *repo_id) else {
+            return StoredLog::Missing {
+                path: String::new(),
+            };
+        };
+        let path = crate::data::setup_log::setup_log_path(&self.log_dir, &repo.name, &ws.name);
+        match crate::data::setup_log::read(&self.log_dir, &repo.name, &ws.name) {
+            Ok(lines) => StoredLog::Lines(lines),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => StoredLog::Missing {
+                path: path.display().to_string(),
+            },
+            Err(e) => StoredLog::Unreadable {
+                path: path.display().to_string(),
+                error: e.to_string(),
+            },
+        }
+    }
+
+    /// Hand an open setup-log viewer its persisted source once the live work
+    /// it was tailing ends. The ring buffer it reads while a create runs is
+    /// dropped with the `in_flight` entry, so without this a viewer left open
+    /// across a finishing build would simply go blank; instead it lands on the
+    /// full log the build just wrote. Cheap: the file read happens on the one
+    /// tick where `stored` is still `None` and the entry has gone.
+    pub fn sync_setup_log_viewer(&mut self) {
+        use crate::data::in_flight::InFlightKind;
+        let Some(Modal::SetupLog {
+            workspace_id,
+            stored: None,
+            live_kind,
+            ..
+        }) = &self.modal
+        else {
+            return;
+        };
+        let ws_id = *workspace_id;
+        let was_archive = *live_kind == Some(InFlightKind::Archive);
+        if self.in_flight.contains_key(&ws_id) {
+            return;
+        }
+        // An archive has no persisted output to fall back to, and the
+        // workspace's SETUP log is emphatically not a substitute: it could
+        // well end `=== OK ===` from a build that happened days ago, which
+        // reads as though the archive had succeeded. Say what actually
+        // happened instead.
+        let resolved = if was_archive {
+            crate::ui::modal::StoredLog::ArchiveFinished
+        } else {
+            self.stored_setup_log(ws_id)
+        };
+        if let Some(Modal::SetupLog { stored, .. }) = &mut self.modal {
+            *stored = Some(resolved);
+        }
     }
 
     pub fn refresh(&mut self) -> Result<()> {
@@ -406,6 +485,11 @@ impl App {
 
 pub struct App {
     pub store: Store,
+    /// Where per-workspace setup logs live (`Dirs::log_dir()`), resolved once
+    /// at construction. Held rather than re-discovered at each use so the
+    /// render and tick paths do no environment lookup, and so a test `App`
+    /// can be pointed at a temp directory instead of the real one.
+    pub log_dir: PathBuf,
     pub sessions: SessionManager,
     /// Coalesces terminal-resize events so backgrounded sessions are resized
     /// once the resize settles. See `crate::app::resize_sync`.

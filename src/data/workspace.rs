@@ -678,6 +678,15 @@ pub async fn rename(store: &Store, repo: &Repo, ws: &Workspace, new_name: &str) 
     git::rename_branch(&repo.path, &ws.branch, &new_branch).await?;
     store.rename_workspace(ws.id, new_name)?;
     store.set_workspace_branch(ws.id, &new_branch)?;
+    // The setup log is addressed by workspace name, so it has to follow the
+    // rename or the log viewer loses it. Best-effort and last: a log that
+    // cannot be moved is not worth failing an otherwise complete rename over.
+    crate::data::setup_log::rename(
+        &crate::config::Dirs::discover().log_dir(),
+        &repo.name,
+        &ws.name,
+        new_name,
+    );
     Ok(())
 }
 

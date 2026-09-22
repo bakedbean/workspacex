@@ -91,6 +91,45 @@ pub fn write_footer(w: &mut impl Write, result: &SetupResult) -> io::Result<()> 
     }
 }
 
+/// Max lines handed back by `read`. A runaway setup script can produce a log
+/// far larger than anyone will scroll through, and the viewer only ever shows
+/// the end of it, so the head is dropped rather than held in memory.
+pub const READ_CAP: usize = 2000;
+
+/// Read a workspace's persisted setup log, newest-last, for the TUI viewer.
+///
+/// `None` means there is no log on disk — either the repo has no setup script
+/// (nothing is ever written in that case, see `workspace::run_setup_logged`)
+/// or the workspace predates log persistence. That is a normal state, not an
+/// error, so an unreadable file is reported the same way. At most `READ_CAP`
+/// lines are returned; the oldest are dropped first.
+pub fn read(log_dir: &Path, repo: &str, name: &str) -> Option<Vec<String>> {
+    let body = std::fs::read_to_string(setup_log_path(log_dir, repo, name)).ok()?;
+    let mut lines: Vec<String> = body.lines().map(|l| l.trim_end().to_string()).collect();
+    // Written with a trailing newline, so the split leaves one empty tail.
+    if lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+    if lines.len() > READ_CAP {
+        lines.drain(..lines.len() - READ_CAP);
+    }
+    Some(lines)
+}
+
+/// Move a workspace's log to its new name. The log path is derived from the
+/// workspace name, so without this a rename would orphan the file and `o` on
+/// the dashboard would report "no setup log" for a workspace that has one.
+/// Best-effort like the rest of this module: a missing or unmovable log is
+/// silently left alone rather than failing the rename.
+pub fn rename(log_dir: &Path, repo: &str, old_name: &str, new_name: &str) {
+    let from = setup_log_path(log_dir, repo, old_name);
+    let to = setup_log_path(log_dir, repo, new_name);
+    if from == to || !from.exists() {
+        return;
+    }
+    let _ = std::fs::rename(&from, &to);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +209,77 @@ mod tests {
             !body.contains("FIRST-RUN-MARKER"),
             "second run should truncate, got: {body}"
         );
+    }
+
+    #[test]
+    fn read_returns_none_when_no_log_was_ever_written() {
+        let logs = TempDir::new().unwrap();
+        assert!(read(logs.path(), "myrepo", "never-ran").is_none());
+    }
+
+    #[test]
+    fn read_returns_header_body_and_footer_without_a_trailing_blank() {
+        let logs = TempDir::new().unwrap();
+        let mut w = create(logs.path(), "myrepo", "foo", Path::new("/wt/foo"), 1).unwrap();
+        write_line(&mut w, &SetupLine::Stdout("building".into())).unwrap();
+        write_line(&mut w, &SetupLine::Stderr("warning".into())).unwrap();
+        write_footer(&mut w, &SetupResult::Failed { exit_code: 2 }).unwrap();
+        drop(w);
+
+        let lines = read(logs.path(), "myrepo", "foo").expect("log should be readable");
+        assert_eq!(lines[0], "=== setup: myrepo/foo ===");
+        assert!(lines.contains(&"building".to_string()), "{lines:?}");
+        assert!(
+            lines.contains(&"! warning".to_string()),
+            "stderr keeps its marker: {lines:?}"
+        );
+        assert_eq!(
+            lines.last().unwrap(),
+            "=== FAILED (exit 2) ===",
+            "the footer must be the last line, not a blank: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn read_keeps_the_newest_lines_when_over_the_cap() {
+        let logs = TempDir::new().unwrap();
+        let mut w = create(logs.path(), "myrepo", "noisy", Path::new("/wt/noisy"), 1).unwrap();
+        for i in 0..(READ_CAP + 50) {
+            write_line(&mut w, &SetupLine::Stdout(format!("line {i}"))).unwrap();
+        }
+        drop(w);
+
+        let lines = read(logs.path(), "myrepo", "noisy").unwrap();
+        assert_eq!(lines.len(), READ_CAP);
+        assert_eq!(
+            lines.last().unwrap(),
+            &format!("line {}", READ_CAP + 49),
+            "the tail is what the viewer needs"
+        );
+        assert!(
+            !lines.contains(&"=== setup: myrepo/noisy ===".to_string()),
+            "the header is old enough to be dropped once the cap is hit"
+        );
+    }
+
+    #[test]
+    fn rename_moves_the_log_to_the_new_name() {
+        let logs = TempDir::new().unwrap();
+        let mut w = create(logs.path(), "myrepo", "old", Path::new("/wt/old"), 1).unwrap();
+        write_line(&mut w, &SetupLine::Stdout("kept".into())).unwrap();
+        drop(w);
+
+        rename(logs.path(), "myrepo", "old", "new");
+
+        assert!(read(logs.path(), "myrepo", "old").is_none());
+        let lines = read(logs.path(), "myrepo", "new").expect("log should follow the rename");
+        assert!(lines.contains(&"kept".to_string()), "{lines:?}");
+    }
+
+    #[test]
+    fn rename_is_a_noop_without_a_log() {
+        let logs = TempDir::new().unwrap();
+        rename(logs.path(), "myrepo", "old", "new");
+        assert!(read(logs.path(), "myrepo", "new").is_none());
     }
 }

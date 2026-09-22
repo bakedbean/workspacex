@@ -227,7 +227,10 @@ pub async fn create_with_app(
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<CreatedWorkspace> {
     // --- Phase 1 (short, locked): compute names/paths, no I/O. ---
-    let (final_name, branch, worktree_path) = {
+    // `log_dir` comes off the App rather than from `Dirs::discover()` at the
+    // point of use, so a test App pointed at a temp directory does not write
+    // setup logs into the developer's own `~/.local/state/wsx/logs`.
+    let (final_name, branch, worktree_path, log_dir) = {
         let g = app.lock().await;
         let resolved_name = match name.as_deref() {
             Some(s) if !s.trim().is_empty() => s.trim().to_string(),
@@ -236,7 +239,7 @@ pub async fn create_with_app(
         let prefix = crate::data::repo::resolve_branch_prefix(&repo, &g.store)?;
         let branch = compose_branch(&prefix, &resolved_name);
         let worktree_path = worktree_base.join(&repo.name).join(&resolved_name);
-        (resolved_name, branch, worktree_path)
+        (resolved_name, branch, worktree_path, g.log_dir.clone())
     };
     let base = repo
         .base_branch
@@ -345,7 +348,6 @@ pub async fn create_with_app(
             let g = app.lock().await;
             g.store.set_setup_status(id, SetupStatus::Running)?;
         }
-        let log_dir = crate::config::Dirs::discover().log_dir();
         let setup_result = run_setup_logged(
             repo.setup_script.as_deref(),
             &repo.path,
@@ -668,7 +670,19 @@ pub fn normalize_slug(text: &str) -> Option<String> {
 
 /// Rename a workspace's name AND its git branch. Idempotent.
 /// Caller is responsible for refreshing App state after.
-pub async fn rename(store: &Store, repo: &Repo, ws: &Workspace, new_name: &str) -> Result<()> {
+///
+/// `log_dir` is taken as a parameter rather than read from
+/// `Dirs::discover()` here: the setup log moves with the workspace, and a
+/// function that resolves the real user's state directory internally turns
+/// every `rename` test into one that mutates `~/.local/state/wsx/logs`.
+/// Callers pass `Dirs::discover().log_dir()`; tests pass a temp dir.
+pub async fn rename(
+    store: &Store,
+    repo: &Repo,
+    ws: &Workspace,
+    new_name: &str,
+    log_dir: &Path,
+) -> Result<()> {
     if new_name == ws.name {
         return Ok(());
     }
@@ -681,12 +695,7 @@ pub async fn rename(store: &Store, repo: &Repo, ws: &Workspace, new_name: &str) 
     // The setup log is addressed by workspace name, so it has to follow the
     // rename or the log viewer loses it. Best-effort and last: a log that
     // cannot be moved is not worth failing an otherwise complete rename over.
-    crate::data::setup_log::rename(
-        &crate::config::Dirs::discover().log_dir(),
-        &repo.name,
-        &ws.name,
-        new_name,
-    );
+    crate::data::setup_log::rename(log_dir, &repo.name, &ws.name, new_name);
     Ok(())
 }
 
@@ -1266,7 +1275,11 @@ mod tests {
         .await
         .unwrap();
 
-        rename(&store, &repo, &created.workspace, "fix-bug")
+        // A temp log dir, never the real one: this test renames repo `demo`'s
+        // workspace `alpha`, and against `Dirs::discover()` that would move
+        // the developer's own `~/.local/state/wsx/logs/setup-demo-alpha.log`.
+        let logs = TempDir::new().unwrap();
+        rename(&store, &repo, &created.workspace, "fix-bug", logs.path())
             .await
             .unwrap();
 

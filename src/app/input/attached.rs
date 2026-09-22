@@ -205,7 +205,11 @@ pub(in crate::app::input) async fn handle_key_attached(
                                 if let Some(repo) = repo {
                                     // Fire-and-forget: rename failure shouldn't disrupt the keystroke.
                                     let _ = crate::data::workspace::rename(
-                                        &app.store, &repo, &ws, &slug,
+                                        &app.store,
+                                        &repo,
+                                        &ws,
+                                        &slug,
+                                        &app.log_dir,
                                     )
                                     .await;
                                     app.refresh()?;

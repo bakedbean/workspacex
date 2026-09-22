@@ -12,12 +12,17 @@ use crate::data::store::{NewWorkspace, Store};
 use crate::ui::modal::Modal;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::PathBuf;
+use tempfile::TempDir;
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
-fn app_with_workspace() -> (App, crate::data::store::WorkspaceId) {
+/// An App whose `log_dir` is a temp directory. The returned `TempDir` must
+/// be held for the life of the test: dropping it deletes the logs, and
+/// letting `App::new`'s real `Dirs::discover()` value stand would point
+/// these tests at the developer's own `~/.local/state/wsx/logs`.
+fn app_with_workspace() -> (App, crate::data::store::WorkspaceId, TempDir) {
     let store = Store::open_in_memory().unwrap();
     let repo_id = store
         .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -33,18 +38,38 @@ fn app_with_workspace() -> (App, crate::data::store::WorkspaceId) {
             shared: false,
         })
         .unwrap();
+    let logs = TempDir::new().unwrap();
     let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    app.log_dir = logs.path().to_path_buf();
     app.refresh().unwrap();
     app.selectable = vec![SelectionTarget::Workspace(ws_id)];
     app.select_index(0);
-    (app, ws_id)
+    (app, ws_id, logs)
+}
+
+/// Write a finished setup log for repo `repo`, workspace `alpha`.
+fn seed_log(logs: &TempDir, body: &str) {
+    let mut w = crate::data::setup_log::create(
+        logs.path(),
+        "repo",
+        "alpha",
+        std::path::Path::new("/wt/alpha"),
+        1,
+    )
+    .unwrap();
+    crate::data::setup_log::write_line(
+        &mut w,
+        &crate::data::setup::SetupLine::Stdout(body.to_string()),
+    )
+    .unwrap();
+    crate::data::setup_log::write_footer(&mut w, &crate::data::setup::SetupResult::Ok).unwrap();
 }
 
 /// The regression this change is about: nothing in flight, `o` must still
 /// open the viewer rather than silently doing nothing.
 #[tokio::test]
 async fn o_opens_the_viewer_for_a_workspace_with_nothing_in_flight() {
-    let (mut app, ws_id) = app_with_workspace();
+    let (mut app, ws_id, _logs) = app_with_workspace();
     app.modal = Some(Modal::WorkspaceActions);
     handle_key_modal(&mut app, &shared_app(), key(KeyCode::Char('o')))
         .await
@@ -70,7 +95,7 @@ async fn o_opens_the_viewer_for_a_workspace_with_nothing_in_flight() {
 /// stays `None` — the log file is still buffered and would read back empty.
 #[tokio::test]
 async fn o_tails_live_work_rather_than_the_file() {
-    let (mut app, ws_id) = app_with_workspace();
+    let (mut app, ws_id, _logs) = app_with_workspace();
     app.in_flight.insert(
         ws_id,
         InFlight::create(
@@ -94,7 +119,8 @@ async fn o_tails_live_work_rather_than_the_file() {
 /// `in_flight` entry.
 #[test]
 fn viewer_switches_to_the_persisted_log_when_the_work_ends() {
-    let (mut app, ws_id) = app_with_workspace();
+    let (mut app, ws_id, logs) = app_with_workspace();
+    seed_log(&logs, "compiled 41 crates");
     app.in_flight.insert(
         ws_id,
         InFlight::create(
@@ -117,22 +143,43 @@ fn viewer_switches_to_the_persisted_log_when_the_work_ends() {
 
     app.in_flight.remove(&ws_id);
     app.sync_setup_log_viewer();
+    let Some(Modal::SetupLog {
+        stored: Some(lines),
+        ..
+    }) = &app.modal
+    else {
+        panic!(
+            "expected the persisted log to take over, got {:?}",
+            app.modal
+        );
+    };
     assert!(
-        matches!(
-            &app.modal,
-            Some(Modal::SetupLog {
-                stored: Some(_),
-                ..
-            })
-        ),
-        "expected the persisted log to take over, got {:?}",
+        lines.contains(&"compiled 41 crates".to_string()),
+        "the real file's contents should be on screen: {lines:?}"
+    );
+
+    // The read is one-shot. `sync_setup_log_viewer` runs on every tick, so if
+    // a loaded viewer did not short-circuit it would re-read the file ~30
+    // times a second under the App lock. Deleting the log and ticking again
+    // must leave what is already loaded untouched.
+    std::fs::remove_file(crate::data::setup_log::setup_log_path(
+        logs.path(),
+        "repo",
+        "alpha",
+    ))
+    .unwrap();
+    app.sync_setup_log_viewer();
+    assert!(
+        matches!(&app.modal, Some(Modal::SetupLog { stored: Some(l), .. })
+            if l.contains(&"compiled 41 crates".to_string())),
+        "a loaded viewer must not re-read on every tick: {:?}",
         app.modal
     );
 }
 
 #[tokio::test]
 async fn scroll_keys_move_the_window_and_esc_closes() {
-    let (mut app, ws_id) = app_with_workspace();
+    let (mut app, ws_id, _logs) = app_with_workspace();
     app.modal = Some(Modal::SetupLog {
         workspace_id: ws_id,
         stored: Some((0..50).map(|i| format!("line {i}")).collect()),
@@ -197,7 +244,7 @@ async fn scroll_keys_move_the_window_and_esc_closes() {
 /// the tail in release.
 #[tokio::test]
 async fn a_scroll_burst_with_no_draw_between_keys_cannot_overflow() {
-    let (mut app, ws_id) = app_with_workspace();
+    let (mut app, ws_id, _logs) = app_with_workspace();
     app.modal = Some(Modal::SetupLog {
         workspace_id: ws_id,
         stored: Some((0..50).map(|i| format!("line {i}")).collect()),

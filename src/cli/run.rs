@@ -647,7 +647,14 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             if new_name == name {
                 println!("workspace {}/{} unchanged", r.name, name);
             } else {
-                crate::data::workspace::rename(&store, &r, &w, &new_name).await?;
+                crate::data::workspace::rename(
+                    &store,
+                    &r,
+                    &w,
+                    &new_name,
+                    &crate::config::Dirs::discover().log_dir(),
+                )
+                .await?;
                 println!(
                     "renamed workspace {}/{} to {}/{}",
                     r.name, name, r.name, new_name

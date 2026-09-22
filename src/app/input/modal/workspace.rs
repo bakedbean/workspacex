@@ -454,8 +454,14 @@ pub(super) async fn rename_workspace(
                         .and_then(|w| app.repos.iter().find(|r| r.id == w.repo_id).cloned());
                     match (ws, repo) {
                         (Some(ws), Some(repo)) if slug != ws.name => {
-                            match crate::data::workspace::rename(&app.store, &repo, &ws, &slug)
-                                .await
+                            match crate::data::workspace::rename(
+                                &app.store,
+                                &repo,
+                                &ws,
+                                &slug,
+                                &app.log_dir,
+                            )
+                            .await
                             {
                                 Ok(()) => {
                                     app.modal = None;

@@ -19,8 +19,20 @@ impl App {
         crate::ui::detail_modules::register_builtins(&mut registry);
         let mut dashboard = DashboardState::default();
         dashboard.load_ordering_prefs(&store);
+        // Several tests construct an `App` only incidentally and then create
+        // a workspace through it, which writes a setup log. Defaulting those
+        // to the real `Dirs::log_dir()` puts `cargo test` in the developer's
+        // own `~/.local/state/wsx/logs`; a scratch path makes "tests never
+        // touch real state" true by construction. Tests that assert on log
+        // contents set `log_dir` to a `TempDir` explicitly.
+        let log_dir = if cfg!(test) {
+            std::env::temp_dir().join("wsx-test-logs")
+        } else {
+            crate::config::Dirs::discover().log_dir()
+        };
         let mut app = Self {
             store,
+            log_dir,
             sessions: SessionManager::new(),
             resize_debounce: Default::default(),
             frame_size: None,
@@ -175,12 +187,7 @@ impl App {
         let Some(repo) = self.repos.iter().find(|r| r.id == *repo_id) else {
             return Vec::new();
         };
-        crate::data::setup_log::read(
-            &crate::config::Dirs::discover().log_dir(),
-            &repo.name,
-            &ws.name,
-        )
-        .unwrap_or_default()
+        crate::data::setup_log::read(&self.log_dir, &repo.name, &ws.name).unwrap_or_default()
     }
 
     /// Hand an open setup-log viewer its persisted source once the live work
@@ -449,6 +456,11 @@ impl App {
 
 pub struct App {
     pub store: Store,
+    /// Where per-workspace setup logs live (`Dirs::log_dir()`), resolved once
+    /// at construction. Held rather than re-discovered at each use so the
+    /// render and tick paths do no environment lookup, and so a test `App`
+    /// can be pointed at a temp directory instead of the real one.
+    pub log_dir: PathBuf,
     pub sessions: SessionManager,
     /// Coalesces terminal-resize events so backgrounded sessions are resized
     /// once the resize settles. See `crate::app::resize_sync`.

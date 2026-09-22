@@ -580,15 +580,12 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
             if let crate::data::setup::SetupResult::Failed { exit_code } = created.setup_result {
                 println!("warning: setup script exited with code {exit_code}");
-                println!(
-                    "setup log: {}",
-                    crate::data::setup_log::setup_log_path(
-                        &dirs.log_dir(),
-                        &r.name,
-                        &created.workspace.name,
-                    )
-                    .display()
-                );
+                // Only when one was really written: logging is best-effort, so
+                // an unwritable log directory must not be reported as a file to
+                // go and read.
+                if let Some(log) = &created.setup_log {
+                    println!("setup log: {}", log.display());
+                }
             }
             // Seed the agent LAST: `create` above already awaited the setup
             // script, and the dashboard skips workspaces whose setup hasn't

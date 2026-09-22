@@ -214,21 +214,33 @@ impl App {
     /// full log the build just wrote. Cheap: the file read happens on the one
     /// tick where `stored` is still `None` and the entry has gone.
     pub fn sync_setup_log_viewer(&mut self) {
+        use crate::data::in_flight::InFlightKind;
         let Some(Modal::SetupLog {
             workspace_id,
             stored: None,
+            live_kind,
             ..
         }) = &self.modal
         else {
             return;
         };
         let ws_id = *workspace_id;
+        let was_archive = *live_kind == Some(InFlightKind::Archive);
         if self.in_flight.contains_key(&ws_id) {
             return;
         }
-        let lines = self.stored_setup_log(ws_id);
+        // An archive has no persisted output to fall back to, and the
+        // workspace's SETUP log is emphatically not a substitute: it could
+        // well end `=== OK ===` from a build that happened days ago, which
+        // reads as though the archive had succeeded. Say what actually
+        // happened instead.
+        let resolved = if was_archive {
+            crate::ui::modal::StoredLog::ArchiveFinished
+        } else {
+            self.stored_setup_log(ws_id)
+        };
         if let Some(Modal::SetupLog { stored, .. }) = &mut self.modal {
-            *stored = Some(lines);
+            *stored = Some(resolved);
         }
     }
 

@@ -79,6 +79,7 @@ async fn o_opens_the_viewer_for_a_workspace_with_nothing_in_flight() {
             workspace_id,
             stored,
             scroll,
+            ..
         }) => {
             assert_eq!(*workspace_id, ws_id);
             assert!(
@@ -131,6 +132,7 @@ fn viewer_switches_to_the_persisted_log_when_the_work_ends() {
     app.modal = Some(Modal::SetupLog {
         workspace_id: ws_id,
         stored: None,
+        live_kind: Some(crate::data::in_flight::InFlightKind::Create),
         scroll: 0,
     });
 
@@ -177,6 +179,44 @@ fn viewer_switches_to_the_persisted_log_when_the_work_ends() {
     );
 }
 
+/// An archive that finishes must NOT fall back to the workspace's setup log.
+/// `archive_with_app` persists nothing, so the fallback would show a stale
+/// build — quite possibly ending `=== OK ===` — which reads as "the archive
+/// succeeded" whether or not it did.
+#[test]
+fn a_finished_archive_does_not_fall_back_to_the_setup_log() {
+    let (mut app, ws_id, logs) = app_with_workspace();
+    seed_log(&logs, "this is a BUILD log, not an archive log");
+    app.in_flight.insert(
+        ws_id,
+        InFlight::archive(
+            SetupProgress::shared(),
+            tokio_util::sync::CancellationToken::new(),
+        ),
+    );
+    app.modal = Some(Modal::SetupLog {
+        workspace_id: ws_id,
+        stored: None,
+        live_kind: Some(crate::data::in_flight::InFlightKind::Archive),
+        scroll: 0,
+    });
+
+    app.in_flight.remove(&ws_id);
+    app.sync_setup_log_viewer();
+
+    assert!(
+        matches!(
+            &app.modal,
+            Some(Modal::SetupLog {
+                stored: Some(StoredLog::ArchiveFinished),
+                ..
+            })
+        ),
+        "an archive must resolve to its own outcome, got {:?}",
+        app.modal
+    );
+}
+
 #[tokio::test]
 async fn scroll_keys_move_the_window_and_esc_closes() {
     let (mut app, ws_id, _logs) = app_with_workspace();
@@ -185,6 +225,7 @@ async fn scroll_keys_move_the_window_and_esc_closes() {
         stored: Some(StoredLog::Lines(
             (0..50).map(|i| format!("line {i}")).collect(),
         )),
+        live_kind: None,
         scroll: 0,
     });
     let s = shared_app();
@@ -252,6 +293,7 @@ async fn a_scroll_burst_with_no_draw_between_keys_cannot_overflow() {
         stored: Some(StoredLog::Lines(
             (0..50).map(|i| format!("line {i}")).collect(),
         )),
+        live_kind: None,
         scroll: 0,
     });
     let s = shared_app();

@@ -107,6 +107,7 @@ fn draw_setup_log(f: &mut ratatui::Frame, app: &mut App, area: ratatui::layout::
             workspace_id,
             stored,
             scroll,
+            ..
         }) = &app.modal
         else {
             return;

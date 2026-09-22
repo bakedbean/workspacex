@@ -395,14 +395,15 @@ pub(super) async fn workspace_actions(
         // otherwise, so the key means one thing in every state.
         KeyCode::Char('o') => {
             if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() {
-                let stored = if app.in_flight.contains_key(&ws_id) {
-                    None
-                } else {
-                    Some(app.stored_setup_log(ws_id))
+                let live_kind = app.in_flight.get(&ws_id).map(|f| f.kind);
+                let stored = match live_kind {
+                    Some(_) => None,
+                    None => Some(app.stored_setup_log(ws_id)),
                 };
                 app.modal = Some(Modal::SetupLog {
                     workspace_id: ws_id,
                     stored,
+                    live_kind,
                     scroll: 0,
                 });
             }

@@ -25,6 +25,12 @@ pub enum StoredLog {
     Missing { path: String },
     /// The file is there but could not be read.
     Unreadable { path: String, error: String },
+    /// An archive this viewer was tailing has finished. Archive output is
+    /// never persisted (`archive_with_app` discards the script's output and
+    /// only pushes step labels), so there is no file to fall back to — and
+    /// the workspace's SETUP log is not it: showing a stale `=== OK ===`
+    /// from an unrelated build would read as "the archive succeeded".
+    ArchiveFinished,
 }
 
 impl StoredLog {
@@ -128,6 +134,12 @@ pub fn render_setup_log(f: &mut Frame, area: Rect, view: &SetupLogView, theme: &
             // A live entry that has not printed anything yet, rather than a
             // log that does not exist.
             (Some(_), _) => ("(waiting for output…)".to_string(), theme.dim_style()),
+            (None, Some(StoredLog::ArchiveFinished)) => (
+                "(archive finished)\n\nArchive output is not kept. The dashboard row is \
+                 gone if it succeeded, and still there if it did not."
+                    .to_string(),
+                theme.dim_style(),
+            ),
             (None, Some(StoredLog::Unreadable { path, error })) => (
                 format!("(setup log could not be read)\n\n{error}\n\n{path}"),
                 theme.err_style(),
@@ -370,6 +382,16 @@ mod tests {
         assert!(
             !text.contains("no setup script"),
             "must not blame a missing script for a read failure:\n{text}"
+        );
+    }
+
+    #[test]
+    fn a_finished_archive_says_so_rather_than_showing_a_build() {
+        let (text, _) = render_to_text(&view(None, Some(&StoredLog::ArchiveFinished), 0), 24);
+        assert!(text.contains("(archive finished)"), "{text}");
+        assert!(
+            !text.contains("no setup script"),
+            "an archive is not a missing setup log:\n{text}"
         );
     }
 

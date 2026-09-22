@@ -74,6 +74,10 @@ pub enum Modal {
         /// means the live `in_flight` tail is what's on screen — the file is
         /// still buffered mid-run and would read back empty.
         stored: Option<StoredLog>,
+        /// The kind of live work this viewer opened onto, if any. Needed at
+        /// handover: once the `in_flight` entry is gone its kind is gone with
+        /// it, and only a CREATE has a persisted log to fall back to.
+        live_kind: Option<crate::data::in_flight::InFlightKind>,
         /// Lines scrolled up from the end of the log; 0 follows the tail.
         /// Clamped by the renderer against the body height it lays out, and
         /// written back so Up/Down always move what the user can see.

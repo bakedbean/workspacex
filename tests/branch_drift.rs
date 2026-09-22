@@ -38,6 +38,7 @@ async fn branch_rename_propagates_to_store() {
         .find(|r| r.id == repo_id)
         .unwrap();
     let base = TempDir::new().unwrap();
+    let log_dir_tmp = tempfile::TempDir::new().unwrap();
     let created = wsx::data::workspace::create(
         &store,
         &repo,
@@ -46,6 +47,7 @@ async fn branch_rename_propagates_to_store() {
         false,
         false,
         wsx::pty::session::AgentKind::Claude,
+        log_dir_tmp.path(),
         tokio_util::sync::CancellationToken::new(),
         |_| {},
     )
@@ -172,6 +174,7 @@ async fn drift_does_not_repoll_pr_for_the_superseded_branch() {
         .find(|r| r.id == repo_id)
         .unwrap();
     let base = TempDir::new().unwrap();
+    let log_dir_tmp = tempfile::TempDir::new().unwrap();
     let created = wsx::data::workspace::create(
         &store,
         &repo,
@@ -180,6 +183,7 @@ async fn drift_does_not_repoll_pr_for_the_superseded_branch() {
         false,
         false,
         wsx::pty::session::AgentKind::Claude,
+        log_dir_tmp.path(),
         tokio_util::sync::CancellationToken::new(),
         |_| {},
     )

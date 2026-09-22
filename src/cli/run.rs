@@ -545,6 +545,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 effective_yolo,
                 shared,
                 agent_kind,
+                &dirs.log_dir(),
                 tokio_util::sync::CancellationToken::new(),
                 |_| {},
             )

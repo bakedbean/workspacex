@@ -51,6 +51,23 @@ pub(in crate::app::input) fn chip_target_session(
     }
 }
 
+/// The agent a dashboard chip will reach: the live primary session's, or
+/// the selected workspace's configured agent when none is running yet.
+fn selected_workspace_agent(app: &App) -> crate::pty::session::AgentKind {
+    if let Some(session) = chip_target_session(app) {
+        return session.agent;
+    }
+    let agent = match app.selected_target() {
+        Some(SelectionTarget::Workspace(id)) => app
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == id)
+            .map(|(_, w)| w.agent),
+        _ => None,
+    };
+    agent.unwrap_or(crate::pty::session::AgentKind::Claude)
+}
+
 /// Dispatch the pinned command at `idx` to the chip-target session.
 /// `idx` is an index into `pinned_commands_cache` — the same 0-based
 /// pinned-command index a chip click carries in `chip_rects` — NOT a
@@ -78,7 +95,7 @@ pub(in crate::app::input) async fn fire_chip(app: &mut App, idx: usize) {
     // and Enter sends it (with `\r`) in one write, auto-spawning the
     // session if needed. No auto-clear — the draft is theirs to edit now.
     if !cmd.submit && matches!(app.view, View::Dashboard) {
-        app.dashboard.reply_draft = cmd.command;
+        app.dashboard.reply_draft = cmd.command_for(selected_workspace_agent(app));
         app.dashboard.reply_draft_clear_at_ms = None;
         app.focus = crate::ui::PaneFocus::DetailBarReply;
         return;
@@ -96,8 +113,8 @@ pub(in crate::app::input) async fn fire_chip(app: &mut App, idx: usize) {
         Some(s) => s,
         None => return,
     };
-    let command_text = cmd.command.clone();
-    let bytes = cmd.pty_bytes();
+    let command_text = cmd.command_for(session.agent);
+    let bytes = cmd.pty_bytes(session.agent);
     session.scroll_to_live();
     let _ = session
         .writer
@@ -278,7 +295,7 @@ pub(in crate::app::input) async fn handle_key_attached_remote(
         if let KeyCode::Char(c @ '1'..='9') = k.code {
             let idx = (c as u8 - b'1') as usize;
             if let Some(cmd) = app.pinned_commands_cache.get(idx) {
-                let bytes = cmd.pty_bytes();
+                let bytes = cmd.pty_bytes(session.agent);
                 session.scroll_to_live();
                 let _ = session
                     .writer

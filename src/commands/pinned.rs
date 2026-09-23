@@ -1,6 +1,9 @@
 //! Pinned commands: parses a newline-separated `Label=command` list into
 //! addressable chips for the attached view.
 
+use crate::agent::skill::BUNDLED_SKILLS;
+use crate::pty::session::AgentKind;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PinnedCommand {
     /// Text shown in the chip. Already trimmed; not yet width-truncated
@@ -18,10 +21,32 @@ pub struct PinnedCommand {
 const NO_SUBMIT_MARKERS: [&str; 2] = ["...", "\u{2026}"];
 
 impl PinnedCommand {
-    /// Bytes to write to the PTY when the chip fires: the command, plus a
-    /// carriage return when the chip submits.
-    pub fn pty_bytes(&self) -> Vec<u8> {
-        let mut bytes = self.command.as_bytes().to_vec();
+    /// The command text as `agent` needs to receive it.
+    ///
+    /// omp only exposes skills as `/skill:<name>`, and its builtins win over
+    /// a bare `/<name>`: omp 18's builtin `/handoff` summarizes and compacts
+    /// the session in place, so a `/handoff` chip never reaches the wsx
+    /// skill and sits on omp's "Generating handoff…" spinner. For omp, a
+    /// chip naming a bundled skill is rewritten to the `/skill:` form.
+    /// Everything else, and every other agent, gets the command verbatim.
+    pub fn command_for(&self, agent: AgentKind) -> String {
+        if agent == AgentKind::Omp {
+            if let Some(rest) = self.command.strip_prefix('/') {
+                let name_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+                let name = &rest[..name_end];
+                if BUNDLED_SKILLS.iter().any(|s| s.name == name) {
+                    return format!("/skill:{rest}");
+                }
+            }
+        }
+        self.command.clone()
+    }
+
+    /// Bytes to write to `agent`'s PTY when the chip fires: the command
+    /// (see [`Self::command_for`]), plus a carriage return when the chip
+    /// submits.
+    pub fn pty_bytes(&self, agent: AgentKind) -> Vec<u8> {
+        let mut bytes = self.command_for(agent).into_bytes();
         if self.submit {
             bytes.push(b'\r');
         }
@@ -225,13 +250,65 @@ mod tests {
             command: "/pull-request".into(),
             submit: true,
         };
-        assert_eq!(submit.pty_bytes(), b"/pull-request\r");
+        assert_eq!(submit.pty_bytes(AgentKind::Claude), b"/pull-request\r");
         let typed = PinnedCommand {
             label: "rev".into(),
             command: "/agent-review ".into(),
             submit: false,
         };
-        assert_eq!(typed.pty_bytes(), b"/agent-review ");
+        assert_eq!(typed.pty_bytes(AgentKind::Claude), b"/agent-review ");
+    }
+
+    fn cmd(command: &str) -> PinnedCommand {
+        PinnedCommand {
+            label: "x".into(),
+            command: command.into(),
+            submit: true,
+        }
+    }
+
+    #[test]
+    fn omp_bundled_skill_chip_uses_skill_prefix() {
+        // omp's builtin `/handoff` compacts the session in place and would
+        // shadow the wsx skill; `/skill:handoff` is the only form that
+        // reaches the skill.
+        assert_eq!(
+            cmd("/handoff").command_for(AgentKind::Omp),
+            "/skill:handoff"
+        );
+        assert_eq!(
+            cmd("/agent-review codex").command_for(AgentKind::Omp),
+            "/skill:agent-review codex"
+        );
+        assert_eq!(cmd("/wsx").command_for(AgentKind::Omp), "/skill:wsx");
+        assert_eq!(
+            cmd("/handoff").pty_bytes(AgentKind::Omp),
+            b"/skill:handoff\r"
+        );
+    }
+
+    #[test]
+    fn omp_leaves_non_skill_chips_alone() {
+        for c in [
+            "/pull-request",
+            "/handoffs",
+            "/skill:handoff",
+            "handoff",
+            "/",
+        ] {
+            assert_eq!(cmd(c).command_for(AgentKind::Omp), c);
+        }
+    }
+
+    #[test]
+    fn other_agents_send_bundled_skill_chips_verbatim() {
+        for agent in AgentKind::ALL
+            .iter()
+            .copied()
+            .filter(|a| *a != AgentKind::Omp)
+        {
+            assert_eq!(cmd("/handoff").command_for(agent), "/handoff", "{agent:?}");
+        }
     }
 
     #[test]

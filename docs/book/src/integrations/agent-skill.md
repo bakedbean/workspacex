@@ -27,3 +27,5 @@ handoff=/handoff
 
 The `agent-review` line ends in `...`, so the chip types `/agent-review ` and waits for you to add the reviewer kind (`codex`, `omp`, …) before pressing enter; press enter with nothing and the skill asks which kind to spawn. Pin it as a plain `/agent-review` if you'd rather always be asked. The `handoff` chip runs `/handoff` with no request, so the agent asks for one before creating the workspace — the question is the chip's way of taking input.
 
+In an omp session, a chip naming a bundled skill is sent as `/skill:<name>` (`/skill:handoff`, `/skill:agent-review`): omp only exposes skills under that prefix, and its own builtin `/handoff` — which summarizes and compacts the session in place — would otherwise catch the chip. Pin the bare `/handoff` form; wsx does the rewrite. Typing `/handoff` by hand in omp still reaches omp's builtin.
+

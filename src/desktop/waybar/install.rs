@@ -263,22 +263,40 @@ pub fn install_walker_theme_into(config_root: &Path) -> Result<String> {
     let dir = config_root.join("walker/themes/wsx");
     std::fs::create_dir_all(&dir)?;
     std::fs::write(dir.join("layout.xml"), WALKER_THEME_LAYOUT)?;
-    let css = WALKER_THEME_CSS.replace("__PALETTE_IMPORT__", &palette_imports(config_root));
+    let (palette, source) = palette_imports(config_root);
+    let css = WALKER_THEME_CSS.replace("__PALETTE_IMPORT__", &palette);
     std::fs::write(dir.join("style.css"), css)?;
     std::fs::write(dir.join("item_menus-wsx.xml"), WALKER_THEME_ITEM)?;
-    Ok(format!("installed walker theme: {}", dir.display()))
+    Ok(format!(
+        "installed walker theme: {} (palette: {source})",
+        dir.display()
+    ))
 }
 
 /// Palette used when the user's active walker theme can't be read: the one
-/// omarchy's own walker themes import.
+/// omarchy's own walker themes import (relative to `themes/wsx/`).
 const OMARCHY_PALETTE_IMPORT: &str = "@import \"../../../omarchy/current/theme/walker.css\";";
+/// Where [`OMARCHY_PALETTE_IMPORT`] lands, relative to `~/.config`.
+const OMARCHY_PALETTE_PATH: &str = "omarchy/current/theme/walker.css";
 
-/// The `@import` lines that give the wsx theme its colors, borrowed from the
-/// theme named in `walker/config.toml` so the menu matches the user's
-/// launcher on any distro (omarchy, fedora-hypr, hand-rolled). Falls back to
-/// omarchy's palette when there is no config, no theme, or the theme has no
-/// imports — the theme's color rules are unusable without one.
-pub(crate) fn palette_imports(config_root: &Path) -> String {
+/// Last resort when neither the active theme nor omarchy supplies a palette:
+/// define every color the wsx theme references, so GTK never drops a rule
+/// (an undefined color left the whole window transparent). The accents in
+/// the theme are catppuccin-mocha, so the neutrals are too.
+const BUILTIN_PALETTE: &str = "@define-color base #1e1e2e;
+@define-color background #1e1e2e;
+@define-color border #585b70;
+@define-color text #cdd6f4;
+@define-color selected-text #f5e0dc;";
+
+/// The palette lines that give the wsx theme its colors, plus a short label
+/// for the setup report naming where they came from. Preference order:
+/// the `@import`s of the theme named in `walker/config.toml` (so the menu
+/// matches the user's launcher on any distro), then omarchy's palette when
+/// it exists, then [`BUILTIN_PALETTE`]. A borrowed theme is trusted to
+/// define the usual walker color names (`@base`, `@text`, ...); re-run
+/// setup after switching walker themes.
+pub(crate) fn palette_imports(config_root: &Path) -> (String, String) {
     let themes = config_root.join("walker/themes");
     let theme = std::fs::read_to_string(config_root.join("walker/config.toml"))
         .ok()
@@ -287,22 +305,26 @@ pub(crate) fn palette_imports(config_root: &Path) -> String {
         // The wsx theme's imports are what we're computing; borrowing them
         // would be circular.
         .filter(|name| name != "wsx" && !name.contains('/'));
-    let imports: Vec<String> = theme
-        .and_then(|name| {
-            let css = std::fs::read_to_string(themes.join(&name).join("style.css")).ok()?;
-            Some(
+    if let Some(name) = theme {
+        let imports: Vec<String> = std::fs::read_to_string(themes.join(&name).join("style.css"))
+            .map(|css| {
                 css_imports(&css)
                     .iter()
                     .map(|l| rebase_import(l, &name))
-                    .collect(),
-            )
-        })
-        .unwrap_or_default();
-    if imports.is_empty() {
-        OMARCHY_PALETTE_IMPORT.to_string()
-    } else {
-        imports.join("\n")
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !imports.is_empty() {
+            return (imports.join("\n"), format!("walker theme {name}"));
+        }
     }
+    if config_root.join(OMARCHY_PALETTE_PATH).is_file() {
+        return (OMARCHY_PALETTE_IMPORT.to_string(), "omarchy".into());
+    }
+    (
+        BUILTIN_PALETTE.to_string(),
+        "built-in defaults; the active walker theme imports no palette".into(),
+    )
 }
 
 /// Re-point a relative `@import` from `themes/<theme>/style.css` so it still
@@ -608,26 +630,45 @@ mod install_tests {
     }
 
     #[test]
-    fn walker_theme_falls_back_to_omarchy_palette() {
+    fn walker_theme_palette_fallbacks() {
         let tmp = tempfile::tempdir().unwrap();
-        // No config at all.
-        assert_eq!(palette_imports(tmp.path()), OMARCHY_PALETTE_IMPORT);
+        let palette = |root: &Path| palette_imports(root).0;
+        // No config and no omarchy: built-in colors, never an import of a
+        // file that doesn't exist.
+        assert_eq!(palette(tmp.path()), BUILTIN_PALETTE);
+        // Every color the theme references is defined by the fallback.
+        for name in ["base", "background", "border", "text", "selected-text"] {
+            assert!(
+                WALKER_THEME_CSS.contains(&format!("@{name}")),
+                "theme no longer uses @{name}; prune BUILTIN_PALETTE"
+            );
+            assert!(
+                BUILTIN_PALETTE.contains(&format!("@define-color {name} ")),
+                "BUILTIN_PALETTE missing {name}"
+            );
+        }
+        // With omarchy's palette on disk, it wins over the built-in one.
+        write(
+            &tmp.path().join(OMARCHY_PALETTE_PATH),
+            "@define-color base #000;\n",
+        );
+        assert_eq!(palette(tmp.path()), OMARCHY_PALETTE_IMPORT);
         // Config naming the wsx theme itself must not self-import.
         write(&tmp.path().join("walker/config.toml"), "theme = \"wsx\"\n");
         write(
             &tmp.path().join("walker/themes/wsx/style.css"),
             "@import \"stale.css\";\n",
         );
-        assert_eq!(palette_imports(tmp.path()), OMARCHY_PALETTE_IMPORT);
+        assert_eq!(palette(tmp.path()), OMARCHY_PALETTE_IMPORT);
         // Theme without imports, and theme whose dir is missing.
         write(
             &tmp.path().join("walker/config.toml"),
             "theme = \"plain\"\n",
         );
         write(&tmp.path().join("walker/themes/plain/style.css"), "* {}\n");
-        assert_eq!(palette_imports(tmp.path()), OMARCHY_PALETTE_IMPORT);
+        assert_eq!(palette(tmp.path()), OMARCHY_PALETTE_IMPORT);
         write(&tmp.path().join("walker/config.toml"), "theme = \"gone\"\n");
-        assert_eq!(palette_imports(tmp.path()), OMARCHY_PALETTE_IMPORT);
+        assert_eq!(palette(tmp.path()), OMARCHY_PALETTE_IMPORT);
     }
 
     #[test]
@@ -660,7 +701,10 @@ mod install_tests {
         );
         assert_eq!(
             palette_imports(tmp.path()),
-            "@import \"../new/palette.css\";"
+            (
+                "@import \"../new/palette.css\";".to_string(),
+                "walker theme t".to_string()
+            )
         );
     }
 

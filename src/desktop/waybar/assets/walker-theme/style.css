@@ -3,9 +3,9 @@
    app launcher) and row padding is tightened for two-line entries. Colors
    (@base, @text, @border, ...) come from the palette the user's active
    walker theme imports — `wsx setup waybar` copies that theme's @import
-   lines here, falling back to omarchy's walker.css. Without a palette those
-   colors are undefined and GTK drops the rules, leaving the window
-   transparent.
+   lines here, falling back to omarchy's walker.css and then to built-in
+   colors. Without a palette those colors are undefined and GTK drops the
+   rules, leaving the window transparent.
    Installed by `wsx setup waybar`; edits are overwritten on re-run. */
 __PALETTE_IMPORT__
 

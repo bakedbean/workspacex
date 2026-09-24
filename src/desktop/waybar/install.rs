@@ -343,44 +343,198 @@ fn rebase_import(line: &str, theme: &str) -> String {
     format!("{}{rebased}{}", &line[..start], &line[end..])
 }
 
+/// Manual fallback printed whenever the installer can't restart elephant
+/// itself.
+const ELEPHANT_RESTART_HINT: &str =
+    "restart elephant to load the menu: pkill -x elephant && setsid -f elephant";
+
+/// How long an old elephant gets to exit after SIGTERM. Its shutdown
+/// handler unlinks the IPC socket, so the replacement must not start until
+/// the old process is fully gone — otherwise the late unlink deletes the
+/// new daemon's socket.
+const ELEPHANT_EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// How long a freshly spawned elephant must survive before the restart
+/// counts as successful (a bad config or a port clash exits immediately).
+const ELEPHANT_STARTUP_PROBE: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// Elephant only hot-REGISTERS a freshly written menu file — its Lua doesn't
 /// execute until the service restarts, so a new menu silently serves
-/// "No Results" until then. Best-effort: omarchy runs elephant as a systemd
-/// user unit, but other setups (e.g. Hyprland `exec-once`) run a bare
-/// process with no unit to restart — that one is replaced in place. When
-/// elephant isn't running at all there is nothing to reload.
+/// "No Results" until then. Omarchy runs elephant as a systemd user unit;
+/// other setups (e.g. Hyprland `exec-once`) run a bare process, which is
+/// replaced in place with the same executable and arguments. Anything
+/// ambiguous or failing degrades to a printed hint rather than guessing.
 fn restart_elephant() -> String {
     use std::process::{Command, Stdio};
-    let unit_restarted = Command::new("systemctl")
-        .args(["--user", "try-restart", "elephant"])
-        // "Unit elephant.service not found" is the expected answer off
-        // omarchy; don't leak it into the setup report.
+    let unit_active = Command::new("systemctl")
+        .args(["--user", "is-active", "--quiet", "elephant"])
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|s| s.success());
-    if unit_restarted {
-        return "restarted elephant (menu definitions load only on restart)".into();
+    if unit_active {
+        let restarted = Command::new("systemctl")
+            .args(["--user", "restart", "elephant"])
+            .status()
+            .is_ok_and(|s| s.success());
+        return if restarted {
+            "restarted elephant (menu definitions load only on restart)".into()
+        } else {
+            "restart elephant to load the menu: systemctl --user restart elephant".into()
+        };
     }
-    let running = Command::new("pgrep")
-        .args(["-x", "elephant"])
-        .stdout(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-    if !running {
-        return "elephant is not running; the menu loads when it next starts".into();
+    // SAFETY: getuid has no side effects and cannot fail.
+    let uid = unsafe { libc::getuid() };
+    match find_elephant_daemons(Path::new("/proc"), uid).as_slice() {
+        [] => "elephant is not running; the menu loads when it next starts".into(),
+        [daemon] => replace_daemon(daemon),
+        _ => format!("several elephant daemons are running; {ELEPHANT_RESTART_HINT}"),
     }
-    let _ = Command::new("pkill").args(["-x", "elephant"]).status();
-    // Own process group so the daemon outlives this terminal session.
+}
+
+/// A running elephant daemon, with what it takes to relaunch it the same
+/// way: the resolved executable and its arguments (argv[1..]), e.g. a
+/// custom `--config` folder.
+#[derive(Debug, PartialEq)]
+struct ElephantDaemon {
+    pid: i32,
+    exe: std::path::PathBuf,
+    args: Vec<std::ffi::OsString>,
+}
+
+/// Elephant daemons owned by `uid`, read from a procfs at `proc_root`.
+/// Other users' daemons are never touched, and client invocations
+/// (`elephant menu ...`, `elephant query ...`) are skipped — see
+/// [`is_daemon_invocation`].
+fn find_elephant_daemons(proc_root: &Path, uid: u32) -> Vec<ElephantDaemon> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+    let Ok(entries) = std::fs::read_dir(proc_root) else {
+        return Vec::new();
+    };
+    let mut daemons: Vec<ElephantDaemon> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let pid: i32 = entry.file_name().to_str()?.parse().ok()?;
+            let dir = entry.path();
+            if std::fs::metadata(&dir).ok()?.uid() != uid {
+                return None;
+            }
+            if std::fs::read_to_string(dir.join("comm")).ok()?.trim_end() != "elephant" {
+                return None;
+            }
+            let cmdline = std::fs::read(dir.join("cmdline")).ok()?;
+            let mut argv = cmdline
+                .split(|&b| b == 0)
+                .filter(|a| !a.is_empty())
+                .map(|a| std::ffi::OsStr::from_bytes(a).to_os_string());
+            let argv0 = argv.next()?;
+            let args: Vec<_> = argv.collect();
+            if !is_daemon_invocation(&args) {
+                return None;
+            }
+            // A package upgrade leaves the running image "(deleted)"; the
+            // path itself now holds the new binary, which is what to start.
+            let exe = std::fs::read_link(dir.join("exe"))
+                .ok()
+                .map(|p| {
+                    let s = p.to_string_lossy();
+                    s.strip_suffix(" (deleted)")
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or(p)
+                })
+                .unwrap_or_else(|| argv0.into());
+            Some(ElephantDaemon { pid, exe, args })
+        })
+        .collect();
+    daemons.sort_by_key(|d| d.pid);
+    daemons
+}
+
+/// True when elephant's argv[1..] start the service rather than run a
+/// client command: only global flags (`--config`/`-c` with a value,
+/// `--debug`/`-d`), no subcommand.
+fn is_daemon_invocation(args: &[std::ffi::OsString]) -> bool {
+    let mut it = args.iter().map(|a| a.to_string_lossy());
+    while let Some(arg) = it.next() {
+        match arg.as_ref() {
+            "--config" | "-c" => {
+                it.next();
+            }
+            a if a.starts_with("--config=") || a.starts_with("-c=") => {}
+            "--debug" | "-d" => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// True while `pid` exists and isn't a zombie (a zombie has already run its
+/// shutdown handler — only its parent's reap is outstanding).
+fn process_running(proc_root: &Path, pid: i32) -> bool {
+    std::fs::read_to_string(proc_root.join(pid.to_string()).join("stat"))
+        .ok()
+        // State is the first field after the parenthesized comm, which
+        // may itself contain spaces or parens.
+        .and_then(|stat| Some(stat[stat.rfind(')')? + 1..].trim_start().starts_with('Z')))
+        .is_some_and(|zombie| !zombie)
+}
+
+/// SIGTERM `daemon`, wait for it to exit, then start the same executable
+/// with the same arguments in its own process group (so it outlives this
+/// terminal). The environment is this shell's, which matches the desktop
+/// session's in practice.
+fn replace_daemon(daemon: &ElephantDaemon) -> String {
     use std::os::unix::process::CommandExt;
-    match Command::new("elephant")
+    use std::process::{Command, Stdio};
+    let proc_root = Path::new("/proc");
+    // SAFETY: plain signal delivery to a pid we just read from /proc.
+    if unsafe { libc::kill(daemon.pid, libc::SIGTERM) } != 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::ESRCH) {
+            return format!(
+                "could not stop elephant (pid {}): {err}; {ELEPHANT_RESTART_HINT}",
+                daemon.pid
+            );
+        }
+    }
+    let deadline = std::time::Instant::now() + ELEPHANT_EXIT_GRACE;
+    while process_running(proc_root, daemon.pid) {
+        if std::time::Instant::now() >= deadline {
+            return format!(
+                "elephant (pid {}) did not exit after SIGTERM; {ELEPHANT_RESTART_HINT}",
+                daemon.pid
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let spawned = Command::new(&daemon.exe)
+        .args(&daemon.args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0)
-        .spawn()
-    {
-        Ok(_) => "restarted elephant (menu definitions load only on restart)".into(),
-        Err(_) => "restart elephant to load the menu: setsid -f elephant".into(),
+        .spawn();
+    let mut child = match spawned {
+        Ok(child) => child,
+        Err(e) => {
+            return format!(
+                "stopped elephant but could not start {}: {e}; {ELEPHANT_RESTART_HINT}",
+                daemon.exe.display()
+            );
+        }
+    };
+    std::thread::sleep(ELEPHANT_STARTUP_PROBE);
+    match child.try_wait() {
+        Ok(None) => format!(
+            "restarted elephant (pid {} -> {}; menu definitions load only on restart)",
+            daemon.pid,
+            child.id()
+        ),
+        Ok(Some(status)) => format!(
+            "elephant exited right after restart ({status}); start it manually to see why: {}",
+            daemon.exe.display()
+        ),
+        Err(e) => format!("restarted elephant, but could not confirm it is up: {e}"),
     }
 }
 
@@ -669,6 +823,83 @@ mod install_tests {
         assert_eq!(palette(tmp.path()), OMARCHY_PALETTE_IMPORT);
         write(&tmp.path().join("walker/config.toml"), "theme = \"gone\"\n");
         assert_eq!(palette(tmp.path()), OMARCHY_PALETTE_IMPORT);
+    }
+
+    /// A fake `/proc/<pid>` entry owned by the test's own uid.
+    fn fake_proc(root: &Path, pid: i32, comm: &str, argv: &[&str], state: char) {
+        let dir = root.join(pid.to_string());
+        write(&dir.join("comm"), &format!("{comm}\n"));
+        write(&dir.join("cmdline"), &format!("{}\0", argv.join("\0")));
+        write(
+            &dir.join("stat"),
+            &format!("{pid} ({comm}) {state} 1 {pid} {pid} 0"),
+        );
+    }
+
+    #[test]
+    fn finds_only_elephant_daemons_not_clients() {
+        use std::os::unix::fs::MetadataExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let uid = std::fs::metadata(root).unwrap().uid();
+        fake_proc(
+            root,
+            10,
+            "elephant",
+            &["elephant", "-c", "/my/cfg", "--debug"],
+            'S',
+        );
+        fake_proc(root, 11, "elephant", &["elephant", "menu", "wsx"], 'S');
+        fake_proc(root, 12, "elephant-x", &["elephant-x"], 'S');
+        fake_proc(
+            root,
+            13,
+            "walker",
+            &["walker", "--gapplication-service"],
+            'S',
+        );
+        std::fs::create_dir_all(root.join("self")).unwrap();
+
+        let daemons = find_elephant_daemons(root, uid);
+        assert_eq!(
+            daemons,
+            vec![ElephantDaemon {
+                pid: 10,
+                // No `exe` link in the fake proc: argv[0] stands in.
+                exe: "elephant".into(),
+                args: ["-c", "/my/cfg", "--debug"].map(Into::into).to_vec(),
+            }]
+        );
+        // Another user's processes are never candidates.
+        assert!(find_elephant_daemons(root, uid + 1).is_empty());
+        assert!(find_elephant_daemons(&root.join("missing"), uid).is_empty());
+    }
+
+    #[test]
+    fn daemon_invocation_allows_only_global_flags() {
+        let yes: &[&[&str]] = &[&[], &["-d"], &["--config", "x"], &["--config=x", "--debug"]];
+        for args in yes {
+            let args: Vec<_> = args.iter().map(Into::into).collect();
+            assert!(is_daemon_invocation(&args), "{args:?}");
+        }
+        let no: &[&[&str]] = &[&["menu", "wsx"], &["-c", "x", "query"], &["--help"]];
+        for args in no {
+            let args: Vec<_> = args.iter().map(Into::into).collect();
+            assert!(!is_daemon_invocation(&args), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn zombie_or_missing_process_counts_as_exited() {
+        let tmp = tempfile::tempdir().unwrap();
+        fake_proc(tmp.path(), 20, "elephant", &["elephant"], 'S');
+        // A comm containing ") Z" must not fool the state parse.
+        fake_proc(tmp.path(), 21, "a) Z (b", &["x"], 'R');
+        fake_proc(tmp.path(), 22, "elephant", &["elephant"], 'Z');
+        assert!(process_running(tmp.path(), 20));
+        assert!(process_running(tmp.path(), 21));
+        assert!(!process_running(tmp.path(), 22));
+        assert!(!process_running(tmp.path(), 23));
     }
 
     #[test]

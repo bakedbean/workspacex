@@ -120,6 +120,80 @@ fn snippet_report(include_path: &str) -> Vec<String> {
     ]
 }
 
+/// True when `css` has a live `@import` of the module stylesheet itself —
+/// not one inside a comment (waybar wouldn't load it) and not a different
+/// file that merely ends the same way (`old-wsx.css`).
+fn imports_module_css(css: &str) -> bool {
+    css_imports(css).iter().any(|stmt| {
+        import_target(stmt).is_some_and(|(s, e)| stmt[s..e].rsplit('/').next() == Some("wsx.css"))
+    })
+}
+
+/// `css` with every `/* ... */` comment removed, leaving quoted strings
+/// intact (a `/*` inside a string is text, not a comment opener). An
+/// unterminated comment swallows the rest of the input, as in a browser.
+fn strip_css_comments(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut chars = css.chars().peekable();
+    let mut quote: Option<char> = None;
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) => {
+                out.push(c);
+                if c == '\\' {
+                    out.extend(chars.next());
+                } else if c == q {
+                    quote = None;
+                }
+            }
+            None if c == '/' && chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut prev = '\0';
+                for c in chars.by_ref() {
+                    if prev == '*' && c == '/' {
+                        break;
+                    }
+                    prev = c;
+                }
+                // Keep tokens on either side of the comment apart.
+                out.push(' ');
+            }
+            None => {
+                if c == '"' || c == '\'' {
+                    quote = Some(c);
+                }
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// The live `@import` statements in `css`, one per line, trimmed. Comments
+/// are stripped first so a commented-out import is never mistaken for (or
+/// resurrected as) a live one.
+fn css_imports(css: &str) -> Vec<String> {
+    strip_css_comments(css)
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("@import"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Byte span of the path inside an `@import` statement: the first quoted
+/// string (`@import "x";`, `@import url('x');`) or a bare `url(x)`.
+fn import_target(stmt: &str) -> Option<(usize, usize)> {
+    if let Some(start) = stmt.find(['"', '\'']) {
+        let quote = stmt[start..].chars().next()?;
+        let len = stmt[start + 1..].find(quote)?;
+        return Some((start + 1, start + 1 + len));
+    }
+    let start = stmt.find("url(")? + 4;
+    let len = stmt[start..].find(')')?;
+    Some((start, start + len))
+}
+
 /// Testable core of the installer: writes the bundled module assets into
 /// `waybar_dir` and attempts to patch `config.jsonc` in place, using `epoch`
 /// to name the pre-patch backup file.
@@ -153,7 +227,13 @@ pub fn install_into(waybar_dir: &Path, epoch: u64) -> Result<Vec<String>> {
         },
         Err(_) => report.extend(snippet_report(&include_path)),
     }
-    report.push("add to style.css (after existing @import lines): @import \"wsx.css\";".into());
+    let styled = std::fs::read_to_string(waybar_dir.join("style.css"))
+        .is_ok_and(|css| imports_module_css(&css));
+    if styled {
+        report.push("style.css already imports wsx.css".into());
+    } else {
+        report.push("add to style.css (after existing @import lines): @import \"wsx.css\";".into());
+    }
     report.push("reload waybar: omarchy-restart-waybar (or pkill -SIGUSR2 waybar)".into());
     Ok(report)
 }
@@ -183,22 +263,278 @@ pub fn install_walker_theme_into(config_root: &Path) -> Result<String> {
     let dir = config_root.join("walker/themes/wsx");
     std::fs::create_dir_all(&dir)?;
     std::fs::write(dir.join("layout.xml"), WALKER_THEME_LAYOUT)?;
-    std::fs::write(dir.join("style.css"), WALKER_THEME_CSS)?;
+    let (palette, source) = palette_imports(config_root);
+    let css = WALKER_THEME_CSS.replace("__PALETTE_IMPORT__", &palette);
+    std::fs::write(dir.join("style.css"), css)?;
     std::fs::write(dir.join("item_menus-wsx.xml"), WALKER_THEME_ITEM)?;
-    Ok(format!("installed walker theme: {}", dir.display()))
+    Ok(format!(
+        "installed walker theme: {} (palette: {source})",
+        dir.display()
+    ))
 }
+
+/// Palette used when the user's active walker theme can't be read: the one
+/// omarchy's own walker themes import (relative to `themes/wsx/`).
+const OMARCHY_PALETTE_IMPORT: &str = "@import \"../../../omarchy/current/theme/walker.css\";";
+/// Where [`OMARCHY_PALETTE_IMPORT`] lands, relative to `~/.config`.
+const OMARCHY_PALETTE_PATH: &str = "omarchy/current/theme/walker.css";
+
+/// Last resort when neither the active theme nor omarchy supplies a palette:
+/// define every color the wsx theme references, so GTK never drops a rule
+/// (an undefined color left the whole window transparent). The accents in
+/// the theme are catppuccin-mocha, so the neutrals are too.
+const BUILTIN_PALETTE: &str = "@define-color base #1e1e2e;
+@define-color background #1e1e2e;
+@define-color border #585b70;
+@define-color text #cdd6f4;
+@define-color selected-text #f5e0dc;";
+
+/// The palette lines that give the wsx theme its colors, plus a short label
+/// for the setup report naming where they came from. Preference order:
+/// the `@import`s of the theme named in `walker/config.toml` (so the menu
+/// matches the user's launcher on any distro), then omarchy's palette when
+/// it exists, then [`BUILTIN_PALETTE`]. A borrowed theme is trusted to
+/// define the usual walker color names (`@base`, `@text`, ...); re-run
+/// setup after switching walker themes.
+pub(crate) fn palette_imports(config_root: &Path) -> (String, String) {
+    let themes = config_root.join("walker/themes");
+    let theme = std::fs::read_to_string(config_root.join("walker/config.toml"))
+        .ok()
+        .and_then(|s| s.parse::<toml::Table>().ok())
+        .and_then(|t| t.get("theme")?.as_str().map(str::to_string))
+        // The wsx theme's imports are what we're computing; borrowing them
+        // would be circular.
+        .filter(|name| name != "wsx" && !name.contains('/'));
+    if let Some(name) = theme {
+        let imports: Vec<String> = std::fs::read_to_string(themes.join(&name).join("style.css"))
+            .map(|css| {
+                css_imports(&css)
+                    .iter()
+                    .map(|l| rebase_import(l, &name))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !imports.is_empty() {
+            return (imports.join("\n"), format!("walker theme {name}"));
+        }
+    }
+    if config_root.join(OMARCHY_PALETTE_PATH).is_file() {
+        return (OMARCHY_PALETTE_IMPORT.to_string(), "omarchy".into());
+    }
+    (
+        BUILTIN_PALETTE.to_string(),
+        "built-in defaults; the active walker theme imports no palette".into(),
+    )
+}
+
+/// Re-point a relative `@import` from `themes/<theme>/style.css` so it still
+/// resolves from `themes/wsx/style.css`. The two files are siblings, so
+/// `../`-relative, absolute, and URL imports carry over unchanged; only a
+/// same-directory import (`colors.css`) needs the `../<theme>/` prefix.
+fn rebase_import(line: &str, theme: &str) -> String {
+    let Some((start, end)) = import_target(line) else {
+        return line.to_string();
+    };
+    let path = line[start..end].trim();
+    if path.starts_with("../") || path.starts_with('/') || path.contains("://") {
+        return line.to_string();
+    }
+    let rebased = format!("../{theme}/{}", path.trim_start_matches("./"));
+    format!("{}{rebased}{}", &line[..start], &line[end..])
+}
+
+/// Manual fallback printed whenever the installer can't restart elephant
+/// itself.
+const ELEPHANT_RESTART_HINT: &str =
+    "restart elephant to load the menu: pkill -x elephant && setsid -f elephant";
+
+/// How long an old elephant gets to exit after SIGTERM. Its shutdown
+/// handler unlinks the IPC socket, so the replacement must not start until
+/// the old process is fully gone — otherwise the late unlink deletes the
+/// new daemon's socket.
+const ELEPHANT_EXIT_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// How long a freshly spawned elephant must survive before the restart
+/// counts as successful (a bad config or a port clash exits immediately).
+const ELEPHANT_STARTUP_PROBE: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Elephant only hot-REGISTERS a freshly written menu file — its Lua doesn't
 /// execute until the service restarts, so a new menu silently serves
-/// "No Results" until then. Best-effort: `try-restart` is a no-op when
-/// elephant isn't running, and any failure degrades to a printed hint.
+/// "No Results" until then. Omarchy runs elephant as a systemd user unit;
+/// other setups (e.g. Hyprland `exec-once`) run a bare process, which is
+/// replaced in place with the same executable and arguments. Anything
+/// ambiguous or failing degrades to a printed hint rather than guessing.
 fn restart_elephant() -> String {
-    match std::process::Command::new("systemctl")
-        .args(["--user", "try-restart", "elephant"])
+    use std::process::{Command, Stdio};
+    let unit_active = Command::new("systemctl")
+        .args(["--user", "is-active", "--quiet", "elephant"])
+        .stderr(Stdio::null())
         .status()
-    {
-        Ok(s) if s.success() => "restarted elephant (menu definitions load only on restart)".into(),
-        _ => "restart elephant to load the menu: systemctl --user try-restart elephant".into(),
+        .is_ok_and(|s| s.success());
+    if unit_active {
+        let restarted = Command::new("systemctl")
+            .args(["--user", "restart", "elephant"])
+            .status()
+            .is_ok_and(|s| s.success());
+        return if restarted {
+            "restarted elephant (menu definitions load only on restart)".into()
+        } else {
+            "restart elephant to load the menu: systemctl --user restart elephant".into()
+        };
+    }
+    // SAFETY: getuid has no side effects and cannot fail.
+    let uid = unsafe { libc::getuid() };
+    match find_elephant_daemons(Path::new("/proc"), uid).as_slice() {
+        [] => "elephant is not running; the menu loads when it next starts".into(),
+        [daemon] => replace_daemon(daemon),
+        _ => format!("several elephant daemons are running; {ELEPHANT_RESTART_HINT}"),
+    }
+}
+
+/// A running elephant daemon, with what it takes to relaunch it the same
+/// way: the resolved executable and its arguments (argv[1..]), e.g. a
+/// custom `--config` folder.
+#[derive(Debug, PartialEq)]
+struct ElephantDaemon {
+    pid: i32,
+    exe: std::path::PathBuf,
+    args: Vec<std::ffi::OsString>,
+}
+
+/// Elephant daemons owned by `uid`, read from a procfs at `proc_root`.
+/// Other users' daemons are never touched, and client invocations
+/// (`elephant menu ...`, `elephant query ...`) are skipped — see
+/// [`is_daemon_invocation`].
+fn find_elephant_daemons(proc_root: &Path, uid: u32) -> Vec<ElephantDaemon> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+    let Ok(entries) = std::fs::read_dir(proc_root) else {
+        return Vec::new();
+    };
+    let mut daemons: Vec<ElephantDaemon> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let pid: i32 = entry.file_name().to_str()?.parse().ok()?;
+            let dir = entry.path();
+            if std::fs::metadata(&dir).ok()?.uid() != uid {
+                return None;
+            }
+            if std::fs::read_to_string(dir.join("comm")).ok()?.trim_end() != "elephant" {
+                return None;
+            }
+            let cmdline = std::fs::read(dir.join("cmdline")).ok()?;
+            let mut argv = cmdline
+                .split(|&b| b == 0)
+                .filter(|a| !a.is_empty())
+                .map(|a| std::ffi::OsStr::from_bytes(a).to_os_string());
+            let argv0 = argv.next()?;
+            let args: Vec<_> = argv.collect();
+            if !is_daemon_invocation(&args) {
+                return None;
+            }
+            // A package upgrade leaves the running image "(deleted)"; the
+            // path itself now holds the new binary, which is what to start.
+            let exe = std::fs::read_link(dir.join("exe"))
+                .ok()
+                .map(|p| {
+                    let s = p.to_string_lossy();
+                    s.strip_suffix(" (deleted)")
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or(p)
+                })
+                .unwrap_or_else(|| argv0.into());
+            Some(ElephantDaemon { pid, exe, args })
+        })
+        .collect();
+    daemons.sort_by_key(|d| d.pid);
+    daemons
+}
+
+/// True when elephant's argv[1..] start the service rather than run a
+/// client command: only global flags (`--config`/`-c` with a value,
+/// `--debug`/`-d`), no subcommand.
+fn is_daemon_invocation(args: &[std::ffi::OsString]) -> bool {
+    let mut it = args.iter().map(|a| a.to_string_lossy());
+    while let Some(arg) = it.next() {
+        match arg.as_ref() {
+            "--config" | "-c" => {
+                it.next();
+            }
+            a if a.starts_with("--config=") || a.starts_with("-c=") => {}
+            "--debug" | "-d" => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// True while `pid` exists and isn't a zombie (a zombie has already run its
+/// shutdown handler — only its parent's reap is outstanding).
+fn process_running(proc_root: &Path, pid: i32) -> bool {
+    std::fs::read_to_string(proc_root.join(pid.to_string()).join("stat"))
+        .ok()
+        // State is the first field after the parenthesized comm, which
+        // may itself contain spaces or parens.
+        .and_then(|stat| Some(stat[stat.rfind(')')? + 1..].trim_start().starts_with('Z')))
+        .is_some_and(|zombie| !zombie)
+}
+
+/// SIGTERM `daemon`, wait for it to exit, then start the same executable
+/// with the same arguments in its own process group (so it outlives this
+/// terminal). The environment is this shell's, which matches the desktop
+/// session's in practice.
+fn replace_daemon(daemon: &ElephantDaemon) -> String {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let proc_root = Path::new("/proc");
+    // SAFETY: plain signal delivery to a pid we just read from /proc.
+    if unsafe { libc::kill(daemon.pid, libc::SIGTERM) } != 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::ESRCH) {
+            return format!(
+                "could not stop elephant (pid {}): {err}; {ELEPHANT_RESTART_HINT}",
+                daemon.pid
+            );
+        }
+    }
+    let deadline = std::time::Instant::now() + ELEPHANT_EXIT_GRACE;
+    while process_running(proc_root, daemon.pid) {
+        if std::time::Instant::now() >= deadline {
+            return format!(
+                "elephant (pid {}) did not exit after SIGTERM; {ELEPHANT_RESTART_HINT}",
+                daemon.pid
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let spawned = Command::new(&daemon.exe)
+        .args(&daemon.args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn();
+    let mut child = match spawned {
+        Ok(child) => child,
+        Err(e) => {
+            return format!(
+                "stopped elephant but could not start {}: {e}; {ELEPHANT_RESTART_HINT}",
+                daemon.exe.display()
+            );
+        }
+    };
+    std::thread::sleep(ELEPHANT_STARTUP_PROBE);
+    match child.try_wait() {
+        Ok(None) => format!(
+            "restarted elephant (pid {} -> {}; menu definitions load only on restart)",
+            daemon.pid,
+            child.id()
+        ),
+        Ok(Some(status)) => format!(
+            "elephant exited right after restart ({status}); start it manually to see why: {}",
+            daemon.exe.display()
+        ),
+        Err(e) => format!("restarted elephant, but could not confirm it is up: {e}"),
     }
 }
 
@@ -229,7 +565,8 @@ pub fn run() -> Result<Vec<String>> {
             // Walker scans theme files once at service startup; a running
             // walker service keeps rendering the old theme until restarted.
             lines.push(
-                "restart walker to reload the wsx theme: omarchy-restart-walker (or pkill walker)"
+                "restart walker to reload the wsx theme: omarchy-restart-walker, or \
+                 pkill -x walker && setsid -f walker --gapplication-service"
                     .into(),
             );
         }
@@ -333,6 +670,33 @@ mod install_tests {
     }
 
     #[test]
+    fn style_css_hint_only_when_import_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let hint = |report: &[String]| report.iter().any(|l| l.starts_with("add to style.css"));
+        // No style.css, and one with only a commented-out import: hint.
+        assert!(hint(&install_into(dir.path(), 1).unwrap()));
+        std::fs::write(
+            dir.path().join("style.css"),
+            "@import \"theme.css\";\n/* @import \"wsx.css\"; */\n",
+        )
+        .unwrap();
+        assert!(hint(&install_into(dir.path(), 2).unwrap()));
+        // Live import: no hint, report says so instead.
+        std::fs::write(
+            dir.path().join("style.css"),
+            "@import \"theme.css\";\n  @import \"wsx.css\";\n",
+        )
+        .unwrap();
+        let report = install_into(dir.path(), 3).unwrap();
+        assert!(!hint(&report), "{report:?}");
+        assert!(
+            report
+                .iter()
+                .any(|l| l == "style.css already imports wsx.css")
+        );
+    }
+
+    #[test]
     fn missing_config_prints_snippets() {
         let dir = tempfile::tempdir().unwrap();
         let report = install_into(dir.path(), 1).unwrap();
@@ -382,6 +746,212 @@ mod install_tests {
         );
         // Re-install overwrites without error (setup is re-runnable).
         install_walker_theme_into(tmp.path()).unwrap();
+    }
+
+    fn write(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn walker_theme_borrows_the_active_themes_palette() {
+        // A non-omarchy setup (fedora-hypr): the omarchy palette path doesn't
+        // exist, so hardcoding it left every color undefined and the window
+        // fully transparent.
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path().join("walker/config.toml"),
+            "force_keyboard_focus = true\ntheme = \"fh-default\" # comment\n",
+        );
+        write(
+            &tmp.path().join("walker/themes/fh-default/style.css"),
+            "@import \"../../../fedora-hypr/current/theme/walker.css\";\n\
+             @import 'colors.css';\n\n* {\n  all: unset;\n}\n",
+        );
+        install_walker_theme_into(tmp.path()).unwrap();
+        let css = std::fs::read_to_string(tmp.path().join("walker/themes/wsx/style.css")).unwrap();
+        assert!(
+            css.contains("@import \"../../../fedora-hypr/current/theme/walker.css\";"),
+            "{css:.600}"
+        );
+        // Same-directory import re-pointed at the source theme's dir.
+        assert!(
+            css.contains("@import '../fh-default/colors.css';"),
+            "{css:.600}"
+        );
+        assert!(!css.contains("omarchy/current"), "{css:.600}");
+        assert!(!css.contains("__PALETTE_IMPORT__"), "{css:.600}");
+    }
+
+    #[test]
+    fn walker_theme_palette_fallbacks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let palette = |root: &Path| palette_imports(root).0;
+        // No config and no omarchy: built-in colors, never an import of a
+        // file that doesn't exist.
+        assert_eq!(palette(tmp.path()), BUILTIN_PALETTE);
+        // Every color the theme references is defined by the fallback.
+        for name in ["base", "background", "border", "text", "selected-text"] {
+            assert!(
+                WALKER_THEME_CSS.contains(&format!("@{name}")),
+                "theme no longer uses @{name}; prune BUILTIN_PALETTE"
+            );
+            assert!(
+                BUILTIN_PALETTE.contains(&format!("@define-color {name} ")),
+                "BUILTIN_PALETTE missing {name}"
+            );
+        }
+        // With omarchy's palette on disk, it wins over the built-in one.
+        write(
+            &tmp.path().join(OMARCHY_PALETTE_PATH),
+            "@define-color base #000;\n",
+        );
+        assert_eq!(palette(tmp.path()), OMARCHY_PALETTE_IMPORT);
+        // Config naming the wsx theme itself must not self-import.
+        write(&tmp.path().join("walker/config.toml"), "theme = \"wsx\"\n");
+        write(
+            &tmp.path().join("walker/themes/wsx/style.css"),
+            "@import \"stale.css\";\n",
+        );
+        assert_eq!(palette(tmp.path()), OMARCHY_PALETTE_IMPORT);
+        // Theme without imports, and theme whose dir is missing.
+        write(
+            &tmp.path().join("walker/config.toml"),
+            "theme = \"plain\"\n",
+        );
+        write(&tmp.path().join("walker/themes/plain/style.css"), "* {}\n");
+        assert_eq!(palette(tmp.path()), OMARCHY_PALETTE_IMPORT);
+        write(&tmp.path().join("walker/config.toml"), "theme = \"gone\"\n");
+        assert_eq!(palette(tmp.path()), OMARCHY_PALETTE_IMPORT);
+    }
+
+    /// A fake `/proc/<pid>` entry owned by the test's own uid.
+    fn fake_proc(root: &Path, pid: i32, comm: &str, argv: &[&str], state: char) {
+        let dir = root.join(pid.to_string());
+        write(&dir.join("comm"), &format!("{comm}\n"));
+        write(&dir.join("cmdline"), &format!("{}\0", argv.join("\0")));
+        write(
+            &dir.join("stat"),
+            &format!("{pid} ({comm}) {state} 1 {pid} {pid} 0"),
+        );
+    }
+
+    #[test]
+    fn finds_only_elephant_daemons_not_clients() {
+        use std::os::unix::fs::MetadataExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let uid = std::fs::metadata(root).unwrap().uid();
+        fake_proc(
+            root,
+            10,
+            "elephant",
+            &["elephant", "-c", "/my/cfg", "--debug"],
+            'S',
+        );
+        fake_proc(root, 11, "elephant", &["elephant", "menu", "wsx"], 'S');
+        fake_proc(root, 12, "elephant-x", &["elephant-x"], 'S');
+        fake_proc(
+            root,
+            13,
+            "walker",
+            &["walker", "--gapplication-service"],
+            'S',
+        );
+        std::fs::create_dir_all(root.join("self")).unwrap();
+
+        let daemons = find_elephant_daemons(root, uid);
+        assert_eq!(
+            daemons,
+            vec![ElephantDaemon {
+                pid: 10,
+                // No `exe` link in the fake proc: argv[0] stands in.
+                exe: "elephant".into(),
+                args: ["-c", "/my/cfg", "--debug"].map(Into::into).to_vec(),
+            }]
+        );
+        // Another user's processes are never candidates.
+        assert!(find_elephant_daemons(root, uid + 1).is_empty());
+        assert!(find_elephant_daemons(&root.join("missing"), uid).is_empty());
+    }
+
+    #[test]
+    fn daemon_invocation_allows_only_global_flags() {
+        let yes: &[&[&str]] = &[&[], &["-d"], &["--config", "x"], &["--config=x", "--debug"]];
+        for args in yes {
+            let args: Vec<_> = args.iter().map(Into::into).collect();
+            assert!(is_daemon_invocation(&args), "{args:?}");
+        }
+        let no: &[&[&str]] = &[&["menu", "wsx"], &["-c", "x", "query"], &["--help"]];
+        for args in no {
+            let args: Vec<_> = args.iter().map(Into::into).collect();
+            assert!(!is_daemon_invocation(&args), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn zombie_or_missing_process_counts_as_exited() {
+        let tmp = tempfile::tempdir().unwrap();
+        fake_proc(tmp.path(), 20, "elephant", &["elephant"], 'S');
+        // A comm containing ") Z" must not fool the state parse.
+        fake_proc(tmp.path(), 21, "a) Z (b", &["x"], 'R');
+        fake_proc(tmp.path(), 22, "elephant", &["elephant"], 'Z');
+        assert!(process_running(tmp.path(), 20));
+        assert!(process_running(tmp.path(), 21));
+        assert!(!process_running(tmp.path(), 22));
+        assert!(!process_running(tmp.path(), 23));
+    }
+
+    #[test]
+    fn css_imports_ignore_comments_and_match_exact_targets() {
+        // A multi-line comment hides imports on its inner lines; a `/*`
+        // inside a string is not a comment opener.
+        let css = "/*\n@import \"wsx.css\";\n*/\n\
+                   @import \"a/*b.css\"; /* trailing */\n\
+                   /* x */ @import url(c.css);\n";
+        assert_eq!(
+            css_imports(css),
+            vec!["@import \"a/*b.css\";", "@import url(c.css);"]
+        );
+        assert!(!imports_module_css(css));
+        // Exact file name, not a suffix match.
+        assert!(!imports_module_css("@import \"old-wsx.css\";"));
+        assert!(imports_module_css("@import url('./wsx.css');"));
+        assert!(imports_module_css(
+            "@import \"/home/u/.config/waybar/wsx.css\";"
+        ));
+    }
+
+    #[test]
+    fn palette_ignores_commented_out_imports() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(&tmp.path().join("walker/config.toml"), "theme = \"t\"\n");
+        write(
+            &tmp.path().join("walker/themes/t/style.css"),
+            "/*\n@import \"../old/palette.css\";\n*/\n@import \"../new/palette.css\";\n",
+        );
+        assert_eq!(
+            palette_imports(tmp.path()),
+            (
+                "@import \"../new/palette.css\";".to_string(),
+                "walker theme t".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn rebase_import_leaves_sibling_safe_paths_alone() {
+        for line in [
+            "@import \"../../../x/walker.css\";",
+            "@import \"/abs/walker.css\";",
+            "@import url(\"file:///abs/walker.css\");",
+        ] {
+            assert_eq!(rebase_import(line, "t"), line);
+        }
+        assert_eq!(
+            rebase_import("@import \"./c.css\";", "t"),
+            "@import \"../t/c.css\";"
+        );
     }
 
     #[test]

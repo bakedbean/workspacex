@@ -104,6 +104,17 @@ workspace (attaching as if you pressed Enter on it), or launches a new TUI
 already attached. These commands are Linux-only and error on other
 platforms.
 
+When [walker](https://github.com/abenz1267/walker) and elephant are
+installed, setup also writes an elephant menu provider and a `wsx` walker
+theme, so the picker shows PR numbers, review marks, and diff counts. The
+theme borrows its colors from the `@import`s of the walker theme set in
+`~/.config/walker/config.toml` (falling back to omarchy's palette, then
+built-in colors) — re-run `wsx setup waybar` after switching walker
+themes. Elephant only loads new menus on restart: setup restarts its
+systemd unit, or replaces a bare elephant process (e.g. Hyprland
+`exec-once`) with the same executable and arguments. Restart walker
+yourself to pick up the theme.
+
 ## macOS menubar (SwiftBar)
 
 On macOS, a [SwiftBar](https://github.com/swiftbar/SwiftBar) plugin mirrors

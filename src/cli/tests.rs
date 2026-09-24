@@ -2866,6 +2866,14 @@ fn parses_setup_waybar() {
 }
 
 #[test]
+fn parses_setup_plasma() {
+    assert!(matches!(
+        parse(&["setup", "plasma"]),
+        Ok(CliAction::SetupPlasma)
+    ));
+}
+
+#[test]
 fn waybar_group_help_renders() {
     let h = render_group_help("waybar");
     assert!(h.contains("wsx waybar —"));

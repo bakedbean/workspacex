@@ -178,6 +178,7 @@ pub enum CliAction {
     },
     WaybarMenuEntries,
     WaybarRefreshPrs,
+    SetupPlasma,
     SetupMenubar,
     MenubarPlugin,
     MenubarJump {

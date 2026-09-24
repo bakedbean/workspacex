@@ -16,6 +16,7 @@ pub(in crate::cli) fn parse_setup(it: &mut Args) -> Result<CliAction> {
     match it.next().as_deref() {
         Some("install-skill") => Ok(CliAction::SetupInstallSkill),
         Some("waybar") => Ok(CliAction::SetupWaybar),
+        Some("plasma") => Ok(CliAction::SetupPlasma),
         Some("menubar") => Ok(CliAction::SetupMenubar),
         other => Err(Error::Usage {
             group: None,

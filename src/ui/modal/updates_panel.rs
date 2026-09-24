@@ -121,7 +121,7 @@ const STATUS_MIN_W: usize = 12;
 /// the whole panel.
 fn name_col_width<'a>(names: impl Iterator<Item = &'a str>, row_width: usize) -> usize {
     let cap = NAME_COL_MAX.min(row_width.saturating_sub(ROW_PREFIX_W + COL_GAP_W + 1));
-    names.map(|n| n.chars().count()).max().unwrap_or(0).min(cap)
+    names.map(display_width).max().unwrap_or(0).min(cap)
 }
 
 /// Case-insensitive substring match against the workspace name, the owning
@@ -1357,6 +1357,30 @@ mod workspace_row_tests {
             "row must fill row_width: {body:?}"
         );
         assert!(body.ends_with("5s"), "age survives truncation: {body:?}");
+    }
+
+    #[test]
+    fn name_col_width_fits_a_wide_name_whole() {
+        // 7 chars but 13 cells: a column sized in chars would cut it short.
+        let w = fixture_workspace("倉庫名-ワーク");
+        let name_col = name_col_width([w.name.as_str(), "alpha"].into_iter(), 98);
+        assert_eq!(name_col, 13);
+        let line = row_line(
+            &w,
+            None,
+            None,
+            false,
+            None,
+            false,
+            Status::Idle,
+            None,
+            10_000,
+            name_col,
+            98,
+            &Theme::ansi(),
+        );
+        let body = line_text(&line);
+        assert!(body.contains("倉庫名-ワーク"), "name shown whole: {body:?}");
     }
 
     #[test]

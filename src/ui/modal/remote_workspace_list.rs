@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::app::{RemoteList, remote_rows};
-use crate::ui::text::{truncate, truncate_pad};
+use crate::ui::text::{display_width, truncate, truncate_pad};
 
 /// Render the floating remote-workspace-list modal. Rows are flattened per
 /// agent instance by `crate::app::remote_rows` — the same helper the key
@@ -95,20 +95,20 @@ pub fn render_remote_workspace_list(
         // indent(1) + agent + gap(2) + branch + gap(2) + ws.
         let agent_desired = rows
             .iter()
-            .map(|r| r.label.chars().count())
+            .map(|r| display_width(r.label))
             .max()
             .unwrap_or(1)
             .clamp(1, 14);
         let ws_desired = ws_cells
             .iter()
-            .map(|s| s.chars().count())
+            .map(|s| display_width(s))
             .max()
             .unwrap_or(1)
             .clamp(1, 34);
         let branch_desired = rows
             .iter()
             .zip(&prefixes)
-            .map(|(r, p)| p.chars().count() + r.branch.chars().count())
+            .map(|(r, p)| display_width(p) + display_width(r.branch))
             .max()
             .unwrap_or(1);
         let budget = (body_area.width as usize).saturating_sub(1 + 2 + 2);
@@ -122,7 +122,7 @@ pub fn render_remote_workspace_list(
                 .unwrap_or_else(|| theme.dim_style());
             // Truncate the branch *name* to the room left after the prefix, so the
             // glyph and `#<num>` always survive even in a narrow panel.
-            let prefix_w = prefixes[i].chars().count();
+            let prefix_w = display_width(&prefixes[i]);
             let name = truncate(row.branch, branch_w.saturating_sub(prefix_w));
             let branch_cell = truncate_pad(&format!("{}{name}", prefixes[i]), branch_w);
             let mut spans = vec![
@@ -502,6 +502,54 @@ mod tests {
             r2.find("repo/beta"),
             "workspace column not aligned:\n{text}"
         );
+    }
+
+    #[test]
+    fn wide_names_under_the_caps_get_columns_that_show_them_whole() {
+        // Each name is 6 chars but 12 cells: columns sized in chars would
+        // cut every one of them with `…` despite the room.
+        let list = RemoteList {
+            host_name: "mini".into(),
+            dest: "mini:".into(),
+            records: vec![SharedWorkspaceRecord {
+                repo: "倉庫".into(),
+                workspace: "作業スペース".into(),
+                branch: "機能ブランチ".into(),
+                worktree_path: "/x".into(),
+                agents: vec![SharedAgentRecord {
+                    label: "エージェント".into(),
+                    agent: "claude".into(),
+                    tmux_session: Some("wsx-a".into()),
+                    alive: true,
+                }],
+                lifecycle: None,
+                pr_number: None,
+            }],
+        };
+        let theme = Theme::wsx();
+        let mut term = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        term.draw(|f| {
+            render_remote_workspace_list(f, f.area(), &list, usize::MAX, None, &theme, false);
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        // Read each row as drawn: a wide char also covers the cell after it.
+        let text = (0..buf.area.height)
+            .map(|y| {
+                let mut row = String::new();
+                let mut x = 0;
+                while x < buf.area.width {
+                    let symbol = buf[(x, y)].symbol();
+                    row.push_str(symbol);
+                    x += display_width(symbol).max(1) as u16;
+                }
+                row
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for name in ["エージェント", "機能ブランチ", "倉庫/作業スペース"] {
+            assert!(text.contains(name), "{name} cut short:\n{text}");
+        }
     }
 
     #[test]

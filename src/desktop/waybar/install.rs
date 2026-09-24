@@ -183,9 +183,67 @@ pub fn install_walker_theme_into(config_root: &Path) -> Result<String> {
     let dir = config_root.join("walker/themes/wsx");
     std::fs::create_dir_all(&dir)?;
     std::fs::write(dir.join("layout.xml"), WALKER_THEME_LAYOUT)?;
-    std::fs::write(dir.join("style.css"), WALKER_THEME_CSS)?;
+    let css = WALKER_THEME_CSS.replace("__PALETTE_IMPORT__", &palette_imports(config_root));
+    std::fs::write(dir.join("style.css"), css)?;
     std::fs::write(dir.join("item_menus-wsx.xml"), WALKER_THEME_ITEM)?;
     Ok(format!("installed walker theme: {}", dir.display()))
+}
+
+/// Palette used when the user's active walker theme can't be read: the one
+/// omarchy's own walker themes import.
+const OMARCHY_PALETTE_IMPORT: &str = "@import \"../../../omarchy/current/theme/walker.css\";";
+
+/// The `@import` lines that give the wsx theme its colors, borrowed from the
+/// theme named in `walker/config.toml` so the menu matches the user's
+/// launcher on any distro (omarchy, fedora-hypr, hand-rolled). Falls back to
+/// omarchy's palette when there is no config, no theme, or the theme has no
+/// imports — the theme's color rules are unusable without one.
+pub(crate) fn palette_imports(config_root: &Path) -> String {
+    let themes = config_root.join("walker/themes");
+    let theme = std::fs::read_to_string(config_root.join("walker/config.toml"))
+        .ok()
+        .and_then(|s| s.parse::<toml::Table>().ok())
+        .and_then(|t| t.get("theme")?.as_str().map(str::to_string))
+        // The wsx theme's imports are what we're computing; borrowing them
+        // would be circular.
+        .filter(|name| name != "wsx" && !name.contains('/'));
+    let imports: Vec<String> = theme
+        .and_then(|name| {
+            let css = std::fs::read_to_string(themes.join(&name).join("style.css")).ok()?;
+            Some(
+                css.lines()
+                    .map(str::trim)
+                    .filter(|l| l.starts_with("@import"))
+                    .map(|l| rebase_import(l, &name))
+                    .collect(),
+            )
+        })
+        .unwrap_or_default();
+    if imports.is_empty() {
+        OMARCHY_PALETTE_IMPORT.to_string()
+    } else {
+        imports.join("\n")
+    }
+}
+
+/// Re-point a relative `@import` from `themes/<theme>/style.css` so it still
+/// resolves from `themes/wsx/style.css`. The two files are siblings, so
+/// `../`-relative, absolute, and URL imports carry over unchanged; only a
+/// same-directory import (`colors.css`) needs the `../<theme>/` prefix.
+fn rebase_import(line: &str, theme: &str) -> String {
+    let Some(start) = line.find(['"', '\'']) else {
+        return line.to_string();
+    };
+    let quote = &line[start..=start];
+    let Some(len) = line[start + 1..].find(quote) else {
+        return line.to_string();
+    };
+    let path = &line[start + 1..start + 1 + len];
+    if path.starts_with("../") || path.starts_with('/') || path.contains("://") {
+        return line.to_string();
+    }
+    let rebased = format!("../{theme}/{}", path.trim_start_matches("./"));
+    format!("{}{rebased}{}", &line[..=start], &line[start + 1 + len..])
 }
 
 /// Elephant only hot-REGISTERS a freshly written menu file — its Lua doesn't
@@ -382,6 +440,79 @@ mod install_tests {
         );
         // Re-install overwrites without error (setup is re-runnable).
         install_walker_theme_into(tmp.path()).unwrap();
+    }
+
+    fn write(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn walker_theme_borrows_the_active_themes_palette() {
+        // A non-omarchy setup (fedora-hypr): the omarchy palette path doesn't
+        // exist, so hardcoding it left every color undefined and the window
+        // fully transparent.
+        let tmp = tempfile::tempdir().unwrap();
+        write(
+            &tmp.path().join("walker/config.toml"),
+            "force_keyboard_focus = true\ntheme = \"fh-default\" # comment\n",
+        );
+        write(
+            &tmp.path().join("walker/themes/fh-default/style.css"),
+            "@import \"../../../fedora-hypr/current/theme/walker.css\";\n\
+             @import 'colors.css';\n\n* {\n  all: unset;\n}\n",
+        );
+        install_walker_theme_into(tmp.path()).unwrap();
+        let css = std::fs::read_to_string(tmp.path().join("walker/themes/wsx/style.css")).unwrap();
+        assert!(
+            css.contains("@import \"../../../fedora-hypr/current/theme/walker.css\";"),
+            "{css:.600}"
+        );
+        // Same-directory import re-pointed at the source theme's dir.
+        assert!(
+            css.contains("@import '../fh-default/colors.css';"),
+            "{css:.600}"
+        );
+        assert!(!css.contains("omarchy/current"), "{css:.600}");
+        assert!(!css.contains("__PALETTE_IMPORT__"), "{css:.600}");
+    }
+
+    #[test]
+    fn walker_theme_falls_back_to_omarchy_palette() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No config at all.
+        assert_eq!(palette_imports(tmp.path()), OMARCHY_PALETTE_IMPORT);
+        // Config naming the wsx theme itself must not self-import.
+        write(&tmp.path().join("walker/config.toml"), "theme = \"wsx\"\n");
+        write(
+            &tmp.path().join("walker/themes/wsx/style.css"),
+            "@import \"stale.css\";\n",
+        );
+        assert_eq!(palette_imports(tmp.path()), OMARCHY_PALETTE_IMPORT);
+        // Theme without imports, and theme whose dir is missing.
+        write(
+            &tmp.path().join("walker/config.toml"),
+            "theme = \"plain\"\n",
+        );
+        write(&tmp.path().join("walker/themes/plain/style.css"), "* {}\n");
+        assert_eq!(palette_imports(tmp.path()), OMARCHY_PALETTE_IMPORT);
+        write(&tmp.path().join("walker/config.toml"), "theme = \"gone\"\n");
+        assert_eq!(palette_imports(tmp.path()), OMARCHY_PALETTE_IMPORT);
+    }
+
+    #[test]
+    fn rebase_import_leaves_sibling_safe_paths_alone() {
+        for line in [
+            "@import \"../../../x/walker.css\";",
+            "@import \"/abs/walker.css\";",
+            "@import url(\"file:///abs/walker.css\");",
+        ] {
+            assert_eq!(rebase_import(line, "t"), line);
+        }
+        assert_eq!(
+            rebase_import("@import \"./c.css\";", "t"),
+            "@import \"../t/c.css\";"
+        );
     }
 
     #[test]

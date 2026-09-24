@@ -1,11 +1,13 @@
 /* wsx walker theme, derived from omarchy-default. Differences: the
    item-subtext line is visible (omarchy zeroes it out for its single-line
    app launcher) and row padding is tightened for two-line entries. Colors
-   come from the active omarchy theme via the same walker.css omarchy's own
-   theme imports; on a non-omarchy setup the import fails harmlessly and
-   GTK falls back to default colors.
+   (@base, @text, @border, ...) come from the palette the user's active
+   walker theme imports — `wsx setup waybar` copies that theme's @import
+   lines here, falling back to omarchy's walker.css. Without a palette those
+   colors are undefined and GTK drops the rules, leaving the window
+   transparent.
    Installed by `wsx setup waybar`; edits are overwritten on re-run. */
-@import "../../../omarchy/current/theme/walker.css";
+__PALETTE_IMPORT__
 
 * {
   all: unset;

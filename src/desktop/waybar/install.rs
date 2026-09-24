@@ -120,13 +120,78 @@ fn snippet_report(include_path: &str) -> Vec<String> {
     ]
 }
 
-/// True when `css` has a live `@import` of the module stylesheet (a
-/// commented-out line doesn't count — waybar wouldn't load it).
+/// True when `css` has a live `@import` of the module stylesheet itself —
+/// not one inside a comment (waybar wouldn't load it) and not a different
+/// file that merely ends the same way (`old-wsx.css`).
 fn imports_module_css(css: &str) -> bool {
-    css.lines().any(|l| {
-        let l = l.trim();
-        l.starts_with("@import") && l.contains("wsx.css")
+    css_imports(css).iter().any(|stmt| {
+        import_target(stmt).is_some_and(|(s, e)| stmt[s..e].rsplit('/').next() == Some("wsx.css"))
     })
+}
+
+/// `css` with every `/* ... */` comment removed, leaving quoted strings
+/// intact (a `/*` inside a string is text, not a comment opener). An
+/// unterminated comment swallows the rest of the input, as in a browser.
+fn strip_css_comments(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut chars = css.chars().peekable();
+    let mut quote: Option<char> = None;
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) => {
+                out.push(c);
+                if c == '\\' {
+                    out.extend(chars.next());
+                } else if c == q {
+                    quote = None;
+                }
+            }
+            None if c == '/' && chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut prev = '\0';
+                for c in chars.by_ref() {
+                    if prev == '*' && c == '/' {
+                        break;
+                    }
+                    prev = c;
+                }
+                // Keep tokens on either side of the comment apart.
+                out.push(' ');
+            }
+            None => {
+                if c == '"' || c == '\'' {
+                    quote = Some(c);
+                }
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// The live `@import` statements in `css`, one per line, trimmed. Comments
+/// are stripped first so a commented-out import is never mistaken for (or
+/// resurrected as) a live one.
+fn css_imports(css: &str) -> Vec<String> {
+    strip_css_comments(css)
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("@import"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Byte span of the path inside an `@import` statement: the first quoted
+/// string (`@import "x";`, `@import url('x');`) or a bare `url(x)`.
+fn import_target(stmt: &str) -> Option<(usize, usize)> {
+    if let Some(start) = stmt.find(['"', '\'']) {
+        let quote = stmt[start..].chars().next()?;
+        let len = stmt[start + 1..].find(quote)?;
+        return Some((start + 1, start + 1 + len));
+    }
+    let start = stmt.find("url(")? + 4;
+    let len = stmt[start..].find(')')?;
+    Some((start, start + len))
 }
 
 /// Testable core of the installer: writes the bundled module assets into
@@ -226,9 +291,8 @@ pub(crate) fn palette_imports(config_root: &Path) -> String {
         .and_then(|name| {
             let css = std::fs::read_to_string(themes.join(&name).join("style.css")).ok()?;
             Some(
-                css.lines()
-                    .map(str::trim)
-                    .filter(|l| l.starts_with("@import"))
+                css_imports(&css)
+                    .iter()
                     .map(|l| rebase_import(l, &name))
                     .collect(),
             )
@@ -246,19 +310,15 @@ pub(crate) fn palette_imports(config_root: &Path) -> String {
 /// `../`-relative, absolute, and URL imports carry over unchanged; only a
 /// same-directory import (`colors.css`) needs the `../<theme>/` prefix.
 fn rebase_import(line: &str, theme: &str) -> String {
-    let Some(start) = line.find(['"', '\'']) else {
+    let Some((start, end)) = import_target(line) else {
         return line.to_string();
     };
-    let quote = &line[start..=start];
-    let Some(len) = line[start + 1..].find(quote) else {
-        return line.to_string();
-    };
-    let path = &line[start + 1..start + 1 + len];
+    let path = line[start..end].trim();
     if path.starts_with("../") || path.starts_with('/') || path.contains("://") {
         return line.to_string();
     }
     let rebased = format!("../{theme}/{}", path.trim_start_matches("./"));
-    format!("{}{rebased}{}", &line[..=start], &line[start + 1 + len..])
+    format!("{}{rebased}{}", &line[..start], &line[end..])
 }
 
 /// Elephant only hot-REGISTERS a freshly written menu file — its Lua doesn't
@@ -568,6 +628,40 @@ mod install_tests {
         assert_eq!(palette_imports(tmp.path()), OMARCHY_PALETTE_IMPORT);
         write(&tmp.path().join("walker/config.toml"), "theme = \"gone\"\n");
         assert_eq!(palette_imports(tmp.path()), OMARCHY_PALETTE_IMPORT);
+    }
+
+    #[test]
+    fn css_imports_ignore_comments_and_match_exact_targets() {
+        // A multi-line comment hides imports on its inner lines; a `/*`
+        // inside a string is not a comment opener.
+        let css = "/*\n@import \"wsx.css\";\n*/\n\
+                   @import \"a/*b.css\"; /* trailing */\n\
+                   /* x */ @import url(c.css);\n";
+        assert_eq!(
+            css_imports(css),
+            vec!["@import \"a/*b.css\";", "@import url(c.css);"]
+        );
+        assert!(!imports_module_css(css));
+        // Exact file name, not a suffix match.
+        assert!(!imports_module_css("@import \"old-wsx.css\";"));
+        assert!(imports_module_css("@import url('./wsx.css');"));
+        assert!(imports_module_css(
+            "@import \"/home/u/.config/waybar/wsx.css\";"
+        ));
+    }
+
+    #[test]
+    fn palette_ignores_commented_out_imports() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(&tmp.path().join("walker/config.toml"), "theme = \"t\"\n");
+        write(
+            &tmp.path().join("walker/themes/t/style.css"),
+            "/*\n@import \"../old/palette.css\";\n*/\n@import \"../new/palette.css\";\n",
+        );
+        assert_eq!(
+            palette_imports(tmp.path()),
+            "@import \"../new/palette.css\";"
+        );
     }
 
     #[test]

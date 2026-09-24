@@ -248,15 +248,42 @@ fn rebase_import(line: &str, theme: &str) -> String {
 
 /// Elephant only hot-REGISTERS a freshly written menu file — its Lua doesn't
 /// execute until the service restarts, so a new menu silently serves
-/// "No Results" until then. Best-effort: `try-restart` is a no-op when
-/// elephant isn't running, and any failure degrades to a printed hint.
+/// "No Results" until then. Best-effort: omarchy runs elephant as a systemd
+/// user unit, but other setups (e.g. Hyprland `exec-once`) run a bare
+/// process with no unit to restart — that one is replaced in place. When
+/// elephant isn't running at all there is nothing to reload.
 fn restart_elephant() -> String {
-    match std::process::Command::new("systemctl")
+    use std::process::{Command, Stdio};
+    let unit_restarted = Command::new("systemctl")
         .args(["--user", "try-restart", "elephant"])
+        // "Unit elephant.service not found" is the expected answer off
+        // omarchy; don't leak it into the setup report.
+        .stderr(Stdio::null())
         .status()
+        .is_ok_and(|s| s.success());
+    if unit_restarted {
+        return "restarted elephant (menu definitions load only on restart)".into();
+    }
+    let running = Command::new("pgrep")
+        .args(["-x", "elephant"])
+        .stdout(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !running {
+        return "elephant is not running; the menu loads when it next starts".into();
+    }
+    let _ = Command::new("pkill").args(["-x", "elephant"]).status();
+    // Own process group so the daemon outlives this terminal session.
+    use std::os::unix::process::CommandExt;
+    match Command::new("elephant")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
     {
-        Ok(s) if s.success() => "restarted elephant (menu definitions load only on restart)".into(),
-        _ => "restart elephant to load the menu: systemctl --user try-restart elephant".into(),
+        Ok(_) => "restarted elephant (menu definitions load only on restart)".into(),
+        Err(_) => "restart elephant to load the menu: setsid -f elephant".into(),
     }
 }
 
@@ -287,7 +314,8 @@ pub fn run() -> Result<Vec<String>> {
             // Walker scans theme files once at service startup; a running
             // walker service keeps rendering the old theme until restarted.
             lines.push(
-                "restart walker to reload the wsx theme: omarchy-restart-walker (or pkill walker)"
+                "restart walker to reload the wsx theme: omarchy-restart-walker, or \
+                 pkill -x walker && setsid -f walker --gapplication-service"
                     .into(),
             );
         }

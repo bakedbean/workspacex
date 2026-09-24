@@ -120,6 +120,15 @@ fn snippet_report(include_path: &str) -> Vec<String> {
     ]
 }
 
+/// True when `css` has a live `@import` of the module stylesheet (a
+/// commented-out line doesn't count — waybar wouldn't load it).
+fn imports_module_css(css: &str) -> bool {
+    css.lines().any(|l| {
+        let l = l.trim();
+        l.starts_with("@import") && l.contains("wsx.css")
+    })
+}
+
 /// Testable core of the installer: writes the bundled module assets into
 /// `waybar_dir` and attempts to patch `config.jsonc` in place, using `epoch`
 /// to name the pre-patch backup file.
@@ -153,7 +162,13 @@ pub fn install_into(waybar_dir: &Path, epoch: u64) -> Result<Vec<String>> {
         },
         Err(_) => report.extend(snippet_report(&include_path)),
     }
-    report.push("add to style.css (after existing @import lines): @import \"wsx.css\";".into());
+    let styled = std::fs::read_to_string(waybar_dir.join("style.css"))
+        .is_ok_and(|css| imports_module_css(&css));
+    if styled {
+        report.push("style.css already imports wsx.css".into());
+    } else {
+        report.push("add to style.css (after existing @import lines): @import \"wsx.css\";".into());
+    }
     report.push("reload waybar: omarchy-restart-waybar (or pkill -SIGUSR2 waybar)".into());
     Ok(report)
 }
@@ -415,6 +430,33 @@ mod install_tests {
                 .file_name()
                 .to_string_lossy()
                 .contains("wsx-tmp"))
+        );
+    }
+
+    #[test]
+    fn style_css_hint_only_when_import_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let hint = |report: &[String]| report.iter().any(|l| l.starts_with("add to style.css"));
+        // No style.css, and one with only a commented-out import: hint.
+        assert!(hint(&install_into(dir.path(), 1).unwrap()));
+        std::fs::write(
+            dir.path().join("style.css"),
+            "@import \"theme.css\";\n/* @import \"wsx.css\"; */\n",
+        )
+        .unwrap();
+        assert!(hint(&install_into(dir.path(), 2).unwrap()));
+        // Live import: no hint, report says so instead.
+        std::fs::write(
+            dir.path().join("style.css"),
+            "@import \"theme.css\";\n  @import \"wsx.css\";\n",
+        )
+        .unwrap();
+        let report = install_into(dir.path(), 3).unwrap();
+        assert!(!hint(&report), "{report:?}");
+        assert!(
+            report
+                .iter()
+                .any(|l| l == "style.css already imports wsx.css")
         );
     }
 

@@ -30,11 +30,11 @@ fn parses_agent_send_with_workspace_flag() {
     {
         CliAction::AgentSend {
             target,
-            prompt,
+            body,
             workspace,
         } => {
             assert_eq!(target, "primary");
-            assert_eq!(prompt, "do the thing");
+            assert_eq!(body, MessageBody::Inline("do the thing".into()));
             assert_eq!(workspace.as_deref(), Some("backend/add-widgets"));
         }
         other => panic!("expected AgentSend, got {other:?}"),
@@ -48,11 +48,11 @@ fn agent_send_flags_are_only_recognised_before_the_label() {
     match parse(&["agent", "send", "claude", "--workspace", "is", "a", "flag"]).unwrap() {
         CliAction::AgentSend {
             target,
-            prompt,
+            body,
             workspace,
         } => {
             assert_eq!(target, "claude");
-            assert_eq!(prompt, "--workspace is a flag");
+            assert_eq!(body, MessageBody::Inline("--workspace is a flag".into()));
             assert_eq!(workspace, None);
         }
         other => panic!("expected AgentSend, got {other:?}"),
@@ -192,7 +192,7 @@ async fn agent_send_dispatch_targets_the_other_workspaces_primary() {
 
     let action = CliAction::AgentSend {
         target: "primary".to_string(),
-        prompt: "do the thing".to_string(),
+        body: MessageBody::Inline("do the thing".into()),
         workspace: Some("r/target".to_string()),
     };
     run_cli(action, &dirs).await.unwrap();
@@ -255,7 +255,7 @@ async fn agent_send_unknown_label_error_offers_the_primary_alias() {
     // the exact case a sender hits when it cannot enumerate the target.
     let action = CliAction::AgentSend {
         target: "claude".to_string(),
-        prompt: "do the thing".to_string(),
+        body: MessageBody::Inline("do the thing".into()),
         workspace: Some("r/target".to_string()),
     };
     let err = run_cli(action, &dirs).await.unwrap_err().to_string();
@@ -270,6 +270,651 @@ async fn agent_send_unknown_label_error_offers_the_primary_alias() {
     // Nothing is queued when resolution fails.
     let store = Store::open(&dirs.db_path()).unwrap();
     assert!(store.undelivered_messages().unwrap().is_empty());
+}
+
+#[test]
+fn agent_send_reads_the_body_from_a_file_or_stdin() {
+    match parse(&["agent", "send", "--file", "/tmp/brief.md", "claude"]).unwrap() {
+        CliAction::AgentSend { target, body, .. } => {
+            assert_eq!(target, "claude");
+            assert_eq!(body, MessageBody::File("/tmp/brief.md".into()));
+        }
+        other => panic!("expected AgentSend, got {other:?}"),
+    }
+    // `--file -` and a lone `-` body both mean stdin.
+    for argv in [
+        &["agent", "send", "--file", "-", "claude"][..],
+        &["agent", "send", "claude", "-"][..],
+    ] {
+        match parse(argv).unwrap() {
+            CliAction::AgentSend { body, .. } => assert_eq!(body, MessageBody::Stdin),
+            other => panic!("expected AgentSend, got {other:?}"),
+        }
+    }
+    // `-` inside a longer inline body is just text.
+    match parse(&["agent", "send", "claude", "a", "-", "b"]).unwrap() {
+        CliAction::AgentSend { body, .. } => {
+            assert_eq!(body, MessageBody::Inline("a - b".into()))
+        }
+        other => panic!("expected AgentSend, got {other:?}"),
+    }
+    // A file body and an inline body are mutually exclusive.
+    assert!(parse(&["agent", "send", "--file", "x", "claude", "hi"]).is_err());
+    assert!(parse(&["agent", "send", "--file"]).is_err());
+    assert!(parse(&["agent", "send", "--file", "x"]).is_err()); // no label
+}
+
+#[test]
+fn parses_agent_messages_flags() {
+    let got = |argv: &[&str]| match parse(argv).unwrap() {
+        CliAction::AgentMessages {
+            view,
+            undelivered,
+            limit,
+            id,
+        } => (view, undelivered, limit, id),
+        other => panic!("expected AgentMessages, got {other:?}"),
+    };
+    assert_eq!(
+        got(&["agent", "messages"]),
+        (MessagesView::Inbox, false, DEFAULT_MESSAGES_LIMIT, None)
+    );
+    assert_eq!(
+        got(&[
+            "agent",
+            "messages",
+            "--sent",
+            "--undelivered",
+            "--limit",
+            "5"
+        ]),
+        (MessagesView::Sent, true, 5, None)
+    );
+    assert_eq!(
+        got(&["agent", "messages", "--all"]).0,
+        MessagesView::Workspace
+    );
+    assert_eq!(got(&["agent", "messages", "--id", "561"]).3, Some(561));
+    assert_eq!(got(&["agent", "messages", "--id", "#561"]).3, Some(561));
+    assert!(parse(&["agent", "messages", "--sent", "--all"]).is_err());
+    assert!(parse(&["agent", "messages", "--limit", "x"]).is_err());
+    assert!(parse(&["agent", "messages", "--id"]).is_err());
+    assert!(parse(&["agent", "messages", "stray"]).is_err());
+}
+
+#[test]
+fn parses_agent_whoami() {
+    assert!(matches!(
+        parse(&["agent", "whoami"]).unwrap(),
+        CliAction::AgentWhoami
+    ));
+    assert!(parse(&["agent", "whoami", "extra"]).is_err());
+}
+
+#[test]
+fn parses_agent_reply_with_and_without_a_message_id() {
+    let got = |argv: &[&str]| match parse(argv).unwrap() {
+        CliAction::AgentReply { to, body } => (to, body),
+        other => panic!("expected AgentReply, got {other:?}"),
+    };
+    assert_eq!(
+        got(&["agent", "reply", "561", "looks", "good"]),
+        (Some(561), MessageBody::Inline("looks good".into()))
+    );
+    assert_eq!(
+        got(&["agent", "reply", "#561", "ok"]),
+        (Some(561), MessageBody::Inline("ok".into()))
+    );
+    // No id: reply to the latest message received.
+    assert_eq!(
+        got(&["agent", "reply", "looks", "good"]),
+        (None, MessageBody::Inline("looks good".into()))
+    );
+    // A lone number is the body, not an id with a missing body.
+    assert_eq!(
+        got(&["agent", "reply", "42"]),
+        (None, MessageBody::Inline("42".into()))
+    );
+    assert_eq!(
+        got(&["agent", "reply", "--file", "r.md", "561"]),
+        (Some(561), MessageBody::File("r.md".into()))
+    );
+    assert_eq!(
+        got(&["agent", "reply", "--file", "r.md"]),
+        (None, MessageBody::File("r.md".into()))
+    );
+    assert_eq!(
+        got(&["agent", "reply", "561", "-"]),
+        (Some(561), MessageBody::Stdin)
+    );
+    assert!(parse(&["agent", "reply"]).is_err());
+    assert!(parse(&["agent", "reply", "--file", "r.md", "561", "extra"]).is_err());
+}
+
+#[test]
+fn parses_agent_wait_flags() {
+    let got = |argv: &[&str]| match parse(argv).unwrap() {
+        CliAction::AgentWait {
+            from,
+            after,
+            timeout_secs,
+        } => (from, after, timeout_secs),
+        other => panic!("expected AgentWait, got {other:?}"),
+    };
+    assert_eq!(
+        got(&["agent", "wait"]),
+        (None, None, DEFAULT_WAIT_TIMEOUT_SECS)
+    );
+    assert_eq!(
+        got(&[
+            "agent",
+            "wait",
+            "--from",
+            "claude#2",
+            "--after",
+            "#560",
+            "--timeout",
+            "0"
+        ]),
+        (Some("claude#2".to_string()), Some(560), 0)
+    );
+    assert!(parse(&["agent", "wait", "--timeout", "soon"]).is_err());
+    assert!(parse(&["agent", "wait", "--from"]).is_err());
+    assert!(parse(&["agent", "wait", "claude"]).is_err());
+}
+
+/// Two workspaces in repo `r`, `origin` and `target`, each with a claude
+/// primary, seeded into the DB `run_cli` will open.
+struct MailFixture {
+    _tmp: tempfile::TempDir,
+    dirs: crate::config::Dirs,
+    origin_ws: crate::data::store::WorkspaceId,
+    origin: crate::data::store::AgentInstanceId,
+    target_ws: crate::data::store::WorkspaceId,
+    target: crate::data::store::AgentInstanceId,
+}
+
+impl MailFixture {
+    fn new() -> Self {
+        use crate::data::store::{NewWorkspace, Store};
+        use crate::pty::session::AgentKind;
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = crate::config::Dirs::for_test(tmp.path());
+        let store = Store::open(&dirs.db_path()).unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+            .unwrap();
+        let mk = |name: &str| {
+            let ws = store
+                .insert_workspace(&NewWorkspace {
+                    repo_id: repo,
+                    name,
+                    branch: &format!("wsx/{name}"),
+                    worktree_path: &std::path::Path::new("/tmp/r").join(name),
+                    yolo: false,
+                    agent: AgentKind::Claude,
+                    shared: false,
+                })
+                .unwrap();
+            let p = store.add_primary_agent(ws, AgentKind::Claude, 1).unwrap();
+            (ws, p.id)
+        };
+        let (origin_ws, origin) = mk("origin");
+        let (target_ws, target) = mk("target");
+        Self {
+            _tmp: tmp,
+            dirs,
+            origin_ws,
+            origin,
+            target_ws,
+            target,
+        }
+    }
+
+    fn store(&self) -> crate::data::store::Store {
+        crate::data::store::Store::open(&self.dirs.db_path()).unwrap()
+    }
+
+    /// An EnvGuard acting as agent `me` (or as a plain shell when `None`),
+    /// with the TUI-liveness probe pointed at an empty dir.
+    fn env_as(
+        &self,
+        me: Option<crate::data::store::AgentInstanceId>,
+    ) -> crate::test_support::EnvGuard {
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("XDG_RUNTIME_DIR", self._tmp.path());
+        env.remove("WSX_WORKSPACE_ID");
+        match me {
+            Some(id) => env.set("WSX_AGENT_INSTANCE_ID", id.0.to_string()),
+            None => env.remove("WSX_AGENT_INSTANCE_ID"),
+        }
+        env
+    }
+}
+
+#[tokio::test]
+async fn agent_send_file_body_is_queued_verbatim() {
+    let fx = MailFixture::new();
+    let _env = fx.env_as(Some(fx.origin));
+    let brief = fx._tmp.path().join("brief.md");
+    std::fs::write(
+        &brief,
+        "TASK: run `cargo test`\n$(not expanded) \"quoted\"\n",
+    )
+    .unwrap();
+    run_cli(
+        CliAction::AgentSend {
+            target: "primary".into(),
+            body: MessageBody::File(brief),
+            workspace: Some("r/target".into()),
+        },
+        &fx.dirs,
+    )
+    .await
+    .unwrap();
+    let queued = fx.store().undelivered_messages().unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(
+        queued[0].body,
+        "TASK: run `cargo test`\n$(not expanded) \"quoted\""
+    );
+    assert_eq!(queued[0].target_agent_id, fx.target);
+    assert_eq!(queued[0].from_agent_id, Some(fx.origin));
+}
+
+#[tokio::test]
+async fn agent_send_refuses_an_empty_body() {
+    let fx = MailFixture::new();
+    let _env = fx.env_as(Some(fx.origin));
+    let empty = fx._tmp.path().join("empty.md");
+    std::fs::write(&empty, "\n  \n").unwrap();
+    for body in [MessageBody::File(empty), MessageBody::Inline(" ".into())] {
+        let err = run_cli(
+            CliAction::AgentSend {
+                target: "primary".into(),
+                body,
+                workspace: Some("r/target".into()),
+            },
+            &fx.dirs,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("empty"), "{err}");
+    }
+    assert!(fx.store().undelivered_messages().unwrap().is_empty());
+}
+
+/// Agents paste `$WSX_AGENT_INSTANCE_ID` into briefs; a numeric target is
+/// that id, resolved globally with no `--workspace`.
+#[tokio::test]
+async fn agent_send_accepts_a_numeric_instance_id() {
+    let fx = MailFixture::new();
+    let _env = fx.env_as(Some(fx.origin));
+    run_cli(
+        CliAction::AgentSend {
+            target: fx.target.0.to_string(),
+            body: MessageBody::Inline("hi".into()),
+            workspace: None,
+        },
+        &fx.dirs,
+    )
+    .await
+    .unwrap();
+    let queued = fx.store().undelivered_messages().unwrap();
+    assert_eq!(queued[0].target_agent_id, fx.target);
+    assert_eq!(queued[0].workspace_id, fx.target_ws);
+
+    // A contradicting --workspace is an error, not a silent reroute.
+    let err = run_cli(
+        CliAction::AgentSend {
+            target: fx.target.0.to_string(),
+            body: MessageBody::Inline("hi".into()),
+            workspace: Some("r/origin".into()),
+        },
+        &fx.dirs,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("r/target"), "{err}");
+    let err = run_cli(
+        CliAction::AgentSend {
+            target: "999999".into(),
+            body: MessageBody::Inline("hi".into()),
+            workspace: None,
+        },
+        &fx.dirs,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("no agent instance 999999"), "{err}");
+}
+
+#[tokio::test]
+async fn agent_messages_needs_an_identity_except_with_all() {
+    let fx = MailFixture::new();
+    let _env = fx.env_as(None);
+    let err = run_cli(
+        CliAction::AgentMessages {
+            view: MessagesView::Inbox,
+            undelivered: false,
+            limit: 20,
+            id: None,
+        },
+        &fx.dirs,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("--all"),
+        "must point at the workspace-wide view: {err}"
+    );
+    drop(_env);
+
+    let _env = fx.env_as(Some(fx.target));
+    let id = fx
+        .store()
+        .enqueue_message(fx.target_ws, fx.target, Some(fx.origin), "hello")
+        .unwrap();
+    for (view, id) in [
+        (MessagesView::Inbox, None),
+        (MessagesView::Sent, None),
+        (MessagesView::Workspace, None),
+        (MessagesView::Inbox, Some(id)),
+    ] {
+        run_cli(
+            CliAction::AgentMessages {
+                view,
+                undelivered: false,
+                limit: 20,
+                id,
+            },
+            &fx.dirs,
+        )
+        .await
+        .unwrap();
+    }
+    let err = run_cli(
+        CliAction::AgentMessages {
+            view: MessagesView::Inbox,
+            undelivered: false,
+            limit: 20,
+            id: Some(id + 100),
+        },
+        &fx.dirs,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("no message"), "{err}");
+}
+
+#[test]
+fn agent_messages_rows_qualify_cross_workspace_parties() {
+    let fx = MailFixture::new();
+    let store = fx.store();
+    let id = store
+        .enqueue_message(fx.target_ws, fx.target, Some(fx.origin), "hé")
+        .unwrap();
+    let m = store.message_by_id(id).unwrap().unwrap();
+    let row = crate::cli::mail::listing_row(&store, &m, fx.target_ws);
+    let cols: Vec<&str> = row.split('\t').collect();
+    assert_eq!(cols[0], id.to_string());
+    assert_eq!(
+        cols[1], "r/origin claude",
+        "sender lives elsewhere: qualified"
+    );
+    assert_eq!(cols[2], "claude", "recipient is local: bare label");
+    assert_eq!(cols[3], "3", "byte length, not char count");
+    assert!(
+        cols[4].ends_with('Z'),
+        "created is UTC ISO-8601: {}",
+        cols[4]
+    );
+    assert_eq!(cols[5], "queued");
+    assert_eq!(
+        cols.len(),
+        crate::cli::mail::LISTING_HEADER.split('\t').count()
+    );
+
+    let full = crate::cli::mail::full_message(&store, &m, fx.origin_ws);
+    assert!(full.starts_with(&format!(
+        "message #{id}\nfrom: claude\nto: r/target claude\n"
+    )));
+    assert!(full.ends_with("\n\nhé"));
+}
+
+#[tokio::test]
+async fn agent_whoami_requires_an_agent_identity() {
+    let fx = MailFixture::new();
+    {
+        let _env = fx.env_as(Some(fx.origin));
+        run_cli(CliAction::AgentWhoami, &fx.dirs).await.unwrap();
+    }
+    let _env = fx.env_as(None);
+    let err = run_cli(CliAction::AgentWhoami, &fx.dirs)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("WSX_AGENT_INSTANCE_ID"), "{err}");
+}
+
+/// The handoff case: origin's agent briefed target's primary. Target replies
+/// without knowing the sender's label or workspace.
+#[tokio::test]
+async fn agent_reply_routes_to_a_cross_workspace_sender() {
+    let fx = MailFixture::new();
+    let first = fx
+        .store()
+        .enqueue_message(fx.target_ws, fx.target, Some(fx.origin), "brief")
+        .unwrap();
+    let latest = fx
+        .store()
+        .enqueue_message(fx.target_ws, fx.target, Some(fx.origin), "follow-up")
+        .unwrap();
+    let _env = fx.env_as(Some(fx.target));
+    for (to, body) in [(None, "re latest"), (Some(first), "re first")] {
+        run_cli(
+            CliAction::AgentReply {
+                to,
+                body: MessageBody::Inline(body.into()),
+            },
+            &fx.dirs,
+        )
+        .await
+        .unwrap();
+    }
+    let replies = fx
+        .store()
+        .list_messages(
+            crate::data::messages::MessageScope::To(fx.origin),
+            false,
+            10,
+        )
+        .unwrap();
+    assert_eq!(replies.len(), 2);
+    for r in &replies {
+        assert_eq!(
+            r.workspace_id, fx.origin_ws,
+            "queued in the SENDER's workspace"
+        );
+        assert_eq!(r.from_agent_id, Some(fx.target));
+    }
+    assert_eq!(replies[0].body, "re latest");
+    assert!(latest > first);
+}
+
+/// With no id, `reply` answers the newest message received, whoever sent it.
+#[tokio::test]
+async fn agent_reply_without_an_id_answers_the_newest_sender() {
+    let fx = MailFixture::new();
+    let store = fx.store();
+    let peer = store
+        .add_workspace_agent(fx.target_ws, crate::pty::session::AgentKind::Codex)
+        .unwrap();
+    store
+        .enqueue_message(fx.target_ws, fx.target, Some(fx.origin), "older")
+        .unwrap();
+    store
+        .enqueue_message(fx.target_ws, fx.target, Some(peer.id), "newer")
+        .unwrap();
+    let _env = fx.env_as(Some(fx.target));
+    run_cli(
+        CliAction::AgentReply {
+            to: None,
+            body: MessageBody::Inline("ack".into()),
+        },
+        &fx.dirs,
+    )
+    .await
+    .unwrap();
+    let to_peer = store
+        .list_messages(crate::data::messages::MessageScope::To(peer.id), false, 10)
+        .unwrap();
+    assert_eq!(to_peer.len(), 1);
+    assert_eq!(to_peer[0].body, "ack");
+    assert!(
+        store
+            .list_messages(
+                crate::data::messages::MessageScope::To(fx.origin),
+                false,
+                10
+            )
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn agent_reply_refuses_mail_it_cannot_answer() {
+    let fx = MailFixture::new();
+    let not_mine = fx
+        .store()
+        .enqueue_message(fx.origin_ws, fx.origin, Some(fx.target), "x")
+        .unwrap();
+    let from_cli = fx
+        .store()
+        .enqueue_message(fx.target_ws, fx.target, None, "x")
+        .unwrap();
+    let _env = fx.env_as(Some(fx.target));
+    for (to, needle) in [
+        (Some(not_mine), "not to you"),
+        (Some(from_cli), "no one to reply to"),
+        (Some(from_cli + 100), "no message"),
+    ] {
+        let err = run_cli(
+            CliAction::AgentReply {
+                to,
+                body: MessageBody::Inline("hi".into()),
+            },
+            &fx.dirs,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains(needle), "{needle}: {err}");
+    }
+}
+
+#[tokio::test]
+async fn agent_wait_returns_mail_without_marking_it_delivered() {
+    let fx = MailFixture::new();
+    let _env = fx.env_as(Some(fx.target));
+    // Already queued before the wait starts: still unread, so it counts.
+    let queued = fx
+        .store()
+        .enqueue_message(fx.target_ws, fx.target, Some(fx.origin), "early")
+        .unwrap();
+    let store = fx.store();
+    let got = crate::cli::mail::wait_for_message(&store, fx.target, None, None, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(got.id, queued);
+    assert!(
+        store
+            .message_by_id(queued)
+            .unwrap()
+            .unwrap()
+            .delivered_at
+            .is_none(),
+        "wait is a read; the dashboard stays the only deliverer"
+    );
+
+    // --after skips it; --from filters by sender.
+    assert!(
+        crate::cli::mail::wait_for_message(&store, fx.target, None, Some(queued), 1)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let other = store
+        .add_workspace_agent(fx.target_ws, crate::pty::session::AgentKind::Codex)
+        .unwrap();
+    let from_codex = store
+        .enqueue_message(fx.target_ws, fx.target, Some(other.id), "codex says")
+        .unwrap();
+    let got = crate::cli::mail::wait_for_message(&store, fx.target, Some(other.id), None, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(got.id, from_codex);
+
+    // A message that lands mid-wait is picked up by the poll.
+    let dirs_db = fx.dirs.db_path();
+    let (ws, target, origin) = (fx.target_ws, fx.target, fx.origin);
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        crate::data::store::Store::open(&dirs_db)
+            .unwrap()
+            .enqueue_message(ws, target, Some(origin), "late")
+            .unwrap()
+    });
+    let got = crate::cli::mail::wait_for_message(&store, fx.target, None, Some(from_codex), 5)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(got.id, writer.join().unwrap());
+    assert_eq!(got.body, "late");
+
+    // The CLI arm turns a timeout into an error naming the filter.
+    let err = run_cli(
+        CliAction::AgentWait {
+            from: Some("r/origin claude".into()),
+            after: Some(got.id),
+            timeout_secs: 1,
+        },
+        &fx.dirs,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("no message from r/origin claude after 1s"),
+        "{err}"
+    );
+    assert!(
+        err.contains(&format!(
+            "wsx agent wait --from 'r/origin claude' --after {}",
+            got.id
+        )),
+        "the retry hint keeps the filters: {err}"
+    );
+    let err = run_cli(
+        CliAction::AgentWait {
+            from: Some("nobody".into()),
+            after: None,
+            timeout_secs: 1,
+        },
+        &fx.dirs,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("--from: no agent 'nobody'"), "{err}");
 }
 
 #[test]
@@ -400,11 +1045,11 @@ fn bare_help_is_a_subcommand_not_a_value() {
     match parse(&["agent", "send", "claude", "help"]).unwrap() {
         CliAction::AgentSend {
             target,
-            prompt,
+            body,
             workspace,
         } => {
             assert_eq!(target, "claude");
-            assert_eq!(prompt, "help");
+            assert_eq!(body, MessageBody::Inline("help".into()));
             assert_eq!(workspace, None);
         }
         other => panic!("expected AgentSend prompt \"help\", got {other:?}"),
@@ -440,14 +1085,17 @@ fn agent_group_help_lists_its_commands() {
     let h = render_group_help("agent");
     assert!(h.contains("list"));
     assert!(h.contains("add <kind>"));
-    assert!(h.contains("send [--workspace <repo>/<slug>] <label> <message...>"));
+    assert!(h.contains("send [--workspace <repo>/<slug>]"));
+    for cmd in ["reply ", "messages ", "wait ", "whoami"] {
+        assert!(h.contains(cmd), "agent help must list `{cmd}`: {h}");
+    }
 }
 
 #[test]
 fn usage_error_has_message_then_group_block() {
     let s = render_usage_error(Some("agent"), "missing arguments");
     assert!(s.starts_with("error: missing arguments"));
-    assert!(s.contains("send [--workspace <repo>/<slug>] <label> <message...>"));
+    assert!(s.contains("send [--workspace <repo>/<slug>]"));
 }
 
 #[test]
@@ -1440,11 +2088,11 @@ fn parses_agent_send_joins_prompt() {
     match parse(&["agent", "send", "claude#2", "hello", "there"]).unwrap() {
         CliAction::AgentSend {
             target,
-            prompt,
+            body,
             workspace,
         } => {
             assert_eq!(target, "claude#2");
-            assert_eq!(prompt, "hello there");
+            assert_eq!(body, MessageBody::Inline("hello there".into()));
             assert_eq!(workspace, None, "no flag → current workspace");
         }
         other => panic!("expected AgentSend, got {other:?}"),
@@ -1502,7 +2150,7 @@ fn report_cli_error_formats_usage_block() {
     };
     let s = report_cli_error(&e);
     assert!(s.starts_with("error: agent send needs"));
-    assert!(s.contains("send [--workspace <repo>/<slug>] <label> <message...>"));
+    assert!(s.contains("send [--workspace <repo>/<slug>]"));
 }
 
 #[test]

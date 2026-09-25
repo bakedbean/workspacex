@@ -64,8 +64,24 @@ pub static GROUPS: &[GroupInfo] = &[
                 blurb: "Attach an agent (claude|pi|hermes|codex|omp)",
             },
             CmdInfo {
-                usage: "send [--workspace <repo>/<slug>] <label> <message...>",
-                blurb: "Queue an async message to an agent here or in another workspace",
+                usage: "send [--workspace <repo>/<slug>] [--file <path>|-] <label|instance-id> [<message...>|-]",
+                blurb: "Queue an async message to an agent here or in another workspace; prints its id",
+            },
+            CmdInfo {
+                usage: "reply [--file <path>|-] [<msg-id>] [<message...>|-]",
+                blurb: "Reply to the sender of a message (default: the latest one you received)",
+            },
+            CmdInfo {
+                usage: "messages [--sent|--all] [--undelivered] [--limit <n>] [--id <msg-id>]",
+                blurb: "List your inbox (or sent / whole-workspace mail) with delivery times; --id prints one in full",
+            },
+            CmdInfo {
+                usage: "wait [--from <sender>] [--after <msg-id>] [--timeout <secs>]",
+                blurb: "Block until a message for you arrives, then print it (read-only: the dashboard still injects it)",
+            },
+            CmdInfo {
+                usage: "whoami",
+                blurb: "Print your agent label, instance id, and workspace",
             },
         ],
     },

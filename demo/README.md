@@ -133,9 +133,9 @@ The hero shows agents working *together* over wsx's own CLI, no human relaying:
   can't target the sandbox — `sandbox/bootstrap.sh` copies the same skill into the
   isolated configs directly instead.
 - In the tape, Claude (after reviewing) runs `wsx agent send codex "<bug + location
-  + fix>"`; wsx prints the deterministic `queued message to codex` (the only safe
-  `Wait` anchor for this step). Codex receives it as a `[message from claude]`
-  banner, fixes + commits, then `wsx agent send claude` back with the hash.
+  + fix>"`; wsx prints the deterministic `queued message #<id> to codex (<n> bytes)`
+  (the only safe `Wait` anchor for this step). Codex receives it as a
+  `[message #<id> from claude; …]` banner, fixes + commits, then `wsx agent send claude` back with the hash.
 - **Known quirk (worked around in the tape):** a message from Claude often lands in
   Codex's prompt *unsubmitted*. After switching to Codex (`Ctrl-x w`) the tape
   presses `Enter` to submit it. Once submitted, Codex reliably replies.

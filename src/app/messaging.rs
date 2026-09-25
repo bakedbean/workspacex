@@ -5,10 +5,18 @@ use crate::data::messages::AgentMessage;
 use crate::data::store::Store;
 
 /// The banner injected into the receiving agent. Pure + testable.
-pub fn delivery_banner(from_label: Option<&str>, body: &str) -> String {
+///
+/// Carries the message id so the receiver can cite it (`agent messages --id`,
+/// `agent wait --after`) and recognise a message it already read through
+/// `agent wait`, plus the exact reply command when there is an agent to reply
+/// to. A sender-less message (a shell or an editor-hosted agent) has no one
+/// to reply to, so it gets no hint.
+pub fn delivery_banner(id: i64, from_label: Option<&str>, body: &str) -> String {
     match from_label {
-        Some(f) => format!("[message from {f}]\n{body}"),
-        None => format!("[message]\n{body}"),
+        Some(f) => {
+            format!("[message #{id} from {f}; reply with: wsx agent reply {id} <message>]\n{body}")
+        }
+        None => format!("[message #{id}]\n{body}"),
     }
 }
 
@@ -20,13 +28,23 @@ pub fn delivery_banner(from_label: Option<&str>, body: &str) -> String {
 /// different workspace than the message, the label is qualified with
 /// `<repo>/<slug> ` so the recipient can see where the work came from.
 pub fn sender_label(store: &Store, msg: &AgentMessage) -> Option<String> {
-    let from = msg.from_agent_id?;
-    let sender = store.workspace_agents_by_id(from).ok()??;
-    let label = sender.label();
-    if sender.workspace_id == msg.workspace_id {
+    instance_label_relative_to(store, msg.from_agent_id?, msg.workspace_id)
+}
+
+/// An instance's label as seen from workspace `viewer`: the bare label when
+/// the instance lives there, `<repo>/<slug> <label>` when it lives elsewhere.
+/// `None` when the instance row no longer exists.
+pub fn instance_label_relative_to(
+    store: &Store,
+    id: crate::data::store::AgentInstanceId,
+    viewer: crate::data::store::WorkspaceId,
+) -> Option<String> {
+    let inst = store.workspace_agents_by_id(id).ok()??;
+    let label = inst.label();
+    if inst.workspace_id == viewer {
         return Some(label);
     }
-    match workspace_ref(store, sender.workspace_id) {
+    match workspace_ref(store, inst.workspace_id) {
         Some(origin) => Some(format!("{origin} {label}")),
         // The instance row resolved but its workspace or repo row didn't
         // (an inconsistent DB — `delete_workspace` clears `workspace_agents`
@@ -37,7 +55,7 @@ pub fn sender_label(store: &Store, msg: &AgentMessage) -> Option<String> {
 }
 
 /// `<repo>/<slug>` for a workspace id, or None if either row is missing.
-fn workspace_ref(store: &Store, ws: crate::data::store::WorkspaceId) -> Option<String> {
+pub fn workspace_ref(store: &Store, ws: crate::data::store::WorkspaceId) -> Option<String> {
     let w = store.workspace_by_id(ws).ok()??;
     let repo = store
         .repos()
@@ -46,6 +64,9 @@ fn workspace_ref(store: &Store, ws: crate::data::store::WorkspaceId) -> Option<S
         .find(|r| r.id == w.repo_id)?;
     Some(format!("{}/{}", repo.name, w.name))
 }
+
+/// `drop_reason` for a message whose target agent's binary is not installed.
+pub(crate) const DROP_AGENT_MISSING: &str = "target agent's binary is not installed";
 
 /// How many times a message may fail to be injected before wsx stops retrying
 /// it. Each attempt already waits `DELIVERY_TIMEOUT_MS` for the agent to become
@@ -186,7 +207,7 @@ impl crate::app::App {
     /// left to wake the drain — the drain clears the heartbeat before dropping.
     /// Re-arm it instead.
     pub(crate) fn drop_message(&mut self, id: i64, now_ms: u64) {
-        if let Err(e) = self.store.mark_delivered(id) {
+        if let Err(e) = self.store.mark_dropped(id, DROP_AGENT_MISSING) {
             tracing::warn!(
                 error = %e,
                 id,
@@ -398,7 +419,7 @@ impl crate::app::App {
                 .iter()
                 .map(|m| {
                     let from = sender_label(&self.store, m);
-                    (m.id, delivery_banner(from.as_deref(), &m.body))
+                    (m.id, delivery_banner(m.id, from.as_deref(), &m.body))
                 })
                 .collect();
             for m in &msgs {
@@ -552,6 +573,8 @@ mod tests {
         app.drop_message(ids[0], 10_000);
 
         assert!(app.store.undelivered_messages().unwrap().is_empty());
+        let row = app.store.message_by_id(ids[0]).unwrap().unwrap();
+        assert_eq!(row.drop_reason.as_deref(), Some(DROP_AGENT_MISSING));
         assert!(!app.mail_drain_due(u64::MAX), "a clean drop needs no retry");
     }
 
@@ -826,10 +849,10 @@ mod tests {
     #[test]
     fn banner_tags_sender() {
         assert_eq!(
-            delivery_banner(Some("claude#2"), "hi"),
-            "[message from claude#2]\nhi"
+            delivery_banner(561, Some("claude#2"), "hi"),
+            "[message #561 from claude#2; reply with: wsx agent reply 561 <message>]\nhi"
         );
-        assert_eq!(delivery_banner(None, "hi"), "[message]\nhi");
+        assert_eq!(delivery_banner(7, None, "hi"), "[message #7]\nhi");
     }
 
     #[test]
@@ -869,8 +892,12 @@ mod tests {
         let label = sender_label(&store, &msg);
         assert_eq!(label.as_deref(), Some("workspacex/parent-task claude"));
         assert_eq!(
-            delivery_banner(label.as_deref(), "TASK: build it"),
-            "[message from workspacex/parent-task claude]\nTASK: build it"
+            delivery_banner(msg.id, label.as_deref(), "TASK: build it"),
+            format!(
+                "[message #{0} from workspacex/parent-task claude; \
+                 reply with: wsx agent reply {0} <message>]\nTASK: build it",
+                msg.id
+            )
         );
     }
 

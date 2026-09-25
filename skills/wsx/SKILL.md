@@ -41,12 +41,23 @@ wsx repo set-related-repos <repo> <comma-separated-names>
 # worktree. `send` can target another workspace via --workspace.
 wsx agent list                              # peers here; (primary) marks the original agent
 wsx agent add <kind>                        # attach another agent: kind = claude|pi|hermes|codex|omp
-wsx agent send [--workspace <repo>/<slug>] <label> <message…>
+wsx agent send [--workspace <repo>/<slug>] [--file <path>|-] <label|instance-id> [<message…>|-]
                                             # async message to an agent; omit
                                             # --workspace for a peer here.
                                             # label `primary` = that workspace's
                                             # primary agent (always correct for a
-                                            # workspace you just created).
+                                            # workspace you just created). A
+                                            # numeric instance id needs no
+                                            # --workspace. Prints the message id.
+wsx agent reply [--file <path>|-] [<msg-id>] [<message…>|-]
+                                            # answer a message's sender (default:
+                                            # the latest you received), in any workspace
+wsx agent messages [--sent|--all] [--undelivered] [--limit <n>] [--id <msg-id>]
+                                            # your inbox as TSV with delivery times;
+                                            # --id prints one message in full
+wsx agent wait [--from <sender>] [--after <msg-id>] [--timeout <secs>]
+                                            # block until a message for you arrives
+wsx agent whoami                            # your label, instance id, workspace
 
 wsx context show                            # markdown digest of this workspace (for editor-hosted agents)
 wsx context write                           # same, written under the state dir; prints the path
@@ -213,11 +224,47 @@ and branch.
   first of a kind is its bare name (`claude`), additional ones get a numeric
   suffix (`claude#2`). The primary (workspace-creation) agent is marked
   `(primary)`.
-- **Your identity:** `$WSX_AGENT_INSTANCE_ID` holds your instance id and
-  `$WSX_WORKSPACE_ID` holds the workspace id.
-- **Message a peer:** `wsx agent send <label> <message>`. Delivery is
-  asynchronous — the message is injected into the peer's session shortly after,
-  tagged `[message from <you>]` so they know it came from you.
+- **Your identity:** `wsx agent whoami` prints your label, instance id, and
+  workspace. The instance id is also in `$WSX_AGENT_INSTANCE_ID`, and any
+  agent can address you by it — `wsx agent send <instance-id> …` works from
+  every workspace, no `--workspace` needed.
+- **Message a peer:** `wsx agent send <label> <message>`. It prints
+  `queued message #<id> to <label> (<n> bytes)`. Delivery is asynchronous — the
+  dashboard injects the message into the peer's session shortly after, tagged
+  `[message #<id> from <you>; reply with: wsx agent reply <id> <message>]`.
+- **Long or code-heavy bodies:** put them in a file and use
+  `wsx agent send --file <path> <label>`, or pipe them with
+  `… | wsx agent send <label> -`. Options must come before the label (or,
+  for `reply`, before the message id): everything after it is message text,
+  so `send <label> --file x` would send the literal words "--file x". The body is sent verbatim — no shell
+  quoting or backtick escaping — and an empty body is refused.
+- **Reply:** `wsx agent reply <id> <message>` (or
+  `wsx agent reply --file <path> <id>`) answers the sender of message
+  `<id>` wherever it lives; with no id it answers the latest message you
+  received — but the newest message can change while you work, so prefer
+  the explicit `<id>` from the banner. Quote a body that starts with a
+  number (`wsx agent reply 561 "42 tests fail"`); a lone number with nothing
+  after it is sent as text. Don't reconstruct the sender's label or
+  workspace by hand.
+- **Check delivery / read your mail:** `wsx agent messages` lists your inbox
+  (`--sent` for what you sent, `--all` for the whole workspace) with each
+  message's id, sender, recipient, size, and created/delivered times;
+  `DELIVERED` reads `queued` until the dashboard has injected it, and
+  `dropped` if wsx gave up on it (e.g. the target agent isn't installed) —
+  a dropped message never arrived; `--id` says why.
+  `wsx agent messages --id <id>` prints one message in full. Never query
+  wsx's sqlite database directly.
+- **Wait for a reply in the same turn:** `wsx agent wait --from <label>`
+  blocks until a message for you arrives and prints it (default timeout 110s;
+  pass `--timeout <secs>` below your tool's own timeout, or run it in the
+  background). Pass `--after <id>` with the id `send` printed, so only mail
+  newer than your request counts. `wait` does not consume anything: waiting
+  again without `--after` returns the same message, so chain waits with
+  `--after <id of the last message you got>`. `wait` is a read, not a delivery: the dashboard still injects
+  the message into your session afterwards. When that `[message #<id> …]`
+  arrives for an id you already handled via `wait`, it is the same message —
+  don't act on it twice. If you have nothing else to do, simply ending your
+  turn also works: the reply is injected as your next input.
 - **Add a peer:** `wsx agent send` only reaches agents already attached. To
   attach one, use `wsx agent add <kind>` (kind = claude | pi | hermes | codex | omp),
   or the `^x a` panel in the TUI. You can use this proactively — e.g. spin up a
@@ -243,7 +290,7 @@ reads a digest produced by `wsx context write` — your recap, status, peers,
 recent commits, and your last message — so it already knows what you are
 doing. It does not set status or recap; it reports back with
 `wsx agent send <your label> "<summary>"`, which reaches you as a bare
-`[message]` banner with no sender label.
+`[message #<id>]` banner with no sender label (and so nothing to `reply` to).
 
 Treat those messages as the user's follow-up instructions, and run
 `git status` / `git diff` before assuming the tree matches your last edit.

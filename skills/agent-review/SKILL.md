@@ -51,15 +51,16 @@ stop and tell the user the valid kinds. Do not guess.
    This is the peer you will brief. The new agent shares this worktree and
    branch.
 
-4. **Find your own coordinator label** so the reviewer knows where to send
-   findings:
+4. **Find your own coordinator label** so you can tell the reviewer who you
+   are:
 
    ```
-   wsx agent list
+   wsx agent whoami
    ```
 
-   The workspace's original agent is marked `(primary)`. Use your own label
-   (the one matching `$WSX_AGENT_INSTANCE_ID`, or the primary if you are it).
+   It prints your `label`, `instance` id, and `workspace`. The reviewer will
+   answer with `wsx agent reply`, which routes back to you automatically, so
+   the label is only for the brief's context.
 
 5. **Gather a short brief** — do NOT paste the whole diff; the reviewer shares
    the worktree and can read it:
@@ -70,11 +71,15 @@ stop and tell the user the valid kinds. Do not guess.
    git diff --stat main...HEAD
    ```
 
-6. **Hand off to the reviewer** with a single message:
+6. **Hand off to the reviewer** with a single message. Write the brief to a
+   file (or pipe it on stdin) so backticks and quotes pass through verbatim:
 
    ```
-   wsx agent send <label> "<brief>"
+   wsx agent send --file <brief-file> <label>
    ```
+
+   It prints `queued message #<id> to <label> (<n> bytes)`. Once the reviewer's
+   session picks it up, `wsx agent messages --sent` shows it delivered.
 
    The `<brief>` must instruct the reviewer to:
    - Review the current branch against `main`. Run `git diff main...HEAD`
@@ -82,24 +87,32 @@ stop and tell the user the valid kinds. Do not guess.
    - Produce a **risk assessment** — security, performance, breaking changes,
      edge cases.
    - Produce a **gap analysis** — test coverage, documentation, error handling.
-   - Report findings back to the coordinator with
-     `wsx agent send <your-label> "<findings>"` when done.
+   - Report findings back when done with
+     `wsx agent reply --file <findings-file> <id>` (or `… <id> -` piping the
+     findings on stdin), where `<id>` is the number in this brief's
+     `[message #<id> from …]` banner.
 
    Include the branch name, commit list, and diff-stat from step 5 so the
    reviewer has orientation without re-deriving it.
 
 7. **Tell the user** the reviewer `<label>` is spawned and working, and that its
-   findings will arrive as a `[message from <label>]` in this session.
+   findings will arrive as a `[message #<id> from <label>; …]` in this session.
+   Then end your turn — the findings are injected as your next input. (To
+   block for them inside a turn instead, use
+   `wsx agent wait --from <label> --after <brief-id> --timeout <secs>`.)
 
 ## Example handoff message
 
 ```
-wsx agent send claude#2 "You are a code reviewer for this wsx workspace.
+wsx agent send claude#2 - <<'EOF'
+You are a code reviewer for this wsx workspace (I am claude, the primary).
 Branch: feat/widgets (3 commits, 7 files changed). Review this branch against
-main: run \`git diff main...HEAD\` to see the full change. Provide (1) a risk
+main: run `git diff main...HEAD` to see the full change. Provide (1) a risk
 assessment — security, performance, breaking changes, edge cases; and (2) a gap
-analysis — test coverage, documentation, error handling. When done, send your
-findings back to me with: wsx agent send <your-label> \"<your findings>\"."
+analysis — test coverage, documentation, error handling. When done, write your
+findings to a file and send them back with:
+wsx agent reply --file <findings-file> <id from this message's banner>
+EOF
 ```
 
 ## Notes

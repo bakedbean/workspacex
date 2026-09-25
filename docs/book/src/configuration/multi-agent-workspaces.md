@@ -63,19 +63,36 @@ The model and context-token usage follow the agent in the **focused pane**, incl
 Agents can send each other messages — a peer in the same workspace by default, or any agent in another workspace with `--workspace`:
 
 ```bash
-wsx agent send [--workspace <repo>/<slug>] <label> <message…>
+wsx agent send [--workspace <repo>/<slug>] [--file <path>|-] <label|instance-id> [<message…>|-]
 ```
 
 `<label>` is an agent's footer/list label (`claude`, `claude#2`, `codex`, …),
-or the reserved label `primary` for the workspace's primary agent. The rest of
-the line is the message body. Without `--workspace` the target is the current
-workspace; with it, any workspace — which is how one agent hands a task to a
-freshly created workspace's agent. Delivery is **asynchronous**: the message is
-queued and injected into the target's session on the next tick, prefixed with a
-banner so the recipient knows where it came from:
+or the reserved label `primary` for the workspace's primary agent. A target of
+all digits is an agent's instance id (from `wsx agent whoami` or
+`wsx agent list`), which is unique across workspaces and so needs no
+`--workspace`. Without `--workspace` a label is looked up in the current
+workspace; with it, in any workspace — which is how one agent hands a task to a
+freshly created workspace's agent.
+
+The rest of the line is the message body. For long or code-heavy bodies use
+`--file <path>`, or `-` (as the body, or `--file -`) to read it from stdin; the
+text is sent verbatim, with trailing whitespace dropped. Options go before the
+target — everything after it is body, so a message may itself start with `--`
+(the one exception: a standalone `--help` or `-h` anywhere prints help). An
+empty body is refused.
+
+`send` prints the new message's id and size:
 
 ```
-[message from claude#2]
+queued message #561 to claude#2 (2747 bytes)
+```
+
+Delivery is **asynchronous**: the message is queued and injected into the
+target's session on the next tick, prefixed with a banner carrying its id,
+where it came from, and how to answer it:
+
+```
+[message #561 from claude#2; reply with: wsx agent reply 561 <message>]
 …your message body…
 ```
 
@@ -83,11 +100,11 @@ A sender in a *different* workspace is qualified with its `<repo>/<slug>`, so
 the recipient can see which workspace the work came from:
 
 ```
-[message from workspacex/parent-task claude]
+[message #562 from workspacex/parent-task claude; reply with: wsx agent reply 562 <message>]
 …your message body…
 ```
 
-If the sender is the `wsx` CLI itself (not another agent — i.e. `$WSX_AGENT_INSTANCE_ID` is unset), the banner is just `[message]`. If the target agent isn't running yet, wsx spawns it first, then delivers. Sending to a label that doesn't exist in the target workspace errors with that workspace's agent labels listed inline (`wsx agent list` only reports the current workspace, so it can't describe another one).
+If the sender is the `wsx` CLI itself (not another agent — i.e. `$WSX_AGENT_INSTANCE_ID` is unset), the banner is just `[message #<id>]`. If the target agent isn't running yet, wsx spawns it first, then delivers. Sending to a label that doesn't exist in the target workspace errors with that workspace's agent labels listed inline (`wsx agent list` only reports the current workspace, so it can't describe another one).
 
 Queued messages are injected by the running `wsx` TUI, so `wsx agent send`
 warns on stderr when no dashboard is running — the message stays queued and is
@@ -120,6 +137,63 @@ survive the process.
 
 Since all agents write to the same files, prefer messaging to hand off work rather than editing the same paths in parallel.
 
+### Replying, reading, and waiting
+
+```bash
+wsx agent reply [--file <path>|-] [<msg-id>] [<message…>|-]
+wsx agent messages [--sent|--all] [--undelivered] [--limit <n>] [--id <msg-id>]
+wsx agent wait [--from <sender>] [--after <msg-id>] [--timeout <secs>]
+wsx agent whoami
+```
+
+These act as the calling agent (`$WSX_AGENT_INSTANCE_ID`).
+
+- **`reply`** queues a message to the sender of message `<msg-id>` (`561` or
+  `#561`), wherever that sender lives; without an id it answers the latest
+  message you received. The newest message can change while you work, so
+  prefer the explicit id from the banner. The first word is taken as an id
+  only when a body follows it, so a lone `wsx agent reply 42` sends "42" to
+  the latest sender, while `wsx agent reply 42 tests fail` answers message
+  #42 — quote a body that starts with a number. Messages from the CLI or an editor agent have
+  no sender to reply to.
+- **`messages`** lists your inbox (`--sent`: what you sent; `--all`: every
+  message queued in, or sent from, the current workspace — this one also works
+  from a plain shell) as TSV, newest `--limit` rows (default 20), oldest first:
+
+  ```
+  ID	FROM	TO	BYTES	CREATED	DELIVERED
+  561	claude#2	claude	2747	2026-09-25T14:03:11Z	2026-09-25T14:03:14Z
+  562	workspacex/parent-task claude	claude	812	2026-09-25T14:10:40Z	queued
+  ```
+
+  `DELIVERED` stays `queued` until the dashboard has written the message into
+  the agent's terminal. It reads `dropped` when wsx retired the message
+  without delivering it (the target agent's binary isn't installed); such a
+  message never arrived, and `--id` shows the reason. `--undelivered` shows
+  queued and dropped messages; `--id <msg-id>` prints
+  one message's headers and full body.
+- **`wait`** blocks until a message for you is recorded, then prints it like
+  `messages --id`. Without `--after`, it counts messages still queued for you
+  when it starts (they haven't reached you yet) and anything newer. With
+  `--after <msg-id>` it counts only newer ids. That makes the id `send`
+  printed the reliable cursor for a request/reply: `--after <that id>`. Since
+  `wait` consumes nothing, a second `wait` without `--after` returns the same
+  message again; chain waits with `--after <last id returned>` (the command
+  prints it). `--from` accepts a label, `primary`, an instance id, or
+  `<repo>/<slug> <label>` as shown in banners. It gives up after `--timeout`
+  seconds (default 110, under common agent tool timeouts; `0` waits forever).
+- **`whoami`** prints your label, instance id, workspace, and whether you are
+  the primary.
+
+`wait` is a **read**, not a delivery. The dashboard remains the only thing that
+marks a message delivered, and it still injects the message into your session
+afterwards — so an agent that handled message `#561` via `wait` will later see
+the same `[message #561 …]` banner and should treat it as a duplicate. The
+alternative, letting `wait` consume the message, would make two processes
+race to deliver it (the dashboard may already have an injection in flight that
+is waiting for the agent to go idle), trading a recognisable duplicate for a
+possible lost or doubly-injected one. Delivery stays at-least-once either way.
+
 ### Listing agents
 
 ```bash
@@ -147,7 +221,7 @@ When wsx spawns an agent it injects two environment variables into that session,
 | `WSX_WORKSPACE_ID`       | The workspace this agent belongs to                |
 | `WSX_AGENT_INSTANCE_ID`  | This specific agent instance                       |
 
-`wsx agent` commands resolve the "current" workspace from `$WSX_WORKSPACE_ID` first, falling back to matching the current directory against known worktrees — so the commands work both from inside an agent session and from a plain shell in the worktree. `wsx agent send` uses `$WSX_AGENT_INSTANCE_ID` to stamp the `[message from …]` sender on outgoing messages.
+`wsx agent` commands resolve the "current" workspace from `$WSX_WORKSPACE_ID` first, falling back to matching the current directory against known worktrees — so the commands work both from inside an agent session and from a plain shell in the worktree. `wsx agent send` uses `$WSX_AGENT_INSTANCE_ID` to stamp the `[message #<id> from …]` sender on outgoing messages.
 
 `--workspace <repo>/<slug>` overrides that resolution for the *target*;
 `$WSX_AGENT_INSTANCE_ID` still identifies the sender, which is how a

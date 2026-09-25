@@ -43,7 +43,7 @@ const CLAUSE_HANDOFF_OUT: &str = "- Start a new workspace instead of a new branc
     `cd` into the new worktree and work there yourself.";
 
 const CLAUSE_HANDOFF_IN: &str = "- If your first input is a handoff brief from \
-    another workspace's agent (banner: `[message from <repo>/<slug> <label>]`), \
+    another workspace's agent (banner: `[message #<id> from <repo>/<slug> <label>; …]`), \
     that brief is your task. Set `wsx recap set --goal` from it before you start.";
 
 const CLAUSE_STATUS: &str = "- Report your status as you go with `wsx status set \
@@ -68,7 +68,7 @@ const CLAUSE_EXTERNAL_EDITOR: &str = "- An editor-hosted agent (one running insi
     user's editor rather than in a wsx session) may work in this worktree alongside \
     you. It reads a digest of your recap and status produced by `wsx context write`, \
     shares this branch and working tree, and reports back to you with `wsx agent \
-    send` — its messages arrive with a bare `[message]` banner and no sender label. \
+    send` — its messages arrive with a bare `[message #<id>]` banner and no sender label. \
     Before assuming the tree matches your last edit, check `git status` and `git \
     diff`, and treat those messages as the user's own follow-up instructions.";
 

@@ -12,6 +12,38 @@ pub enum HelpTopic {
     Group(&'static str),
 }
 
+/// Where an agent message's body comes from. Parsed without touching the
+/// filesystem or stdin; `run` reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MessageBody {
+    /// The remaining argv words, joined with single spaces.
+    Inline(String),
+    /// `--file <path>`: the file's contents, verbatim.
+    File(PathBuf),
+    /// `--file -` or a lone `-` body: all of stdin.
+    Stdin,
+}
+
+/// Which rows `wsx agent messages` lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessagesView {
+    /// Messages addressed to the calling agent (the default).
+    Inbox,
+    /// Messages the calling agent sent (`--sent`).
+    Sent,
+    /// Every message in the current workspace (`--all`).
+    Workspace,
+}
+
+/// Rows `wsx agent messages` shows without `--limit`.
+pub const DEFAULT_MESSAGES_LIMIT: usize = 20;
+
+/// How long `wsx agent wait` blocks without `--timeout`. Kept under the
+/// shortest agent-harness tool timeout in common use (Claude Code's Bash tool
+/// defaults to 2 minutes, max 10), so a wait that outlives its welcome ends
+/// with a clear message instead of being killed mid-poll.
+pub const DEFAULT_WAIT_TIMEOUT_SECS: u64 = 110;
+
 #[derive(Debug)]
 pub enum CliAction {
     Tui {
@@ -158,11 +190,34 @@ pub enum CliAction {
     MenubarRefresh,
     AgentList,
     AgentSend {
+        /// A label (`claude#2`, `primary`) or a numeric instance id.
         target: String,
-        prompt: String,
+        body: MessageBody,
         /// `<repo>/<slug>` when addressing an agent in ANOTHER workspace;
         /// `None` means the current workspace (the pre-existing behavior).
         workspace: Option<String>,
+    },
+    AgentMessages {
+        view: MessagesView,
+        undelivered: bool,
+        limit: usize,
+        /// `--id N`: print that one message in full instead of a listing.
+        id: Option<i64>,
+    },
+    AgentWhoami,
+    AgentReply {
+        /// The message being answered; `None` = the latest one received.
+        to: Option<i64>,
+        body: MessageBody,
+    },
+    AgentWait {
+        /// Only return a message from this sender (label as displayed, or
+        /// instance id).
+        from: Option<String>,
+        /// Only return messages with an id above this one.
+        after: Option<i64>,
+        /// 0 = wait forever.
+        timeout_secs: u64,
     },
     AgentAdd {
         kind: String,

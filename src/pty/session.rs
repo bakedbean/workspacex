@@ -1373,7 +1373,7 @@ mod tests {
             .map(|i| format!("paragraph {i}: {para}"))
             .collect::<Vec<_>>()
             .join("\n\n");
-        let banner = crate::app::messaging::delivery_banner(Some("codex"), &body);
+        let banner = crate::app::messaging::delivery_banner(1, Some("codex"), &body);
         assert!(banner.len() > 3_000, "body must span several PTY reads");
 
         assert!(
@@ -1400,7 +1400,9 @@ mod tests {
         }
         let got = std::fs::read(&out).unwrap_or_default();
         assert!(
-            got.starts_with(b"\x1b[200~[message from codex]\n"),
+            got.starts_with(
+                b"\x1b[200~[message #1 from codex; reply with: wsx agent reply 1 <message>]\n"
+            ),
             "delivery must open a bracketed paste with the banner: {:?}",
             String::from_utf8_lossy(&got[..got.len().min(40)])
         );

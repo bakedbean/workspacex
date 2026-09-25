@@ -88,15 +88,15 @@ is to await the user's request; otherwise the answer *is* the task.
 7. **Send the brief** to the new workspace's primary agent:
 
    ```
-   wsx agent send --workspace <repo>/<new-slug> primary "$(cat <<'EOF'
+   wsx agent send --workspace <repo>/<new-slug> primary - <<'EOF'
    <brief>
    EOF
-   )"
    ```
 
-   The quoted heredoc (`<<'EOF'`) passes the brief through verbatim — the
-   user's request and your pointers may contain `$`, backticks, or quotes
-   that a plain double-quoted string would mangle or execute.
+   The trailing `-` reads the body from stdin, and the quoted heredoc
+   (`<<'EOF'`) passes it through verbatim — the user's request and your
+   pointers may contain `$`, backticks, or quotes that a double-quoted
+   argument would mangle or execute. (`--file <path>` works too.)
 
    Use the wsx skill's brief format. The brief is the new agent's *only*
    context — write it so it still makes sense if this session were deleted:
@@ -122,8 +122,9 @@ is to await the user's request; otherwise the answer *is* the task.
    START:       the first concrete step.
    ```
 
-   `agent send` *queues* the brief; the dashboard delivers it when the new
-   agent's session is up. If it warns that no `wsx` dashboard is running, tell
+   `agent send` *queues* the brief and prints `queued message #<id> …`; the
+   dashboard delivers it when the new agent's session is up
+   (`wsx agent messages --sent` shows `DELIVERED` once it has). If it warns that no `wsx` dashboard is running, tell
    the user to open `wsx` — until then the brief sits undelivered. If `send`
    itself fails, fix and resend to the workspace you created; do not mark this
    workspace done until the brief is queued.
@@ -146,7 +147,7 @@ User fires the chip; you ask; they reply
 
 ```
 wsx workspace create backend --name add-json-list-flag
-wsx agent send --workspace backend/add-json-list-flag primary "$(cat <<'EOF'
+wsx agent send --workspace backend/add-json-list-flag primary - <<'EOF'
 TASK: Add a --json flag to `widgets list` emitting one object per widget
 (id, name, qty, created_at), and document it in docs/cli/widgets.md. Done
 when the flag, a test for the JSON shape, and the docs are in and a PR is
@@ -162,7 +163,6 @@ CONSTRAINTS: Don't change the default (TSV) output; scripts depend on it.
 Follow the arg pattern at src/cli/mod.rs:210 for the new flag.
 START: read src/cli/widgets.rs:140-188, then the test module below it.
 EOF
-)"
 wsx status set done --message "handed off to backend/add-json-list-flag"
 ```
 
@@ -171,7 +171,8 @@ wsx status set done --message "handed off to backend/add-json-list-flag"
 - `wsx workspace create` from inside a workspace inherits yolo mode and agent
   kind — do not pass those flags.
 - `wsx agent send` is asynchronous; the new agent receives the brief once its
-  session is up, tagged `[message from <repo>/<slug> <label>]`. `wsx workspace
+  session is up, tagged `[message #<id> from <repo>/<slug> <label>; …]`, and
+  can answer you with `wsx agent reply <id>`. `wsx workspace
   create --prompt <text>` is the same queue in one step; this skill keeps the
   two commands separate so a failed create is never followed by a brief.
 - Do not `cd` into the new worktree or start the work there yourself. Create,

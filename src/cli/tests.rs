@@ -115,6 +115,20 @@ fn agent_send_flags_are_recognised_until_the_first_message_word() {
         got(&["agent", "send", "primary", "--file", "-"]),
         ("primary".into(), MessageBody::Stdin, None)
     );
+    // A repeated flag is last-wins, even split across the label.
+    assert_eq!(
+        got(&[
+            "agent",
+            "send",
+            "--workspace",
+            "r/old",
+            "primary",
+            "--workspace",
+            "r/w",
+            "hi"
+        ]),
+        ("primary".into(), MessageBody::Inline("hi".into()), ws())
+    );
     // Any other `--word` starts the body, which is kept verbatim.
     assert_eq!(
         got(&["agent", "send", "claude", "--verbose", "is", "broken"]),
@@ -141,6 +155,14 @@ fn agent_send_refuses_a_flag_stranded_in_the_message() {
             "{argv:?}: {err}"
         );
     }
+    // A flag missing its value after the label is an error, which also
+    // makes a body of exactly `--file` unsendable inline (stdin/file only).
+    assert!(parse(&["agent", "send", "primary", "--file"]).is_err());
+    assert!(parse(&["agent", "send", "primary", "--workspace"]).is_err());
+    assert!(parse(&["agent", "reply", "561", "--file"]).is_err());
+    // `--` is not an end-of-options marker: it starts the body, so a later
+    // option word is still stranded.
+    assert!(parse(&["agent", "send", "primary", "--", "--file", "x"]).is_err());
     // A flag name inside a quoted (single-word) message is just text.
     match parse(&["agent", "send", "primary", "pass --file <path>"]).unwrap() {
         CliAction::AgentSend { body, .. } => {

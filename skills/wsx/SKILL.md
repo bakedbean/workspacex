@@ -94,7 +94,7 @@ wsx status set done    --message "implemented and tests green"
 - `waiting` — when parked on something external (a build, CI, a long-running command).
 - `done` — when the task is complete.
 
-Status is recorded per agent (from `$WSX_AGENT_INSTANCE_ID`), so peers in the same workspace don't overwrite each other; the dashboard shows the most urgent one (blocked > working > waiting > done). `wsx status show` prints the workspace's status and each agent's.
+Status is recorded per agent (from `$WSX_AGENT_INSTANCE_ID`), so peers in the same workspace don't overwrite each other; the workspace-level status is the most urgent one (blocked > working > waiting > done). `wsx status show` prints the workspace's status and each agent's.
 
 The `--message` is a short one-liner shown in the PM pane and the waybar menu subtext. Claude Code hooks also report coarse state automatically, but an explicit `set` with a message is always clearer — prefer it at the transitions above.
 

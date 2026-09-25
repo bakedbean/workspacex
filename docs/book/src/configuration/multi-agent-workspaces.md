@@ -233,9 +233,15 @@ The leading number is the agent's instance id — the same value wsx injects as 
 
 Each agent's `wsx status set` and status hooks are recorded against that agent — identified by the `$WSX_AGENT_INSTANCE_ID` wsx injects into its session — so peers sharing a workspace no longer overwrite each other's status. A push with no agent identity (a plain shell, an editor-hosted agent) is recorded against the primary.
 
-The dashboard, project-manager pane, waybar, and menubar still show one status per workspace, derived from the agents' statuses: the one that most needs a human wins — `blocked`, then `working`, then background work, then `waiting`, then `done` — with the most recent push breaking ties. One agent finishing therefore can't mark the workspace done while a peer is still working, and a peer that is blocked surfaces even if another agent is busy.
+wsx still keeps one status per workspace, derived from the agents' statuses: the one that most needs a human wins — `blocked`, then `working`, then background work, then `waiting`, then `done` — with the most recent push breaking ties. In waybar, the menubar, `wsx status show`, and `wsx workspace list --json`, one agent finishing therefore can't mark the workspace done while a peer is still working, and a blocked peer surfaces even if another agent is busy.
 
-`wsx status clear` run by an agent clears only that agent's status; run from a plain shell it clears every agent's. Removing an agent drops its status from the workspace's.
+The dashboard and project-manager pane show that same derived status, but still combine it with the **primary** agent's session signals (its liveness and transcript), as they always have. A peer's push that is older than the primary's latest transcript activity gives way to what the primary's transcript says, so a peer still working while the primary has finished can show as complete there. Per-agent classification in the dashboard is a planned follow-up.
+
+`wsx status clear` run by an agent clears only that agent's status; run from a plain shell it clears every agent's. Removing an agent drops its status from the workspace's, and a late status push from a removed agent is discarded.
+
+A status has no expiry: a peer whose session died keeps its last status until it reports again, is cleared, or is removed.
+
+While an older `wsx` binary shares the database (for example, one not yet rebuilt after upgrading), its status pushes and clears are applied to the primary agent the next time a current binary writes a status.
 
 ```bash
 wsx status show [--workspace <repo>/<slug>] [--json]

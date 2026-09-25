@@ -1,8 +1,8 @@
 ```
-wsx workspace create <repo> [--name <slug>] [--yolo] [--agent claude|pi|hermes|codex|omp] [--prompt <text>]
+wsx workspace create <repo> [--name <slug>] [--yolo] [--shared] [--agent claude|pi|hermes|codex|omp] [--prompt <text>]
 ```
 
-Creates a workspace in `<repo>`, equivalent to the dashboard's `[n]` keybind. `<slug>` is a kebab-case workspace name; the resulting git branch is `<branch_prefix>/<slug>`. When `--name` is omitted, an adjective-noun slug like `merry-birch` is generated. `--yolo` skips the permission prompts in the spawned agent session. `--agent` overrides the `coding_agent` setting (see [Coding agents](../configuration/coding-agents.md)) for this workspace; when omitted, the setting applies (claude unless configured otherwise).
+Creates a workspace in `<repo>`, equivalent to the dashboard's `[n]` keybind. `<slug>` is a kebab-case workspace name; the resulting git branch is `<branch_prefix>/<slug>`. When `--name` is omitted, an adjective-noun slug like `merry-birch` is generated. `--yolo` skips the permission prompts in the spawned agent session. `--shared` runs the workspace's agents under tmux (see [Shared workspaces](../integrations/shared-workspaces.md)). `--agent` overrides the `coding_agent` setting (see [Coding agents](../configuration/coding-agents.md)) for this workspace; when omitted, the setting applies (claude unless configured otherwise).
 
 `--prompt` seeds the new workspace's agent with a starting task, equivalent to running [`wsx agent send`](../configuration/multi-agent-workspaces.md) against it immediately afterward. Like any queued message it is delivered by the dashboard, which spawns the agent on demand — so a workspace created with `--prompt` while no dashboard is running stays idle, and the command says so on stderr.
 
@@ -58,6 +58,8 @@ wsx workspace rename <repo> <old-slug> <new-slug>
 ```
 
 Renames the workspace slug AND its git branch in sync with the wsx database. Using `git branch -m` directly leaves wsx's DB stale.
+
+The worktree directory is **not** moved: it keeps the path it was created with, so a renamed workspace's directory still carries the old slug. The command prints that path — `renamed workspace backend/merry-birch to backend/fix-login (worktree path unchanged: …/merry-birch)` — and `wsx workspace path` always returns it.
 
 ```
 wsx workspace archive <repo> <slug> [--keep-worktree] [--force-delete-branch]

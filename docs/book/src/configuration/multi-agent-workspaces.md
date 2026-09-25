@@ -4,7 +4,7 @@ Every workspace starts with exactly one agent — the **primary**, chosen at cre
 
 ### Adding and removing agents
 
-In the TUI, press `Ctrl-x a` while a workspace is selected to open the **agents panel**. It lists the agents already attached (the primary is tagged `(primary)`) and an "add" picker of the four kinds:
+In the TUI, press `Ctrl-x a` while a workspace is selected to open the **agents panel**. It lists the agents already attached (the primary is tagged `(primary)`) and an "add" picker of the five kinds (`claude`, `pi`, `hermes`, `codex`, `omp`):
 
 | Key      | Action                                                  |
 | -------- | ------------------------------------------------------- |
@@ -25,6 +25,14 @@ wsx agent add <kind>     # kind = claude | pi | hermes | codex | omp
 ```
 
 This runs against the **current** workspace — the one whose worktree you're in, or the one named by `$WSX_WORKSPACE_ID` (see [identity](#agent-identity-and-labels) below). It prints the new agent's label, e.g. `added claude#2`.
+
+The CLI equivalent of the panel's `x` names the agent to remove:
+
+```bash
+wsx agent remove <label>     # e.g. codex, claude#2
+```
+
+It refuses the primary (whether named `primary` or by its kind label). Messages still queued for the removed agent are discarded with it, and the command reports how many on stderr. A running dashboard stops the removed agent's session on its next refresh; if that agent was on screen, the view returns to the dashboard.
 
 ### Sessions survive a restart
 
@@ -108,7 +116,9 @@ If the sender is the `wsx` CLI itself (not another agent — i.e. `$WSX_AGENT_IN
 
 Queued messages are injected by the running `wsx` TUI, so `wsx agent send`
 warns on stderr when no dashboard is running — the message stays queued and is
-delivered when one starts.
+delivered when one starts. It refuses, queueing nothing, when the target
+agent's binary can't be found (on `PATH`, or at its `WSX_<AGENT>_BIN`
+override): the dashboard could never start that agent to deliver to it.
 
 Delivery waits for the target agent to be ready to accept input: its TUI must
 be up (not still booting) and its output quiet. A cold agent takes a second or

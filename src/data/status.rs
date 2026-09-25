@@ -110,20 +110,35 @@ impl Store {
             Target::Gone => return Ok(()),
             Target::NoAgents => ("workspace_status", "workspace_id", id.0),
         };
-        let prev: Option<(String, String)> = tx
+        let prev: Option<(String, String, bool)> = tx
             .query_row(
-                &format!("SELECT state, source FROM {table} WHERE {key_col} = ?1"),
+                &format!("SELECT state, source, turn_ended FROM {table} WHERE {key_col} = ?1"),
                 [key],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .optional()?;
-        let prev = prev.and_then(|(st, src)| Some((ReportedState::from_stored(&st)?, src)));
+        let prev = prev.and_then(|(st, source, turn_ended)| {
+            Some(StoredStatus {
+                state: ReportedState::from_stored(&st)?,
+                source,
+                turn_ended,
+            })
+        });
         let now = now_ms();
-        match merge_hook(prev.as_ref().map(|(st, src)| (*st, src.as_str())), state) {
-            HookMerge::Drop => return Ok(()),
+        match merge_hook(prev.as_ref(), state) {
+            // Nothing to write, but a legacy adoption above still commits.
+            HookMerge::Drop => {}
             HookMerge::Refresh => {
                 tx.execute(
                     &format!("UPDATE {table} SET reported_at = ?1 WHERE {key_col} = ?2"),
+                    rusqlite::params![now, key],
+                )?;
+            }
+            HookMerge::ConfirmTurnEnd => {
+                tx.execute(
+                    &format!(
+                        "UPDATE {table} SET reported_at = ?1, turn_ended = 1 WHERE {key_col} = ?2"
+                    ),
                     rusqlite::params![now, key],
                 )?;
             }
@@ -355,6 +370,14 @@ fn adopt_legacy_writes(conn: &rusqlite::Connection, id: WorkspaceId) -> Result<(
     Ok(())
 }
 
+/// The stored row a hook push lands on, as `merge_hook` needs it.
+struct StoredStatus {
+    state: ReportedState,
+    source: String,
+    /// A turn-end hook has already confirmed this model-pushed status.
+    turn_ended: bool,
+}
+
 /// What a hook push does to the row it lands on (see `merge_hook`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HookMerge {
@@ -362,14 +385,16 @@ enum HookMerge {
     Replace,
     /// Keep the stored state, message and source; refresh `reported_at` only.
     Refresh,
+    /// `Refresh`, and mark the model status as confirmed by its turn's end.
+    ConfirmTurnEnd,
     /// Write the hook's state, keeping the stored message.
     KeepMessage,
     /// Leave the row untouched.
     Drop,
 }
 
-/// Decide what a hook reporting `hook` does to a stored row `prev`
-/// (`(state, source)`, `None` when the agent has none).
+/// Decide what a hook reporting `hook` does to the stored row `prev` (`None`
+/// when the agent has none).
 ///
 /// **An idle prompt never replaces `Busy`.** `Busy` records a *condition* —
 /// background work is in flight — while every other state records an
@@ -381,50 +406,62 @@ enum HookMerge {
 /// to prevent. `Working`, `Blocked` (a permission prompt) and `Done` (a `Stop`
 /// whose `background_tasks` has emptied) all still supersede `Busy`.
 ///
-/// **A model-set row keeps its message.** The doctrine has agents push
-/// `wsx status set <state> --message …` at every transition, and the harness
-/// hook reports the turn's end seconds later. Last-writer-wins erased every
-/// such message. So, over a row whose source is `model`:
-/// - a hook repeating the stored state only refreshes `reported_at` — it adds
-///   nothing but freshness, which the dashboard's gate
-///   (`app::status::fresh_reported`) needs after the transcript grew past a
-///   mid-turn `set`;
-/// - a turn-end or idle hook (`Done`, `Blocked`, `Waiting`) never overrides a
-///   model-set `Done`, `Blocked` or `Waiting`: those are the model's own
-///   account of why its turn ended, and the hook's `Done`/`Blocked` split is a
-///   `?`-suffix guess. Refresh it instead;
-/// - a model `Working` parking on background work (`Busy`) keeps its message:
-///   it describes the work still in flight;
+/// **A model-pushed status holds through the end of its turn.** The doctrine
+/// has agents push `wsx status set <state> --message …` at every transition,
+/// and the harness reports the turn's end seconds later; last-writer-wins
+/// erased every such message. So, over a row whose source is `model`:
+/// - the turn's end (`Done`/`Blocked`) over a model `Done`, `Blocked` or
+///   `Waiting` keeps it — the model's own account of why the turn ended
+///   beats the hook's `?`-suffix guess — and refreshes `reported_at`, which
+///   the dashboard's freshness gate (`app::status::fresh_reported`) needs
+///   once the transcript has grown past a mid-turn `set`. It also marks the
+///   row confirmed: the *next* turn-end is a later turn that finished without
+///   a new `set`, and replaces it. Codex has no turn-start hook, so this is
+///   the only boundary it gives;
+/// - an idle prompt (`Waiting`) over a model `Done`, `Blocked` or `Waiting`
+///   is dropped, `reported_at` untouched: idleness is not news, and a fresh
+///   timestamp would make an old completion satisfy `wsx agent wait --done`
+///   (`mail::ends_wait`);
+/// - the same state again (`Working` over a model `Working`) refreshes;
+/// - a model `Working` parking on background work (`Busy`) keeps its message,
+///   which describes the work still in flight — as does every repeated
+///   `Busy` after it;
 /// - anything else is new information and replaces the row, message and all:
-///   `Working`/`Busy` over a model turn-end is a new turn the old message no
-///   longer describes, and a turn-end over a model `Working` means the model
+///   `Working`/`Busy` over a model turn-end is new work the message no longer
+///   describes, and a turn-end over a model `Working` means the model
 ///   finished without saying so.
 ///
 /// All of this is per agent row: one peer's hook never touches another's.
 /// Arrival order, not event order, decides: hook processes are independent,
 /// so a stalled `Stop` landing after a newer `UserPromptSubmit` can briefly
-/// resurrect a stale state until the following event. Self-correcting.
+/// resurrect a stale state until the following event.
 ///
-/// Nothing here expires a stale state from a session that died mid-flight;
-/// the dashboard's escape is the `session_running` guard in
-/// `Status::classify`. Waybar and the menubar rows render
-/// `all_workspace_status` directly and show the last stored state.
-fn merge_hook(prev: Option<(ReportedState, &str)>, hook: ReportedState) -> HookMerge {
+/// Nothing here expires a stale state from a session that died mid-flight.
+/// The dashboard honours a stored `Busy` only while the session runs (see
+/// `Status::classify`); a stored `Done`/`Blocked` stands until the next push.
+/// Waybar and the menubar rows render `all_workspace_status` directly and
+/// show the last stored state.
+fn merge_hook(prev: Option<&StoredStatus>, hook: ReportedState) -> HookMerge {
     use ReportedState::*;
-    let Some((prev, source)) = prev else {
+    let Some(prev) = prev else {
         return HookMerge::Replace;
     };
-    if prev == Busy && hook == Waiting {
+    if prev.state == Busy && hook == Waiting {
         return HookMerge::Drop;
     }
-    if source != "model" {
-        return HookMerge::Replace;
+    if prev.source != "model" {
+        return if prev.state == hook {
+            HookMerge::Refresh
+        } else {
+            HookMerge::Replace
+        };
     }
-    let turn_end = |s| matches!(s, Done | Blocked | Waiting);
-    match (prev, hook) {
-        _ if prev == hook => HookMerge::Refresh,
-        _ if turn_end(prev) && turn_end(hook) => HookMerge::Refresh,
-        (Working, Busy) => HookMerge::KeepMessage,
+    let turn_end = matches!(prev.state, Done | Blocked | Waiting);
+    match hook {
+        Waiting if turn_end => HookMerge::Drop,
+        Done | Blocked if turn_end && !prev.turn_ended => HookMerge::ConfirmTurnEnd,
+        _ if prev.state == hook && !turn_end => HookMerge::Refresh,
+        Busy if prev.state == Working => HookMerge::KeepMessage,
         _ => HookMerge::Replace,
     }
 }
@@ -1324,5 +1361,107 @@ mod tests {
             .apply_hook_status(ws, None, ReportedState::Working, "hook")
             .unwrap();
         assert_eq!(status_of(&store, ws).message, None);
+    }
+
+    #[test]
+    fn the_next_turn_end_replaces_a_confirmed_model_status() {
+        // Codex has no turn-start hook: its notify fires only at turn end. A
+        // model status survives the turn-end of the turn it was set in, but a
+        // later turn that ends without a new `set` must not stay hidden behind
+        // it — in either direction.
+        use ReportedState::*;
+        for (model, next) in [(Blocked, Done), (Done, Blocked), (Done, Done)] {
+            let (store, ws) = store_with_workspace();
+            store
+                .set_workspace_status(ws, model, Some("turn A"), "model")
+                .unwrap();
+            store.apply_hook_status(ws, None, model, "notify").unwrap();
+            let got = status_of(&store, ws);
+            assert_eq!((got.state, got.message.as_deref()), (model, Some("turn A")));
+            store.apply_hook_status(ws, None, next, "notify").unwrap();
+            let got = status_of(&store, ws);
+            assert_eq!(
+                (got.state, got.message.as_deref(), got.source.as_str()),
+                (next, None, "notify"),
+                "model {model:?}, then turn B ends {next:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_new_model_push_is_protected_again() {
+        let (store, ws) = store_with_workspace();
+        store
+            .set_workspace_status(ws, ReportedState::Done, Some("turn A"), "model")
+            .unwrap();
+        store
+            .apply_hook_status(ws, None, ReportedState::Done, "notify")
+            .unwrap();
+        store
+            .set_workspace_status(ws, ReportedState::Done, Some("turn B"), "model")
+            .unwrap();
+        store
+            .apply_hook_status(ws, None, ReportedState::Done, "notify")
+            .unwrap();
+        assert_eq!(status_of(&store, ws).message.as_deref(), Some("turn B"));
+    }
+
+    #[test]
+    fn idle_prompt_never_refreshes_a_model_turn_end() {
+        // `wsx agent wait --done` counts a done/blocked newer than its
+        // baseline as a completion (`mail::ends_wait`). Claude's idle timer
+        // must not make an old completion look new.
+        for model in [ReportedState::Done, ReportedState::Blocked] {
+            let (store, ws) = store_with_workspace();
+            store
+                .set_workspace_status(ws, model, Some("finished"), "model")
+                .unwrap();
+            store.apply_hook_status(ws, None, model, "hook").unwrap();
+            backdate(&store, ws);
+            store
+                .apply_hook_status(ws, None, ReportedState::Waiting, "hook")
+                .unwrap();
+            let got = status_of(&store, ws);
+            assert_eq!((got.state, got.reported_at), (model, 1));
+            assert_eq!(got.message.as_deref(), Some("finished"));
+        }
+    }
+
+    #[test]
+    fn repeated_busy_keeps_the_carried_message() {
+        // A background task resumes the session and it parks again on the
+        // tasks still running: the message still describes that work.
+        let (store, ws) = store_with_workspace();
+        store
+            .set_workspace_status(ws, ReportedState::Working, Some("running tests"), "model")
+            .unwrap();
+        for _ in 0..2 {
+            store
+                .apply_hook_status(ws, None, ReportedState::Busy, "hook")
+                .unwrap();
+        }
+        let got = status_of(&store, ws);
+        assert_eq!(
+            (got.state, got.message.as_deref()),
+            (ReportedState::Busy, Some("running tests"))
+        );
+    }
+
+    #[test]
+    fn a_dropped_idle_prompt_still_adopts_legacy_writes() {
+        // An older binary's hook wrote `busy` to the workspace row directly;
+        // the idle prompt that follows is dropped, but the adoption must
+        // still commit.
+        let (store, ws) = store_with_workspace();
+        store
+            .set_workspace_status(ws, ReportedState::Working, None, "hook")
+            .unwrap();
+        legacy_write(&store, ws, "busy", now_ms() + 1_000);
+        store
+            .apply_hook_status(ws, None, ReportedState::Waiting, "hook")
+            .unwrap();
+        let all = store.agent_statuses(ws).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all.values().next().unwrap().state, ReportedState::Busy);
     }
 }

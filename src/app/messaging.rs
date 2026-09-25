@@ -20,13 +20,23 @@ pub fn delivery_banner(from_label: Option<&str>, body: &str) -> String {
 /// different workspace than the message, the label is qualified with
 /// `<repo>/<slug> ` so the recipient can see where the work came from.
 pub fn sender_label(store: &Store, msg: &AgentMessage) -> Option<String> {
-    let from = msg.from_agent_id?;
-    let sender = store.workspace_agents_by_id(from).ok()??;
-    let label = sender.label();
-    if sender.workspace_id == msg.workspace_id {
+    instance_label_relative_to(store, msg.from_agent_id?, msg.workspace_id)
+}
+
+/// An instance's label as seen from workspace `viewer`: the bare label when
+/// the instance lives there, `<repo>/<slug> <label>` when it lives elsewhere.
+/// `None` when the instance row no longer exists.
+pub fn instance_label_relative_to(
+    store: &Store,
+    id: crate::data::store::AgentInstanceId,
+    viewer: crate::data::store::WorkspaceId,
+) -> Option<String> {
+    let inst = store.workspace_agents_by_id(id).ok()??;
+    let label = inst.label();
+    if inst.workspace_id == viewer {
         return Some(label);
     }
-    match workspace_ref(store, sender.workspace_id) {
+    match workspace_ref(store, inst.workspace_id) {
         Some(origin) => Some(format!("{origin} {label}")),
         // The instance row resolved but its workspace or repo row didn't
         // (an inconsistent DB — `delete_workspace` clears `workspace_agents`
@@ -37,7 +47,7 @@ pub fn sender_label(store: &Store, msg: &AgentMessage) -> Option<String> {
 }
 
 /// `<repo>/<slug>` for a workspace id, or None if either row is missing.
-fn workspace_ref(store: &Store, ws: crate::data::store::WorkspaceId) -> Option<String> {
+pub fn workspace_ref(store: &Store, ws: crate::data::store::WorkspaceId) -> Option<String> {
     let w = store.workspace_by_id(ws).ok()??;
     let repo = store
         .repos()

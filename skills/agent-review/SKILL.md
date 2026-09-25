@@ -88,7 +88,7 @@ stop and tell the user the valid kinds. Do not guess.
      edge cases.
    - Produce a **gap analysis** — test coverage, documentation, error handling.
    - Report findings back when done with
-     `wsx agent reply <id> --file <findings-file>` (or `… <id> -` piping the
+     `wsx agent reply --file <findings-file> <id>` (or `… <id> -` piping the
      findings on stdin), where `<id>` is the number in this brief's
      `[message #<id> from …]` banner.
 
@@ -111,7 +111,7 @@ main: run `git diff main...HEAD` to see the full change. Provide (1) a risk
 assessment — security, performance, breaking changes, edge cases; and (2) a gap
 analysis — test coverage, documentation, error handling. When done, write your
 findings to a file and send them back with:
-wsx agent reply <id from this message's banner> --file <findings-file>
+wsx agent reply --file <findings-file> <id from this message's banner>
 EOF
 ```
 

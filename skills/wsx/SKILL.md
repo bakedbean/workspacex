@@ -233,11 +233,13 @@ and branch.
   dashboard injects the message into the peer's session shortly after, tagged
   `[message #<id> from <you>; reply with: wsx agent reply <id> <message>]`.
 - **Long or code-heavy bodies:** put them in a file and use
-  `wsx agent send <label> --file <path>` (flags go before the label:
-  `wsx agent send --file <path> <label>`), or pipe them with
-  `… | wsx agent send <label> -`. The body is sent verbatim — no shell
+  `wsx agent send --file <path> <label>`, or pipe them with
+  `… | wsx agent send <label> -`. Options must come before the label (or,
+  for `reply`, before the message id): everything after it is message text,
+  so `send <label> --file x` would send the literal words "--file x". The body is sent verbatim — no shell
   quoting or backtick escaping — and an empty body is refused.
-- **Reply:** `wsx agent reply <id> <message>` answers the sender of message
+- **Reply:** `wsx agent reply <id> <message>` (or
+  `wsx agent reply --file <path> <id>`) answers the sender of message
   `<id>` wherever it lives; with no id it answers the latest message you
   received. Don't reconstruct the sender's label or workspace by hand.
 - **Check delivery / read your mail:** `wsx agent messages` lists your inbox

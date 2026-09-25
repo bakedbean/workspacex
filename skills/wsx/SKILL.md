@@ -54,11 +54,12 @@ wsx agent send [--workspace <repo>/<slug>] [--file <path>|-] <label|instance-id>
 wsx agent reply [--file <path>|-] [<msg-id>] [<message…>|-]
                                             # answer a message's sender (default:
                                             # the latest you received), in any workspace
-wsx agent messages [--sent|--all] [--undelivered] [--limit <n>] [--id <msg-id>]
+wsx agent messages [--sent|--all] [--undelivered] [--limit <n>] [--id <msg-id>] [--json]
                                             # your inbox as TSV with delivery times;
                                             # --id prints one message in full
-wsx agent wait [--from <sender>] [--after <msg-id>] [--timeout <secs>]
+wsx agent wait [--from <sender>] [--after <msg-id>] [--timeout <secs>] [--done <agent>]
                                             # block until a message for you arrives
+                                            # (--done: or until <agent> reports done/blocked)
 wsx agent whoami                            # your label, instance id, workspace
 
 # Read another workspace's state with these — never query wsx's sqlite db directly.
@@ -260,8 +261,8 @@ and branch.
   `DELIVERED` reads `queued` until the dashboard has injected it, and
   `dropped` if wsx gave up on it (e.g. the target agent isn't installed) —
   a dropped message never arrived; `--id` says why.
-  `wsx agent messages --id <id>` prints one message in full. Never query
-  wsx's sqlite database directly.
+  `wsx agent messages --id <id>` prints one message in full; add `--json`
+  for parseable output. Never query wsx's sqlite database directly.
 - **Wait for a reply in the same turn:** `wsx agent wait --from <label>`
   blocks until a message for you arrives and prints it (default timeout 110s;
   pass `--timeout <secs>` below your tool's own timeout, or run it in the
@@ -271,7 +272,9 @@ and branch.
   `--after <id of the last message you got>`. `wait` is a read, not a delivery: the dashboard still injects
   the message into your session afterwards. When that `[message #<id> …]`
   arrives for an id you already handled via `wait`, it is the same message —
-  don't act on it twice. If you have nothing else to do, simply ending your
+  don't act on it twice. To also catch a peer that finishes without
+  replying, add `--done <label>`: the wait ends when that peer reports
+  `done` (or `blocked`) after your `--after` message. If you have nothing else to do, simply ending your
   turn also works: the reply is injected as your next input.
 - **Add a peer:** `wsx agent send` only reaches agents already attached. To
   attach one, use `wsx agent add <kind>` (kind = claude | pi | hermes | codex | omp),

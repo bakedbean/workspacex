@@ -141,8 +141,8 @@ Since all agents write to the same files, prefer messaging to hand off work rath
 
 ```bash
 wsx agent reply [--file <path>|-] [<msg-id>] [<message…>|-]
-wsx agent messages [--sent|--all] [--undelivered] [--limit <n>] [--id <msg-id>]
-wsx agent wait [--from <sender>] [--after <msg-id>] [--timeout <secs>]
+wsx agent messages [--sent|--all] [--undelivered] [--limit <n>] [--id <msg-id>] [--json]
+wsx agent wait [--from <sender>] [--after <msg-id>] [--timeout <secs>] [--done <agent>]
 wsx agent whoami
 ```
 
@@ -172,6 +172,13 @@ These act as the calling agent (`$WSX_AGENT_INSTANCE_ID`).
   message never arrived, and `--id` shows the reason. `--undelivered` shows
   queued and dropped messages; `--id <msg-id>` prints
   one message's headers and full body.
+
+  `--json` prints message objects instead — an array, or one object with
+  `--id`: `{id, from_id, from, to_id, to, workspace, bytes, body, created_at,
+  delivered_at, state, drop_reason}`, where `from`/`to` are labels as you'd
+  address them, `workspace` is the recipient's `<repo>/<slug>`, `state` is
+  `queued`, `delivered`, or `dropped`, and timestamps are epoch milliseconds.
+  `from_id`/`from` are `null` for a message sent from a shell.
 - **`wait`** blocks until a message for you is recorded, then prints it like
   `messages --id`. Without `--after`, it counts messages still queued for you
   when it starts (they haven't reached you yet) and anything newer. With
@@ -182,6 +189,16 @@ These act as the calling agent (`$WSX_AGENT_INSTANCE_ID`).
   prints it). `--from` accepts a label, `primary`, an instance id, or
   `<repo>/<slug> <label>` as shown in banners. It gives up after `--timeout`
   seconds (default 110, under common agent tool timeouts; `0` waits forever).
+
+  `--done <agent>` also ends the wait when that agent (same forms as
+  `--from`) reports `done` — or `blocked`, since it can't finish without a
+  human — and prints `<agent> reported done at <time>: <message>`. Only a
+  status reported after the `--after` message was sent counts (after the wait
+  started, without `--after`), so a `done` left over from the peer's previous
+  task doesn't end it. That covers a peer that finishes without replying:
+  `send` a task, then `wait --after <its id> --done <peer>`. With `--done`
+  and no `--from`, `wait` also works from a plain shell, watching the status
+  only.
 - **`whoami`** prints your label, instance id, workspace, and whether you are
   the primary.
 

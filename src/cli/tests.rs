@@ -3214,3 +3214,30 @@ fn blocked_also_ends_a_done_wait() {
         Some(crate::cli::mail::WaitHit::Status(s)) if s.state == ReportedState::Blocked
     ));
 }
+
+#[test]
+fn workspace_flag_rejects_a_flag_as_its_value() {
+    let e = parse(&["status", "show", "--workspace", "--json"]).unwrap_err();
+    assert!(e.to_string().contains("--workspace needs value"), "{e}");
+}
+
+#[tokio::test]
+async fn agent_wait_done_errors_when_the_peer_is_removed() {
+    use crate::cli::mail::{WaitFor, wait_for};
+    let fx = MailFixture::new();
+    let store = fx.store();
+    let peer = store
+        .add_workspace_agent(fx.target_ws, crate::pty::session::AgentKind::Codex)
+        .unwrap()
+        .id;
+    store.remove_workspace_agent(peer).unwrap();
+    let what = WaitFor {
+        inbox: None,
+        done: Some((peer, 0)),
+    };
+    let err = match wait_for(&store, &what, 0).await {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("must not wait on a removed agent"),
+    };
+    assert!(err.contains("removed while waiting"), "{err}");
+}

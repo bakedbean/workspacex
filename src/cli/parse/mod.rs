@@ -60,10 +60,16 @@ pub(in crate::cli) fn parse_read_flags(
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--workspace" => {
-                flags.workspace = Some(it.next().ok_or_else(|| Error::Usage {
-                    group: None,
-                    msg: "--workspace needs value (<repo>/<slug>)".into(),
-                })?);
+                // A flag in the value slot means the value was forgotten
+                // (`--workspace --json`); say that, not "no repo named --json".
+                let value =
+                    it.next()
+                        .filter(|v| !v.starts_with("--"))
+                        .ok_or_else(|| Error::Usage {
+                            group: None,
+                            msg: "--workspace needs value (<repo>/<slug>)".into(),
+                        })?;
+                flags.workspace = Some(value);
             }
             "--json" if json_ok => flags.json = true,
             other => {

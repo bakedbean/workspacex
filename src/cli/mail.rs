@@ -388,6 +388,14 @@ pub(in crate::cli) async fn wait_for(
             if let Some(s) = store.agent_status(peer)?.filter(|s| ends_wait(s, since)) {
                 return Ok(Some(WaitHit::Status(s)));
             }
+            // A removed peer will never report; say so instead of running
+            // out the clock (or waiting forever with --timeout 0).
+            if store.workspace_agents_by_id(peer)?.is_none() {
+                return Err(Error::UserInput(format!(
+                    "--done: agent instance {} was removed while waiting",
+                    peer.0
+                )));
+            }
         }
         if let Some(Some(d)) = deadline {
             if std::time::Instant::now() >= d {

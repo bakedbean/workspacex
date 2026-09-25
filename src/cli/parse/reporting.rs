@@ -4,7 +4,7 @@
 //! the same hook/notify shapes, so they share a file.
 
 use super::{Args, parse_read_flags};
-use crate::cli::action::CliAction;
+use crate::cli::action::{CliAction, RecapFields};
 use crate::error::{Error, Result};
 
 pub(in crate::cli) fn parse_status(it: &mut Args) -> Result<CliAction> {
@@ -12,25 +12,40 @@ pub(in crate::cli) fn parse_status(it: &mut Args) -> Result<CliAction> {
         Some("set") => {
             let state = it.next().ok_or_else(|| Error::Usage {
                 group: None,
-                msg: "usage: wsx status set <working|waiting|blocked|done> [--message <text>]"
+                msg: "usage: wsx status set <working|waiting|blocked|done> [--message <text>] \
+                      [--goal|--state|--next <text>] [--goal-short|--state-short|--next-short <text>]"
                     .into(),
             })?;
             let mut message = None;
+            let mut recap = RecapFields::default();
             while let Some(arg) = it.next() {
-                if arg == "--message" || arg == "-m" {
-                    message = Some(it.next().ok_or_else(|| Error::Usage {
-                        group: None,
-                        msg: "--message requires a value".into(),
-                    })?);
+                let slot = if arg == "--message" || arg == "-m" {
+                    &mut message
+                } else if let Some(slot) = recap.slot(&arg) {
+                    slot
                 } else {
                     return Err(Error::Usage {
                         group: None,
                         msg: format!("unexpected argument: {arg}"),
                     });
-                }
+                };
+                *slot = Some(it.next().ok_or_else(|| Error::Usage {
+                    group: None,
+                    msg: format!("{arg} requires a value"),
+                })?);
             }
-            Ok(CliAction::StatusSet { state, message })
+            Ok(CliAction::StatusSet {
+                state,
+                message,
+                recap,
+            })
         }
+        // Bare `wsx status` reads rather than erroring: agents reach for it
+        // to check what they last reported.
+        None => Ok(CliAction::StatusShow {
+            workspace: None,
+            json: false,
+        }),
         Some("clear") => Ok(CliAction::StatusClear),
         Some("show") => {
             let f = parse_read_flags(it, "status show [--workspace <repo>/<slug>] [--json]", true)?;
@@ -74,7 +89,7 @@ pub(in crate::cli) fn parse_status(it: &mut Args) -> Result<CliAction> {
         }
         other => Err(Error::Usage {
             group: None,
-            msg: format!("unknown status subcommand: {}", other.unwrap_or("(none)")),
+            msg: format!("unknown status subcommand: {}", other.unwrap_or_default()),
         }),
     }
 }
@@ -82,36 +97,20 @@ pub(in crate::cli) fn parse_status(it: &mut Args) -> Result<CliAction> {
 pub(in crate::cli) fn parse_recap(it: &mut Args) -> Result<CliAction> {
     match it.next().as_deref() {
         Some("set") => {
-            let mut goal = None;
-            let mut state = None;
-            let mut next = None;
-            let mut goal_short = None;
-            let mut state_short = None;
-            let mut next_short = None;
+            let mut fields = RecapFields::default();
             while let Some(arg) = it.next() {
-                let slot = match arg.as_str() {
-                    "--goal" => &mut goal,
-                    "--state" => &mut state,
-                    "--next" => &mut next,
-                    "--goal-short" => &mut goal_short,
-                    "--state-short" => &mut state_short,
-                    "--next-short" => &mut next_short,
-                    _ => {
-                        return Err(Error::Usage {
-                            group: None,
-                            msg: format!("unexpected argument: {arg}"),
-                        });
-                    }
+                let Some(slot) = fields.slot(&arg) else {
+                    return Err(Error::Usage {
+                        group: None,
+                        msg: format!("unexpected argument: {arg}"),
+                    });
                 };
                 *slot = Some(it.next().ok_or_else(|| Error::Usage {
                     group: None,
                     msg: format!("{arg} requires a value"),
                 })?);
             }
-            if [&goal, &state, &next, &goal_short, &state_short, &next_short]
-                .iter()
-                .all(|o| o.is_none())
-            {
+            if fields.is_empty() {
                 return Err(Error::Usage {
                     group: None,
                     msg: "usage: wsx recap set [--goal|--state|--next <text>] \
@@ -119,6 +118,14 @@ pub(in crate::cli) fn parse_recap(it: &mut Args) -> Result<CliAction> {
                         .into(),
                 });
             }
+            let RecapFields {
+                goal,
+                state,
+                next,
+                goal_short,
+                state_short,
+                next_short,
+            } = fields;
             Ok(CliAction::RecapSet {
                 goal,
                 state,
@@ -128,6 +135,11 @@ pub(in crate::cli) fn parse_recap(it: &mut Args) -> Result<CliAction> {
                 next_short,
             })
         }
+        // Bare `wsx recap` is `recap show`, for the same reason.
+        None => Ok(CliAction::RecapShow {
+            workspace: None,
+            json: false,
+        }),
         Some("show") => {
             let f = parse_read_flags(it, "recap show [--workspace <repo>/<slug>] [--json]", true)?;
             Ok(CliAction::RecapShow {
@@ -138,7 +150,7 @@ pub(in crate::cli) fn parse_recap(it: &mut Args) -> Result<CliAction> {
         Some("clear") => Ok(CliAction::RecapClear),
         other => Err(Error::Usage {
             group: None,
-            msg: format!("unknown recap subcommand: {}", other.unwrap_or("(none)")),
+            msg: format!("unknown recap subcommand: {}", other.unwrap_or_default()),
         }),
     }
 }

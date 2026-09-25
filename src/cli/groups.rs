@@ -53,7 +53,7 @@ pub static GROUPS: &[GroupInfo] = &[
     },
     GroupInfo {
         name: "agent",
-        blurb: "List, add, and message agents in a workspace",
+        blurb: "List, add, remove, and message agents in a workspace",
         commands: &[
             CmdInfo {
                 usage: "list [--workspace <repo>/<slug>] [--json]",
@@ -62,6 +62,10 @@ pub static GROUPS: &[GroupInfo] = &[
             CmdInfo {
                 usage: "add <kind>",
                 blurb: "Attach an agent (claude|pi|hermes|codex|omp)",
+            },
+            CmdInfo {
+                usage: "remove <label>",
+                blurb: "Detach a non-primary agent; its undelivered messages are discarded",
             },
             CmdInfo {
                 usage: "send [--workspace <repo>/<slug>] [--file <path>|-] <label|instance-id> [<message...>|-]",
@@ -234,8 +238,13 @@ pub static GROUPS: &[GroupInfo] = &[
         blurb: "Report agent-driven workspace status",
         commands: &[
             CmdInfo {
-                usage: "set <working|waiting|blocked|done> [--message <text>]",
-                blurb: "Set this agent's status (model push path)",
+                usage: "(no command)",
+                blurb: "Same as `show` for the current workspace",
+            },
+            CmdInfo {
+                usage: "set <working|waiting|blocked|done> [--message <text>] [<recap flags>]",
+                blurb: "Set this agent's status (model push path); accepts the same \
+                        --goal/--state/--next[-short] flags as `recap set` to update both at once",
             },
             CmdInfo {
                 usage: "clear",
@@ -262,8 +271,8 @@ pub static GROUPS: &[GroupInfo] = &[
                         no filler (e.g. \"Audit V2 invoices, CV-04964, bug from #2835\")",
             },
             CmdInfo {
-                usage: "show [--workspace <repo>/<slug>] [--json]",
-                blurb: "Print the recap, here or in another workspace",
+                usage: "[show] [--workspace <repo>/<slug>] [--json]",
+                blurb: "Print the recap, here or in another workspace (bare `recap` = show)",
             },
             CmdInfo {
                 usage: "clear",

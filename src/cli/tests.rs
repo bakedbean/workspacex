@@ -186,6 +186,8 @@ async fn agent_send_dispatch_targets_the_other_workspaces_primary() {
     // ambient environment (this process may itself be running under a
     // live wsx dashboard).
     env.set("XDG_RUNTIME_DIR", tmp.path());
+    // The target's binary must resolve, or the send refuses to queue.
+    stub_agent_binaries(&mut env);
     // Target resolution must come entirely from `workspace`, not from
     // the sender's own identity, so leave the sender unset.
     env.remove("WSX_AGENT_INSTANCE_ID");
@@ -425,6 +427,21 @@ fn parses_agent_wait_flags() {
     assert!(parse(&["agent", "wait", "claude"]).is_err());
 }
 
+/// Point every agent kind's `WSX_<AGENT>_BIN` at an existing binary.
+/// `agent send` refuses a target whose binary isn't installed, and CI has
+/// none of the real agents on PATH.
+fn stub_agent_binaries(env: &mut crate::test_support::EnvGuard) {
+    for var in [
+        "WSX_CLAUDE_BIN",
+        "WSX_PI_BIN",
+        "WSX_HERMES_BIN",
+        "WSX_CODEX_BIN",
+        "WSX_OMP_BIN",
+    ] {
+        env.set(var, crate::test_support::true_path());
+    }
+}
+
 /// Two workspaces in repo `r`, `origin` and `target`, each with a claude
 /// primary, seeded into the DB `run_cli` will open.
 struct MailFixture {
@@ -485,6 +502,7 @@ impl MailFixture {
     ) -> crate::test_support::EnvGuard {
         let mut env = crate::test_support::EnvGuard::new();
         env.set("XDG_RUNTIME_DIR", self._tmp.path());
+        stub_agent_binaries(&mut env);
         env.remove("WSX_WORKSPACE_ID");
         match me {
             Some(id) => env.set("WSX_AGENT_INSTANCE_ID", id.0.to_string()),
@@ -1726,6 +1744,7 @@ async fn workspace_create_with_prompt_queues_it_to_the_new_primary() {
     // no-dashboard warning path is deterministic regardless of whether
     // this process is itself running under a live wsx dashboard.
     env.set("XDG_RUNTIME_DIR", tmp.path());
+    stub_agent_binaries(&mut env);
     env.remove("WSX_AGENT_INSTANCE_ID");
 
     run_cli(
@@ -2240,7 +2259,7 @@ fn parses_status_set_with_message() {
     )
     .unwrap();
     match a {
-        CliAction::StatusSet { state, message } => {
+        CliAction::StatusSet { state, message, .. } => {
             assert_eq!(state, "blocked");
             assert_eq!(message.as_deref(), Some("need a decision"));
         }
@@ -2258,7 +2277,7 @@ fn parses_status_set_without_message() {
     )
     .unwrap();
     match a {
-        CliAction::StatusSet { state, message } => {
+        CliAction::StatusSet { state, message, .. } => {
             assert_eq!(state, "working");
             assert_eq!(message, None);
         }
@@ -2357,6 +2376,159 @@ fn status_set_message_without_value_is_usage_error() {
     )
     .unwrap_err();
     assert!(matches!(err, Error::Usage { .. }), "got {err:?}");
+}
+
+#[test]
+fn parses_status_set_with_recap_flags() {
+    match parse(&[
+        "status",
+        "set",
+        "working",
+        "-m",
+        "running tests",
+        "--state",
+        "tests running",
+        "--next-short",
+        "fix flake",
+    ])
+    .unwrap()
+    {
+        CliAction::StatusSet {
+            state,
+            message,
+            recap,
+        } => {
+            assert_eq!(state, "working");
+            assert_eq!(message.as_deref(), Some("running tests"));
+            assert_eq!(recap.state.as_deref(), Some("tests running"));
+            assert_eq!(recap.next_short.as_deref(), Some("fix flake"));
+            assert_eq!(recap.goal, None);
+        }
+        other => panic!("expected StatusSet, got {other:?}"),
+    }
+    assert!(parse(&["status", "set", "working", "--goal"]).is_err());
+    assert!(parse(&["status", "set", "working", "--bogus", "x"]).is_err());
+}
+
+/// A scratch `Dirs` whose DB holds one repo `r` with one workspace `ws`
+/// (plus its primary agent), and an env pointing `resolve_current_workspace`
+/// at it. The guard must outlive the `run_cli` calls.
+fn seed_current_workspace() -> (
+    tempfile::TempDir,
+    crate::config::Dirs,
+    crate::data::store::WorkspaceId,
+    crate::test_support::EnvGuard,
+) {
+    use crate::data::store::{NewWorkspace, Store};
+    use crate::pty::session::AgentKind;
+    let tmp = tempfile::tempdir().unwrap();
+    let dirs = crate::config::Dirs::for_test(tmp.path());
+    let ws = {
+        let store = Store::open(&dirs.db_path()).unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "ws",
+                branch: "wsx/ws",
+                worktree_path: std::path::Path::new("/tmp/r/ws"),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store.add_primary_agent(ws, AgentKind::Claude, 1).unwrap();
+        ws
+    };
+    let mut env = crate::test_support::EnvGuard::new();
+    env.set("WSX_WORKSPACE_ID", ws.0.to_string());
+    env.set("XDG_RUNTIME_DIR", tmp.path());
+    stub_agent_binaries(&mut env);
+    env.remove("WSX_AGENT_INSTANCE_ID");
+    (tmp, dirs, ws, env)
+}
+
+#[tokio::test]
+async fn status_set_with_recap_flags_updates_both() {
+    use crate::data::store::{ReportedState, Store};
+    let (_tmp, dirs, ws, _env) = seed_current_workspace();
+    {
+        let store = Store::open(&dirs.db_path()).unwrap();
+        store
+            .set_workspace_recap(ws, Some("the goal"), Some("old"), None, None, None, None)
+            .unwrap();
+    }
+    let action = parse(&[
+        "status",
+        "set",
+        "blocked",
+        "--message",
+        "need a call",
+        "--state",
+        "new",
+        "--state-short",
+        "new-short",
+    ])
+    .unwrap();
+    run_cli(action, &dirs).await.unwrap();
+
+    let store = Store::open(&dirs.db_path()).unwrap();
+    let status = store.workspace_status(ws).unwrap().unwrap();
+    assert_eq!(status.state, ReportedState::Blocked);
+    assert_eq!(status.message.as_deref(), Some("need a call"));
+    let recap = store.workspace_recap(ws).unwrap().unwrap();
+    assert_eq!(recap.state.as_deref(), Some("new"));
+    assert_eq!(recap.state_short.as_deref(), Some("new-short"));
+    assert_eq!(
+        recap.goal.as_deref(),
+        Some("the goal"),
+        "fields not passed must be left alone, as with `recap set`"
+    );
+}
+
+#[tokio::test]
+async fn status_set_without_recap_flags_leaves_recap_absent() {
+    use crate::data::store::Store;
+    let (_tmp, dirs, ws, _env) = seed_current_workspace();
+    run_cli(parse(&["status", "set", "working"]).unwrap(), &dirs)
+        .await
+        .unwrap();
+    let store = Store::open(&dirs.db_path()).unwrap();
+    assert!(store.workspace_recap(ws).unwrap().is_none());
+}
+
+#[test]
+fn bare_status_and_recap_are_show_for_the_current_workspace() {
+    assert!(matches!(
+        parse(&["status"]).unwrap(),
+        CliAction::StatusShow {
+            workspace: None,
+            json: false
+        }
+    ));
+    assert!(matches!(
+        parse(&["recap"]).unwrap(),
+        CliAction::RecapShow {
+            workspace: None,
+            json: false
+        }
+    ));
+}
+
+#[tokio::test]
+async fn bare_status_dispatches_against_the_current_workspace() {
+    use crate::data::store::{ReportedState, Store};
+    let (_tmp, dirs, ws, _env) = seed_current_workspace();
+    // No status yet: a read, not an error.
+    run_cli(parse(&["status"]).unwrap(), &dirs).await.unwrap();
+    Store::open(&dirs.db_path())
+        .unwrap()
+        .set_workspace_status(ws, ReportedState::Working, Some("x"), "model")
+        .unwrap();
+    run_cli(parse(&["status"]).unwrap(), &dirs).await.unwrap();
+    run_cli(parse(&["recap"]).unwrap(), &dirs).await.unwrap();
 }
 
 #[test]
@@ -2803,6 +2975,7 @@ async fn status_set_and_clear_are_attributed_to_the_calling_agent() {
     let set = |state: &str| CliAction::StatusSet {
         state: state.to_string(),
         message: None,
+        recap: Default::default(),
     };
     run_cli(set("working"), &dirs).await.unwrap();
     env.set("WSX_AGENT_INSTANCE_ID", peer.0.to_string());
@@ -3240,4 +3413,161 @@ async fn agent_wait_done_errors_when_the_peer_is_removed() {
         Ok(_) => panic!("must not wait on a removed agent"),
     };
     assert!(err.contains("removed while waiting"), "{err}");
+}
+
+#[test]
+fn rename_summary_names_the_unchanged_worktree_path() {
+    let line = resolve::rename_summary(
+        "r",
+        "merry-birch",
+        "fix-login",
+        std::path::Path::new("/w/r/merry-birch"),
+    );
+    assert_eq!(
+        line,
+        "renamed workspace r/merry-birch to r/fix-login \
+         (worktree path unchanged: /w/r/merry-birch)"
+    );
+}
+
+#[test]
+fn parses_agent_remove() {
+    match parse(&["agent", "remove", "codex#2"]).unwrap() {
+        CliAction::AgentRemove { label } => assert_eq!(label, "codex#2"),
+        other => panic!("expected AgentRemove, got {other:?}"),
+    }
+    assert!(parse(&["agent", "remove"]).is_err());
+    assert!(parse(&["agent", "remove", "codex", "extra"]).is_err());
+}
+
+#[tokio::test]
+async fn agent_remove_detaches_a_peer_and_discards_its_inbox() {
+    use crate::data::store::Store;
+    use crate::pty::session::AgentKind;
+    let (_tmp, dirs, ws, _env) = seed_current_workspace();
+    let (primary, peer) = {
+        let store = Store::open(&dirs.db_path()).unwrap();
+        let primary = store.primary_instance_id(ws).unwrap().unwrap();
+        let peer = store.add_workspace_agent(ws, AgentKind::Codex).unwrap().id;
+        store
+            .enqueue_message(ws, peer, None, "for the peer")
+            .unwrap();
+        store
+            .enqueue_message(ws, primary, None, "for the primary")
+            .unwrap();
+        (primary, peer)
+    };
+
+    run_cli(parse(&["agent", "remove", "codex"]).unwrap(), &dirs)
+        .await
+        .unwrap();
+
+    let store = Store::open(&dirs.db_path()).unwrap();
+    let ids: Vec<_> = store
+        .workspace_agents(ws)
+        .unwrap()
+        .into_iter()
+        .map(|i| i.id)
+        .collect();
+    assert_eq!(ids, vec![primary]);
+    assert!(store.workspace_agents_by_id(peer).unwrap().is_none());
+    let queued = store.undelivered_messages().unwrap();
+    assert_eq!(queued.len(), 1, "only the peer's inbox goes with it");
+    assert_eq!(queued[0].target_agent_id, primary);
+}
+
+#[tokio::test]
+async fn agent_remove_refuses_the_primary_and_unknown_labels() {
+    use crate::data::store::Store;
+    let (_tmp, dirs, ws, _env) = seed_current_workspace();
+    for label in ["primary", "claude"] {
+        let err = run_cli(parse(&["agent", "remove", label]).unwrap(), &dirs)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("primary agent"), "{label}: {err}");
+    }
+    let err = run_cli(parse(&["agent", "remove", "pi"]).unwrap(), &dirs)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("claude"), "must list the labels here: {err}");
+    let store = Store::open(&dirs.db_path()).unwrap();
+    assert_eq!(store.workspace_agents(ws).unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn agent_send_refuses_a_target_whose_binary_is_missing() {
+    use crate::data::store::Store;
+    use crate::pty::session::AgentKind;
+    let (_tmp, dirs, ws, mut env) = seed_current_workspace();
+    env.set("WSX_CODEX_BIN", "/nonexistent/wsx-test-codex");
+    Store::open(&dirs.db_path())
+        .unwrap()
+        .add_workspace_agent(ws, AgentKind::Codex)
+        .unwrap();
+
+    let err = run_cli(parse(&["agent", "send", "codex", "hi"]).unwrap(), &dirs)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("/nonexistent/wsx-test-codex"), "{err}");
+    assert!(
+        err.contains("wsx agent remove codex"),
+        "a peer can be detached: {err}"
+    );
+    let store = Store::open(&dirs.db_path()).unwrap();
+    assert!(
+        store.undelivered_messages().unwrap().is_empty(),
+        "nothing is queued for an agent the dashboard can't start"
+    );
+
+    // The same send to the (installed) primary still queues.
+    run_cli(parse(&["agent", "send", "primary", "hi"]).unwrap(), &dirs)
+        .await
+        .unwrap();
+    assert_eq!(store.undelivered_messages().unwrap().len(), 1);
+}
+
+#[test]
+fn missing_agent_binary_honors_the_bin_override() {
+    use crate::pty::session::{AgentKind, missing_agent_binary};
+    let mut env = crate::test_support::EnvGuard::new();
+    env.set("WSX_PI_BIN", crate::test_support::true_path());
+    assert_eq!(missing_agent_binary(AgentKind::Pi), None);
+    env.set("WSX_PI_BIN", "/nonexistent/pi");
+    assert_eq!(
+        missing_agent_binary(AgentKind::Pi).as_deref(),
+        Some("/nonexistent/pi")
+    );
+    env.set("WSX_PI_BIN", "wsx-test-no-such-binary");
+    assert!(missing_agent_binary(AgentKind::Pi).is_some());
+}
+
+#[test]
+fn unknown_repo_error_lists_repos_and_prefix_matches() {
+    let store = crate::data::store::Store::open_in_memory().unwrap();
+    for name in ["sskit", "sso", "backend"] {
+        store
+            .add_repo(std::path::Path::new(&format!("/tmp/{name}")), name, "wsx")
+            .unwrap();
+    }
+    let e = lookup_repo(&store, "ssk").unwrap_err().to_string();
+    assert!(e.contains("no repo named ssk"), "{e}");
+    assert!(e.contains("did you mean sskit?"), "{e}");
+    assert!(e.contains("registered repos: "), "{e}");
+    for name in ["sskit", "sso", "backend"] {
+        assert!(e.contains(name), "must list {name}: {e}");
+    }
+
+    let e = lookup_repo(&store, "frontend").unwrap_err().to_string();
+    assert!(!e.contains("did you mean"), "no prefix match: {e}");
+    assert!(e.contains("backend"), "{e}");
+
+    let e = lookup_repo(&store, "SS").unwrap_err().to_string();
+    assert!(e.contains("did you mean sskit or sso?"), "{e}");
+
+    let empty = crate::data::store::Store::open_in_memory().unwrap();
+    let e = lookup_repo(&empty, "x").unwrap_err().to_string();
+    assert!(e.contains("registered repos: (none)"), "{e}");
 }

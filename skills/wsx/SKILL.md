@@ -28,9 +28,10 @@ wsx workspace list --json      # + status, recap, agents, cached PR per workspac
 ## CLI surface
 
 ```
-wsx workspace create <repo> [--name <slug>] [--yolo] [--agent claude|pi|hermes|codex|omp]
+wsx workspace create <repo> [--name <slug>] [--yolo] [--shared] [--agent claude|pi|hermes|codex|omp] [--prompt <text>]
 wsx workspace path <repo> <slug>            # prints just the worktree path (script-friendly)
-wsx workspace rename <repo> <old> <new>     # renames slug AND git branch in sync
+wsx workspace rename <repo> <old> <new>     # renames slug AND git branch in sync;
+                                            # the worktree directory does NOT move
 wsx workspace archive <repo> <slug> [--keep-worktree] [--force-delete-branch]
 
 wsx repo list
@@ -43,6 +44,8 @@ wsx repo set-related-repos <repo> <comma-separated-names>
 wsx agent list [--workspace <repo>/<slug>] [--json]
                                             # agents + each one's status; (primary) marks the original agent
 wsx agent add <kind>                        # attach another agent: kind = claude|pi|hermes|codex|omp
+wsx agent remove <label>                    # detach a peer (never the primary); its
+                                            # undelivered messages are discarded
 wsx agent send [--workspace <repo>/<slug>] [--file <path>|-] <label|instance-id> [<message…>|-]
                                             # async message to an agent; omit
                                             # --workspace for a peer here.
@@ -75,7 +78,11 @@ Run `wsx --help` or `wsx <command> --help` to list commands and arguments direct
 
 When `create` runs from inside a workspace (an agent handing off, or a shell in a worktree), the new workspace inherits that workspace's yolo mode and agent kind. Don't pass `--yolo` when handing off; pass `--agent` only to deliberately pick a different agent. Creates from outside any workspace default to non-yolo and the `coding_agent` setting (claude unless configured otherwise).
 
-The full reference is the project README's "CLI reference", "Multi-agent workspaces", and "Related repos" sections — consult it for `wsx config` / `wsx remote` / setup scripts.
+`--prompt <text>` queues `<text>` to the new workspace's primary agent, exactly as `wsx agent send --workspace <repo>/<slug> primary <text>` would right after the create (same sender banner, same delivery by the dashboard). `--shared` runs the workspace's agents under tmux so their sessions survive the dashboard and can be attached remotely.
+
+`wsx workspace rename` changes the slug and branch only — the worktree stays at its original path, and the command prints it (`worktree path unchanged: <path>`). Use that path, or `wsx workspace path <repo> <new>`; don't build one from the new slug.
+
+The full reference is the wsx book at https://bakedbean.github.io/workspacex/docs/ — its "CLI reference", "Multi-agent workspaces", and "Related repos" pages cover `wsx config` / `wsx remote` / setup scripts.
 
 ## Reporting your status
 
@@ -86,6 +93,16 @@ wsx status set working --message "running the test suite"
 wsx status set blocked --message "need your call on the auth approach"
 wsx status set done    --message "implemented and tests green"
 ```
+
+`wsx status set` also takes the recap flags below (`--goal`, `--state`, `--next` and their `-short` forms), so a transition and its recap refresh are one call:
+
+```bash
+wsx status set working --message "running the test suite" \
+  --state "impl done, tests running" --state-short "tests running" \
+  --next "fix failures" --next-short "fix failures"
+```
+
+Bare `wsx status` is `wsx status show` for the current workspace.
 
 **When to call it** (the states are `working | waiting | blocked | done`):
 
@@ -106,7 +123,7 @@ Alongside status, maintain the workspace recap — the dashboard's project-manag
 wsx recap set --goal "cookie expiry bug from #42" --goal-short "cookie expiry, #42"   # once, when scope is clear
 wsx recap set --state "tests added but failing" --state-short "tests failing" \
               --next "debug session token regex" --next-short "debug token regex"
-wsx recap show
+wsx recap show                 # bare `wsx recap` does the same
 ```
 
 Fields update independently; set `--goal`/`--goal-short` once and refresh the state/next pairs as work progresses. Short forms are keyword distillations for the dashboard row — telegraphic style: identifiers and ticket/PR numbers only, no articles (a/an/the), no filler verbs ("make dashboard PR clickable", not "Make the dashboard PR status column clickable"); aim for ≤40 chars (goal) / ≤24 chars (state, next).
@@ -146,6 +163,8 @@ Create it, brief its agent, and go back to your own task.
 wsx workspace create <repo> --name <slug>
 wsx agent send --workspace <repo>/<slug> primary "<brief>"
 ```
+
+or, equivalently, one: `wsx workspace create <repo> --name <slug> --prompt "<brief>"`.
 
 Always pass `--name` — an unnamed workspace forces the new agent to rename it
 before it can start. Use `primary` as the label: a fresh workspace has exactly one
@@ -187,7 +206,9 @@ START: read src/api/gadgets.rs:40-88, then src/api/mod.rs route table.
 
 Delivery requires a running `wsx` dashboard — the TUI is what injects queued
 messages. If `agent send` warns that none is running, tell the user to open
-`wsx`, or the handoff will sit undelivered.
+`wsx`, or the handoff will sit undelivered. `agent send` refuses outright
+(nothing queued) when the target agent's binary isn't installed, since the
+dashboard could never start it.
 
 ## Cross-repo orchestration
 

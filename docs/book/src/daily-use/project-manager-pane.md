@@ -45,9 +45,17 @@ wsx recap set --state "tests failing" --next "debug the regex"
 
 Any subset of `--goal`, `--state`, and `--next` can be set at once (at
 least one is required); omitted flags leave the existing value untouched.
-`wsx recap show` prints the current recap (`--workspace <repo>/<slug>` for
-another workspace's, `--json` for machine-readable output), and
-`wsx recap clear` deletes it. This isn't something you normally run by hand — the standing operating
+`wsx recap show` (or bare `wsx recap`) prints the current recap
+(`--workspace <repo>/<slug>` for another workspace's, `--json` for
+machine-readable output), and `wsx recap clear` deletes it. `wsx status set`
+accepts the same flags, so an agent can report a status change and refresh its
+recap in one call:
+
+```bash
+wsx status set blocked --message "need a decision" --state "auth approach unsettled"
+```
+
+Bare `wsx status` is `wsx status show` for the current workspace. This isn't something you normally run by hand — the standing operating
 doctrine wsx injects into every session (see `process_doctrine` in
 [Global settings](../configuration/global-settings.md)) instructs the agent
 to set the goal once scope is clear and refresh state/next alongside its

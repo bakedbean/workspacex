@@ -86,6 +86,27 @@ fn resolved_binary(agent: AgentKind) -> String {
     std::env::var(env_var).unwrap_or_else(|_| agent.default_binary().to_string())
 }
 
+/// The binary `agent` would be spawned with, if it can't be found: an
+/// explicit path that isn't a file, or a bare name on no `PATH` entry.
+/// `None` means a spawn can at least find it.
+///
+/// Lets a caller that can't spawn anything itself (`wsx agent send`) predict
+/// the `Error::AgentBinaryMissing` the dashboard would hit, from the same
+/// `WSX_<AGENT>_BIN` resolution the spawn uses.
+pub fn missing_agent_binary(agent: AgentKind) -> Option<String> {
+    let bin = resolved_binary(agent);
+    let path = Path::new(&bin);
+    let found = if path.components().count() > 1 {
+        path.is_file()
+    } else {
+        std::env::var_os("PATH").is_some_and(|dirs| {
+            std::env::split_paths(&dirs)
+                .any(|d| !d.as_os_str().is_empty() && d.join(&bin).is_file())
+        })
+    };
+    (!found).then_some(bin)
+}
+
 #[derive(Default)]
 pub struct PromptCapture {
     buffer: String,

@@ -112,20 +112,12 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoRemove { name } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             crate::data::repo::remove(&store, r.id)?;
             println!("removed repo: {name}");
         }
         CliAction::RepoSetPrefix { name, prefix } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             store.set_repo_branch_prefix(r.id, &prefix)?;
             if prefix.is_empty() {
                 println!("cleared branch prefix for {name} (using global default)");
@@ -134,11 +126,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetBaseBranch { name, value } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let trimmed = value.trim();
             if trimmed.is_empty() {
                 store.set_repo_base_branch(r.id, None)?;
@@ -149,11 +137,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetInstructions { name, source } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let value = source.resolve()?;
             if value.trim().is_empty() {
                 store.set_repo_custom_instructions(r.id, None)?;
@@ -164,11 +148,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetSetup { name, source } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let value = source.resolve()?;
             if value.trim().is_empty() {
                 store.set_repo_setup_script(r.id, None)?;
@@ -179,11 +159,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetArchive { name, source } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let value = source.resolve()?;
             if value.trim().is_empty() {
                 store.set_repo_archive_script(r.id, None)?;
@@ -194,11 +170,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoEditSetup { name } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let current = r.setup_script.clone().unwrap_or_default();
             let new_value = open_in_editor("setup", &current)?;
             let new_value = new_value.trim_end_matches('\n').to_string();
@@ -213,11 +185,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoEditArchive { name } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let current = r.archive_script.clone().unwrap_or_default();
             let new_value = open_in_editor("archive", &current)?;
             let new_value = new_value.trim_end_matches('\n').to_string();
@@ -232,11 +200,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetPinnedCommands { name, source } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let value = source.resolve()?;
             if value.trim().is_empty() {
                 store.set_repo_pinned_commands(r.id, None)?;
@@ -247,11 +211,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoEditPinnedCommands { name } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let current = r.pinned_commands.clone().unwrap_or_default();
             let new_value = open_in_editor("pinned-commands", &current)?;
             let new_value = new_value.trim_end_matches('\n').to_string();
@@ -266,30 +226,18 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetName { name, new_name } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let trimmed = new_name.trim();
             store.set_repo_name(r.id, trimmed)?;
             println!("renamed repo {name} to {trimmed}");
         }
         CliAction::RepoSetPath { name, path } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let path = crate::data::repo::set_path(&store, r.id, &path).await?;
             println!("set path for {name} to {}", path.display());
         }
         CliAction::RepoSetRelatedRepos { name, source } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let value = source.resolve()?;
             if value.trim().is_empty() {
                 store.set_repo_related_repos(r.id, None)?;
@@ -300,11 +248,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoEditRelatedRepos { name } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let current = r.related_repos.clone().unwrap_or_default();
             let new_value = open_in_editor("related-repos", &current)?;
             let new_value = new_value.trim_end_matches('\n').to_string();
@@ -668,8 +612,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 )
                 .await?;
                 println!(
-                    "renamed workspace {}/{} to {}/{}",
-                    r.name, name, r.name, new_name
+                    "{}",
+                    rename_summary(&r.name, &name, &new_name, &w.worktree_path)
                 );
             }
         }
@@ -969,7 +913,45 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             let inst = store.add_workspace_agent(ws.id, agent)?;
             println!("added {}", inst.label());
         }
-        CliAction::StatusSet { state, message } => {
+        CliAction::AgentRemove { label } => {
+            let ws = resolve_current_workspace(&store)?;
+            let agents = store.workspace_agents(ws.id)?;
+            let id = store
+                .resolve_instance_label(ws.id, &label)?
+                .ok_or_else(|| {
+                    let labels: Vec<String> = agents.iter().map(|i| i.label()).collect();
+                    Error::UserInput(format!(
+                        "no agent '{label}' in this workspace; agents here: {}",
+                        join_or_none(labels.iter().map(|s| s.as_str()))
+                    ))
+                })?;
+            if agents.iter().any(|i| i.id == id && i.is_primary) {
+                return Err(Error::UserInput(format!(
+                    "'{label}' is this workspace's primary agent and cannot be removed \
+                     (archive the workspace instead)"
+                )));
+            }
+            // `remove_workspace_agent` deletes the agent's inbox with it (the
+            // FK leaves no other option). Count what was still waiting first,
+            // so the sender-side loss is at least reported.
+            let discarded = store
+                .undelivered_messages()?
+                .iter()
+                .filter(|m| m.target_agent_id == id)
+                .count();
+            store.remove_workspace_agent(id)?;
+            println!("removed {label}");
+            if discarded > 0 {
+                eprintln!(
+                    "warning: discarded {discarded} undelivered message(s) addressed to {label}"
+                );
+            }
+        }
+        CliAction::StatusSet {
+            state,
+            message,
+            recap,
+        } => {
             let parsed = crate::data::store::ReportedState::parse(&state).ok_or_else(|| {
                 Error::UserInput(format!(
                     "invalid status '{state}'; expected working|waiting|blocked|done"
@@ -979,6 +961,18 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             let agent = resolve_env_instance(&store, ws.id).map(|i| i.id);
             store.set_agent_status(ws.id, agent, parsed, message.as_deref(), "model")?;
             println!("status: {}", parsed.as_str());
+            if !recap.is_empty() {
+                store.set_workspace_recap(
+                    ws.id,
+                    recap.goal.as_deref(),
+                    recap.state.as_deref(),
+                    recap.next.as_deref(),
+                    recap.goal_short.as_deref(),
+                    recap.state_short.as_deref(),
+                    recap.next_short.as_deref(),
+                )?;
+                println!("recap updated");
+            }
         }
         CliAction::StatusClear => {
             let ws = resolve_current_workspace(&store)?;

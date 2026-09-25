@@ -108,10 +108,33 @@ pub(in crate::cli) fn lookup_repo(
     store: &crate::data::store::Store,
     name: &str,
 ) -> Result<crate::data::store::Repo> {
-    crate::data::repo::list(store)?
+    let repos = crate::data::repo::list(store)?;
+    let hint = unknown_repo_hint(name, &repos);
+    repos
         .into_iter()
         .find(|r| r.name == name)
-        .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))
+        .ok_or_else(|| Error::UserInput(format!("no repo named {name}; {hint}")))
+}
+
+/// What to tell a caller who named a repo that isn't registered: any repos
+/// the name is a prefix of (the usual typo is a truncated name), then the
+/// full list, since an agent can't guess the valid names on its own.
+pub(in crate::cli) fn unknown_repo_hint(name: &str, repos: &[crate::data::store::Repo]) -> String {
+    let needle = name.to_lowercase();
+    let close: Vec<&str> = repos
+        .iter()
+        .map(|r| r.name.as_str())
+        .filter(|n| !needle.is_empty() && n.to_lowercase().starts_with(&needle))
+        .collect();
+    let known = format!(
+        "registered repos: {}",
+        join_or_none(repos.iter().map(|r| r.name.as_str()))
+    );
+    if close.is_empty() {
+        known
+    } else {
+        format!("did you mean {}? {known}", close.join(" or "))
+    }
 }
 
 pub(in crate::cli) fn lookup_workspace(
@@ -159,8 +182,8 @@ pub(in crate::cli) fn resolve_workspace_spec(
     let repos = crate::data::repo::list(store)?;
     let repo = repos.iter().find(|r| r.name == repo_name).ok_or_else(|| {
         Error::UserInput(format!(
-            "--workspace: no repo named '{repo_name}'; known repos: {}",
-            join_or_none(repos.iter().map(|r| r.name.as_str()))
+            "--workspace: no repo named '{repo_name}'; {}",
+            unknown_repo_hint(repo_name, &repos)
         ))
     })?;
     let workspaces = store.workspaces(repo.id)?;

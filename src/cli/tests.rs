@@ -3543,3 +3543,31 @@ fn missing_agent_binary_honors_the_bin_override() {
     env.set("WSX_PI_BIN", "wsx-test-no-such-binary");
     assert!(missing_agent_binary(AgentKind::Pi).is_some());
 }
+
+#[test]
+fn unknown_repo_error_lists_repos_and_prefix_matches() {
+    let store = crate::data::store::Store::open_in_memory().unwrap();
+    for name in ["sskit", "sso", "backend"] {
+        store
+            .add_repo(std::path::Path::new(&format!("/tmp/{name}")), name, "wsx")
+            .unwrap();
+    }
+    let e = lookup_repo(&store, "ssk").unwrap_err().to_string();
+    assert!(e.contains("no repo named ssk"), "{e}");
+    assert!(e.contains("did you mean sskit?"), "{e}");
+    assert!(e.contains("registered repos: "), "{e}");
+    for name in ["sskit", "sso", "backend"] {
+        assert!(e.contains(name), "must list {name}: {e}");
+    }
+
+    let e = lookup_repo(&store, "frontend").unwrap_err().to_string();
+    assert!(!e.contains("did you mean"), "no prefix match: {e}");
+    assert!(e.contains("backend"), "{e}");
+
+    let e = lookup_repo(&store, "SS").unwrap_err().to_string();
+    assert!(e.contains("did you mean sskit or sso?"), "{e}");
+
+    let empty = crate::data::store::Store::open_in_memory().unwrap();
+    let e = lookup_repo(&empty, "x").unwrap_err().to_string();
+    assert!(e.contains("registered repos: (none)"), "{e}");
+}

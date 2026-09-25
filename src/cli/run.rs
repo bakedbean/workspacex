@@ -112,20 +112,12 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoRemove { name } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             crate::data::repo::remove(&store, r.id)?;
             println!("removed repo: {name}");
         }
         CliAction::RepoSetPrefix { name, prefix } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             store.set_repo_branch_prefix(r.id, &prefix)?;
             if prefix.is_empty() {
                 println!("cleared branch prefix for {name} (using global default)");
@@ -134,11 +126,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetBaseBranch { name, value } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let trimmed = value.trim();
             if trimmed.is_empty() {
                 store.set_repo_base_branch(r.id, None)?;
@@ -149,11 +137,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetInstructions { name, source } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let value = source.resolve()?;
             if value.trim().is_empty() {
                 store.set_repo_custom_instructions(r.id, None)?;
@@ -164,11 +148,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetSetup { name, source } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let value = source.resolve()?;
             if value.trim().is_empty() {
                 store.set_repo_setup_script(r.id, None)?;
@@ -179,11 +159,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetArchive { name, source } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let value = source.resolve()?;
             if value.trim().is_empty() {
                 store.set_repo_archive_script(r.id, None)?;
@@ -194,11 +170,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoEditSetup { name } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let current = r.setup_script.clone().unwrap_or_default();
             let new_value = open_in_editor("setup", &current)?;
             let new_value = new_value.trim_end_matches('\n').to_string();
@@ -213,11 +185,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoEditArchive { name } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let current = r.archive_script.clone().unwrap_or_default();
             let new_value = open_in_editor("archive", &current)?;
             let new_value = new_value.trim_end_matches('\n').to_string();
@@ -232,11 +200,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetPinnedCommands { name, source } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let value = source.resolve()?;
             if value.trim().is_empty() {
                 store.set_repo_pinned_commands(r.id, None)?;
@@ -247,11 +211,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoEditPinnedCommands { name } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let current = r.pinned_commands.clone().unwrap_or_default();
             let new_value = open_in_editor("pinned-commands", &current)?;
             let new_value = new_value.trim_end_matches('\n').to_string();
@@ -266,30 +226,18 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoSetName { name, new_name } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let trimmed = new_name.trim();
             store.set_repo_name(r.id, trimmed)?;
             println!("renamed repo {name} to {trimmed}");
         }
         CliAction::RepoSetPath { name, path } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let path = crate::data::repo::set_path(&store, r.id, &path).await?;
             println!("set path for {name} to {}", path.display());
         }
         CliAction::RepoSetRelatedRepos { name, source } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let value = source.resolve()?;
             if value.trim().is_empty() {
                 store.set_repo_related_repos(r.id, None)?;
@@ -300,11 +248,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
         }
         CliAction::RepoEditRelatedRepos { name } => {
-            let repos = crate::data::repo::list(&store)?;
-            let r = repos
-                .into_iter()
-                .find(|r| r.name == name)
-                .ok_or_else(|| Error::UserInput(format!("no repo named {name}")))?;
+            let r = lookup_repo(&store, &name)?;
             let current = r.related_repos.clone().unwrap_or_default();
             let new_value = open_in_editor("related-repos", &current)?;
             let new_value = new_value.trim_end_matches('\n').to_string();

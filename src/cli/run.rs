@@ -668,8 +668,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 )
                 .await?;
                 println!(
-                    "renamed workspace {}/{} to {}/{}",
-                    r.name, name, r.name, new_name
+                    "{}",
+                    rename_summary(&r.name, &name, &new_name, &w.worktree_path)
                 );
             }
         }

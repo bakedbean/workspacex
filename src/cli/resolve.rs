@@ -126,6 +126,21 @@ pub(in crate::cli) fn lookup_workspace(
         .ok_or_else(|| Error::UserInput(format!("no workspace named {name} in repo {}", repo.name)))
 }
 
+/// The line `wsx workspace rename` prints. It names the worktree path
+/// because rename never moves it: an agent that assumes the directory
+/// follows the new slug `cd`s into a path that doesn't exist.
+pub(in crate::cli) fn rename_summary(
+    repo: &str,
+    old: &str,
+    new: &str,
+    worktree: &std::path::Path,
+) -> String {
+    format!(
+        "renamed workspace {repo}/{old} to {repo}/{new} (worktree path unchanged: {})",
+        worktree.display()
+    )
+}
+
 /// Resolve a `--workspace <repo>/<slug>` spec to a workspace.
 ///
 /// Splits on the LAST `/`: repo names may contain spaces and other

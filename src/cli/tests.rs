@@ -3394,3 +3394,18 @@ async fn agent_wait_done_errors_when_the_peer_is_removed() {
     };
     assert!(err.contains("removed while waiting"), "{err}");
 }
+
+#[test]
+fn rename_summary_names_the_unchanged_worktree_path() {
+    let line = resolve::rename_summary(
+        "r",
+        "merry-birch",
+        "fix-login",
+        std::path::Path::new("/w/r/merry-birch"),
+    );
+    assert_eq!(
+        line,
+        "renamed workspace r/merry-birch to r/fix-login \
+         (worktree path unchanged: /w/r/merry-birch)"
+    );
+}

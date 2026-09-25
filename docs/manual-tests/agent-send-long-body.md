@@ -23,8 +23,8 @@ From the sender workspace:
 wsx agent send --workspace <repo>/<claude-slug> primary "ping: reply with the word pong"
 ```
 
-Expect, in the claude session: a user turn reading `[message from
-<repo>/<slug> primary]` on its first line, `ping: …` on the second, and the
+Expect, in the claude session: a user turn reading `[message #<id> from
+<repo>/<slug> <label>; reply with: …]` on its first line, `ping: …` on the second, and the
 agent replies. The message must submit on its own — nothing left sitting in
 the composer.
 
@@ -38,7 +38,7 @@ $body
 END-OF-MESSAGE"
 ```
 
-Expect: the recorded user turn starts with the `[message from …]` banner and
+Expect: the recorded user turn starts with the `[message #<id> from …]` banner and
 ends with `END-OF-MESSAGE`, and the reply reports 14 PARA lines. Confirm from
 the transcript rather than the screen — the composer may show the body as a
 `[Pasted text #1 +N lines]` placeholder, which is fine:

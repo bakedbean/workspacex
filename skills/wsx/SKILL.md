@@ -241,18 +241,26 @@ and branch.
 - **Reply:** `wsx agent reply <id> <message>` (or
   `wsx agent reply --file <path> <id>`) answers the sender of message
   `<id>` wherever it lives; with no id it answers the latest message you
-  received. Don't reconstruct the sender's label or workspace by hand.
+  received — but the newest message can change while you work, so prefer
+  the explicit `<id>` from the banner. Quote a body that starts with a
+  number (`wsx agent reply 561 "42 tests fail"`); a lone number with nothing
+  after it is sent as text. Don't reconstruct the sender's label or
+  workspace by hand.
 - **Check delivery / read your mail:** `wsx agent messages` lists your inbox
   (`--sent` for what you sent, `--all` for the whole workspace) with each
   message's id, sender, recipient, size, and created/delivered times;
-  `DELIVERED` reads `queued` until the dashboard has injected it.
+  `DELIVERED` reads `queued` until the dashboard has injected it, and
+  `dropped` if wsx gave up on it (e.g. the target agent isn't installed) —
+  a dropped message never arrived; `--id` says why.
   `wsx agent messages --id <id>` prints one message in full. Never query
   wsx's sqlite database directly.
 - **Wait for a reply in the same turn:** `wsx agent wait --from <label>`
   blocks until a message for you arrives and prints it (default timeout 110s;
   pass `--timeout <secs>` below your tool's own timeout, or run it in the
-  background). Use `--after <id>` with the id `send` printed to ignore
-  earlier mail. `wait` is a read, not a delivery: the dashboard still injects
+  background). Pass `--after <id>` with the id `send` printed, so only mail
+  newer than your request counts. `wait` does not consume anything: waiting
+  again without `--after` returns the same message, so chain waits with
+  `--after <id of the last message you got>`. `wait` is a read, not a delivery: the dashboard still injects
   the message into your session afterwards. When that `[message #<id> …]`
   arrives for an id you already handled via `wait`, it is the same message —
   don't act on it twice. If you have nothing else to do, simply ending your

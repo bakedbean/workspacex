@@ -77,8 +77,9 @@ freshly created workspace's agent.
 The rest of the line is the message body. For long or code-heavy bodies use
 `--file <path>`, or `-` (as the body, or `--file -`) to read it from stdin; the
 text is sent verbatim, with trailing whitespace dropped. Options go before the
-target — everything after it is body, so a message may itself start with `--`.
-An empty body is refused.
+target — everything after it is body, so a message may itself start with `--`
+(the one exception: a standalone `--help` or `-h` anywhere prints help). An
+empty body is refused.
 
 `send` prints the new message's id and size:
 
@@ -149,8 +150,11 @@ These act as the calling agent (`$WSX_AGENT_INSTANCE_ID`).
 
 - **`reply`** queues a message to the sender of message `<msg-id>` (`561` or
   `#561`), wherever that sender lives; without an id it answers the latest
-  message you received. A lone number is treated as the body, so
-  `wsx agent reply 42` sends "42". Messages from the CLI or an editor agent have
+  message you received. The newest message can change while you work, so
+  prefer the explicit id from the banner. The first word is taken as an id
+  only when a body follows it, so a lone `wsx agent reply 42` sends "42" to
+  the latest sender, while `wsx agent reply 42 tests fail` answers message
+  #42 — quote a body that starts with a number. Messages from the CLI or an editor agent have
   no sender to reply to.
 - **`messages`** lists your inbox (`--sent`: what you sent; `--all`: every
   message queued in, or sent from, the current workspace — this one also works
@@ -163,12 +167,19 @@ These act as the calling agent (`$WSX_AGENT_INSTANCE_ID`).
   ```
 
   `DELIVERED` stays `queued` until the dashboard has written the message into
-  the agent's terminal. `--undelivered` shows only those; `--id <msg-id>` prints
+  the agent's terminal. It reads `dropped` when wsx retired the message
+  without delivering it (the target agent's binary isn't installed); such a
+  message never arrived, and `--id` shows the reason. `--undelivered` shows
+  queued and dropped messages; `--id <msg-id>` prints
   one message's headers and full body.
 - **`wait`** blocks until a message for you is recorded, then prints it like
-  `messages --id`. Messages already queued for you when it starts count (they
-  haven't reached you yet); `--after <msg-id>` instead counts only newer ids,
-  and `--from` accepts a label, `primary`, an instance id, or
+  `messages --id`. Without `--after`, it counts messages still queued for you
+  when it starts (they haven't reached you yet) and anything newer. With
+  `--after <msg-id>` it counts only newer ids. That makes the id `send`
+  printed the reliable cursor for a request/reply: `--after <that id>`. Since
+  `wait` consumes nothing, a second `wait` without `--after` returns the same
+  message again; chain waits with `--after <last id returned>` (the command
+  prints it). `--from` accepts a label, `primary`, an instance id, or
   `<repo>/<slug> <label>` as shown in banners. It gives up after `--timeout`
   seconds (default 110, under common agent tool timeouts; `0` waits forever).
 - **`whoami`** prints your label, instance id, workspace, and whether you are

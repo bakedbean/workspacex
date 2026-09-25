@@ -172,7 +172,7 @@ wsx status set done --message "handed off to backend/add-json-list-flag"
   kind — do not pass those flags.
 - `wsx agent send` is asynchronous; the new agent receives the brief once its
   session is up, tagged `[message #<id> from <repo>/<slug> <label>; …]`, and
-  can answer you with `wsx agent reply <id>`. `wsx workspace
+  can answer you with `wsx agent reply <id> <message>`. `wsx workspace
   create --prompt <text>` is the same queue in one step; this skill keeps the
   two commands separate so a failed create is never followed by a brief.
 - Do not `cd` into the new worktree or start the work there yourself. Create,

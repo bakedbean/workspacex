@@ -52,7 +52,7 @@ Screenshot demo/out/01-agents.png
 # --- Claude reviews and delegates the fix to Codex over the wsx CLI ---
 Type "Review src/auth.py for the most serious security bug. Then hand the fix to your Codex teammate using `wsx agent send codex`: give it the exact bug, the location, and a parameterized-query fix, and ask it to fix, commit, and report back. Then wait for Codex's reply."
 Enter
-Wait+Screen@120s /queued message to codex/
+Wait+Screen@120s /queued message #[0-9]+ to codex/
 Sleep 3s
 Screenshot demo/out/01-claude-delegates.png
 

@@ -885,12 +885,17 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 ))
             })?;
             let ws = resolve_current_workspace(&store)?;
-            store.set_workspace_status(ws.id, parsed, message.as_deref(), "model")?;
+            let agent = resolve_env_instance(&store, ws.id).map(|i| i.id);
+            store.set_agent_status(ws.id, agent, parsed, message.as_deref(), "model")?;
             println!("status: {}", parsed.as_str());
         }
         CliAction::StatusClear => {
             let ws = resolve_current_workspace(&store)?;
-            store.clear_workspace_status(ws.id)?;
+            // An agent clears only its own row; a human's shell clears them all.
+            match resolve_env_instance(&store, ws.id) {
+                Some(inst) => store.clear_agent_status(ws.id, inst.id)?,
+                None => store.clear_workspace_status(ws.id)?,
+            }
             println!("status cleared");
         }
         CliAction::StatusFromHook { agent } => {
@@ -907,7 +912,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                     };
                     let integration = crate::agent::status::for_agent(kind);
                     if let Some(state) = integration.parse_event(&json) {
-                        let _ = store.apply_hook_status(ws.id, state, "hook");
+                        let inst = resolve_current_instance(&store, ws.id, kind);
+                        let _ = store.apply_hook_status(ws.id, inst, state, "hook");
                     }
                     // Remember which harness session this instance is in, so a
                     // respawn resumes that conversation rather than whichever
@@ -938,7 +944,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                         };
                         let integration = crate::agent::status::for_agent(kind);
                         if let Some(state) = integration.parse_event(&json) {
-                            let _ = store.apply_hook_status(ws.id, state, "notify");
+                            let inst = resolve_current_instance(&store, ws.id, kind);
+                            let _ = store.apply_hook_status(ws.id, inst, state, "notify");
                         }
                         // Same per-instance session capture as `from-hook`
                         // (Codex: the thread id, for `codex resume <id>`).

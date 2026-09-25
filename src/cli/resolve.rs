@@ -46,6 +46,22 @@ pub(in crate::cli) fn resolve_current_workspace(
     Ok(ws)
 }
 
+/// The agent instance the current `wsx` invocation runs inside, if it is
+/// attached to `ws`: `WSX_AGENT_INSTANCE_ID` (set when wsx spawns an agent,
+/// inherited by its hooks and shell commands). `None` when unset,
+/// unparseable, unknown, or attached to another workspace — a push from a
+/// human's shell, or a stale id, is then the primary's (see
+/// `Store::set_agent_status`).
+pub(in crate::cli) fn resolve_env_instance(
+    store: &crate::data::store::Store,
+    ws: crate::data::store::WorkspaceId,
+) -> Option<crate::data::agents::AgentInstance> {
+    let raw = std::env::var("WSX_AGENT_INSTANCE_ID").ok()?;
+    let id = crate::data::store::AgentInstanceId(raw.trim().parse::<i64>().ok()?);
+    let inst = store.workspace_agents_by_id(id).ok().flatten()?;
+    (inst.workspace_id == ws).then_some(inst)
+}
+
 /// The agent instance the current `wsx` invocation runs inside, if any:
 /// `WSX_AGENT_INSTANCE_ID` (set when wsx spawns an agent, inherited by the
 /// agent's hooks) parsed and checked to belong to `ws` and be of `kind`.
@@ -58,12 +74,10 @@ pub(in crate::cli) fn resolve_current_instance(
     ws: crate::data::store::WorkspaceId,
     kind: crate::pty::session::AgentKind,
 ) -> Option<crate::data::store::AgentInstanceId> {
-    let raw = std::env::var("WSX_AGENT_INSTANCE_ID").ok()?;
-    let id = crate::data::store::AgentInstanceId(raw.trim().parse::<i64>().ok()?);
-    let inst = store.workspace_agents_by_id(id).ok().flatten()?;
+    let inst = resolve_env_instance(store, ws)?;
     // `kind` is the harness the hook says it speaks for; a late event from a
     // harness the instance was switched away from must not relabel it.
-    (inst.workspace_id == ws && inst.agent == kind).then_some(id)
+    (inst.agent == kind).then_some(inst.id)
 }
 
 /// Effective yolo + agent for a new workspace: explicit flags win, then the

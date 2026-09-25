@@ -167,6 +167,21 @@ impl Store {
             "DELETE FROM workspace_agents WHERE id = ?1 AND is_primary = 0",
             [id.0],
         )?;
+        if deleted == 1 {
+            // The removed agent's status must stop counting toward the
+            // workspace's derived row (it may have been the `blocked` one).
+            let ws: Option<i64> = self
+                .conn()
+                .query_row(
+                    "SELECT workspace_id FROM agent_status WHERE agent_id = ?1",
+                    [id.0],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(ws) = ws {
+                self.clear_agent_status(WorkspaceId(ws), id)?;
+            }
+        }
         if deleted == 0 {
             let exists: i64 = self.conn().query_row(
                 "SELECT count(*) FROM workspace_agents WHERE id = ?1",

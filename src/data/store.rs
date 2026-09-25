@@ -218,6 +218,8 @@ impl Store {
         // Manual cascade: agent_messages.target_agent_id → workspace_agents → workspaces
         self.conn
             .execute("DELETE FROM agent_messages WHERE workspace_id = ?1", [id.0])?;
+        self.conn
+            .execute("DELETE FROM agent_status WHERE workspace_id = ?1", [id.0])?;
         self.conn.execute(
             "DELETE FROM workspace_agents WHERE workspace_id = ?1",
             [id.0],
@@ -1587,7 +1589,7 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 25);
+        assert_eq!(v, 26);
     }
 
     #[test]

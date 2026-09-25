@@ -180,7 +180,8 @@ pub(in crate::cli) fn retry_send_hint(repo: &str, slug: &str, prompt: &str) -> S
     )
 }
 
-/// Queue `body` for `target` and warn when nothing will deliver it.
+/// Queue `body` for `target`, warn when nothing will deliver it, and return
+/// the new message id.
 ///
 /// The CLI only ever writes to the store; the dashboard is the sole thing
 /// that injects queued messages into an agent PTY (`App::drain_agent_messages`
@@ -195,19 +196,19 @@ pub(in crate::cli) fn enqueue_for_agent(
     workspace: crate::data::store::WorkspaceId,
     target: crate::data::store::AgentInstanceId,
     body: &str,
-) -> Result<()> {
+) -> Result<i64> {
     let from = std::env::var("WSX_AGENT_INSTANCE_ID")
         .ok()
         .and_then(|s| s.parse::<i64>().ok())
         .map(crate::data::store::AgentInstanceId);
-    store.enqueue_message(workspace, target, from, body)?;
+    let id = store.enqueue_message(workspace, target, from, body)?;
     if !crate::app::ipc::any_live_tui() {
         eprintln!(
             "warning: no wsx dashboard is running — this message is queued and \
              will not be delivered until one starts. Tell the user to open `wsx`."
         );
     }
-    Ok(())
+    Ok(id)
 }
 
 pub(in crate::cli) fn open_in_editor(key: &str, initial: &str) -> Result<String> {

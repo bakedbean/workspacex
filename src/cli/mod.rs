@@ -11,6 +11,7 @@
 pub(crate) mod action;
 pub(crate) mod groups;
 pub(crate) mod help;
+pub(crate) mod mail;
 pub(crate) mod parse;
 pub(crate) mod resolve;
 pub(crate) mod run;
@@ -18,7 +19,10 @@ pub(crate) mod run;
 #[cfg(test)]
 mod tests;
 
-pub use action::{CliAction, HelpTopic, ValueSource};
+pub use action::{
+    CliAction, DEFAULT_MESSAGES_LIMIT, DEFAULT_WAIT_TIMEOUT_SECS, HelpTopic, MessageBody,
+    MessagesView, ValueSource,
+};
 pub use groups::{CmdInfo, GROUPS, GroupInfo, group_name};
 pub use help::{render_group_help, render_root_help, render_usage_error, report_cli_error};
 pub use parse::parse_args;

@@ -608,7 +608,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                     })
                     .and_then(|target| enqueue_for_agent(&store, ws_id, target, prompt));
                 match seeded {
-                    Ok(()) => println!("queued starter prompt to primary"),
+                    Ok(id) => println!("queued starter prompt #{id} to primary"),
                     // The worktree is live and the prompt is not. Hand back a
                     // command that actually resends THIS prompt, rather than
                     // leaving a workspace that looks created but never wakes.
@@ -713,35 +713,146 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         }
         CliAction::AgentSend {
             target,
-            prompt,
+            body,
             workspace,
         } => {
-            let target_ws = match workspace.as_deref() {
-                Some(spec) => resolve_workspace_spec(&store, spec)?,
-                None => resolve_current_workspace(&store)?,
+            let (target_ws, target_id) =
+                super::mail::resolve_send_target(&store, &target, workspace.as_deref())?;
+            let body = super::mail::read_body(&body)?;
+            let id = enqueue_for_agent(&store, target_ws.id, target_id, &body)?;
+            // Name the recipient as the sender would address it: the bare
+            // label at home, qualified when it lives in another workspace.
+            let home = resolve_current_workspace(&store).ok().map(|w| w.id);
+            let shown = super::mail::party(&store, Some(target_id), home.unwrap_or(target_ws.id));
+            println!("{}", super::mail::queued_line(id, &shown, &body));
+        }
+        CliAction::AgentWhoami => {
+            let me = super::mail::current_agent(&store)?;
+            let ws = crate::app::messaging::workspace_ref(&store, me.workspace_id)
+                .unwrap_or_else(|| format!("(workspace {})", me.workspace_id.0));
+            println!("label: {}", me.label());
+            println!("instance: {}", me.id.0);
+            println!("workspace: {ws}");
+            println!("primary: {}", if me.is_primary { "yes" } else { "no" });
+        }
+        CliAction::AgentMessages {
+            view,
+            undelivered,
+            limit,
+            id,
+        } => {
+            use crate::cli::action::MessagesView;
+            use crate::data::messages::MessageScope;
+            // Labels are shown relative to the caller's workspace; for a
+            // plain shell (no agent identity) that is the cwd's workspace.
+            let me = super::mail::current_agent(&store);
+            let home = |store: &crate::data::store::Store| match &me {
+                Ok(inst) => Ok(inst.workspace_id),
+                Err(_) => resolve_current_workspace(store).map(|w| w.id),
             };
-            let target_id = store
-                .resolve_instance_label(target_ws.id, &target)?
-                .ok_or_else(|| {
-                    // `wsx agent list` only reports the CURRENT workspace, so
-                    // list the target's labels inline instead of pointing at it.
-                    let labels = store
-                        .workspace_agents(target_ws.id)
-                        .map(|v| {
-                            let names: Vec<String> = v.iter().map(|i| i.label()).collect();
-                            join_or_none(names.iter().map(|s| s.as_str()))
-                        })
-                        .unwrap_or_else(|_| "(unknown)".to_string());
-                    Error::UserInput(format!(
-                        "no agent '{target}' in workspace {}; agents there: {labels} \
-                         (or `primary` for whichever is that workspace's primary agent)",
-                        target_ws.name
-                    ))
-                })?;
-            enqueue_for_agent(&store, target_ws.id, target_id, &prompt)?;
-            match workspace.as_deref() {
-                Some(_) => println!("queued message to {target} in {}", target_ws.name),
-                None => println!("queued message to {target}"),
+            if let Some(id) = id {
+                let m = store
+                    .message_by_id(id)?
+                    .ok_or_else(|| Error::UserInput(format!("no message #{id}")))?;
+                let viewer = home(&store).unwrap_or(m.workspace_id);
+                println!("{}", super::mail::full_message(&store, &m, viewer));
+                return Ok(());
+            }
+            let (scope, viewer) = match view {
+                MessagesView::Workspace => {
+                    let ws = home(&store)?;
+                    (MessageScope::Workspace(ws), ws)
+                }
+                MessagesView::Inbox | MessagesView::Sent => {
+                    let inst = me.as_ref().map_err(|e| {
+                        Error::UserInput(format!(
+                            "{e}; use `wsx agent messages --all` for the whole workspace"
+                        ))
+                    })?;
+                    let scope = if view == MessagesView::Inbox {
+                        MessageScope::To(inst.id)
+                    } else {
+                        MessageScope::From(inst.id)
+                    };
+                    (scope, inst.workspace_id)
+                }
+            };
+            println!("{}", super::mail::LISTING_HEADER);
+            for m in store.list_messages(scope, undelivered, limit)? {
+                println!("{}", super::mail::listing_row(&store, &m, viewer));
+            }
+        }
+        CliAction::AgentReply { to, body } => {
+            use crate::data::messages::MessageScope;
+            let me = super::mail::current_agent(&store)?;
+            let original = match to {
+                Some(id) => store
+                    .message_by_id(id)?
+                    .ok_or_else(|| Error::UserInput(format!("no message #{id}")))?,
+                None => store
+                    .list_messages(MessageScope::To(me.id), false, 1)?
+                    .pop()
+                    .ok_or_else(|| {
+                        Error::UserInput("you have not received any messages to reply to".into())
+                    })?,
+            };
+            if original.target_agent_id != me.id {
+                return Err(Error::UserInput(format!(
+                    "message #{} was sent to {}, not to you ({}); reply only answers your own mail",
+                    original.id,
+                    super::mail::party(&store, Some(original.target_agent_id), me.workspace_id),
+                    me.label()
+                )));
+            }
+            let sender_id = original.from_agent_id.ok_or_else(|| {
+                Error::UserInput(format!(
+                    "message #{} came from a shell or editor agent, not a wsx agent; \
+                     there is no one to reply to",
+                    original.id
+                ))
+            })?;
+            let sender = store.workspace_agents_by_id(sender_id)?.ok_or_else(|| {
+                Error::UserInput(format!(
+                    "the sender of message #{} (instance {}) has since been removed",
+                    original.id, sender_id.0
+                ))
+            })?;
+            let body = super::mail::read_body(&body)?;
+            let id = enqueue_for_agent(&store, sender.workspace_id, sender.id, &body)?;
+            let shown = super::mail::party(&store, Some(sender.id), me.workspace_id);
+            println!(
+                "{} in reply to #{}",
+                super::mail::queued_line(id, &shown, &body),
+                original.id
+            );
+        }
+        CliAction::AgentWait {
+            from,
+            after,
+            timeout_secs,
+        } => {
+            let me = super::mail::current_agent(&store)?;
+            let from_id = from
+                .as_deref()
+                .map(|f| super::mail::resolve_sender(&store, me.workspace_id, f))
+                .transpose()?;
+            let hit =
+                super::mail::wait_for_message(&store, me.id, from_id, after, timeout_secs).await?;
+            let Some(m) = hit else {
+                let who = from.map(|f| format!(" from {f}")).unwrap_or_default();
+                return Err(Error::UserInput(format!(
+                    "no message{who} after {timeout_secs}s; run `wsx agent wait` again \
+                     (or with --timeout 0 to wait indefinitely)"
+                )));
+            };
+            println!("{}", super::mail::full_message(&store, &m, me.workspace_id));
+            if m.delivered_at.is_none() {
+                // `wait` is a read: the dashboard still injects the message.
+                eprintln!(
+                    "note: wsx will also inject message #{} into your session; \
+                     that copy is the same message, already shown here",
+                    m.id
+                );
             }
         }
         CliAction::AgentAdd { kind } => {

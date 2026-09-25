@@ -264,9 +264,10 @@ and branch.
   `[message #<id> from <you>; reply with: wsx agent reply <id> <message>]`.
 - **Long or code-heavy bodies:** put them in a file and use
   `wsx agent send --file <path> <label>`, or pipe them with
-  `… | wsx agent send <label> -`. Options must come before the label (or,
-  for `reply`, before the message id): everything after it is message text,
-  so `send <label> --file x` would send the literal words "--file x". The body is sent verbatim — no shell
+  `… | wsx agent send <label> -`. Options go anywhere before the first
+  message word (either side of the label or `reply`'s message id); from there
+  on everything is message text, and a `--file`/`--workspace` stranded among
+  the words is refused rather than sent. The body is sent verbatim — no shell
   quoting or backtick escaping — and an empty body is refused.
 - **Reply:** `wsx agent reply <id> <message>` (or
   `wsx agent reply --file <path> <id>`) answers the sender of message

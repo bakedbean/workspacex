@@ -10,7 +10,7 @@ use crate::data::store::{Repo, Workspace, WorkspaceId};
 use crate::ui::dashboard::layout::GroupMode;
 use crate::ui::dashboard::sort::SortMode;
 use crate::ui::dashboard::{OrderedSection, SectionKind, WorkspaceItem, ordered_sections};
-use crate::ui::text::{FILTER_ECHO_MAX, truncate, truncate_pad};
+use crate::ui::text::{FILTER_ECHO_MAX, display_width, truncate, truncate_pad};
 
 /// Everything the panel reads, gathered once per render or keypress by
 /// `crate::app::render::panel_inputs`. The renderer and the key handler
@@ -121,7 +121,7 @@ const STATUS_MIN_W: usize = 12;
 /// the whole panel.
 fn name_col_width<'a>(names: impl Iterator<Item = &'a str>, row_width: usize) -> usize {
     let cap = NAME_COL_MAX.min(row_width.saturating_sub(ROW_PREFIX_W + COL_GAP_W + 1));
-    names.map(|n| n.chars().count()).max().unwrap_or(0).min(cap)
+    names.map(display_width).max().unwrap_or(0).min(cap)
 }
 
 /// Case-insensitive substring match against the workspace name, the owning
@@ -548,7 +548,7 @@ fn workspace_row<'a>(
     let age_reserved = if age_w > 0 { age_w + COL_GAP_W } else { 0 };
     let status_budget = avail.saturating_sub(age_reserved);
     let status_txt = truncate(&status_text, status_budget);
-    let pad_w = status_budget.saturating_sub(status_txt.chars().count()) + age_reserved - age_w;
+    let pad_w = status_budget.saturating_sub(display_width(&status_txt)) + age_reserved - age_w;
 
     let mut spans = vec![
         Span::raw("  "),
@@ -1326,6 +1326,61 @@ mod workspace_row_tests {
         assert_eq!(body.chars().count(), 60, "row must not overflow row_width");
         assert!(body.ends_with("5s"), "age survives truncation: {body:?}");
         assert!(body.contains('…'), "status text truncates with ellipsis");
+    }
+
+    /// Wide chars take two cells each, so a CJK name and status text must
+    /// be budgeted and padded in cells for the age to stay at the edge.
+    #[test]
+    fn workspace_row_pads_wide_text_to_row_width_in_cells() {
+        let theme = Theme::ansi();
+        let w = fixture_workspace("倉庫名-ワーク");
+        let awaiting = ("日本語ツール".repeat(4), 5_000i64);
+        let line = row_line(
+            &w,
+            None,
+            Some(ActivityState::Awaiting),
+            true,
+            Some(&awaiting),
+            false,
+            Status::Question,
+            None,
+            10_000,
+            20,
+            98,
+            &theme,
+        );
+        let body = line_text(&line);
+        assert!(body.contains("日本"), "wide status text is shown: {body:?}");
+        assert_eq!(
+            display_width(&body),
+            98,
+            "row must fill row_width: {body:?}"
+        );
+        assert!(body.ends_with("5s"), "age survives truncation: {body:?}");
+    }
+
+    #[test]
+    fn name_col_width_fits_a_wide_name_whole() {
+        // 7 chars but 13 cells: a column sized in chars would cut it short.
+        let w = fixture_workspace("倉庫名-ワーク");
+        let name_col = name_col_width([w.name.as_str(), "alpha"].into_iter(), 98);
+        assert_eq!(name_col, 13);
+        let line = row_line(
+            &w,
+            None,
+            None,
+            false,
+            None,
+            false,
+            Status::Idle,
+            None,
+            10_000,
+            name_col,
+            98,
+            &Theme::ansi(),
+        );
+        let body = line_text(&line);
+        assert!(body.contains("倉庫名-ワーク"), "name shown whole: {body:?}");
     }
 
     #[test]

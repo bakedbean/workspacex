@@ -969,7 +969,11 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             let inst = store.add_workspace_agent(ws.id, agent)?;
             println!("added {}", inst.label());
         }
-        CliAction::StatusSet { state, message } => {
+        CliAction::StatusSet {
+            state,
+            message,
+            recap,
+        } => {
             let parsed = crate::data::store::ReportedState::parse(&state).ok_or_else(|| {
                 Error::UserInput(format!(
                     "invalid status '{state}'; expected working|waiting|blocked|done"
@@ -979,6 +983,18 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             let agent = resolve_env_instance(&store, ws.id).map(|i| i.id);
             store.set_agent_status(ws.id, agent, parsed, message.as_deref(), "model")?;
             println!("status: {}", parsed.as_str());
+            if !recap.is_empty() {
+                store.set_workspace_recap(
+                    ws.id,
+                    recap.goal.as_deref(),
+                    recap.state.as_deref(),
+                    recap.next.as_deref(),
+                    recap.goal_short.as_deref(),
+                    recap.state_short.as_deref(),
+                    recap.next_short.as_deref(),
+                )?;
+                println!("recap updated");
+            }
         }
         CliAction::StatusClear => {
             let ws = resolve_current_workspace(&store)?;

@@ -236,6 +236,10 @@ pub enum CliAction {
     StatusSet {
         state: String,
         message: Option<String>,
+        /// Recap fields passed alongside the status, so the common
+        /// "set status and refresh the recap" pair is one call. All-`None`
+        /// leaves the recap untouched.
+        recap: RecapFields,
     },
     StatusClear,
     /// `wsx status show` — the workspace's derived status plus each agent's.
@@ -277,6 +281,38 @@ pub enum CliAction {
     },
     /// `wsx context write` — write the digest under the state dir, print its path.
     ContextWrite,
+}
+
+/// The six optional recap one-liners, as `--goal`/`--state`/`--next` and
+/// their `-short` forms. Shared by `status set` so both commands accept
+/// exactly the same flags.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RecapFields {
+    pub goal: Option<String>,
+    pub state: Option<String>,
+    pub next: Option<String>,
+    pub goal_short: Option<String>,
+    pub state_short: Option<String>,
+    pub next_short: Option<String>,
+}
+
+impl RecapFields {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The field a recap flag writes to, or `None` if `flag` isn't one.
+    pub fn slot(&mut self, flag: &str) -> Option<&mut Option<String>> {
+        Some(match flag {
+            "--goal" => &mut self.goal,
+            "--state" => &mut self.state,
+            "--next" => &mut self.next,
+            "--goal-short" => &mut self.goal_short,
+            "--state-short" => &mut self.state_short,
+            "--next-short" => &mut self.next_short,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug)]

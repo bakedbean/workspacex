@@ -234,8 +234,9 @@ pub static GROUPS: &[GroupInfo] = &[
         blurb: "Report agent-driven workspace status",
         commands: &[
             CmdInfo {
-                usage: "set <working|waiting|blocked|done> [--message <text>]",
-                blurb: "Set this agent's status (model push path)",
+                usage: "set <working|waiting|blocked|done> [--message <text>] [<recap flags>]",
+                blurb: "Set this agent's status (model push path); accepts the same \
+                        --goal/--state/--next[-short] flags as `recap set` to update both at once",
             },
             CmdInfo {
                 usage: "clear",

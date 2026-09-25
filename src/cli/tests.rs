@@ -2240,7 +2240,7 @@ fn parses_status_set_with_message() {
     )
     .unwrap();
     match a {
-        CliAction::StatusSet { state, message } => {
+        CliAction::StatusSet { state, message, .. } => {
             assert_eq!(state, "blocked");
             assert_eq!(message.as_deref(), Some("need a decision"));
         }
@@ -2258,7 +2258,7 @@ fn parses_status_set_without_message() {
     )
     .unwrap();
     match a {
-        CliAction::StatusSet { state, message } => {
+        CliAction::StatusSet { state, message, .. } => {
             assert_eq!(state, "working");
             assert_eq!(message, None);
         }
@@ -2357,6 +2357,126 @@ fn status_set_message_without_value_is_usage_error() {
     )
     .unwrap_err();
     assert!(matches!(err, Error::Usage { .. }), "got {err:?}");
+}
+
+#[test]
+fn parses_status_set_with_recap_flags() {
+    match parse(&[
+        "status",
+        "set",
+        "working",
+        "-m",
+        "running tests",
+        "--state",
+        "tests running",
+        "--next-short",
+        "fix flake",
+    ])
+    .unwrap()
+    {
+        CliAction::StatusSet {
+            state,
+            message,
+            recap,
+        } => {
+            assert_eq!(state, "working");
+            assert_eq!(message.as_deref(), Some("running tests"));
+            assert_eq!(recap.state.as_deref(), Some("tests running"));
+            assert_eq!(recap.next_short.as_deref(), Some("fix flake"));
+            assert_eq!(recap.goal, None);
+        }
+        other => panic!("expected StatusSet, got {other:?}"),
+    }
+    assert!(parse(&["status", "set", "working", "--goal"]).is_err());
+    assert!(parse(&["status", "set", "working", "--bogus", "x"]).is_err());
+}
+
+/// A scratch `Dirs` whose DB holds one repo `r` with one workspace `ws`
+/// (plus its primary agent), and an env pointing `resolve_current_workspace`
+/// at it. The guard must outlive the `run_cli` calls.
+fn seed_current_workspace() -> (
+    tempfile::TempDir,
+    crate::config::Dirs,
+    crate::data::store::WorkspaceId,
+    crate::test_support::EnvGuard,
+) {
+    use crate::data::store::{NewWorkspace, Store};
+    use crate::pty::session::AgentKind;
+    let tmp = tempfile::tempdir().unwrap();
+    let dirs = crate::config::Dirs::for_test(tmp.path());
+    let ws = {
+        let store = Store::open(&dirs.db_path()).unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "ws",
+                branch: "wsx/ws",
+                worktree_path: std::path::Path::new("/tmp/r/ws"),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store.add_primary_agent(ws, AgentKind::Claude, 1).unwrap();
+        ws
+    };
+    let mut env = crate::test_support::EnvGuard::new();
+    env.set("WSX_WORKSPACE_ID", ws.0.to_string());
+    env.set("XDG_RUNTIME_DIR", tmp.path());
+    env.remove("WSX_AGENT_INSTANCE_ID");
+    (tmp, dirs, ws, env)
+}
+
+#[tokio::test]
+async fn status_set_with_recap_flags_updates_both() {
+    use crate::data::store::{ReportedState, Store};
+    let (_tmp, dirs, ws, _env) = seed_current_workspace();
+    {
+        let store = Store::open(&dirs.db_path()).unwrap();
+        store
+            .set_workspace_recap(ws, Some("the goal"), Some("old"), None, None, None, None)
+            .unwrap();
+    }
+    let action = parse(&[
+        "status",
+        "set",
+        "blocked",
+        "--message",
+        "need a call",
+        "--state",
+        "new",
+        "--state-short",
+        "new-short",
+    ])
+    .unwrap();
+    run_cli(action, &dirs).await.unwrap();
+
+    let store = Store::open(&dirs.db_path()).unwrap();
+    let status = store.workspace_status(ws).unwrap().unwrap();
+    assert_eq!(status.state, ReportedState::Blocked);
+    assert_eq!(status.message.as_deref(), Some("need a call"));
+    let recap = store.workspace_recap(ws).unwrap().unwrap();
+    assert_eq!(recap.state.as_deref(), Some("new"));
+    assert_eq!(recap.state_short.as_deref(), Some("new-short"));
+    assert_eq!(
+        recap.goal.as_deref(),
+        Some("the goal"),
+        "fields not passed must be left alone, as with `recap set`"
+    );
+}
+
+#[tokio::test]
+async fn status_set_without_recap_flags_leaves_recap_absent() {
+    use crate::data::store::Store;
+    let (_tmp, dirs, ws, _env) = seed_current_workspace();
+    run_cli(parse(&["status", "set", "working"]).unwrap(), &dirs)
+        .await
+        .unwrap();
+    let store = Store::open(&dirs.db_path()).unwrap();
+    assert!(store.workspace_recap(ws).unwrap().is_none());
 }
 
 #[test]
@@ -2803,6 +2923,7 @@ async fn status_set_and_clear_are_attributed_to_the_calling_agent() {
     let set = |state: &str| CliAction::StatusSet {
         state: state.to_string(),
         message: None,
+        recap: Default::default(),
     };
     run_cli(set("working"), &dirs).await.unwrap();
     env.set("WSX_AGENT_INSTANCE_ID", peer.0.to_string());

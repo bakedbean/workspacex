@@ -3079,6 +3079,52 @@ fn read_commands_take_json() {
     assert!(parse(&["context", "show", "--json"]).is_err());
 }
 
+/// Bare `status`/`recap` is `show`, so `show`'s flags work without it.
+#[test]
+fn bare_status_and_recap_take_show_flags() {
+    for group in ["status", "recap"] {
+        for (args, want_ws, want_json) in [
+            (vec!["--json"], None, true),
+            (vec!["--workspace", "r/w"], Some("r/w"), false),
+            (vec!["--workspace", "r/w", "--json"], Some("r/w"), true),
+            (vec!["--json", "--workspace", "r/w"], Some("r/w"), true),
+        ] {
+            let mut argv = vec![group];
+            argv.extend(&args);
+            let (workspace, json) = match parse(&argv).unwrap() {
+                CliAction::StatusShow { workspace, json } if group == "status" => (workspace, json),
+                CliAction::RecapShow { workspace, json } if group == "recap" => (workspace, json),
+                other => panic!("{argv:?} parsed as {other:?}"),
+            };
+            assert_eq!(workspace.as_deref(), want_ws, "{argv:?}");
+            assert_eq!(json, want_json, "{argv:?}");
+        }
+        // Flag errors still name the show usage, and unknown words still fail.
+        let err = parse(&[group, "--bogus"]).unwrap_err().to_string();
+        assert!(err.contains("--bogus") && err.contains("show"), "{err}");
+        let err = parse(&[group, "--workspace"]).unwrap_err().to_string();
+        assert!(err.contains("--workspace needs value"), "{err}");
+        let err = parse(&[group, "bogus"]).unwrap_err().to_string();
+        assert!(
+            err.contains(&format!("unknown {group} subcommand: bogus")),
+            "{err}"
+        );
+    }
+    // The other subcommands are untouched.
+    assert!(matches!(
+        parse(&["status", "clear"]).unwrap(),
+        CliAction::StatusClear
+    ));
+    assert!(matches!(
+        parse(&["recap", "clear"]).unwrap(),
+        CliAction::RecapClear
+    ));
+    assert!(matches!(
+        parse(&["status", "--help"]).unwrap(),
+        CliAction::Help(_)
+    ));
+}
+
 #[test]
 fn workspace_list_takes_a_repo_and_json_in_either_order() {
     for args in [

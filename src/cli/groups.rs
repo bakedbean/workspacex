@@ -239,7 +239,7 @@ pub static GROUPS: &[GroupInfo] = &[
         commands: &[
             CmdInfo {
                 usage: "(no command)",
-                blurb: "Same as `show` for the current workspace",
+                blurb: "Same as `show` (accepts its flags)",
             },
             CmdInfo {
                 usage: "set <working|waiting|blocked|done> [--message <text>] [<recap flags>]",

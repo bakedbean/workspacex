@@ -3,12 +3,23 @@
 //! Both write to the dashboard rather than doing work, and both accept
 //! the same hook/notify shapes, so they share a file.
 
-use super::{Args, parse_read_flags};
+use super::{Args, ReadFlags, parse_read_flags};
 use crate::cli::action::{CliAction, RecapFields};
 use crate::error::{Error, Result};
 
+/// The flags of `<group> show`, which is also the bare `<group>`: `first`
+/// is the word after the group, when it was a flag rather than `show`.
+fn parse_show_flags(first: Option<String>, it: &mut Args, group: &str) -> Result<ReadFlags> {
+    let usage = format!("{group} [show] [--workspace <repo>/<slug>] [--json]");
+    // `Args` is a `'static` trait object, so a chain borrowing `it` can't
+    // stand in for it; the tail is a handful of flags, so just collect.
+    let rest: Vec<String> = first.into_iter().chain(it).collect();
+    parse_read_flags(&mut rest.into_iter(), &usage, true)
+}
+
 pub(in crate::cli) fn parse_status(it: &mut Args) -> Result<CliAction> {
-    match it.next().as_deref() {
+    let first = it.next();
+    match first.as_deref() {
         Some("set") => {
             let state = it.next().ok_or_else(|| Error::Usage {
                 group: None,
@@ -40,15 +51,18 @@ pub(in crate::cli) fn parse_status(it: &mut Args) -> Result<CliAction> {
                 recap,
             })
         }
-        // Bare `wsx status` reads rather than erroring: agents reach for it
-        // to check what they last reported.
-        None => Ok(CliAction::StatusShow {
-            workspace: None,
-            json: false,
-        }),
         Some("clear") => Ok(CliAction::StatusClear),
-        Some("show") => {
-            let f = parse_read_flags(it, "status show [--workspace <repo>/<slug>] [--json]", true)?;
+        // Bare `wsx status` (with or without `show`'s flags) reads rather
+        // than erroring: agents reach for it to check what they last reported.
+        None | Some("show") => {
+            let f = parse_show_flags(None, it, "status")?;
+            Ok(CliAction::StatusShow {
+                workspace: f.workspace,
+                json: f.json,
+            })
+        }
+        Some(flag) if flag.starts_with('-') => {
+            let f = parse_show_flags(first, it, "status")?;
             Ok(CliAction::StatusShow {
                 workspace: f.workspace,
                 json: f.json,
@@ -95,7 +109,8 @@ pub(in crate::cli) fn parse_status(it: &mut Args) -> Result<CliAction> {
 }
 
 pub(in crate::cli) fn parse_recap(it: &mut Args) -> Result<CliAction> {
-    match it.next().as_deref() {
+    let first = it.next();
+    match first.as_deref() {
         Some("set") => {
             let mut fields = RecapFields::default();
             while let Some(arg) = it.next() {
@@ -136,12 +151,15 @@ pub(in crate::cli) fn parse_recap(it: &mut Args) -> Result<CliAction> {
             })
         }
         // Bare `wsx recap` is `recap show`, for the same reason.
-        None => Ok(CliAction::RecapShow {
-            workspace: None,
-            json: false,
-        }),
-        Some("show") => {
-            let f = parse_read_flags(it, "recap show [--workspace <repo>/<slug>] [--json]", true)?;
+        None | Some("show") => {
+            let f = parse_show_flags(None, it, "recap")?;
+            Ok(CliAction::RecapShow {
+                workspace: f.workspace,
+                json: f.json,
+            })
+        }
+        Some(flag) if flag.starts_with('-') => {
+            let f = parse_show_flags(first, it, "recap")?;
             Ok(CliAction::RecapShow {
                 workspace: f.workspace,
                 json: f.json,

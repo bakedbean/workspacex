@@ -574,6 +574,12 @@ fn toml_basic_string(s: &str) -> String {
 /// session's stored config and silently ignores `-c` for these two keys
 /// (verified against codex-cli 0.146.0). A resumed session already carries the
 /// doctrine in its history from the Fresh spawn that created it.
+///
+/// Every spawn, resumed ones included, passes
+/// `-c check_for_update_on_startup=false`: Codex's blocking "Update available"
+/// dialog would otherwise hold an unattended agent at startup. Unlike the two
+/// overrides above, this one *is* honored on `resume` (verified against
+/// codex-cli 0.157.0). Users update Codex by running it outside wsx.
 /// The `remote` arg is unused — wsx's RemoteOpts targets Claude's
 /// `--remote-control`, which is unrelated to Codex's `--remote`.
 pub fn build_codex_command(
@@ -587,6 +593,12 @@ pub fn build_codex_command(
     for (k, v) in std::env::vars() {
         cmd.env(k, v);
     }
+
+    // Codex's startup "Update available" dialog blocks input until answered,
+    // stranding the injected brief behind it. Unlike the Fresh-only overrides
+    // below, this key is honored on `resume` too, so it goes on every spawn.
+    cmd.arg("-c");
+    cmd.arg("check_for_update_on_startup=false");
 
     // Status reporting: developer sessions (Fresh/Continue) get `-c notify=...`
     // so Codex calls back into `wsx status from-notify` on agent-turn-complete.
@@ -2554,6 +2566,50 @@ mod tests {
             argv.iter().any(|a| a == "--last"),
             "continue must use --last: {argv:?}"
         );
+    }
+
+    /// Codex's startup update dialog blocks the injected brief until someone
+    /// answers it, so every spawn mode must disable the check — and on resume
+    /// the `-c` must precede the `resume` subcommand to count as global.
+    #[test]
+    fn codex_every_spawn_mode_disables_startup_update_check() {
+        let mut env = EnvGuard::new();
+        env.set("WSX_CODEX_BIN", "codex");
+        let modes = [
+            SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: None,
+                doctrine: None,
+                additional_dirs: vec![],
+                yolo: false,
+                pin_session_id: None,
+            },
+            SpawnMode::Continue {
+                custom_instructions: None,
+                doctrine: None,
+                additional_dirs: vec![],
+                yolo: false,
+                resume_session_id: Some("01a080db-c2a2-7e92-a90a-d267ae83eb3d".into()),
+            },
+            SpawnMode::Continue {
+                custom_instructions: None,
+                doctrine: None,
+                additional_dirs: vec![],
+                yolo: true,
+                resume_session_id: None,
+            },
+        ];
+        for mode in &modes {
+            let argv = codex_argv(mode);
+            let idx = argv
+                .iter()
+                .position(|a| a == "check_for_update_on_startup=false")
+                .unwrap_or_else(|| panic!("update check not disabled: {argv:?}"));
+            assert_eq!(argv[idx - 1], "-c", "value must follow -c: {argv:?}");
+            if let Some(resume) = argv.iter().position(|a| a == "resume") {
+                assert!(idx < resume, "-c must precede resume: {argv:?}");
+            }
+        }
     }
 
     #[test]

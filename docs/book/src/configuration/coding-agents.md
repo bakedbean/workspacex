@@ -63,6 +63,8 @@ If a worktree was used with an older wsx, it may contain a wsx-created `AGENTS.m
 
 **Claude slash commands**: before each Codex spawn, wsx mirrors Markdown files from `~/.claude/commands/` into a local Codex plugin at `~/plugins/wsx-claude-commands/commands/` and registers that plugin in the implicit personal marketplace at `~/.agents/plugins/marketplace.json`. The marketplace entry is marked `INSTALLED_BY_DEFAULT`, so commands such as `/pull-request` and `/commit-changes` are available in Codex without maintaining a second command set. Edits to the Claude command files are picked up on the next Codex spawn.
 
+**Update check**: every Codex spawn, fresh or resumed, passes `-c check_for_update_on_startup=false`. Codex's startup "Update available" dialog blocks input until someone answers it, which would leave a handoff or reviewer agent stuck behind it with its brief unread. wsx therefore never updates Codex for you: run `codex` outside wsx to see the update prompt, or upgrade through your package manager (e.g. `npm install -g @openai/codex` or `brew upgrade codex`).
+
 **Spawn**: fresh workspaces launch bare `codex`. Non-yolo sessions use Codex's built-in interactive approvals + workspace-write sandbox; `--yolo` workspaces add `--dangerously-bypass-approvals-and-sandbox`.
 
 **Continue**: `codex resume <thread-id>` once the instance's thread id has been recorded from its `notify` payload (see [Sessions survive a restart](multi-agent-workspaces.md#sessions-survive-a-restart)); before that, `codex resume --last`, which Codex filters to the current directory natively — the worktree's own most-recent session.

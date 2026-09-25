@@ -855,19 +855,60 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             from,
             after,
             timeout_secs,
+            done,
         } => {
-            let me = super::mail::current_agent(&store)?;
+            use super::mail::{WaitFor, WaitHit};
+            // Waiting on mail needs an identity (whose inbox?); waiting only
+            // on a peer's status does not, so a plain shell can use --done.
+            let me = match (super::mail::current_agent(&store), &done, &from) {
+                (Ok(me), _, _) => Some(me),
+                (Err(_), Some(_), None) => None,
+                (Err(e), _, _) => return Err(e),
+            };
+            let home = match &me {
+                Some(me) => me.workspace_id,
+                None => resolve_current_workspace(&store)?.id,
+            };
             let from_id = from
                 .as_deref()
-                .map(|f| super::mail::resolve_sender(&store, me.workspace_id, f))
+                .map(|f| super::mail::resolve_sender(&store, home, f))
                 .transpose()?;
-            let hit =
-                super::mail::wait_for_message(&store, me.id, from_id, after, timeout_secs).await?;
-            let Some(m) = hit else {
+            let done_target = match done.as_deref() {
+                Some(d) => {
+                    let peer = super::mail::resolve_agent_ref(&store, home, d, "--done")?;
+                    // Measure "done" from the message that asked for the work
+                    // when there is one, so a peer that finished between the
+                    // send and this wait still counts.
+                    let since = match after {
+                        Some(id) => {
+                            store
+                                .message_by_id(id)?
+                                .ok_or_else(|| {
+                                    Error::UserInput(format!("--after: no message #{id}"))
+                                })?
+                                .created_at
+                        }
+                        None => crate::data::store::now_ms(),
+                    };
+                    Some((peer, since))
+                }
+                None => None,
+            };
+            let what = WaitFor {
+                inbox: me.as_ref().map(|m| (m.id, from_id, after)),
+                done: done_target,
+            };
+            let hit = super::mail::wait_for(&store, &what, timeout_secs).await?;
+            let Some(hit) = hit else {
                 let who = from
                     .as_deref()
                     .map(|f| format!(" from {f}"))
                     .unwrap_or_default();
+                let what_missed = match (&me, done.as_deref()) {
+                    (Some(_), Some(d)) => format!("no message{who} and no done from {d}"),
+                    (None, Some(d)) => format!("no done from {d}"),
+                    _ => format!("no message{who}"),
+                };
                 // The retry command keeps the caller's filters so a copy-paste
                 // does not silently widen the wait.
                 let mut retry = String::from("wsx agent wait");
@@ -877,12 +918,37 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 if let Some(a) = after {
                     retry.push_str(&format!(" --after {a}"));
                 }
+                if let Some(d) = done.as_deref() {
+                    retry.push_str(&format!(" --done {}", super::resolve::shell_quote(d)));
+                }
                 return Err(Error::UserInput(format!(
-                    "no message{who} after {timeout_secs}s; run `{retry}` again \
+                    "{what_missed} after {timeout_secs}s; run `{retry}` again \
                      (add --timeout 0 to wait indefinitely)"
                 )));
             };
-            println!("{}", super::mail::full_message(&store, &m, me.workspace_id));
+            let m = match hit {
+                WaitHit::Message(m) => m,
+                WaitHit::Status(s) => {
+                    let (peer, _) = what.done.expect("a status hit implies --done");
+                    let label = super::mail::party(&store, Some(peer), home);
+                    let at = crate::util::time::format_utc_ms(s.reported_at);
+                    match s.message.as_deref().filter(|m| !m.trim().is_empty()) {
+                        Some(msg) => {
+                            println!("{label} reported {} at {at}: {msg}", s.state.as_str())
+                        }
+                        None => println!("{label} reported {} at {at}", s.state.as_str()),
+                    }
+                    if s.state == crate::data::store::ReportedState::Blocked {
+                        eprintln!(
+                            "note: {label} is blocked on a human, not done; \
+                             check `wsx status show` for its workspace"
+                        );
+                    }
+                    return Ok(());
+                }
+            };
+            let viewer = me.as_ref().map(|m| m.workspace_id).unwrap_or(home);
+            println!("{}", super::mail::full_message(&store, &m, viewer));
             if m.delivered_at.is_none() {
                 // `wait` is a read: the dashboard still injects the message.
                 eprintln!(

@@ -76,7 +76,7 @@ pub static GROUPS: &[GroupInfo] = &[
                 blurb: "List your inbox (or sent / whole-workspace mail) with delivery times; --id prints one in full",
             },
             CmdInfo {
-                usage: "wait [--from <sender>] [--after <msg-id>] [--timeout <secs>]",
+                usage: "wait [--from <sender>] [--after <msg-id>] [--timeout <secs>] [--done <agent>]",
                 blurb: "Block until a message for you arrives, then print it (read-only: the dashboard still injects it)",
             },
             CmdInfo {

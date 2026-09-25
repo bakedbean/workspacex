@@ -11,7 +11,8 @@ pub(in crate::cli) const USAGE_AGENT_SEND: &str =
 const USAGE_AGENT_REPLY: &str = "agent reply [--file <path>|-] [<msg-id>] [<message…>|-]";
 const USAGE_AGENT_MESSAGES: &str =
     "agent messages [--sent|--all] [--undelivered] [--limit <n>] [--id <msg-id>] [--json]";
-const USAGE_AGENT_WAIT: &str = "agent wait [--from <sender>] [--after <msg-id>] [--timeout <secs>]";
+const USAGE_AGENT_WAIT: &str =
+    "agent wait [--from <sender>] [--after <msg-id>] [--timeout <secs>] [--done <agent>]";
 
 fn usage(msg: impl Into<String>) -> Error {
     Error::Usage {
@@ -179,9 +180,11 @@ pub(in crate::cli) fn parse_agent(it: &mut Args) -> Result<CliAction> {
             let mut from = None;
             let mut after = None;
             let mut timeout_secs = DEFAULT_WAIT_TIMEOUT_SECS;
+            let mut done = None;
             while let Some(arg) = it.next() {
                 match arg.as_str() {
                     "--from" => from = Some(flag_value(it, "--from", "<sender>")?),
+                    "--done" => done = Some(flag_value(it, "--done", "<agent>")?),
                     "--after" => after = Some(msg_id_value(it, "--after")?),
                     "--timeout" => {
                         let v = flag_value(it, "--timeout", "<secs>")?;
@@ -200,6 +203,7 @@ pub(in crate::cli) fn parse_agent(it: &mut Args) -> Result<CliAction> {
                 from,
                 after,
                 timeout_secs,
+                done,
             })
         }
         Some("add") => {

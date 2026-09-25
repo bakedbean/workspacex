@@ -208,6 +208,20 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// One agent's last reported status, if it has reported one.
+    pub fn agent_status(&self, agent: AgentInstanceId) -> Result<Option<ReportedStatus>> {
+        let r = self
+            .conn()
+            .query_row(
+                "SELECT state, message, source, reported_at \
+                 FROM agent_status WHERE agent_id = ?1",
+                [agent.0],
+                row_to_reported_status,
+            )
+            .optional()?;
+        Ok(r)
+    }
+
     /// Every agent's status across all workspaces, keyed by instance.
     pub fn all_agent_statuses(&self) -> Result<HashMap<AgentInstanceId, ReportedStatus>> {
         let mut stmt = self

@@ -225,6 +225,10 @@ pub enum CliAction {
         after: Option<i64>,
         /// 0 = wait forever.
         timeout_secs: u64,
+        /// `--done <agent>`: also return once that agent reports `done` (or
+        /// `blocked`) after the baseline — the `--after` message's creation
+        /// time, else when the wait started.
+        done: Option<String>,
     },
     AgentAdd {
         kind: String,

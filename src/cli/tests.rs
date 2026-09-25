@@ -399,6 +399,7 @@ fn parses_agent_wait_flags() {
             from,
             after,
             timeout_secs,
+            done: None,
         } => (from, after, timeout_secs),
         other => panic!("expected AgentWait, got {other:?}"),
     };
@@ -890,6 +891,7 @@ async fn agent_wait_returns_mail_without_marking_it_delivered() {
             from: Some("r/origin claude".into()),
             after: Some(got.id),
             timeout_secs: 1,
+            done: None,
         },
         &fx.dirs,
     )
@@ -912,6 +914,7 @@ async fn agent_wait_returns_mail_without_marking_it_delivered() {
             from: Some("nobody".into()),
             after: None,
             timeout_secs: 1,
+            done: None,
         },
         &fx.dirs,
     )
@@ -3048,4 +3051,166 @@ async fn agent_messages_json_dispatches() {
         .await
         .unwrap();
     }
+}
+
+#[test]
+fn parses_agent_wait_done() {
+    match parse(&["agent", "wait", "--done", "r/other codex", "--after", "5"]).unwrap() {
+        CliAction::AgentWait { done, after, .. } => {
+            assert_eq!(done.as_deref(), Some("r/other codex"));
+            assert_eq!(after, Some(5));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(parse(&["agent", "wait", "--done"]).is_err());
+}
+
+/// `wait --done` returns once the peer reports done after the baseline: a
+/// stale `done` from its previous task must not end the wait, one reported
+/// since the `--after` message must, and a shell with no agent identity can
+/// wait on status alone.
+#[tokio::test]
+async fn agent_wait_done_watches_the_peers_status() {
+    use crate::cli::mail::{WaitFor, WaitHit, wait_for};
+    use crate::data::store::ReportedState;
+    let fx = MailFixture::new();
+    let store = fx.store();
+    // Stale: reported before the baseline.
+    store
+        .set_agent_status(
+            fx.target_ws,
+            Some(fx.target),
+            ReportedState::Done,
+            None,
+            "hook",
+        )
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let asked = store
+        .enqueue_message(fx.target_ws, fx.target, Some(fx.origin), "do it")
+        .unwrap();
+    let since = store.message_by_id(asked).unwrap().unwrap().created_at;
+    let what = WaitFor {
+        inbox: None,
+        done: Some((fx.target, since)),
+    };
+    assert!(
+        wait_for(&store, &what, 1).await.unwrap().is_none(),
+        "a done from before the ask must not end the wait"
+    );
+
+    // Working, then done mid-wait: the poll picks it up.
+    store
+        .set_agent_status(
+            fx.target_ws,
+            Some(fx.target),
+            ReportedState::Working,
+            None,
+            "hook",
+        )
+        .unwrap();
+    let db = fx.dirs.db_path();
+    let (ws, target) = (fx.target_ws, fx.target);
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        crate::data::store::Store::open(&db)
+            .unwrap()
+            .set_agent_status(
+                ws,
+                Some(target),
+                ReportedState::Done,
+                Some("shipped"),
+                "model",
+            )
+            .unwrap();
+    });
+    let hit = wait_for(&store, &what, 5).await.unwrap();
+    writer.join().unwrap();
+    match hit {
+        Some(WaitHit::Status(s)) => {
+            assert_eq!(s.state, ReportedState::Done);
+            assert_eq!(s.message.as_deref(), Some("shipped"));
+        }
+        _ => panic!("expected a status hit"),
+    }
+
+    // Through the CLI arm from a plain shell: status-only, returns at once
+    // since the done above is after message `asked`.
+    let mut env = fx.env_as(None);
+    env.set("WSX_WORKSPACE_ID", fx.origin_ws.0.to_string());
+    run_cli(
+        CliAction::AgentWait {
+            from: None,
+            after: Some(asked),
+            timeout_secs: 2,
+            done: Some("r/target claude".into()),
+        },
+        &fx.dirs,
+    )
+    .await
+    .unwrap();
+    // Mail filters still need an identity.
+    let err = run_cli(
+        CliAction::AgentWait {
+            from: Some("claude".into()),
+            after: None,
+            timeout_secs: 1,
+            done: Some("r/target claude".into()),
+        },
+        &fx.dirs,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("WSX_AGENT_INSTANCE_ID"), "{err}");
+    drop(env);
+
+    // A timeout names what was missed and keeps --done in the retry hint.
+    let _env = fx.env_as(Some(fx.origin));
+    let err = run_cli(
+        CliAction::AgentWait {
+            from: None,
+            after: None,
+            timeout_secs: 1,
+            done: Some("r/target claude".into()),
+        },
+        &fx.dirs,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("no message and no done from r/target claude after 1s"),
+        "{err}"
+    );
+    assert!(err.contains("--done 'r/target claude'"), "{err}");
+}
+
+#[test]
+fn blocked_also_ends_a_done_wait() {
+    // Pure check on the predicate through a store round trip.
+    use crate::data::store::ReportedState;
+    let fx = MailFixture::new();
+    let store = fx.store();
+    store
+        .set_agent_status(
+            fx.target_ws,
+            Some(fx.target),
+            ReportedState::Blocked,
+            None,
+            "model",
+        )
+        .unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    let what = crate::cli::mail::WaitFor {
+        inbox: None,
+        done: Some((fx.target, 0)),
+    };
+    assert!(matches!(
+        rt.block_on(crate::cli::mail::wait_for(&store, &what, 1)).unwrap(),
+        Some(crate::cli::mail::WaitHit::Status(s)) if s.state == ReportedState::Blocked
+    ));
 }

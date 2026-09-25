@@ -622,11 +622,16 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 }
             }
         }
-        CliAction::WorkspaceList { repo } => {
+        CliAction::WorkspaceList { repo, json } => {
             let filtered = match repo {
                 Some(name) => vec![lookup_repo(&store, &name)?],
                 None => crate::data::repo::list(&store)?,
             };
+            if json {
+                let records = crate::commands::inspect::workspace_records(&store, &filtered)?;
+                println!("{}", serde_json::to_string_pretty(&records)?);
+                return Ok(());
+            }
             for r in filtered {
                 for w in store.workspaces(r.id)? {
                     println!(
@@ -704,12 +709,17 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 println!("note: running sessions keep their current backend until restarted");
             }
         }
-        CliAction::AgentList => {
-            let ws = resolve_current_workspace(&store)?;
-            for inst in store.workspace_agents(ws.id)? {
-                let tag = if inst.is_primary { "  (primary)" } else { "" };
-                println!("{}  {}{}", inst.id.0, inst.label(), tag);
+        CliAction::AgentList { workspace, json } => {
+            let ws = target_workspace(&store, workspace.as_deref())?;
+            let agents = crate::commands::inspect::agents(&store, ws.id)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&agents)?);
+                return Ok(());
             }
+            print!(
+                "{}",
+                crate::commands::inspect::render_agents(&agents, crate::data::store::now_ms())
+            );
         }
         CliAction::AgentSend {
             target,
@@ -740,6 +750,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             undelivered,
             limit,
             id,
+            json,
         } => {
             use crate::cli::action::MessagesView;
             use crate::data::messages::MessageScope;
@@ -755,7 +766,12 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                     .message_by_id(id)?
                     .ok_or_else(|| Error::UserInput(format!("no message #{id}")))?;
                 let viewer = home(&store).unwrap_or(m.workspace_id);
-                println!("{}", super::mail::full_message(&store, &m, viewer));
+                if json {
+                    let rec = super::mail::message_record(&store, &m, viewer);
+                    println!("{}", serde_json::to_string_pretty(&rec)?);
+                } else {
+                    println!("{}", super::mail::full_message(&store, &m, viewer));
+                }
                 return Ok(());
             }
             let (scope, viewer) = match view {
@@ -777,9 +793,18 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                     (scope, inst.workspace_id)
                 }
             };
+            let messages = store.list_messages(scope, undelivered, limit)?;
+            if json {
+                let recs: Vec<_> = messages
+                    .iter()
+                    .map(|m| super::mail::message_record(&store, m, viewer))
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&recs)?);
+                return Ok(());
+            }
             println!("{}", super::mail::LISTING_HEADER);
-            for m in store.list_messages(scope, undelivered, limit)? {
-                println!("{}", super::mail::listing_row(&store, &m, viewer));
+            for m in &messages {
+                println!("{}", super::mail::listing_row(&store, m, viewer));
             }
         }
         CliAction::AgentReply { to, body } => {
@@ -830,19 +855,60 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             from,
             after,
             timeout_secs,
+            done,
         } => {
-            let me = super::mail::current_agent(&store)?;
+            use super::mail::{WaitFor, WaitHit};
+            // Waiting on mail needs an identity (whose inbox?); waiting only
+            // on a peer's status does not, so a plain shell can use --done.
+            let me = match (super::mail::current_agent(&store), &done, &from) {
+                (Ok(me), _, _) => Some(me),
+                (Err(_), Some(_), None) => None,
+                (Err(e), _, _) => return Err(e),
+            };
+            let home = match &me {
+                Some(me) => me.workspace_id,
+                None => resolve_current_workspace(&store)?.id,
+            };
             let from_id = from
                 .as_deref()
-                .map(|f| super::mail::resolve_sender(&store, me.workspace_id, f))
+                .map(|f| super::mail::resolve_sender(&store, home, f))
                 .transpose()?;
-            let hit =
-                super::mail::wait_for_message(&store, me.id, from_id, after, timeout_secs).await?;
-            let Some(m) = hit else {
+            let done_target = match done.as_deref() {
+                Some(d) => {
+                    let peer = super::mail::resolve_agent_ref(&store, home, d, "--done")?;
+                    // Measure "done" from the message that asked for the work
+                    // when there is one, so a peer that finished between the
+                    // send and this wait still counts.
+                    let since = match after {
+                        Some(id) => {
+                            store
+                                .message_by_id(id)?
+                                .ok_or_else(|| {
+                                    Error::UserInput(format!("--after: no message #{id}"))
+                                })?
+                                .created_at
+                        }
+                        None => crate::data::store::now_ms(),
+                    };
+                    Some((peer, since))
+                }
+                None => None,
+            };
+            let what = WaitFor {
+                inbox: me.as_ref().map(|m| (m.id, from_id, after)),
+                done: done_target,
+            };
+            let hit = super::mail::wait_for(&store, &what, timeout_secs).await?;
+            let Some(hit) = hit else {
                 let who = from
                     .as_deref()
                     .map(|f| format!(" from {f}"))
                     .unwrap_or_default();
+                let what_missed = match (&me, done.as_deref()) {
+                    (Some(_), Some(d)) => format!("no message{who} and no done from {d}"),
+                    (None, Some(d)) => format!("no done from {d}"),
+                    _ => format!("no message{who}"),
+                };
                 // The retry command keeps the caller's filters so a copy-paste
                 // does not silently widen the wait.
                 let mut retry = String::from("wsx agent wait");
@@ -852,12 +918,37 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 if let Some(a) = after {
                     retry.push_str(&format!(" --after {a}"));
                 }
+                if let Some(d) = done.as_deref() {
+                    retry.push_str(&format!(" --done {}", super::resolve::shell_quote(d)));
+                }
                 return Err(Error::UserInput(format!(
-                    "no message{who} after {timeout_secs}s; run `{retry}` again \
+                    "{what_missed} after {timeout_secs}s; run `{retry}` again \
                      (add --timeout 0 to wait indefinitely)"
                 )));
             };
-            println!("{}", super::mail::full_message(&store, &m, me.workspace_id));
+            let m = match hit {
+                WaitHit::Message(m) => m,
+                WaitHit::Status(s) => {
+                    let (peer, _) = what.done.expect("a status hit implies --done");
+                    let label = super::mail::party(&store, Some(peer), home);
+                    let at = crate::util::time::format_utc_ms(s.reported_at);
+                    match s.message.as_deref().filter(|m| !m.trim().is_empty()) {
+                        Some(msg) => {
+                            println!("{label} reported {} at {at}: {msg}", s.state.as_str())
+                        }
+                        None => println!("{label} reported {} at {at}", s.state.as_str()),
+                    }
+                    if s.state == crate::data::store::ReportedState::Blocked {
+                        eprintln!(
+                            "note: {label} is blocked on a human, not done; \
+                             check `wsx status show` for its workspace"
+                        );
+                    }
+                    return Ok(());
+                }
+            };
+            let viewer = me.as_ref().map(|m| m.workspace_id).unwrap_or(home);
+            println!("{}", super::mail::full_message(&store, &m, viewer));
             if m.delivered_at.is_none() {
                 // `wait` is a read: the dashboard still injects the message.
                 eprintln!(
@@ -885,13 +976,30 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 ))
             })?;
             let ws = resolve_current_workspace(&store)?;
-            store.set_workspace_status(ws.id, parsed, message.as_deref(), "model")?;
+            let agent = resolve_env_instance(&store, ws.id).map(|i| i.id);
+            store.set_agent_status(ws.id, agent, parsed, message.as_deref(), "model")?;
             println!("status: {}", parsed.as_str());
         }
         CliAction::StatusClear => {
             let ws = resolve_current_workspace(&store)?;
-            store.clear_workspace_status(ws.id)?;
+            // An agent clears only its own row; a human's shell clears them all.
+            match resolve_env_instance(&store, ws.id) {
+                Some(inst) => store.clear_agent_status(ws.id, inst.id)?,
+                None => store.clear_workspace_status(ws.id)?,
+            }
             println!("status cleared");
+        }
+        CliAction::StatusShow { workspace, json } => {
+            let ws = target_workspace(&store, workspace.as_deref())?;
+            let view = crate::commands::inspect::status_view(&store, &ws)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&view)?);
+                return Ok(());
+            }
+            print!(
+                "{}",
+                crate::commands::inspect::render_status(&view, crate::data::store::now_ms())
+            );
         }
         CliAction::StatusFromHook { agent } => {
             use std::io::Read;
@@ -907,7 +1015,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                     };
                     let integration = crate::agent::status::for_agent(kind);
                     if let Some(state) = integration.parse_event(&json) {
-                        let _ = store.apply_hook_status(ws.id, state, "hook");
+                        let inst = resolve_current_instance(&store, ws.id, kind);
+                        let _ = store.apply_hook_status(ws.id, inst, state, "hook");
                     }
                     // Remember which harness session this instance is in, so a
                     // respawn resumes that conversation rather than whichever
@@ -938,7 +1047,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                         };
                         let integration = crate::agent::status::for_agent(kind);
                         if let Some(state) = integration.parse_event(&json) {
-                            let _ = store.apply_hook_status(ws.id, state, "notify");
+                            let inst = resolve_current_instance(&store, ws.id, kind);
+                            let _ = store.apply_hook_status(ws.id, inst, state, "notify");
                         }
                         // Same per-instance session capture as `from-hook`
                         // (Codex: the thread id, for `codex resume <id>`).
@@ -972,27 +1082,22 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             )?;
             println!("recap updated");
         }
-        CliAction::RecapShow => {
-            let ws = resolve_current_workspace(&store)?;
-            match store.workspace_recap(ws.id)? {
-                Some(r) => {
-                    println!("goal:        {}", r.goal.as_deref().unwrap_or("-"));
-                    println!("state:       {}", r.state.as_deref().unwrap_or("-"));
-                    println!("next:        {}", r.next.as_deref().unwrap_or("-"));
-                    println!("goal-short:  {}", r.goal_short.as_deref().unwrap_or("-"));
-                    println!("state-short: {}", r.state_short.as_deref().unwrap_or("-"));
-                    println!("next-short:  {}", r.next_short.as_deref().unwrap_or("-"));
-                }
-                None => println!("no recap set"),
+        CliAction::RecapShow { workspace, json } => {
+            let ws = target_workspace(&store, workspace.as_deref())?;
+            let view = crate::commands::inspect::recap_view(&store, &ws)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&view)?);
+                return Ok(());
             }
+            print!("{}", crate::commands::inspect::render_recap(&view));
         }
         CliAction::RecapClear => {
             let ws = resolve_current_workspace(&store)?;
             store.clear_workspace_recap(ws.id)?;
             println!("recap cleared");
         }
-        CliAction::ContextShow => {
-            let ws = resolve_current_workspace(&store)?;
+        CliAction::ContextShow { workspace } => {
+            let ws = target_workspace(&store, workspace.as_deref())?;
             let digest = crate::commands::context::gather(&store, &ws).await?;
             print!("{}", crate::commands::context::render(&digest));
         }

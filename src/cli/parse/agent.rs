@@ -1,6 +1,6 @@
 //! `wsx agent` — listing agents, sending them prompts, and reading replies.
 
-use super::Args;
+use super::{Args, parse_read_flags};
 use crate::cli::action::{
     CliAction, DEFAULT_MESSAGES_LIMIT, DEFAULT_WAIT_TIMEOUT_SECS, MessageBody, MessagesView,
 };
@@ -10,8 +10,9 @@ pub(in crate::cli) const USAGE_AGENT_SEND: &str =
     "agent send [--workspace <repo>/<slug>] [--file <path>|-] <label|instance-id> [<message…>|-]";
 const USAGE_AGENT_REPLY: &str = "agent reply [--file <path>|-] [<msg-id>] [<message…>|-]";
 const USAGE_AGENT_MESSAGES: &str =
-    "agent messages [--sent|--all] [--undelivered] [--limit <n>] [--id <msg-id>]";
-const USAGE_AGENT_WAIT: &str = "agent wait [--from <sender>] [--after <msg-id>] [--timeout <secs>]";
+    "agent messages [--sent|--all] [--undelivered] [--limit <n>] [--id <msg-id>] [--json]";
+const USAGE_AGENT_WAIT: &str =
+    "agent wait [--from <sender>] [--after <msg-id>] [--timeout <secs>] [--done <agent>]";
 
 fn usage(msg: impl Into<String>) -> Error {
     Error::Usage {
@@ -68,7 +69,13 @@ fn file_source(path: String) -> MessageBody {
 
 pub(in crate::cli) fn parse_agent(it: &mut Args) -> Result<CliAction> {
     match it.next().as_deref() {
-        Some("list") => Ok(CliAction::AgentList),
+        Some("list") => {
+            let f = parse_read_flags(it, "agent list [--workspace <repo>/<slug>] [--json]", true)?;
+            Ok(CliAction::AgentList {
+                workspace: f.workspace,
+                json: f.json,
+            })
+        }
         Some("whoami") => match it.next() {
             None => Ok(CliAction::AgentWhoami),
             Some(extra) => Err(usage(format!(
@@ -129,6 +136,7 @@ pub(in crate::cli) fn parse_agent(it: &mut Args) -> Result<CliAction> {
             let mut undelivered = false;
             let mut limit = DEFAULT_MESSAGES_LIMIT;
             let mut id = None;
+            let mut json = false;
             while let Some(arg) = it.next() {
                 match arg.as_str() {
                     "--sent" | "--all" => {
@@ -152,6 +160,7 @@ pub(in crate::cli) fn parse_agent(it: &mut Args) -> Result<CliAction> {
                         })?;
                     }
                     "--id" => id = Some(msg_id_value(it, "--id")?),
+                    "--json" => json = true,
                     other => {
                         return Err(usage(format!(
                             "unexpected argument '{other}'\n{USAGE_AGENT_MESSAGES}"
@@ -164,15 +173,18 @@ pub(in crate::cli) fn parse_agent(it: &mut Args) -> Result<CliAction> {
                 undelivered,
                 limit,
                 id,
+                json,
             })
         }
         Some("wait") => {
             let mut from = None;
             let mut after = None;
             let mut timeout_secs = DEFAULT_WAIT_TIMEOUT_SECS;
+            let mut done = None;
             while let Some(arg) = it.next() {
                 match arg.as_str() {
                     "--from" => from = Some(flag_value(it, "--from", "<sender>")?),
+                    "--done" => done = Some(flag_value(it, "--done", "<agent>")?),
                     "--after" => after = Some(msg_id_value(it, "--after")?),
                     "--timeout" => {
                         let v = flag_value(it, "--timeout", "<secs>")?;
@@ -191,6 +203,7 @@ pub(in crate::cli) fn parse_agent(it: &mut Args) -> Result<CliAction> {
                 from,
                 after,
                 timeout_secs,
+                done,
             })
         }
         Some("add") => {

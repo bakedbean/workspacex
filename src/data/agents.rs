@@ -149,26 +149,38 @@ impl Store {
     }
 
     pub fn remove_workspace_agent(&self, id: AgentInstanceId) -> Result<()> {
+        // One IMMEDIATE transaction: a concurrent status hook for this agent
+        // either lands before (and is cleared here) or after (and finds the
+        // agent gone, so it cannot write an orphan row).
+        let tx = rusqlite::Transaction::new_unchecked(
+            self.conn(),
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
         // Clear any inbox rows targeting this instance first: agent_messages
         // has an FK (target_agent_id -> workspace_agents.id) with no cascade,
         // and delivered messages are retained, so the row delete below would
         // FK-violate once any message had ever been sent to this agent. The
         // `IN (... WHERE is_primary = 0)` guard mirrors the row delete's
-        // own guard so a primary's inbox is never wiped (and each statement is
-        // independently safe, so there's no separate-SELECT TOCTOU).
-        self.conn().execute(
+        // own guard so a primary's inbox is never wiped.
+        tx.execute(
             "DELETE FROM agent_messages WHERE target_agent_id = ?1
              AND ?1 IN (SELECT id FROM workspace_agents WHERE is_primary = 0)",
             [id.0],
         )?;
-        // Atomic: only deletes non-primary rows, so there is no TOCTOU between a
-        // separate SELECT and DELETE.
-        let deleted = self.conn().execute(
+        let ws: Option<i64> = tx
+            .query_row(
+                "SELECT workspace_id FROM workspace_agents WHERE id = ?1 AND is_primary = 0",
+                [id.0],
+                |r| r.get(0),
+            )
+            .optional()?;
+        // Only deletes non-primary rows.
+        let deleted = tx.execute(
             "DELETE FROM workspace_agents WHERE id = ?1 AND is_primary = 0",
             [id.0],
         )?;
         if deleted == 0 {
-            let exists: i64 = self.conn().query_row(
+            let exists: i64 = tx.query_row(
                 "SELECT count(*) FROM workspace_agents WHERE id = ?1",
                 [id.0],
                 |r| r.get(0),
@@ -179,6 +191,13 @@ impl Store {
                 "cannot remove the primary agent".into()
             }));
         }
+        // The removed agent's status must stop counting toward the
+        // workspace's derived row (it may have been the `blocked` one).
+        if let Some(ws) = ws {
+            tx.execute("DELETE FROM agent_status WHERE agent_id = ?1", [id.0])?;
+            crate::data::status::rederive_workspace_status(&tx, WorkspaceId(ws))?;
+        }
+        tx.commit()?;
         Ok(())
     }
 

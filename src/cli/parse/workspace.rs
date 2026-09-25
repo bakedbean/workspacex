@@ -109,8 +109,23 @@ pub(in crate::cli) fn parse_workspace(it: &mut Args) -> Result<CliAction> {
             })
         }
         Some("list") => {
-            let repo = it.next();
-            Ok(CliAction::WorkspaceList { repo })
+            let mut repo = None;
+            let mut json = false;
+            for arg in &mut *it {
+                match arg.as_str() {
+                    "--json" => json = true,
+                    _ if repo.is_none() => repo = Some(arg),
+                    other => {
+                        return Err(Error::Usage {
+                            group: None,
+                            msg: format!(
+                                "unexpected argument: {other} (usage: workspace list [<repo>] [--json])"
+                            ),
+                        });
+                    }
+                }
+            }
+            Ok(CliAction::WorkspaceList { repo, json })
         }
         Some("path") => {
             let repo = it.next().ok_or_else(|| Error::Usage {

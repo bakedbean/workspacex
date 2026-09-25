@@ -37,6 +37,52 @@ fn is_version(tok: &str) -> bool {
 
 pub(in crate::cli) type Args = dyn Iterator<Item = String>;
 
+/// Trailing flags of a read-only inspection command.
+#[derive(Debug, Default)]
+pub(in crate::cli) struct ReadFlags {
+    /// `--workspace <repo>/<slug>`: inspect another workspace.
+    pub workspace: Option<String>,
+    /// `--json`: machine-readable output. Only accepted when the caller
+    /// passes `json_ok`.
+    pub json: bool,
+}
+
+/// Consume the trailing flags of a read-only inspection command (`agent
+/// list`, `status show`, `recap show`, `context show`). Anything else —
+/// including `--json` where it isn't supported — is a usage error naming
+/// `usage`.
+pub(in crate::cli) fn parse_read_flags(
+    it: &mut Args,
+    usage: &str,
+    json_ok: bool,
+) -> Result<ReadFlags> {
+    let mut flags = ReadFlags::default();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--workspace" => {
+                // A flag in the value slot means the value was forgotten
+                // (`--workspace --json`); say that, not "no repo named --json".
+                let value =
+                    it.next()
+                        .filter(|v| !v.starts_with("--"))
+                        .ok_or_else(|| Error::Usage {
+                            group: None,
+                            msg: "--workspace needs value (<repo>/<slug>)".into(),
+                        })?;
+                flags.workspace = Some(value);
+            }
+            "--json" if json_ok => flags.json = true,
+            other => {
+                return Err(Error::Usage {
+                    group: None,
+                    msg: format!("unexpected argument: {other} (usage: {usage})"),
+                });
+            }
+        }
+    }
+    Ok(flags)
+}
+
 pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
     let mut rest: Vec<String> = args.into_iter().skip(1).collect();
     let first = if rest.is_empty() {

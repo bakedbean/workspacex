@@ -26,8 +26,8 @@ pub static GROUPS: &[GroupInfo] = &[
                 blurb: "Create a workspace (branch + worktree), optionally seeding its agent",
             },
             CmdInfo {
-                usage: "list [<repo>]",
-                blurb: "List workspaces as TSV rows",
+                usage: "list [<repo>] [--json]",
+                blurb: "List workspaces as TSV rows; --json adds status, recap, agents and cached PR",
             },
             CmdInfo {
                 usage: "path <repo> <slug>",
@@ -56,8 +56,8 @@ pub static GROUPS: &[GroupInfo] = &[
         blurb: "List, add, and message agents in a workspace",
         commands: &[
             CmdInfo {
-                usage: "list",
-                blurb: "Show agents in the current workspace",
+                usage: "list [--workspace <repo>/<slug>] [--json]",
+                blurb: "Show agents and each one's own status, here or in another workspace",
             },
             CmdInfo {
                 usage: "add <kind>",
@@ -72,11 +72,11 @@ pub static GROUPS: &[GroupInfo] = &[
                 blurb: "Reply to the sender of a message (default: the latest one you received)",
             },
             CmdInfo {
-                usage: "messages [--sent|--all] [--undelivered] [--limit <n>] [--id <msg-id>]",
+                usage: "messages [--sent|--all] [--undelivered] [--limit <n>] [--id <msg-id>] [--json]",
                 blurb: "List your inbox (or sent / whole-workspace mail) with delivery times; --id prints one in full",
             },
             CmdInfo {
-                usage: "wait [--from <sender>] [--after <msg-id>] [--timeout <secs>]",
+                usage: "wait [--from <sender>] [--after <msg-id>] [--timeout <secs>] [--done <agent>]",
                 blurb: "Block until a message for you arrives, then print it (read-only: the dashboard still injects it)",
             },
             CmdInfo {
@@ -235,11 +235,15 @@ pub static GROUPS: &[GroupInfo] = &[
         commands: &[
             CmdInfo {
                 usage: "set <working|waiting|blocked|done> [--message <text>]",
-                blurb: "Set workspace status (model push path)",
+                blurb: "Set this agent's status (model push path)",
             },
             CmdInfo {
                 usage: "clear",
-                blurb: "Clear workspace status",
+                blurb: "Clear status (from an agent: its own; from a shell: every agent's)",
+            },
+            CmdInfo {
+                usage: "show [--workspace <repo>/<slug>] [--json]",
+                blurb: "Print the workspace status and each agent's, here or in another workspace",
             },
             CmdInfo {
                 usage: "from-hook [--agent <kind>]",
@@ -258,8 +262,8 @@ pub static GROUPS: &[GroupInfo] = &[
                         no filler (e.g. \"Audit V2 invoices, CV-04964, bug from #2835\")",
             },
             CmdInfo {
-                usage: "show",
-                blurb: "Print the current recap",
+                usage: "show [--workspace <repo>/<slug>] [--json]",
+                blurb: "Print the recap, here or in another workspace",
             },
             CmdInfo {
                 usage: "clear",
@@ -272,7 +276,7 @@ pub static GROUPS: &[GroupInfo] = &[
         blurb: "Workspace context digest for editor-hosted agents",
         commands: &[
             CmdInfo {
-                usage: "show",
+                usage: "show [--workspace <repo>/<slug>]",
                 blurb: "Print the digest (branch, agents, status, recap, recent commits, \
                         primary agent's last message, instructions for an external agent)",
             },

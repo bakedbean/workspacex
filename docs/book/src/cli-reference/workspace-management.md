@@ -23,10 +23,29 @@ Two existing behaviors make this self-sufficient. Claude sessions are spawned wi
 This assumes a wsx dashboard is already running on the target machine, since nothing else delivers the prompt. Leaving `wsx` running in a tmux session is the usual arrangement.
 
 ```
-wsx workspace list [<repo>]
+wsx workspace list [<repo>] [--json]
 ```
 
 Lists workspaces as tab-separated `repo<TAB>slug<TAB>branch<TAB>worktree_path` rows. Pass a repo name to filter.
+
+`--json` prints an array with everything a dashboard row shows, one object per workspace:
+
+```json
+{
+  "repo": "backend",
+  "slug": "add-widgets",
+  "branch": "eg/add-widgets",
+  "path": "/home/me/.local/state/wsx/worktrees/backend/add-widgets",
+  "status": {"state": "working", "message": "running tests", "source": "model", "reported_at": 1790342366562},
+  "recap": {"goal_short": "POST /widgets", "state_short": "tests failing", "next_short": "fix validation"},
+  "agents": [
+    {"id": 12, "label": "claude", "kind": "claude", "primary": true, "status": {"state": "working", "message": "running tests", "source": "model", "reported_at": 1790342366562}}
+  ],
+  "pr": {"state": "open", "number": 241, "url": "https://github.com/acme/backend/pull/241", "review": "approved", "unresolved": 0, "fetched_at": 1790342836000}
+}
+```
+
+`status` is the workspace's derived status (see [Per-agent status](../configuration/multi-agent-workspaces.md#per-agent-status)); `recap` holds the short forms. `pr` is whatever the dashboard or waybar last cached — `workspace list` makes no network calls — and is `null` when nothing was ever fetched; `state` is one of `no_pr`, `draft`, `open`, `conflicted`, `merged`, `closed`. Any field that was never set is `null`. Timestamps are epoch milliseconds.
 
 ```
 wsx workspace path <repo> <slug>

@@ -3,7 +3,7 @@
 //! Both write to the dashboard rather than doing work, and both accept
 //! the same hook/notify shapes, so they share a file.
 
-use super::Args;
+use super::{Args, parse_read_flags};
 use crate::cli::action::CliAction;
 use crate::error::{Error, Result};
 
@@ -32,6 +32,13 @@ pub(in crate::cli) fn parse_status(it: &mut Args) -> Result<CliAction> {
             Ok(CliAction::StatusSet { state, message })
         }
         Some("clear") => Ok(CliAction::StatusClear),
+        Some("show") => {
+            let f = parse_read_flags(it, "status show [--workspace <repo>/<slug>] [--json]", true)?;
+            Ok(CliAction::StatusShow {
+                workspace: f.workspace,
+                json: f.json,
+            })
+        }
         Some("from-hook") => {
             let mut agent = None;
             while let Some(arg) = it.next() {
@@ -121,7 +128,13 @@ pub(in crate::cli) fn parse_recap(it: &mut Args) -> Result<CliAction> {
                 next_short,
             })
         }
-        Some("show") => Ok(CliAction::RecapShow),
+        Some("show") => {
+            let f = parse_read_flags(it, "recap show [--workspace <repo>/<slug>] [--json]", true)?;
+            Ok(CliAction::RecapShow {
+                workspace: f.workspace,
+                json: f.json,
+            })
+        }
         Some("clear") => Ok(CliAction::RecapClear),
         other => Err(Error::Usage {
             group: None,
@@ -132,7 +145,16 @@ pub(in crate::cli) fn parse_recap(it: &mut Args) -> Result<CliAction> {
 
 pub(in crate::cli) fn parse_context(it: &mut Args) -> Result<CliAction> {
     let action = match it.next().as_deref() {
-        Some("show") => CliAction::ContextShow,
+        Some("show") => {
+            return Ok(CliAction::ContextShow {
+                workspace: parse_read_flags(
+                    it,
+                    "wsx context show [--workspace <repo>/<slug>]",
+                    false,
+                )?
+                .workspace,
+            });
+        }
         Some("write") => CliAction::ContextWrite,
         other => {
             return Err(Error::Usage {

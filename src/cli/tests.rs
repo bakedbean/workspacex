@@ -216,9 +216,9 @@ async fn agent_send_dispatch_targets_the_other_workspaces_primary() {
 }
 
 /// The unknown-label error must offer `primary` alongside the concrete
-/// labels. A cross-workspace sender cannot run `wsx agent list` against
-/// the target, so this error is the one place it learns how to recover —
-/// and `primary` is the label that works whatever kind the target runs.
+/// labels, so a sender mid-task recovers with one retry instead of a
+/// separate `wsx agent list --workspace` — and `primary` is the label that
+/// works whatever kind the target runs.
 #[tokio::test]
 async fn agent_send_unknown_label_error_offers_the_primary_alias() {
     use crate::config::Dirs;
@@ -312,6 +312,7 @@ fn parses_agent_messages_flags() {
             undelivered,
             limit,
             id,
+            json: false,
         } => (view, undelivered, limit, id),
         other => panic!("expected AgentMessages, got {other:?}"),
     };
@@ -398,6 +399,7 @@ fn parses_agent_wait_flags() {
             from,
             after,
             timeout_secs,
+            done: None,
         } => (from, after, timeout_secs),
         other => panic!("expected AgentWait, got {other:?}"),
     };
@@ -602,6 +604,7 @@ async fn agent_messages_needs_an_identity_except_with_all() {
             undelivered: false,
             limit: 20,
             id: None,
+            json: false,
         },
         &fx.dirs,
     )
@@ -631,6 +634,7 @@ async fn agent_messages_needs_an_identity_except_with_all() {
                 undelivered: false,
                 limit: 20,
                 id,
+                json: false,
             },
             &fx.dirs,
         )
@@ -643,6 +647,7 @@ async fn agent_messages_needs_an_identity_except_with_all() {
             undelivered: false,
             limit: 20,
             id: Some(id + 100),
+            json: false,
         },
         &fx.dirs,
     )
@@ -886,6 +891,7 @@ async fn agent_wait_returns_mail_without_marking_it_delivered() {
             from: Some("r/origin claude".into()),
             after: Some(got.id),
             timeout_secs: 1,
+            done: None,
         },
         &fx.dirs,
     )
@@ -908,6 +914,7 @@ async fn agent_wait_returns_mail_without_marking_it_delivered() {
             from: Some("nobody".into()),
             after: None,
             timeout_secs: 1,
+            done: None,
         },
         &fx.dirs,
     )
@@ -1889,7 +1896,7 @@ fn create_flags_non_yolo_claude_parent_matches_defaults() {
 #[test]
 fn parses_workspace_list_no_filter() {
     match parse(&["workspace", "list"]).unwrap() {
-        CliAction::WorkspaceList { repo } => assert!(repo.is_none()),
+        CliAction::WorkspaceList { repo, json: false } => assert!(repo.is_none()),
         other => panic!("unexpected: {other:?}"),
     }
 }
@@ -1897,7 +1904,9 @@ fn parses_workspace_list_no_filter() {
 #[test]
 fn parses_workspace_list_with_repo_filter() {
     match parse(&["workspace", "list", "backend"]).unwrap() {
-        CliAction::WorkspaceList { repo } => assert_eq!(repo.as_deref(), Some("backend")),
+        CliAction::WorkspaceList { repo, json: false } => {
+            assert_eq!(repo.as_deref(), Some("backend"))
+        }
         other => panic!("unexpected: {other:?}"),
     }
 }
@@ -2116,7 +2125,10 @@ fn workspace_create_accepts_every_agent_kind() {
 fn parses_agent_list_and_add() {
     assert!(matches!(
         parse(&["agent", "list"]).unwrap(),
-        CliAction::AgentList
+        CliAction::AgentList {
+            workspace: None,
+            json: false
+        }
     ));
     assert!(matches!(
         parse(&["agent", "add", "codex"]).unwrap(),
@@ -2448,7 +2460,10 @@ fn recap_set_short_flag_alone_satisfies_at_least_one() {
 fn parses_recap_show_and_clear() {
     assert!(matches!(
         parse(&["recap", "show"]).unwrap(),
-        CliAction::RecapShow
+        CliAction::RecapShow {
+            workspace: None,
+            json: false
+        }
     ));
     assert!(matches!(
         parse(&["recap", "clear"]).unwrap(),
@@ -2460,7 +2475,7 @@ fn parses_recap_show_and_clear() {
 fn parses_context_show_and_write() {
     assert!(matches!(
         parse(&["context", "show"]).unwrap(),
-        CliAction::ContextShow
+        CliAction::ContextShow { workspace: None }
     ));
     assert!(matches!(
         parse(&["context", "write"]).unwrap(),
@@ -2672,4 +2687,557 @@ fn theme_usage_errors_are_tagged_with_the_group() {
             other => panic!("{other:?}"),
         }
     }
+}
+
+#[test]
+fn read_commands_take_an_optional_workspace_flag() {
+    let spec = || Some("meals backend/api-fix".to_string());
+    assert!(matches!(
+        parse(&["agent", "list"]).unwrap(),
+        CliAction::AgentList {
+            workspace: None,
+            json: false
+        }
+    ));
+    assert!(matches!(
+        parse(&["agent", "list", "--workspace", "meals backend/api-fix"]).unwrap(),
+        CliAction::AgentList { workspace, json: false } if workspace == spec()
+    ));
+    assert!(matches!(
+        parse(&["status", "show"]).unwrap(),
+        CliAction::StatusShow {
+            workspace: None,
+            json: false
+        }
+    ));
+    assert!(matches!(
+        parse(&["status", "show", "--workspace", "meals backend/api-fix"]).unwrap(),
+        CliAction::StatusShow { workspace, json: false } if workspace == spec()
+    ));
+    assert!(matches!(
+        parse(&["recap", "show", "--workspace", "meals backend/api-fix"]).unwrap(),
+        CliAction::RecapShow { workspace, json: false } if workspace == spec()
+    ));
+    assert!(matches!(
+        parse(&["context", "show", "--workspace", "meals backend/api-fix"]).unwrap(),
+        CliAction::ContextShow { workspace } if workspace == spec()
+    ));
+    assert!(matches!(
+        parse(&["context", "show"]).unwrap(),
+        CliAction::ContextShow { workspace: None }
+    ));
+}
+
+#[test]
+fn read_command_flags_reject_junk() {
+    for args in [
+        &["agent", "list", "--workspace"][..],
+        &["status", "show", "extra"][..],
+        &["recap", "show", "--wat"][..],
+        &["context", "show", "--workspace"][..],
+        &["context", "write", "--workspace", "r/w"][..],
+    ] {
+        assert!(
+            matches!(parse(args), Err(Error::Usage { .. })),
+            "{args:?} must be a usage error"
+        );
+    }
+}
+
+/// Seed `r/here` (primary claude + peer claude#2) and `r/there` (primary
+/// codex) in the DB file `run_cli` opens.
+fn seed_two_workspaces(
+    dirs: &crate::config::Dirs,
+) -> (
+    crate::data::store::WorkspaceId,
+    crate::data::store::AgentInstanceId,
+    crate::data::store::AgentInstanceId,
+) {
+    use crate::data::store::{NewWorkspace, Store};
+    use crate::pty::session::AgentKind;
+    let store = Store::open(&dirs.db_path()).unwrap();
+    let repo = store
+        .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+        .unwrap();
+    let mut ids = Vec::new();
+    for (name, kind) in [("here", AgentKind::Claude), ("there", AgentKind::Codex)] {
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name,
+                branch: &format!("wsx/{name}"),
+                worktree_path: &std::path::PathBuf::from(format!("/tmp/r/{name}")),
+                yolo: false,
+                agent: kind,
+                shared: false,
+            })
+            .unwrap();
+        store.add_primary_agent(ws, kind, 1).unwrap();
+        ids.push(ws);
+    }
+    let here = ids[0];
+    let primary = store.primary_instance_id(here).unwrap().unwrap();
+    let peer = store
+        .add_workspace_agent(here, AgentKind::Claude)
+        .unwrap()
+        .id;
+    (here, primary, peer)
+}
+
+/// `wsx status set` from a peer lands on the peer's own row, and its
+/// `status clear` leaves the primary's alone — the overwrite this per-agent
+/// schema exists to stop.
+#[tokio::test]
+async fn status_set_and_clear_are_attributed_to_the_calling_agent() {
+    use crate::config::Dirs;
+    use crate::data::store::{ReportedState, Store};
+    use crate::test_support::EnvGuard;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dirs = Dirs::for_test(tmp.path());
+    let (here, primary, peer) = seed_two_workspaces(&dirs);
+
+    let mut env = EnvGuard::new();
+    env.set("WSX_WORKSPACE_ID", here.0.to_string());
+    env.set("WSX_AGENT_INSTANCE_ID", primary.0.to_string());
+    let set = |state: &str| CliAction::StatusSet {
+        state: state.to_string(),
+        message: None,
+    };
+    run_cli(set("working"), &dirs).await.unwrap();
+    env.set("WSX_AGENT_INSTANCE_ID", peer.0.to_string());
+    run_cli(set("done"), &dirs).await.unwrap();
+
+    let store = Store::open(&dirs.db_path()).unwrap();
+    let all = store.agent_statuses(here).unwrap();
+    assert_eq!(all[&primary].state, ReportedState::Working);
+    assert_eq!(all[&peer].state, ReportedState::Done);
+    assert_eq!(
+        store.workspace_status(here).unwrap().unwrap().state,
+        ReportedState::Working,
+        "a peer finishing must not mark the workspace done"
+    );
+
+    run_cli(CliAction::StatusClear, &dirs).await.unwrap();
+    let all = store.agent_statuses(here).unwrap();
+    assert!(!all.contains_key(&peer));
+    assert!(
+        all.contains_key(&primary),
+        "clear from a peer is scoped to it"
+    );
+
+    // A shell with no agent identity clears the whole workspace.
+    env.remove("WSX_AGENT_INSTANCE_ID");
+    run_cli(CliAction::StatusClear, &dirs).await.unwrap();
+    assert!(store.agent_statuses(here).unwrap().is_empty());
+    assert!(store.workspace_status(here).unwrap().is_none());
+}
+
+/// Every read command resolves `--workspace` through the same spec resolver
+/// as `agent send`, so a bad spec fails with the valid alternatives listed.
+#[tokio::test]
+async fn read_commands_resolve_another_workspace() {
+    use crate::config::Dirs;
+    use crate::test_support::EnvGuard;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dirs = Dirs::for_test(tmp.path());
+    let (here, _, _) = seed_two_workspaces(&dirs);
+    let mut env = EnvGuard::new();
+    env.set("WSX_WORKSPACE_ID", here.0.to_string());
+
+    let w = |s: &str| Some(s.to_string());
+    for action in [
+        CliAction::AgentList {
+            workspace: w("r/there"),
+            json: false,
+        },
+        CliAction::StatusShow {
+            workspace: w("r/there"),
+            json: false,
+        },
+        CliAction::RecapShow {
+            workspace: w("r/there"),
+            json: false,
+        },
+        CliAction::ContextShow {
+            workspace: w("r/there"),
+        },
+    ] {
+        run_cli(action, &dirs).await.unwrap();
+    }
+    let err = run_cli(
+        CliAction::StatusShow {
+            workspace: w("r/nope"),
+            json: false,
+        },
+        &dirs,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("here") && err.contains("there"), "{err}");
+}
+
+#[test]
+fn read_commands_take_json() {
+    assert!(matches!(
+        parse(&["agent", "list", "--json"]).unwrap(),
+        CliAction::AgentList {
+            workspace: None,
+            json: true
+        }
+    ));
+    assert!(matches!(
+        parse(&["status", "show", "--json", "--workspace", "r/w"]).unwrap(),
+        CliAction::StatusShow {
+            workspace: Some(_),
+            json: true
+        }
+    ));
+    assert!(matches!(
+        parse(&["recap", "show", "--workspace", "r/w", "--json"]).unwrap(),
+        CliAction::RecapShow {
+            workspace: Some(_),
+            json: true
+        }
+    ));
+    // `context show` renders markdown for humans; it has no JSON form.
+    assert!(parse(&["context", "show", "--json"]).is_err());
+}
+
+#[test]
+fn workspace_list_takes_a_repo_and_json_in_either_order() {
+    for args in [
+        &["workspace", "list", "backend", "--json"][..],
+        &["workspace", "list", "--json", "backend"][..],
+    ] {
+        match parse(args).unwrap() {
+            CliAction::WorkspaceList { repo, json } => {
+                assert_eq!(repo.as_deref(), Some("backend"));
+                assert!(json);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    assert!(matches!(
+        parse(&["workspace", "list", "--json"]).unwrap(),
+        CliAction::WorkspaceList {
+            repo: None,
+            json: true
+        }
+    ));
+    assert!(matches!(
+        parse(&["workspace", "list", "a", "b"]),
+        Err(Error::Usage { .. })
+    ));
+}
+
+#[tokio::test]
+async fn json_read_commands_dispatch() {
+    use crate::config::Dirs;
+    use crate::test_support::EnvGuard;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dirs = Dirs::for_test(tmp.path());
+    let (here, _, _) = seed_two_workspaces(&dirs);
+    let mut env = EnvGuard::new();
+    env.set("WSX_WORKSPACE_ID", here.0.to_string());
+    for action in [
+        CliAction::WorkspaceList {
+            repo: None,
+            json: true,
+        },
+        CliAction::AgentList {
+            workspace: Some("r/there".into()),
+            json: true,
+        },
+        CliAction::StatusShow {
+            workspace: None,
+            json: true,
+        },
+        CliAction::RecapShow {
+            workspace: None,
+            json: true,
+        },
+    ] {
+        run_cli(action, &dirs).await.unwrap();
+    }
+}
+
+#[test]
+fn parses_agent_messages_json() {
+    assert!(matches!(
+        parse(&["agent", "messages", "--all", "--json"]).unwrap(),
+        CliAction::AgentMessages {
+            view: MessagesView::Workspace,
+            json: true,
+            ..
+        }
+    ));
+    assert!(matches!(
+        parse(&["agent", "messages", "--json", "--id", "7"]).unwrap(),
+        CliAction::AgentMessages {
+            id: Some(7),
+            json: true,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn message_records_expose_ids_labels_and_delivery_state() {
+    let fx = MailFixture::new();
+    let store = fx.store();
+    let queued = store
+        .enqueue_message(fx.target_ws, fx.target, Some(fx.origin), "hello")
+        .unwrap();
+    let delivered = store
+        .enqueue_message(fx.target_ws, fx.target, None, "from a shell")
+        .unwrap();
+    store.mark_delivered(delivered).unwrap();
+    let dropped = store
+        .enqueue_message(fx.target_ws, fx.target, Some(fx.origin), "lost")
+        .unwrap();
+    store.mark_dropped(dropped, "binary missing").unwrap();
+
+    let rec = |id| {
+        let m = store.message_by_id(id).unwrap().unwrap();
+        serde_json::to_value(crate::cli::mail::message_record(&store, &m, fx.target_ws)).unwrap()
+    };
+    let q = rec(queued);
+    assert_eq!(q["id"], queued);
+    assert_eq!(q["from_id"], fx.origin.0);
+    // Labels are relative to the viewer: the sender lives elsewhere.
+    assert_eq!(q["from"], "r/origin claude");
+    assert_eq!(q["to_id"], fx.target.0);
+    assert_eq!(q["to"], "claude");
+    assert_eq!(q["workspace"], "r/target");
+    assert_eq!(q["bytes"], 5);
+    assert_eq!(q["body"], "hello");
+    assert_eq!(q["state"], "queued");
+    assert!(q["delivered_at"].is_null());
+    assert!(q["drop_reason"].is_null());
+
+    let d = rec(delivered);
+    assert!(d["from_id"].is_null() && d["from"].is_null());
+    assert_eq!(d["state"], "delivered");
+    assert!(d["delivered_at"].is_i64());
+
+    let x = rec(dropped);
+    assert_eq!(x["state"], "dropped");
+    assert_eq!(x["drop_reason"], "binary missing");
+}
+
+#[tokio::test]
+async fn agent_messages_json_dispatches() {
+    let fx = MailFixture::new();
+    let id = fx
+        .store()
+        .enqueue_message(fx.target_ws, fx.target, Some(fx.origin), "hi")
+        .unwrap();
+    let _env = fx.env_as(Some(fx.target));
+    for id in [None, Some(id)] {
+        run_cli(
+            CliAction::AgentMessages {
+                view: MessagesView::Inbox,
+                undelivered: false,
+                limit: 20,
+                id,
+                json: true,
+            },
+            &fx.dirs,
+        )
+        .await
+        .unwrap();
+    }
+}
+
+#[test]
+fn parses_agent_wait_done() {
+    match parse(&["agent", "wait", "--done", "r/other codex", "--after", "5"]).unwrap() {
+        CliAction::AgentWait { done, after, .. } => {
+            assert_eq!(done.as_deref(), Some("r/other codex"));
+            assert_eq!(after, Some(5));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(parse(&["agent", "wait", "--done"]).is_err());
+}
+
+/// `wait --done` returns once the peer reports done after the baseline: a
+/// stale `done` from its previous task must not end the wait, one reported
+/// since the `--after` message must, and a shell with no agent identity can
+/// wait on status alone.
+#[tokio::test]
+async fn agent_wait_done_watches_the_peers_status() {
+    use crate::cli::mail::{WaitFor, WaitHit, wait_for};
+    use crate::data::store::ReportedState;
+    let fx = MailFixture::new();
+    let store = fx.store();
+    // Stale: reported before the baseline.
+    store
+        .set_agent_status(
+            fx.target_ws,
+            Some(fx.target),
+            ReportedState::Done,
+            None,
+            "hook",
+        )
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let asked = store
+        .enqueue_message(fx.target_ws, fx.target, Some(fx.origin), "do it")
+        .unwrap();
+    let since = store.message_by_id(asked).unwrap().unwrap().created_at;
+    let what = WaitFor {
+        inbox: None,
+        done: Some((fx.target, since)),
+    };
+    assert!(
+        wait_for(&store, &what, 1).await.unwrap().is_none(),
+        "a done from before the ask must not end the wait"
+    );
+
+    // Working, then done mid-wait: the poll picks it up.
+    store
+        .set_agent_status(
+            fx.target_ws,
+            Some(fx.target),
+            ReportedState::Working,
+            None,
+            "hook",
+        )
+        .unwrap();
+    let db = fx.dirs.db_path();
+    let (ws, target) = (fx.target_ws, fx.target);
+    let writer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        crate::data::store::Store::open(&db)
+            .unwrap()
+            .set_agent_status(
+                ws,
+                Some(target),
+                ReportedState::Done,
+                Some("shipped"),
+                "model",
+            )
+            .unwrap();
+    });
+    let hit = wait_for(&store, &what, 5).await.unwrap();
+    writer.join().unwrap();
+    match hit {
+        Some(WaitHit::Status(s)) => {
+            assert_eq!(s.state, ReportedState::Done);
+            assert_eq!(s.message.as_deref(), Some("shipped"));
+        }
+        _ => panic!("expected a status hit"),
+    }
+
+    // Through the CLI arm from a plain shell: status-only, returns at once
+    // since the done above is after message `asked`.
+    let mut env = fx.env_as(None);
+    env.set("WSX_WORKSPACE_ID", fx.origin_ws.0.to_string());
+    run_cli(
+        CliAction::AgentWait {
+            from: None,
+            after: Some(asked),
+            timeout_secs: 2,
+            done: Some("r/target claude".into()),
+        },
+        &fx.dirs,
+    )
+    .await
+    .unwrap();
+    // Mail filters still need an identity.
+    let err = run_cli(
+        CliAction::AgentWait {
+            from: Some("claude".into()),
+            after: None,
+            timeout_secs: 1,
+            done: Some("r/target claude".into()),
+        },
+        &fx.dirs,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("WSX_AGENT_INSTANCE_ID"), "{err}");
+    drop(env);
+
+    // A timeout names what was missed and keeps --done in the retry hint.
+    let _env = fx.env_as(Some(fx.origin));
+    let err = run_cli(
+        CliAction::AgentWait {
+            from: None,
+            after: None,
+            timeout_secs: 1,
+            done: Some("r/target claude".into()),
+        },
+        &fx.dirs,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("no message and no done from r/target claude after 1s"),
+        "{err}"
+    );
+    assert!(err.contains("--done 'r/target claude'"), "{err}");
+}
+
+#[test]
+fn blocked_also_ends_a_done_wait() {
+    // Pure check on the predicate through a store round trip.
+    use crate::data::store::ReportedState;
+    let fx = MailFixture::new();
+    let store = fx.store();
+    store
+        .set_agent_status(
+            fx.target_ws,
+            Some(fx.target),
+            ReportedState::Blocked,
+            None,
+            "model",
+        )
+        .unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    let what = crate::cli::mail::WaitFor {
+        inbox: None,
+        done: Some((fx.target, 0)),
+    };
+    assert!(matches!(
+        rt.block_on(crate::cli::mail::wait_for(&store, &what, 1)).unwrap(),
+        Some(crate::cli::mail::WaitHit::Status(s)) if s.state == ReportedState::Blocked
+    ));
+}
+
+#[test]
+fn workspace_flag_rejects_a_flag_as_its_value() {
+    let e = parse(&["status", "show", "--workspace", "--json"]).unwrap_err();
+    assert!(e.to_string().contains("--workspace needs value"), "{e}");
+}
+
+#[tokio::test]
+async fn agent_wait_done_errors_when_the_peer_is_removed() {
+    use crate::cli::mail::{WaitFor, wait_for};
+    let fx = MailFixture::new();
+    let store = fx.store();
+    let peer = store
+        .add_workspace_agent(fx.target_ws, crate::pty::session::AgentKind::Codex)
+        .unwrap()
+        .id;
+    store.remove_workspace_agent(peer).unwrap();
+    let what = WaitFor {
+        inbox: None,
+        done: Some((peer, 0)),
+    };
+    let err = match wait_for(&store, &what, 0).await {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("must not wait on a removed agent"),
+    };
+    assert!(err.contains("removed while waiting"), "{err}");
 }

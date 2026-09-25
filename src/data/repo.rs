@@ -95,6 +95,11 @@ impl Store {
                  (SELECT id FROM workspaces WHERE repo_id = ?1)",
             [id.0],
         )?;
+        self.conn().execute(
+            "DELETE FROM agent_status WHERE workspace_id IN \
+                 (SELECT id FROM workspaces WHERE repo_id = ?1)",
+            [id.0],
+        )?;
         // scm_cache.workspace_id also has no ON DELETE CASCADE.
         self.conn().execute(
             "DELETE FROM scm_cache WHERE workspace_id IN \

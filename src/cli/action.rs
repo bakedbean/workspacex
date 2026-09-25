@@ -146,6 +146,7 @@ pub enum CliAction {
     },
     WorkspaceList {
         repo: Option<String>,
+        json: bool,
     },
     WorkspacePath {
         repo: String,
@@ -188,7 +189,11 @@ pub enum CliAction {
         slug: String,
     },
     MenubarRefresh,
-    AgentList,
+    AgentList {
+        /// `<repo>/<slug>` to inspect another workspace; `None` = current.
+        workspace: Option<String>,
+        json: bool,
+    },
     AgentSend {
         /// A label (`claude#2`, `primary`) or a numeric instance id.
         target: String,
@@ -203,6 +208,8 @@ pub enum CliAction {
         limit: usize,
         /// `--id N`: print that one message in full instead of a listing.
         id: Option<i64>,
+        /// `--json`: print message objects (bodies included) instead.
+        json: bool,
     },
     AgentWhoami,
     AgentReply {
@@ -218,6 +225,10 @@ pub enum CliAction {
         after: Option<i64>,
         /// 0 = wait forever.
         timeout_secs: u64,
+        /// `--done <agent>`: also return once that agent reports `done` (or
+        /// `blocked`) after the baseline — the `--after` message's creation
+        /// time, else when the wait started.
+        done: Option<String>,
     },
     AgentAdd {
         kind: String,
@@ -227,6 +238,11 @@ pub enum CliAction {
         message: Option<String>,
     },
     StatusClear,
+    /// `wsx status show` — the workspace's derived status plus each agent's.
+    StatusShow {
+        workspace: Option<String>,
+        json: bool,
+    },
     StatusFromHook {
         /// The harness whose event payload is on stdin. `None` falls back to
         /// the resolved workspace's agent kind.
@@ -250,10 +266,15 @@ pub enum CliAction {
         state_short: Option<String>,
         next_short: Option<String>,
     },
-    RecapShow,
+    RecapShow {
+        workspace: Option<String>,
+        json: bool,
+    },
     RecapClear,
     /// `wsx context show` — print the workspace context digest.
-    ContextShow,
+    ContextShow {
+        workspace: Option<String>,
+    },
     /// `wsx context write` — write the digest under the state dir, print its path.
     ContextWrite,
 }

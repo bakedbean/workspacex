@@ -120,8 +120,8 @@ pub(in crate::cli) fn resolve_send_target(
     let target_id = store
         .resolve_instance_label(target_ws.id, target)?
         .ok_or_else(|| {
-            // `wsx agent list` only reports the CURRENT workspace, so
-            // list the target's labels inline instead of pointing at it.
+            // List the target's labels inline: the sender is mid-task
+            // and the recovery is one retry away.
             let labels = store
                 .workspace_agents(target_ws.id)
                 .map(|v| {
@@ -146,12 +146,23 @@ pub(in crate::cli) fn resolve_sender(
     home: WorkspaceId,
     from: &str,
 ) -> Result<AgentInstanceId> {
+    resolve_agent_ref(store, home, from, "--from")
+}
+
+/// `resolve_sender`'s grammar for any flag naming an agent; `flag` prefixes
+/// the errors.
+pub(in crate::cli) fn resolve_agent_ref(
+    store: &Store,
+    home: WorkspaceId,
+    from: &str,
+    flag: &str,
+) -> Result<AgentInstanceId> {
     if !from.is_empty() && from.bytes().all(|b| b.is_ascii_digit()) {
         let id = AgentInstanceId(from.parse().unwrap_or(-1));
         return match store.workspace_agents_by_id(id)? {
             Some(_) => Ok(id),
             None => Err(Error::UserInput(format!(
-                "--from: no agent instance {from}"
+                "{flag}: no agent instance {from}"
             ))),
         };
     }
@@ -164,7 +175,7 @@ pub(in crate::cli) fn resolve_sender(
     };
     store
         .resolve_instance_label(ws, label)?
-        .ok_or_else(|| Error::UserInput(format!("--from: no agent '{from}'")))
+        .ok_or_else(|| Error::UserInput(format!("{flag}: no agent '{from}'")))
 }
 
 /// Byte length plus the `(n bytes)` suffix `send`/`reply` print.
@@ -228,6 +239,54 @@ fn delivery_state(m: &AgentMessage, long: bool) -> String {
     }
 }
 
+/// One message as `wsx agent messages --json` prints it. Additive-only, like
+/// the `commands::inspect` shapes: agents parse this. Timestamps are epoch ms.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(in crate::cli) struct MessageRecord {
+    pub id: i64,
+    /// Sender instance id; `None` for a shell or editor-agent sender.
+    pub from_id: Option<i64>,
+    /// Sender as the viewer addresses it (see `party`); `None` when `from_id` is.
+    pub from: Option<String>,
+    pub to_id: i64,
+    pub to: String,
+    /// The recipient's workspace, `<repo>/<slug>`.
+    pub workspace: Option<String>,
+    pub bytes: usize,
+    pub body: String,
+    pub created_at: i64,
+    /// When wsx injected (or retired) it; `None` while queued.
+    pub delivered_at: Option<i64>,
+    /// `queued`, `delivered`, or `dropped` (retired without reaching the agent).
+    pub state: &'static str,
+    pub drop_reason: Option<String>,
+}
+
+pub(in crate::cli) fn message_record(
+    store: &Store,
+    m: &AgentMessage,
+    viewer: WorkspaceId,
+) -> MessageRecord {
+    MessageRecord {
+        id: m.id,
+        from_id: m.from_agent_id.map(|i| i.0),
+        from: m.from_agent_id.map(|i| party(store, Some(i), viewer)),
+        to_id: m.target_agent_id.0,
+        to: party(store, Some(m.target_agent_id), viewer),
+        workspace: workspace_ref(store, m.workspace_id),
+        bytes: m.body.len(),
+        body: m.body.clone(),
+        created_at: m.created_at,
+        delivered_at: m.delivered_at,
+        state: match (m.delivered_at, &m.drop_reason) {
+            (None, _) => "queued",
+            (Some(_), Some(_)) => "dropped",
+            (Some(_), None) => "delivered",
+        },
+        drop_reason: m.drop_reason.clone(),
+    }
+}
+
 /// A whole message: a header block, a blank line, then the body verbatim.
 pub(in crate::cli) fn full_message(store: &Store, m: &AgentMessage, viewer: WorkspaceId) -> String {
     use crate::util::time::format_utc_ms;
@@ -246,6 +305,27 @@ pub(in crate::cli) fn full_message(store: &Store, m: &AgentMessage, viewer: Work
 /// How often `wait` re-reads the inbox.
 const WAIT_POLL_MS: u64 = 500;
 
+/// What `wait` watches for. Either part may be absent, not both.
+pub(in crate::cli) struct WaitFor {
+    /// A message to this instance, optionally only from one sender, with an
+    /// id above `after` (else `Store::wait_baseline`).
+    pub inbox: Option<(AgentInstanceId, Option<AgentInstanceId>, Option<i64>)>,
+    /// This agent reporting `done` or `blocked` at or after this epoch ms.
+    pub done: Option<(AgentInstanceId, i64)>,
+}
+
+pub(in crate::cli) enum WaitHit {
+    Message(AgentMessage),
+    Status(crate::data::store::ReportedStatus),
+}
+
+/// Whether a peer's status ends a `wait --done`. `blocked` counts: the peer
+/// can't finish without a human, so waiting on would only run out the clock.
+fn ends_wait(s: &crate::data::store::ReportedStatus, since_ms: i64) -> bool {
+    use crate::data::store::ReportedState;
+    matches!(s.state, ReportedState::Done | ReportedState::Blocked) && s.reported_at >= since_ms
+}
+
 /// Block until a message for `me` (optionally only from `from`) with an id
 /// above the cursor is recorded, and return it without marking it delivered.
 ///
@@ -254,7 +334,8 @@ const WAIT_POLL_MS: u64 = 500;
 /// reached the agent yet counts, else the newest id when the wait starts.
 /// Because nothing is consumed, a second `wait` without `--after` returns the
 /// same message again; chain waits with `--after <last id>`.
-/// `timeout_secs == 0` waits forever.
+/// `timeout_secs == 0` waits forever. The inbox-only form of `wait_for`.
+#[cfg(test)]
 pub(in crate::cli) async fn wait_for_message(
     store: &Store,
     me: AgentInstanceId,
@@ -262,17 +343,59 @@ pub(in crate::cli) async fn wait_for_message(
     after: Option<i64>,
     timeout_secs: u64,
 ) -> Result<Option<AgentMessage>> {
-    let baseline = match after {
-        Some(id) => id,
-        None => store.wait_baseline(me)?,
+    let what = WaitFor {
+        inbox: Some((me, from, after)),
+        done: None,
+    };
+    Ok(wait_for(store, &what, timeout_secs)
+        .await?
+        .and_then(|hit| match hit {
+            WaitHit::Message(m) => Some(m),
+            WaitHit::Status(_) => None,
+        }))
+}
+
+/// Poll until either part of `what` is satisfied (`wait_for_message`
+/// documents the inbox cursor). Both are reads: no message is consumed and no status
+/// changes. A message wins a tie, since it is the richer answer.
+pub(in crate::cli) async fn wait_for(
+    store: &Store,
+    what: &WaitFor,
+    timeout_secs: u64,
+) -> Result<Option<WaitHit>> {
+    let inbox = match what.inbox {
+        Some((me, from, after)) => Some((
+            me,
+            from,
+            match after {
+                Some(id) => id,
+                None => store.wait_baseline(me)?,
+            },
+        )),
+        None => None,
     };
     // A timeout too large for `Instant` is effectively forever.
     let deadline = (timeout_secs > 0).then(|| {
         std::time::Instant::now().checked_add(std::time::Duration::from_secs(timeout_secs))
     });
     loop {
-        if let Some(m) = store.first_message_to_after(me, baseline, from)? {
-            return Ok(Some(m));
+        if let Some((me, from, baseline)) = inbox {
+            if let Some(m) = store.first_message_to_after(me, baseline, from)? {
+                return Ok(Some(WaitHit::Message(m)));
+            }
+        }
+        if let Some((peer, since)) = what.done {
+            if let Some(s) = store.agent_status(peer)?.filter(|s| ends_wait(s, since)) {
+                return Ok(Some(WaitHit::Status(s)));
+            }
+            // A removed peer will never report; say so instead of running
+            // out the clock (or waiting forever with --timeout 0).
+            if store.workspace_agents_by_id(peer)?.is_none() {
+                return Err(Error::UserInput(format!(
+                    "--done: agent instance {} was removed while waiting",
+                    peer.0
+                )));
+            }
         }
         if let Some(Some(d)) = deadline {
             if std::time::Instant::now() >= d {

@@ -115,31 +115,36 @@ impl Store {
         Ok(v)
     }
 
-    /// Messages to `target` that are either newer than `after_id` or still
-    /// undelivered, oldest first. `wsx agent wait` polls this: a queued row
-    /// has not reached the agent yet whenever it was written, and anything
-    /// past the baseline arrived after the wait began.
+    /// Messages to `target` newer than `after_id` — plus, with
+    /// `include_queued`, older ones still undelivered — oldest first.
+    /// `wsx agent wait` polls this: anything past the baseline arrived after
+    /// the wait began, and a queued row has not reached the agent yet
+    /// whenever it was written.
     pub fn messages_to_since(
         &self,
         target: AgentInstanceId,
         after_id: i64,
+        include_queued: bool,
     ) -> Result<Vec<AgentMessage>> {
         let mut stmt = self.conn().prepare_cached(&format!(
             "SELECT {MESSAGE_COLUMNS} FROM agent_messages
-             WHERE target_agent_id = ?1 AND (id > ?2 OR delivered_at IS NULL)
+             WHERE target_agent_id = ?1 AND (id > ?2 OR (?3 AND delivered_at IS NULL))
              ORDER BY id ASC"
         ))?;
-        let rows = stmt.query_map(rusqlite::params![target.0, after_id], row_to_message)?;
+        let rows = stmt.query_map(
+            rusqlite::params![target.0, after_id, include_queued],
+            row_to_message,
+        )?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
     /// The highest message id ever assigned (0 for an empty table).
     pub fn max_message_id(&self) -> Result<i64> {
-        Ok(self.conn().query_row(
-            "SELECT COALESCE(MAX(id), 0) FROM agent_messages",
-            [],
-            |r| r.get(0),
-        )?)
+        Ok(self
+            .conn()
+            .query_row("SELECT COALESCE(MAX(id), 0) FROM agent_messages", [], |r| {
+                r.get(0)
+            })?)
     }
 
     pub fn mark_delivered(&self, id: i64) -> Result<()> {
@@ -214,7 +219,14 @@ mod tests {
         assert!(got.created_at > 0);
         assert_eq!(got.delivered_at, None);
         store.mark_delivered(b).unwrap();
-        assert!(store.message_by_id(b).unwrap().unwrap().delivered_at.is_some());
+        assert!(
+            store
+                .message_by_id(b)
+                .unwrap()
+                .unwrap()
+                .delivered_at
+                .is_some()
+        );
         assert!(store.message_by_id(9999).unwrap().is_none());
         assert_eq!(store.max_message_id().unwrap(), b);
     }
@@ -237,41 +249,62 @@ mod tests {
                 shared: false,
             })
             .unwrap();
-        let far = store.add_primary_agent(other, AgentKind::Claude, 1).unwrap().id;
+        let far = store
+            .add_primary_agent(other, AgentKind::Claude, 1)
+            .unwrap()
+            .id;
 
-        let to_codex = store.enqueue_message(ws, codex, Some(primary), "a").unwrap();
-        let to_primary = store.enqueue_message(ws, primary, Some(codex), "b").unwrap();
-        let outbound = store.enqueue_message(other, far, Some(primary), "c").unwrap();
+        let to_codex = store
+            .enqueue_message(ws, codex, Some(primary), "a")
+            .unwrap();
+        let to_primary = store
+            .enqueue_message(ws, primary, Some(codex), "b")
+            .unwrap();
+        let outbound = store
+            .enqueue_message(other, far, Some(primary), "c")
+            .unwrap();
         let inbound = store.enqueue_message(ws, primary, Some(far), "d").unwrap();
         let unrelated = store.enqueue_message(other, far, None, "e").unwrap();
 
         let ids = |v: Vec<AgentMessage>| v.into_iter().map(|m| m.id).collect::<Vec<_>>();
         assert_eq!(
-            ids(store.list_messages(MessageScope::To(primary), false, 50).unwrap()),
+            ids(store
+                .list_messages(MessageScope::To(primary), false, 50)
+                .unwrap()),
             vec![to_primary, inbound]
         );
         assert_eq!(
-            ids(store.list_messages(MessageScope::From(primary), false, 50).unwrap()),
+            ids(store
+                .list_messages(MessageScope::From(primary), false, 50)
+                .unwrap()),
             vec![to_codex, outbound]
         );
         assert_eq!(
-            ids(store.list_messages(MessageScope::Workspace(ws), false, 50).unwrap()),
+            ids(store
+                .list_messages(MessageScope::Workspace(ws), false, 50)
+                .unwrap()),
             vec![to_codex, to_primary, outbound, inbound],
             "outbound cross-workspace mail belongs to the sender's workspace too"
         );
         assert!(
-            !ids(store.list_messages(MessageScope::Workspace(ws), false, 50).unwrap())
-                .contains(&unrelated)
+            !ids(store
+                .list_messages(MessageScope::Workspace(ws), false, 50)
+                .unwrap())
+            .contains(&unrelated)
         );
 
         // limit keeps the NEWEST rows, still oldest-first.
         assert_eq!(
-            ids(store.list_messages(MessageScope::To(primary), false, 1).unwrap()),
+            ids(store
+                .list_messages(MessageScope::To(primary), false, 1)
+                .unwrap()),
             vec![inbound]
         );
         store.mark_delivered(inbound).unwrap();
         assert_eq!(
-            ids(store.list_messages(MessageScope::To(primary), true, 50).unwrap()),
+            ids(store
+                .list_messages(MessageScope::To(primary), true, 50)
+                .unwrap()),
             vec![to_primary]
         );
     }
@@ -286,17 +319,32 @@ mod tests {
         let baseline = store.max_message_id().unwrap();
         assert_eq!(
             store
-                .messages_to_since(target, baseline)
+                .messages_to_since(target, baseline, true)
                 .unwrap()
                 .iter()
                 .map(|m| m.id)
                 .collect::<Vec<_>>(),
             vec![old_queued]
         );
+        assert!(
+            store
+                .messages_to_since(target, baseline, false)
+                .unwrap()
+                .is_empty(),
+            "without include_queued only rows past the baseline count"
+        );
         store.mark_delivered(old_queued).unwrap();
-        assert!(store.messages_to_since(target, baseline).unwrap().is_empty());
+        assert!(
+            store
+                .messages_to_since(target, baseline, true)
+                .unwrap()
+                .is_empty()
+        );
         let fresh = store.enqueue_message(ws, target, None, "new").unwrap();
         store.mark_delivered(fresh).unwrap();
-        assert_eq!(store.messages_to_since(target, baseline).unwrap()[0].id, fresh);
+        assert_eq!(
+            store.messages_to_since(target, baseline, true).unwrap()[0].id,
+            fresh
+        );
     }
 }

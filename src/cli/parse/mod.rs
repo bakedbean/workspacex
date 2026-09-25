@@ -37,20 +37,35 @@ fn is_version(tok: &str) -> bool {
 
 pub(in crate::cli) type Args = dyn Iterator<Item = String>;
 
-/// Consume the trailing flags of a read-only inspection command
-/// (`agent list`, `status show`, `recap show`, `context show`): the
-/// `--workspace <repo>/<slug>` that points it at another workspace.
-/// Anything else is a usage error naming `usage`.
-pub(in crate::cli) fn parse_workspace_flag(it: &mut Args, usage: &str) -> Result<Option<String>> {
-    let mut workspace = None;
+/// Trailing flags of a read-only inspection command.
+#[derive(Debug, Default)]
+pub(in crate::cli) struct ReadFlags {
+    /// `--workspace <repo>/<slug>`: inspect another workspace.
+    pub workspace: Option<String>,
+    /// `--json`: machine-readable output. Only accepted when the caller
+    /// passes `json_ok`.
+    pub json: bool,
+}
+
+/// Consume the trailing flags of a read-only inspection command (`agent
+/// list`, `status show`, `recap show`, `context show`). Anything else —
+/// including `--json` where it isn't supported — is a usage error naming
+/// `usage`.
+pub(in crate::cli) fn parse_read_flags(
+    it: &mut Args,
+    usage: &str,
+    json_ok: bool,
+) -> Result<ReadFlags> {
+    let mut flags = ReadFlags::default();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--workspace" => {
-                workspace = Some(it.next().ok_or_else(|| Error::Usage {
+                flags.workspace = Some(it.next().ok_or_else(|| Error::Usage {
                     group: None,
                     msg: "--workspace needs value (<repo>/<slug>)".into(),
                 })?);
             }
+            "--json" if json_ok => flags.json = true,
             other => {
                 return Err(Error::Usage {
                     group: None,
@@ -59,7 +74,7 @@ pub(in crate::cli) fn parse_workspace_flag(it: &mut Args, usage: &str) -> Result
             }
         }
     }
-    Ok(workspace)
+    Ok(flags)
 }
 
 pub fn parse_args(args: Vec<String>) -> Result<CliAction> {

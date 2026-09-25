@@ -107,6 +107,7 @@ pub struct PrRecord {
     /// `approved`, `changes_requested`, `review_required`, or `None`.
     pub review: Option<String>,
     pub unresolved: Option<u32>,
+    /// When this PR state was fetched (ms, like every timestamp here).
     pub fetched_at: Option<i64>,
 }
 
@@ -218,7 +219,9 @@ pub fn workspace_records(
                             .pr_review
                             .map(|d| crate::data::scm_cache::review_to_str(d).to_string()),
                         unresolved: c.pr_unresolved,
-                        fetched_at: c.fetched_at,
+                        // scm_cache stamps seconds; every timestamp this
+                        // module emits is milliseconds.
+                        fetched_at: c.fetched_at.map(|s| s * 1000),
                     })
                 }),
             });
@@ -433,6 +436,106 @@ mod tests {
             render_recap(&recap_view(&store, &ws).unwrap()),
             "goal:        g\nstate:       -\nnext:        -\n\
              goal-short:  gs\nstate-short: -\nnext-short:  -\n"
+        );
+    }
+
+    #[test]
+    fn workspace_records_carry_the_whole_dashboard_row() {
+        use crate::git::forge::{BranchLifecycle, PrStatus, ReviewDecision};
+        let (store, ws, primary, peer) = seed();
+        store
+            .set_agent_status(
+                ws.id,
+                Some(peer),
+                ReportedState::Blocked,
+                Some("q"),
+                "model",
+            )
+            .unwrap();
+        store
+            .set_workspace_recap(
+                ws.id,
+                Some("long goal"),
+                None,
+                None,
+                Some("goal"),
+                Some("st"),
+                None,
+            )
+            .unwrap();
+        store
+            .upsert_scm_pr(
+                ws.id,
+                &PrStatus {
+                    lifecycle: BranchLifecycle::PrOpen,
+                    number: Some(42),
+                    url: Some("https://example.test/pr/42".into()),
+                    review: Some(ReviewDecision::Approved),
+                    unresolved: Some(2),
+                },
+                7,
+            )
+            .unwrap();
+        let repos = crate::data::repo::list(&store).unwrap();
+        let recs = workspace_records(&store, &repos).unwrap();
+        assert_eq!(recs.len(), 1);
+        let json = serde_json::to_value(&recs[0]).unwrap();
+        assert_eq!(json["repo"], "r");
+        assert_eq!(json["slug"], "w");
+        assert_eq!(json["branch"], "wsx/w");
+        assert_eq!(json["path"], "/tmp/r/w");
+        assert_eq!(json["status"]["state"], "blocked");
+        assert_eq!(json["status"]["message"], "q");
+        assert_eq!(json["recap"]["goal_short"], "goal");
+        assert_eq!(json["recap"]["state_short"], "st");
+        assert!(json["recap"]["next_short"].is_null());
+        assert!(json["recap"].get("goal").is_none(), "only the short forms");
+        assert_eq!(json["agents"][0]["id"], primary.0);
+        assert_eq!(json["agents"][0]["primary"], true);
+        assert!(json["agents"][0]["status"].is_null());
+        assert_eq!(json["agents"][1]["label"], "codex");
+        assert_eq!(json["agents"][1]["status"]["state"], "blocked");
+        assert_eq!(json["pr"]["state"], "open");
+        assert_eq!(json["pr"]["number"], 42);
+        assert_eq!(json["pr"]["url"], "https://example.test/pr/42");
+        assert_eq!(json["pr"]["review"], "approved");
+        assert_eq!(json["pr"]["unresolved"], 2);
+        assert_eq!(json["pr"]["fetched_at"], 7000, "seconds in, ms out");
+    }
+
+    #[test]
+    fn workspace_records_leave_unknowns_null() {
+        let (store, _, _, _) = seed();
+        let repos = crate::data::repo::list(&store).unwrap();
+        let json = serde_json::to_value(workspace_records(&store, &repos).unwrap()).unwrap();
+        assert!(json[0]["status"].is_null());
+        assert!(json[0]["recap"].is_null());
+        // No PR ever cached is unknown, distinct from a cached `no_pr`.
+        assert!(json[0]["pr"].is_null());
+    }
+
+    #[test]
+    fn status_and_recap_views_serialize_flat_and_stable() {
+        let (store, ws, _, _) = seed();
+        let status = serde_json::to_value(status_view(&store, &ws).unwrap()).unwrap();
+        assert_eq!(
+            status,
+            serde_json::json!({
+                "repo": "r",
+                "slug": "w",
+                "status": null,
+                "agents": [
+                    {"id": status["agents"][0]["id"], "label": "claude", "kind": "claude",
+                     "primary": true, "status": null},
+                    {"id": status["agents"][1]["id"], "label": "codex", "kind": "codex",
+                     "primary": false, "status": null},
+                ],
+            })
+        );
+        let recap = serde_json::to_value(recap_view(&store, &ws).unwrap()).unwrap();
+        assert_eq!(
+            recap,
+            serde_json::json!({"repo": "r", "slug": "w", "recap": null})
         );
     }
 }

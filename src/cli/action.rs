@@ -146,6 +146,7 @@ pub enum CliAction {
     },
     WorkspaceList {
         repo: Option<String>,
+        json: bool,
     },
     WorkspacePath {
         repo: String,
@@ -191,6 +192,7 @@ pub enum CliAction {
     AgentList {
         /// `<repo>/<slug>` to inspect another workspace; `None` = current.
         workspace: Option<String>,
+        json: bool,
     },
     AgentSend {
         /// A label (`claude#2`, `primary`) or a numeric instance id.
@@ -233,6 +235,7 @@ pub enum CliAction {
     /// `wsx status show` — the workspace's derived status plus each agent's.
     StatusShow {
         workspace: Option<String>,
+        json: bool,
     },
     StatusFromHook {
         /// The harness whose event payload is on stdin. `None` falls back to
@@ -259,6 +262,7 @@ pub enum CliAction {
     },
     RecapShow {
         workspace: Option<String>,
+        json: bool,
     },
     RecapClear,
     /// `wsx context show` — print the workspace context digest.

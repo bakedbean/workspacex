@@ -622,11 +622,16 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 }
             }
         }
-        CliAction::WorkspaceList { repo } => {
+        CliAction::WorkspaceList { repo, json } => {
             let filtered = match repo {
                 Some(name) => vec![lookup_repo(&store, &name)?],
                 None => crate::data::repo::list(&store)?,
             };
+            if json {
+                let records = crate::commands::inspect::workspace_records(&store, &filtered)?;
+                println!("{}", serde_json::to_string_pretty(&records)?);
+                return Ok(());
+            }
             for r in filtered {
                 for w in store.workspaces(r.id)? {
                     println!(
@@ -704,9 +709,13 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 println!("note: running sessions keep their current backend until restarted");
             }
         }
-        CliAction::AgentList { workspace } => {
+        CliAction::AgentList { workspace, json } => {
             let ws = target_workspace(&store, workspace.as_deref())?;
             let agents = crate::commands::inspect::agents(&store, ws.id)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&agents)?);
+                return Ok(());
+            }
             print!(
                 "{}",
                 crate::commands::inspect::render_agents(&agents, crate::data::store::now_ms())
@@ -899,9 +908,13 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
             println!("status cleared");
         }
-        CliAction::StatusShow { workspace } => {
+        CliAction::StatusShow { workspace, json } => {
             let ws = target_workspace(&store, workspace.as_deref())?;
             let view = crate::commands::inspect::status_view(&store, &ws)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&view)?);
+                return Ok(());
+            }
             print!(
                 "{}",
                 crate::commands::inspect::render_status(&view, crate::data::store::now_ms())
@@ -988,9 +1001,13 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             )?;
             println!("recap updated");
         }
-        CliAction::RecapShow { workspace } => {
+        CliAction::RecapShow { workspace, json } => {
             let ws = target_workspace(&store, workspace.as_deref())?;
             let view = crate::commands::inspect::recap_view(&store, &ws)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&view)?);
+                return Ok(());
+            }
             print!("{}", crate::commands::inspect::render_recap(&view));
         }
         CliAction::RecapClear => {

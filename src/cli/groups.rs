@@ -26,8 +26,8 @@ pub static GROUPS: &[GroupInfo] = &[
                 blurb: "Create a workspace (branch + worktree), optionally seeding its agent",
             },
             CmdInfo {
-                usage: "list [<repo>]",
-                blurb: "List workspaces as TSV rows",
+                usage: "list [<repo>] [--json]",
+                blurb: "List workspaces as TSV rows; --json adds status, recap, agents and cached PR",
             },
             CmdInfo {
                 usage: "path <repo> <slug>",
@@ -56,7 +56,7 @@ pub static GROUPS: &[GroupInfo] = &[
         blurb: "List, add, and message agents in a workspace",
         commands: &[
             CmdInfo {
-                usage: "list [--workspace <repo>/<slug>]",
+                usage: "list [--workspace <repo>/<slug>] [--json]",
                 blurb: "Show agents and each one's own status, here or in another workspace",
             },
             CmdInfo {
@@ -242,7 +242,7 @@ pub static GROUPS: &[GroupInfo] = &[
                 blurb: "Clear status (from an agent: its own; from a shell: every agent's)",
             },
             CmdInfo {
-                usage: "show [--workspace <repo>/<slug>]",
+                usage: "show [--workspace <repo>/<slug>] [--json]",
                 blurb: "Print the workspace status and each agent's, here or in another workspace",
             },
             CmdInfo {
@@ -262,7 +262,7 @@ pub static GROUPS: &[GroupInfo] = &[
                         no filler (e.g. \"Audit V2 invoices, CV-04964, bug from #2835\")",
             },
             CmdInfo {
-                usage: "show [--workspace <repo>/<slug>]",
+                usage: "show [--workspace <repo>/<slug>] [--json]",
                 blurb: "Print the recap, here or in another workspace",
             },
             CmdInfo {

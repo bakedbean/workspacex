@@ -1889,7 +1889,7 @@ fn create_flags_non_yolo_claude_parent_matches_defaults() {
 #[test]
 fn parses_workspace_list_no_filter() {
     match parse(&["workspace", "list"]).unwrap() {
-        CliAction::WorkspaceList { repo } => assert!(repo.is_none()),
+        CliAction::WorkspaceList { repo, json: false } => assert!(repo.is_none()),
         other => panic!("unexpected: {other:?}"),
     }
 }
@@ -1897,7 +1897,9 @@ fn parses_workspace_list_no_filter() {
 #[test]
 fn parses_workspace_list_with_repo_filter() {
     match parse(&["workspace", "list", "backend"]).unwrap() {
-        CliAction::WorkspaceList { repo } => assert_eq!(repo.as_deref(), Some("backend")),
+        CliAction::WorkspaceList { repo, json: false } => {
+            assert_eq!(repo.as_deref(), Some("backend"))
+        }
         other => panic!("unexpected: {other:?}"),
     }
 }
@@ -2116,7 +2118,10 @@ fn workspace_create_accepts_every_agent_kind() {
 fn parses_agent_list_and_add() {
     assert!(matches!(
         parse(&["agent", "list"]).unwrap(),
-        CliAction::AgentList { workspace: None }
+        CliAction::AgentList {
+            workspace: None,
+            json: false
+        }
     ));
     assert!(matches!(
         parse(&["agent", "add", "codex"]).unwrap(),
@@ -2448,7 +2453,10 @@ fn recap_set_short_flag_alone_satisfies_at_least_one() {
 fn parses_recap_show_and_clear() {
     assert!(matches!(
         parse(&["recap", "show"]).unwrap(),
-        CliAction::RecapShow { workspace: None }
+        CliAction::RecapShow {
+            workspace: None,
+            json: false
+        }
     ));
     assert!(matches!(
         parse(&["recap", "clear"]).unwrap(),
@@ -2679,23 +2687,29 @@ fn read_commands_take_an_optional_workspace_flag() {
     let spec = || Some("meals backend/api-fix".to_string());
     assert!(matches!(
         parse(&["agent", "list"]).unwrap(),
-        CliAction::AgentList { workspace: None }
+        CliAction::AgentList {
+            workspace: None,
+            json: false
+        }
     ));
     assert!(matches!(
         parse(&["agent", "list", "--workspace", "meals backend/api-fix"]).unwrap(),
-        CliAction::AgentList { workspace } if workspace == spec()
+        CliAction::AgentList { workspace, json: false } if workspace == spec()
     ));
     assert!(matches!(
         parse(&["status", "show"]).unwrap(),
-        CliAction::StatusShow { workspace: None }
+        CliAction::StatusShow {
+            workspace: None,
+            json: false
+        }
     ));
     assert!(matches!(
         parse(&["status", "show", "--workspace", "meals backend/api-fix"]).unwrap(),
-        CliAction::StatusShow { workspace } if workspace == spec()
+        CliAction::StatusShow { workspace, json: false } if workspace == spec()
     ));
     assert!(matches!(
         parse(&["recap", "show", "--workspace", "meals backend/api-fix"]).unwrap(),
-        CliAction::RecapShow { workspace } if workspace == spec()
+        CliAction::RecapShow { workspace, json: false } if workspace == spec()
     ));
     assert!(matches!(
         parse(&["context", "show", "--workspace", "meals backend/api-fix"]).unwrap(),
@@ -2829,12 +2843,15 @@ async fn read_commands_resolve_another_workspace() {
     for action in [
         CliAction::AgentList {
             workspace: w("r/there"),
+            json: false,
         },
         CliAction::StatusShow {
             workspace: w("r/there"),
+            json: false,
         },
         CliAction::RecapShow {
             workspace: w("r/there"),
+            json: false,
         },
         CliAction::ContextShow {
             workspace: w("r/there"),
@@ -2845,6 +2862,7 @@ async fn read_commands_resolve_another_workspace() {
     let err = run_cli(
         CliAction::StatusShow {
             workspace: w("r/nope"),
+            json: false,
         },
         &dirs,
     )
@@ -2852,4 +2870,90 @@ async fn read_commands_resolve_another_workspace() {
     .unwrap_err()
     .to_string();
     assert!(err.contains("here") && err.contains("there"), "{err}");
+}
+
+#[test]
+fn read_commands_take_json() {
+    assert!(matches!(
+        parse(&["agent", "list", "--json"]).unwrap(),
+        CliAction::AgentList {
+            workspace: None,
+            json: true
+        }
+    ));
+    assert!(matches!(
+        parse(&["status", "show", "--json", "--workspace", "r/w"]).unwrap(),
+        CliAction::StatusShow {
+            workspace: Some(_),
+            json: true
+        }
+    ));
+    assert!(matches!(
+        parse(&["recap", "show", "--workspace", "r/w", "--json"]).unwrap(),
+        CliAction::RecapShow {
+            workspace: Some(_),
+            json: true
+        }
+    ));
+    // `context show` renders markdown for humans; it has no JSON form.
+    assert!(parse(&["context", "show", "--json"]).is_err());
+}
+
+#[test]
+fn workspace_list_takes_a_repo_and_json_in_either_order() {
+    for args in [
+        &["workspace", "list", "backend", "--json"][..],
+        &["workspace", "list", "--json", "backend"][..],
+    ] {
+        match parse(args).unwrap() {
+            CliAction::WorkspaceList { repo, json } => {
+                assert_eq!(repo.as_deref(), Some("backend"));
+                assert!(json);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    assert!(matches!(
+        parse(&["workspace", "list", "--json"]).unwrap(),
+        CliAction::WorkspaceList {
+            repo: None,
+            json: true
+        }
+    ));
+    assert!(matches!(
+        parse(&["workspace", "list", "a", "b"]),
+        Err(Error::Usage { .. })
+    ));
+}
+
+#[tokio::test]
+async fn json_read_commands_dispatch() {
+    use crate::config::Dirs;
+    use crate::test_support::EnvGuard;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dirs = Dirs::for_test(tmp.path());
+    let (here, _, _) = seed_two_workspaces(&dirs);
+    let mut env = EnvGuard::new();
+    env.set("WSX_WORKSPACE_ID", here.0.to_string());
+    for action in [
+        CliAction::WorkspaceList {
+            repo: None,
+            json: true,
+        },
+        CliAction::AgentList {
+            workspace: Some("r/there".into()),
+            json: true,
+        },
+        CliAction::StatusShow {
+            workspace: None,
+            json: true,
+        },
+        CliAction::RecapShow {
+            workspace: None,
+            json: true,
+        },
+    ] {
+        run_cli(action, &dirs).await.unwrap();
+    }
 }

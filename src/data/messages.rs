@@ -14,9 +14,18 @@ pub struct AgentMessage {
     pub body: String,
     /// Epoch ms the row was queued.
     pub created_at: i64,
-    /// Epoch ms the TUI injected it into the target's PTY (or retired it as
-    /// undeliverable). `None` while still queued.
+    /// Epoch ms the TUI injected it into the target's PTY, or retired it as
+    /// undeliverable (then `drop_reason` is set). `None` while still queued.
     pub delivered_at: Option<i64>,
+    /// Set when the message was retired WITHOUT reaching the agent.
+    pub drop_reason: Option<String>,
+}
+
+impl AgentMessage {
+    /// Whether the message actually reached the agent's session.
+    pub fn reached_agent(&self) -> bool {
+        self.delivered_at.is_some() && self.drop_reason.is_none()
+    }
 }
 
 /// Which rows `list_messages` returns, always relative to one agent instance
@@ -34,7 +43,7 @@ pub enum MessageScope {
 }
 
 const MESSAGE_COLUMNS: &str =
-    "id, workspace_id, target_agent_id, from_agent_id, body, created_at, delivered_at";
+    "id, workspace_id, target_agent_id, from_agent_id, body, created_at, delivered_at, drop_reason";
 
 fn row_to_message(r: &rusqlite::Row) -> rusqlite::Result<AgentMessage> {
     Ok(AgentMessage {
@@ -45,6 +54,7 @@ fn row_to_message(r: &rusqlite::Row) -> rusqlite::Result<AgentMessage> {
         body: r.get(4)?,
         created_at: r.get(5)?,
         delivered_at: r.get(6)?,
+        drop_reason: r.get(7)?,
     })
 }
 
@@ -99,8 +109,10 @@ impl Store {
                 w.0,
             ),
         };
+        // "Undelivered" means never reached the agent: still queued, or
+        // retired as undeliverable.
         let pending = if undelivered_only {
-            " AND delivered_at IS NULL"
+            " AND (delivered_at IS NULL OR drop_reason IS NOT NULL)"
         } else {
             ""
         };
@@ -145,6 +157,16 @@ impl Store {
             .query_row("SELECT COALESCE(MAX(id), 0) FROM agent_messages", [], |r| {
                 r.get(0)
             })?)
+    }
+
+    /// Retire a message that can never be delivered: stamp `delivered_at` so
+    /// the drain stops retrying it, and record why it did not arrive.
+    pub fn mark_dropped(&self, id: i64, reason: &str) -> Result<()> {
+        self.conn().execute(
+            "UPDATE agent_messages SET delivered_at = ?1, drop_reason = ?2 WHERE id = ?3",
+            rusqlite::params![now_ms(), reason, id],
+        )?;
+        Ok(())
     }
 
     pub fn mark_delivered(&self, id: i64) -> Result<()> {
@@ -306,6 +328,25 @@ mod tests {
                 .list_messages(MessageScope::To(primary), true, 50)
                 .unwrap()),
             vec![to_primary]
+        );
+        // A dropped message never arrived, so it still counts as undelivered.
+        store.mark_dropped(to_primary, "gone").unwrap();
+        let dropped = store
+            .list_messages(MessageScope::To(primary), true, 50)
+            .unwrap();
+        assert_eq!(
+            dropped.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![to_primary]
+        );
+        assert_eq!(dropped[0].drop_reason.as_deref(), Some("gone"));
+        assert!(!dropped[0].reached_agent());
+        assert!(
+            store
+                .undelivered_messages()
+                .unwrap()
+                .iter()
+                .all(|m| m.id != to_primary),
+            "the drain must not retry a dropped message"
         );
     }
 

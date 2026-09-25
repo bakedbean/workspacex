@@ -65,6 +65,9 @@ pub fn workspace_ref(store: &Store, ws: crate::data::store::WorkspaceId) -> Opti
     Some(format!("{}/{}", repo.name, w.name))
 }
 
+/// `drop_reason` for a message whose target agent's binary is not installed.
+pub(crate) const DROP_AGENT_MISSING: &str = "target agent's binary is not installed";
+
 /// How many times a message may fail to be injected before wsx stops retrying
 /// it. Each attempt already waits `DELIVERY_TIMEOUT_MS` for the agent to become
 /// ready, so exhausting the ceiling means the target has been unable to accept
@@ -204,7 +207,7 @@ impl crate::app::App {
     /// left to wake the drain — the drain clears the heartbeat before dropping.
     /// Re-arm it instead.
     pub(crate) fn drop_message(&mut self, id: i64, now_ms: u64) {
-        if let Err(e) = self.store.mark_delivered(id) {
+        if let Err(e) = self.store.mark_dropped(id, DROP_AGENT_MISSING) {
             tracing::warn!(
                 error = %e,
                 id,
@@ -570,6 +573,8 @@ mod tests {
         app.drop_message(ids[0], 10_000);
 
         assert!(app.store.undelivered_messages().unwrap().is_empty());
+        let row = app.store.message_by_id(ids[0]).unwrap().unwrap();
+        assert_eq!(row.drop_reason.as_deref(), Some(DROP_AGENT_MISSING));
         assert!(!app.mail_drain_due(u64::MAX), "a clean drop needs no retry");
     }
 

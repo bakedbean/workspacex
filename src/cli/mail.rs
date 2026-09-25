@@ -205,10 +205,27 @@ pub(in crate::cli) fn listing_row(store: &Store, m: &AgentMessage, viewer: Works
         party(store, Some(m.target_agent_id), viewer),
         m.body.len(),
         format_utc_ms(m.created_at),
-        m.delivered_at
-            .map(format_utc_ms)
-            .unwrap_or_else(|| "queued".to_string()),
+        delivery_state(m, false),
     )
+}
+
+/// The DELIVERED column: the injection time, `queued`, or `dropped` for a
+/// message wsx retired without it ever reaching the agent. `long` adds the
+/// explanation `--id`/`wait` print.
+fn delivery_state(m: &AgentMessage, long: bool) -> String {
+    use crate::util::time::format_utc_ms;
+    match (m.delivered_at, &m.drop_reason) {
+        (None, _) if long => "queued (not yet injected into the session)".to_string(),
+        (None, _) => "queued".to_string(),
+        (Some(t), Some(why)) if long => {
+            format!(
+                "dropped at {}, never reached the agent: {why}",
+                format_utc_ms(t)
+            )
+        }
+        (Some(_), Some(_)) => "dropped".to_string(),
+        (Some(t), None) => format_utc_ms(t),
+    }
 }
 
 /// A whole message: a header block, a blank line, then the body verbatim.
@@ -221,9 +238,7 @@ pub(in crate::cli) fn full_message(store: &Store, m: &AgentMessage, viewer: Work
         party(store, Some(m.target_agent_id), viewer),
         m.body.len(),
         format_utc_ms(m.created_at),
-        m.delivered_at
-            .map(format_utc_ms)
-            .unwrap_or_else(|| "queued (not yet injected into the session)".to_string()),
+        delivery_state(m, true),
         m.body
     )
 }
@@ -287,6 +302,26 @@ mod tests {
         );
         let e = read_body(&MessageBody::File(dir.path().join("missing"))).unwrap_err();
         assert!(e.to_string().contains("missing"), "{e}");
+    }
+
+    #[test]
+    fn delivery_state_tells_dropped_from_delivered() {
+        let mut m = AgentMessage {
+            id: 1,
+            workspace_id: WorkspaceId(1),
+            target_agent_id: AgentInstanceId(1),
+            from_agent_id: None,
+            body: "x".into(),
+            created_at: 0,
+            delivered_at: None,
+            drop_reason: None,
+        };
+        assert_eq!(delivery_state(&m, false), "queued");
+        m.delivered_at = Some(1_000);
+        assert_eq!(delivery_state(&m, false), "1970-01-01T00:00:01Z");
+        m.drop_reason = Some("binary missing".into());
+        assert_eq!(delivery_state(&m, false), "dropped");
+        assert!(delivery_state(&m, true).ends_with("never reached the agent: binary missing"));
     }
 
     #[test]

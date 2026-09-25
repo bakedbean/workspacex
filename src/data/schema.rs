@@ -176,6 +176,14 @@ impl Store {
             )?;
             self.conn().execute("PRAGMA user_version = 24", [])?;
         }
+        if v < 25 {
+            // Why a message was retired without ever reaching the agent (its
+            // binary is not installed). `delivered_at` is still set on those
+            // rows so the drain stops retrying them; this column is what lets
+            // `wsx agent messages` report them as dropped rather than delivered.
+            self.add_column_if_missing("agent_messages", "drop_reason", "drop_reason TEXT")?;
+            self.conn().execute("PRAGMA user_version = 25", [])?;
+        }
         Ok(())
     }
 
@@ -315,7 +323,8 @@ CREATE TABLE IF NOT EXISTS agent_messages (
     from_agent_id   INTEGER,
     body            TEXT NOT NULL,
     created_at      INTEGER NOT NULL,
-    delivered_at    INTEGER
+    delivered_at    INTEGER,
+    drop_reason     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_agent_messages_undelivered
     ON agent_messages(workspace_id) WHERE delivered_at IS NULL;

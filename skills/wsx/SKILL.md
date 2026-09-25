@@ -266,9 +266,10 @@ and branch.
   `wsx agent send --file <path> <label>`, or pipe them with
   `… | wsx agent send <label> -`. Options go anywhere before the first
   message word (either side of the label or `reply`'s message id); from there
-  on everything is message text, and a `--file`/`--workspace` stranded among
-  the words is refused rather than sent. The body is sent verbatim — no shell
-  quoting or backtick escaping — and an empty body is refused.
+  on everything is message text. A standalone `--file` (or, for `send`,
+  `--workspace`) among the message words is refused rather than sent. To
+  mention one literally, quote the whole message. The body is sent verbatim —
+  no shell quoting or backtick escaping — and an empty body is refused.
 - **Reply:** `wsx agent reply <id> <message>` (or
   `wsx agent reply --file <path> <id>`) answers the sender of message
   `<id>` wherever it lives; with no id it answers the latest message you

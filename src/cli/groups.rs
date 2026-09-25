@@ -69,11 +69,13 @@ pub static GROUPS: &[GroupInfo] = &[
             },
             CmdInfo {
                 usage: "send [--workspace <repo>/<slug>] [--file <path>|-] <label|instance-id> [<message...>|-]",
-                blurb: "Queue an async message to an agent here or in another workspace; prints its id",
+                blurb: "Queue an async message to an agent here or in another workspace; prints its id. \
+                        Options may also follow the label, up to the first message word",
             },
             CmdInfo {
                 usage: "reply [--file <path>|-] [<msg-id>] [<message...>|-]",
-                blurb: "Reply to the sender of a message (default: the latest one you received)",
+                blurb: "Reply to the sender of a message (default: the latest one you received). \
+                        --file may also follow the id, up to the first message word",
             },
             CmdInfo {
                 usage: "messages [--sent|--all] [--undelivered] [--limit <n>] [--id <msg-id>] [--json]",

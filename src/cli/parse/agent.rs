@@ -223,8 +223,17 @@ pub(in crate::cli) fn parse_agent(it: &mut Args) -> Result<CliAction> {
             }
             Ok(CliAction::AgentAdd { kind })
         }
+        Some("remove") => {
+            let label = it.next().ok_or_else(|| usage("agent remove <label>"))?;
+            if let Some(extra) = it.next() {
+                return Err(usage(format!(
+                    "unexpected argument: {extra} (usage: agent remove <label>)"
+                )));
+            }
+            Ok(CliAction::AgentRemove { label })
+        }
         _ => Err(usage(
-            "agent <list|add|send|messages|reply|wait|whoami> ...",
+            "agent <list|add|remove|send|messages|reply|wait|whoami> ...",
         )),
     }
 }

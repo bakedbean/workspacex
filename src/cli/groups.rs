@@ -53,7 +53,7 @@ pub static GROUPS: &[GroupInfo] = &[
     },
     GroupInfo {
         name: "agent",
-        blurb: "List, add, and message agents in a workspace",
+        blurb: "List, add, remove, and message agents in a workspace",
         commands: &[
             CmdInfo {
                 usage: "list [--workspace <repo>/<slug>] [--json]",
@@ -62,6 +62,10 @@ pub static GROUPS: &[GroupInfo] = &[
             CmdInfo {
                 usage: "add <kind>",
                 blurb: "Attach an agent (claude|pi|hermes|codex|omp)",
+            },
+            CmdInfo {
+                usage: "remove <label>",
+                blurb: "Detach a non-primary agent; its undelivered messages are discarded",
             },
             CmdInfo {
                 usage: "send [--workspace <repo>/<slug>] [--file <path>|-] <label|instance-id> [<message...>|-]",

@@ -969,6 +969,40 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             let inst = store.add_workspace_agent(ws.id, agent)?;
             println!("added {}", inst.label());
         }
+        CliAction::AgentRemove { label } => {
+            let ws = resolve_current_workspace(&store)?;
+            let agents = store.workspace_agents(ws.id)?;
+            let id = store
+                .resolve_instance_label(ws.id, &label)?
+                .ok_or_else(|| {
+                    let labels: Vec<String> = agents.iter().map(|i| i.label()).collect();
+                    Error::UserInput(format!(
+                        "no agent '{label}' in this workspace; agents here: {}",
+                        join_or_none(labels.iter().map(|s| s.as_str()))
+                    ))
+                })?;
+            if agents.iter().any(|i| i.id == id && i.is_primary) {
+                return Err(Error::UserInput(format!(
+                    "'{label}' is this workspace's primary agent and cannot be removed \
+                     (archive the workspace instead)"
+                )));
+            }
+            // `remove_workspace_agent` deletes the agent's inbox with it (the
+            // FK leaves no other option). Count what was still waiting first,
+            // so the sender-side loss is at least reported.
+            let discarded = store
+                .undelivered_messages()?
+                .iter()
+                .filter(|m| m.target_agent_id == id)
+                .count();
+            store.remove_workspace_agent(id)?;
+            println!("removed {label}");
+            if discarded > 0 {
+                eprintln!(
+                    "warning: discarded {discarded} undelivered message(s) addressed to {label}"
+                );
+            }
+        }
         CliAction::StatusSet {
             state,
             message,

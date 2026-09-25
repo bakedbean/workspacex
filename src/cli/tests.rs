@@ -3409,3 +3409,69 @@ fn rename_summary_names_the_unchanged_worktree_path() {
          (worktree path unchanged: /w/r/merry-birch)"
     );
 }
+
+#[test]
+fn parses_agent_remove() {
+    match parse(&["agent", "remove", "codex#2"]).unwrap() {
+        CliAction::AgentRemove { label } => assert_eq!(label, "codex#2"),
+        other => panic!("expected AgentRemove, got {other:?}"),
+    }
+    assert!(parse(&["agent", "remove"]).is_err());
+    assert!(parse(&["agent", "remove", "codex", "extra"]).is_err());
+}
+
+#[tokio::test]
+async fn agent_remove_detaches_a_peer_and_discards_its_inbox() {
+    use crate::data::store::Store;
+    use crate::pty::session::AgentKind;
+    let (_tmp, dirs, ws, _env) = seed_current_workspace();
+    let (primary, peer) = {
+        let store = Store::open(&dirs.db_path()).unwrap();
+        let primary = store.primary_instance_id(ws).unwrap().unwrap();
+        let peer = store.add_workspace_agent(ws, AgentKind::Codex).unwrap().id;
+        store
+            .enqueue_message(ws, peer, None, "for the peer")
+            .unwrap();
+        store
+            .enqueue_message(ws, primary, None, "for the primary")
+            .unwrap();
+        (primary, peer)
+    };
+
+    run_cli(parse(&["agent", "remove", "codex"]).unwrap(), &dirs)
+        .await
+        .unwrap();
+
+    let store = Store::open(&dirs.db_path()).unwrap();
+    let ids: Vec<_> = store
+        .workspace_agents(ws)
+        .unwrap()
+        .into_iter()
+        .map(|i| i.id)
+        .collect();
+    assert_eq!(ids, vec![primary]);
+    assert!(store.workspace_agents_by_id(peer).unwrap().is_none());
+    let queued = store.undelivered_messages().unwrap();
+    assert_eq!(queued.len(), 1, "only the peer's inbox goes with it");
+    assert_eq!(queued[0].target_agent_id, primary);
+}
+
+#[tokio::test]
+async fn agent_remove_refuses_the_primary_and_unknown_labels() {
+    use crate::data::store::Store;
+    let (_tmp, dirs, ws, _env) = seed_current_workspace();
+    for label in ["primary", "claude"] {
+        let err = run_cli(parse(&["agent", "remove", label]).unwrap(), &dirs)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("primary agent"), "{label}: {err}");
+    }
+    let err = run_cli(parse(&["agent", "remove", "pi"]).unwrap(), &dirs)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("claude"), "must list the labels here: {err}");
+    let store = Store::open(&dirs.db_path()).unwrap();
+    assert_eq!(store.workspace_agents(ws).unwrap().len(), 1);
+}

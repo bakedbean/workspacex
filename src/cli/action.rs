@@ -233,6 +233,11 @@ pub enum CliAction {
     AgentAdd {
         kind: String,
     },
+    /// `wsx agent remove <label>` — detach a non-primary agent from the
+    /// current workspace.
+    AgentRemove {
+        label: String,
+    },
     StatusSet {
         state: String,
         message: Option<String>,

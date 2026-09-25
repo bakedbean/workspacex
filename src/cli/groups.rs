@@ -234,6 +234,10 @@ pub static GROUPS: &[GroupInfo] = &[
         blurb: "Report agent-driven workspace status",
         commands: &[
             CmdInfo {
+                usage: "(no command)",
+                blurb: "Same as `show` for the current workspace",
+            },
+            CmdInfo {
                 usage: "set <working|waiting|blocked|done> [--message <text>] [<recap flags>]",
                 blurb: "Set this agent's status (model push path); accepts the same \
                         --goal/--state/--next[-short] flags as `recap set` to update both at once",
@@ -263,8 +267,8 @@ pub static GROUPS: &[GroupInfo] = &[
                         no filler (e.g. \"Audit V2 invoices, CV-04964, bug from #2835\")",
             },
             CmdInfo {
-                usage: "show [--workspace <repo>/<slug>] [--json]",
-                blurb: "Print the recap, here or in another workspace",
+                usage: "[show] [--workspace <repo>/<slug>] [--json]",
+                blurb: "Print the recap, here or in another workspace (bare `recap` = show)",
             },
             CmdInfo {
                 usage: "clear",

@@ -2480,6 +2480,38 @@ async fn status_set_without_recap_flags_leaves_recap_absent() {
 }
 
 #[test]
+fn bare_status_and_recap_are_show_for_the_current_workspace() {
+    assert!(matches!(
+        parse(&["status"]).unwrap(),
+        CliAction::StatusShow {
+            workspace: None,
+            json: false
+        }
+    ));
+    assert!(matches!(
+        parse(&["recap"]).unwrap(),
+        CliAction::RecapShow {
+            workspace: None,
+            json: false
+        }
+    ));
+}
+
+#[tokio::test]
+async fn bare_status_dispatches_against_the_current_workspace() {
+    use crate::data::store::{ReportedState, Store};
+    let (_tmp, dirs, ws, _env) = seed_current_workspace();
+    // No status yet: a read, not an error.
+    run_cli(parse(&["status"]).unwrap(), &dirs).await.unwrap();
+    Store::open(&dirs.db_path())
+        .unwrap()
+        .set_workspace_status(ws, ReportedState::Working, Some("x"), "model")
+        .unwrap();
+    run_cli(parse(&["status"]).unwrap(), &dirs).await.unwrap();
+    run_cli(parse(&["recap"]).unwrap(), &dirs).await.unwrap();
+}
+
+#[test]
 fn status_from_hook_agent_without_value_is_usage_error() {
     let err = parse_args(
         ["wsx", "status", "from-hook", "--agent"]

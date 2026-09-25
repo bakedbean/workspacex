@@ -242,7 +242,8 @@ pub enum CliAction {
         recap: RecapFields,
     },
     StatusClear,
-    /// `wsx status show` — the workspace's derived status plus each agent's.
+    /// `wsx status show` (or bare `wsx status`) — the workspace's derived
+    /// status plus each agent's.
     StatusShow {
         workspace: Option<String>,
         json: bool,

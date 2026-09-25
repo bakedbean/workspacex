@@ -40,6 +40,12 @@ pub(in crate::cli) fn parse_status(it: &mut Args) -> Result<CliAction> {
                 recap,
             })
         }
+        // Bare `wsx status` reads rather than erroring: agents reach for it
+        // to check what they last reported.
+        None => Ok(CliAction::StatusShow {
+            workspace: None,
+            json: false,
+        }),
         Some("clear") => Ok(CliAction::StatusClear),
         Some("show") => {
             let f = parse_read_flags(it, "status show [--workspace <repo>/<slug>] [--json]", true)?;
@@ -83,7 +89,7 @@ pub(in crate::cli) fn parse_status(it: &mut Args) -> Result<CliAction> {
         }
         other => Err(Error::Usage {
             group: None,
-            msg: format!("unknown status subcommand: {}", other.unwrap_or("(none)")),
+            msg: format!("unknown status subcommand: {}", other.unwrap_or_default()),
         }),
     }
 }
@@ -129,6 +135,11 @@ pub(in crate::cli) fn parse_recap(it: &mut Args) -> Result<CliAction> {
                 next_short,
             })
         }
+        // Bare `wsx recap` is `recap show`, for the same reason.
+        None => Ok(CliAction::RecapShow {
+            workspace: None,
+            json: false,
+        }),
         Some("show") => {
             let f = parse_read_flags(it, "recap show [--workspace <repo>/<slug>] [--json]", true)?;
             Ok(CliAction::RecapShow {
@@ -139,7 +150,7 @@ pub(in crate::cli) fn parse_recap(it: &mut Args) -> Result<CliAction> {
         Some("clear") => Ok(CliAction::RecapClear),
         other => Err(Error::Usage {
             group: None,
-            msg: format!("unknown recap subcommand: {}", other.unwrap_or("(none)")),
+            msg: format!("unknown recap subcommand: {}", other.unwrap_or_default()),
         }),
     }
 }

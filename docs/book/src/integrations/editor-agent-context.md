@@ -52,7 +52,7 @@ that tells it to read the path itself.
 **Reporting back** goes through `wsx agent send <primary label> "<summary>"`
 run from the worktree. Because an editor shell carries no
 `WSX_AGENT_INSTANCE_ID`, the message reaches the primary agent with a bare
-`[message]` banner. wsx-spawned agents are told to expect this (see
+`[message #<id>]` banner. wsx-spawned agents are told to expect this (see
 [The other direction](#the-other-direction)).
 
 ## What the digest contains

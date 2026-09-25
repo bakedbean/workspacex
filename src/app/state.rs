@@ -262,7 +262,33 @@ impl App {
         // `self.store`, and nothing between the workspaces rebuild above and
         // here writes to the DB or reads `agent_roster`, so hoisting it this
         // early is safe.
-        self.agent_roster = self.store.all_workspace_agents().unwrap_or_default();
+        match self.store.all_workspace_agents() {
+            Ok(roster) => {
+                self.agent_roster = roster;
+                // Stop sessions whose instance row is gone. The TUI's own
+                // removal paths kill the session themselves, but another
+                // process (`wsx agent remove`, a CLI archive) can only delete
+                // the row, and a session left running here would be an agent
+                // nothing can address any more. Only on a successful read: an
+                // errored (empty) roster must not kill every session.
+                let known: std::collections::HashSet<_> = self
+                    .agent_roster
+                    .values()
+                    .flatten()
+                    .map(|instance| instance.id)
+                    .collect();
+                let stale: Vec<_> = self
+                    .sessions
+                    .iter()
+                    .map(|(id, _)| id)
+                    .filter(|id| !known.contains(id))
+                    .collect();
+                for id in stale {
+                    self.sessions.remove(id);
+                }
+            }
+            Err(_) => self.agent_roster = Default::default(),
+        }
         let live_peer_ids: std::collections::HashSet<_> = self
             .agent_roster
             .values()
@@ -994,6 +1020,28 @@ mod strip_instances_tests {
         assert_eq!(app.agent_roster.get(&ws).map(|v| v.len()), Some(1));
         app.refresh().unwrap();
         assert_eq!(app.agent_roster.get(&ws).map(|v| v.len()), Some(2));
+    }
+
+    #[test]
+    fn refresh_stops_sessions_whose_instance_row_was_removed() {
+        let mut app = test_app();
+        let ws = app.test_workspace("pruned");
+        let primary = app
+            .store
+            .add_primary_agent(ws, AgentKind::Claude, 1)
+            .unwrap();
+        let peer = app.store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        app.refresh().unwrap();
+        app.test_spawn_session(primary.id, SessionStatus::Running { pid: 1 });
+        app.test_spawn_session(peer.id, SessionStatus::Running { pid: 2 });
+
+        // What `wsx agent remove` does from another process: the row goes,
+        // the TUI's session is left for the next refresh to notice.
+        app.store.remove_workspace_agent(peer.id).unwrap();
+        app.refresh().unwrap();
+
+        assert!(app.sessions.get(peer.id).is_none());
+        assert!(app.sessions.get(primary.id).is_some());
     }
 
     #[test]

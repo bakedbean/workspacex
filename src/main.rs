@@ -63,7 +63,12 @@ async fn main() -> Result<()> {
     let select = match action {
         cli::CliAction::Tui { select } => select,
         other => {
-            cli::run_cli(other, &dirs).await?;
+            // Report like a parse error rather than letting `main` print
+            // the Debug form (`Error: UserInput("…")`); exit 1 as before.
+            if let Err(e) = cli::run_cli(other, &dirs).await {
+                eprint!("{}", cli::report_cli_error(&e));
+                std::process::exit(1);
+            }
             return Ok(());
         }
     };

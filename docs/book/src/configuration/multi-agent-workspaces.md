@@ -253,6 +253,14 @@ wsx still keeps one status per workspace, derived from the agents' statuses: the
 
 The dashboard and project-manager pane show that same derived status, but still combine it with the **primary** agent's session signals (its liveness and transcript), as they always have. A peer's push that is older than the primary's latest transcript activity gives way to what the primary's transcript says, so a peer still working while the primary has finished can show as complete there. Per-agent classification in the dashboard is a planned follow-up.
 
+Status hooks (Claude's hooks, Codex's `notify`) infer state from the harness's lifecycle events. A status an agent sets with `wsx status set` holds, with its message, through the end of the turn it was set in:
+
+- the hook marking that turn's end (`done` or `blocked`) keeps an agent's `done`, `blocked` or `waiting` and its message, and only refreshes its timestamp. The next turn to end without a new `wsx status set` replaces it. This is the only turn boundary Codex reports, since it has no turn-start hook;
+- Claude's idle notification (`waiting`) never changes an agent's `done`, `blocked` or `waiting`, not even its timestamp, so `wsx agent wait --done` doesn't mistake an old completion for a new one;
+- a hook reporting new work (`working` when the next prompt arrives, or background work) replaces an agent's `done`, `blocked` or `waiting` and drops its message, which described the previous work;
+- an agent's `working` keeps its message when the hook repeats `working`, or when the turn parks on background work;
+- a hook reporting a turn's end over an agent's `working` replaces it, because the agent finished without saying so.
+
 `wsx status clear` run by an agent clears only that agent's status; run from a plain shell it clears every agent's. Removing an agent drops its status from the workspace's, and a late status push from a removed agent is discarded.
 
 A status has no expiry: a peer whose session died keeps its last status until it reports again, is cleared, or is removed.

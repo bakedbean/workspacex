@@ -202,6 +202,20 @@ impl Store {
             }
             self.conn().execute("PRAGMA user_version = 26", [])?;
         }
+        if v < 27 {
+            // Set once a turn-end hook has confirmed a model-pushed status
+            // (see `data::status::merge_hook`): the next turn-end replaces it.
+            // Every full-row write (`INSERT OR REPLACE`, including an older
+            // binary's) resets it to 0 by omission.
+            for table in ["agent_status", "workspace_status"] {
+                self.add_column_if_missing(
+                    table,
+                    "turn_ended",
+                    "turn_ended INTEGER NOT NULL DEFAULT 0",
+                )?;
+            }
+            self.conn().execute("PRAGMA user_version = 27", [])?;
+        }
         Ok(())
     }
 

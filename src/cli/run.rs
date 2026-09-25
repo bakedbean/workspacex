@@ -750,6 +750,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             undelivered,
             limit,
             id,
+            json,
         } => {
             use crate::cli::action::MessagesView;
             use crate::data::messages::MessageScope;
@@ -765,7 +766,12 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                     .message_by_id(id)?
                     .ok_or_else(|| Error::UserInput(format!("no message #{id}")))?;
                 let viewer = home(&store).unwrap_or(m.workspace_id);
-                println!("{}", super::mail::full_message(&store, &m, viewer));
+                if json {
+                    let rec = super::mail::message_record(&store, &m, viewer);
+                    println!("{}", serde_json::to_string_pretty(&rec)?);
+                } else {
+                    println!("{}", super::mail::full_message(&store, &m, viewer));
+                }
                 return Ok(());
             }
             let (scope, viewer) = match view {
@@ -787,9 +793,18 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                     (scope, inst.workspace_id)
                 }
             };
+            let messages = store.list_messages(scope, undelivered, limit)?;
+            if json {
+                let recs: Vec<_> = messages
+                    .iter()
+                    .map(|m| super::mail::message_record(&store, m, viewer))
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&recs)?);
+                return Ok(());
+            }
             println!("{}", super::mail::LISTING_HEADER);
-            for m in store.list_messages(scope, undelivered, limit)? {
-                println!("{}", super::mail::listing_row(&store, &m, viewer));
+            for m in &messages {
+                println!("{}", super::mail::listing_row(&store, m, viewer));
             }
         }
         CliAction::AgentReply { to, body } => {

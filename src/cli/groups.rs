@@ -72,7 +72,7 @@ pub static GROUPS: &[GroupInfo] = &[
                 blurb: "Reply to the sender of a message (default: the latest one you received)",
             },
             CmdInfo {
-                usage: "messages [--sent|--all] [--undelivered] [--limit <n>] [--id <msg-id>]",
+                usage: "messages [--sent|--all] [--undelivered] [--limit <n>] [--id <msg-id>] [--json]",
                 blurb: "List your inbox (or sent / whole-workspace mail) with delivery times; --id prints one in full",
             },
             CmdInfo {

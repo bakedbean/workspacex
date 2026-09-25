@@ -228,6 +228,54 @@ fn delivery_state(m: &AgentMessage, long: bool) -> String {
     }
 }
 
+/// One message as `wsx agent messages --json` prints it. Additive-only, like
+/// the `commands::inspect` shapes: agents parse this. Timestamps are epoch ms.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(in crate::cli) struct MessageRecord {
+    pub id: i64,
+    /// Sender instance id; `None` for a shell or editor-agent sender.
+    pub from_id: Option<i64>,
+    /// Sender as the viewer addresses it (see `party`); `None` when `from_id` is.
+    pub from: Option<String>,
+    pub to_id: i64,
+    pub to: String,
+    /// The recipient's workspace, `<repo>/<slug>`.
+    pub workspace: Option<String>,
+    pub bytes: usize,
+    pub body: String,
+    pub created_at: i64,
+    /// When wsx injected (or retired) it; `None` while queued.
+    pub delivered_at: Option<i64>,
+    /// `queued`, `delivered`, or `dropped` (retired without reaching the agent).
+    pub state: &'static str,
+    pub drop_reason: Option<String>,
+}
+
+pub(in crate::cli) fn message_record(
+    store: &Store,
+    m: &AgentMessage,
+    viewer: WorkspaceId,
+) -> MessageRecord {
+    MessageRecord {
+        id: m.id,
+        from_id: m.from_agent_id.map(|i| i.0),
+        from: m.from_agent_id.map(|i| party(store, Some(i), viewer)),
+        to_id: m.target_agent_id.0,
+        to: party(store, Some(m.target_agent_id), viewer),
+        workspace: workspace_ref(store, m.workspace_id),
+        bytes: m.body.len(),
+        body: m.body.clone(),
+        created_at: m.created_at,
+        delivered_at: m.delivered_at,
+        state: match (m.delivered_at, &m.drop_reason) {
+            (None, _) => "queued",
+            (Some(_), Some(_)) => "dropped",
+            (Some(_), None) => "delivered",
+        },
+        drop_reason: m.drop_reason.clone(),
+    }
+}
+
 /// A whole message: a header block, a blank line, then the body verbatim.
 pub(in crate::cli) fn full_message(store: &Store, m: &AgentMessage, viewer: WorkspaceId) -> String {
     use crate::util::time::format_utc_ms;

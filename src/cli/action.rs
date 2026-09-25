@@ -208,6 +208,8 @@ pub enum CliAction {
         limit: usize,
         /// `--id N`: print that one message in full instead of a listing.
         id: Option<i64>,
+        /// `--json`: print message objects (bodies included) instead.
+        json: bool,
     },
     AgentWhoami,
     AgentReply {

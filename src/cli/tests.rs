@@ -312,6 +312,7 @@ fn parses_agent_messages_flags() {
             undelivered,
             limit,
             id,
+            json: false,
         } => (view, undelivered, limit, id),
         other => panic!("expected AgentMessages, got {other:?}"),
     };
@@ -602,6 +603,7 @@ async fn agent_messages_needs_an_identity_except_with_all() {
             undelivered: false,
             limit: 20,
             id: None,
+            json: false,
         },
         &fx.dirs,
     )
@@ -631,6 +633,7 @@ async fn agent_messages_needs_an_identity_except_with_all() {
                 undelivered: false,
                 limit: 20,
                 id,
+                json: false,
             },
             &fx.dirs,
         )
@@ -643,6 +646,7 @@ async fn agent_messages_needs_an_identity_except_with_all() {
             undelivered: false,
             limit: 20,
             id: Some(id + 100),
+            json: false,
         },
         &fx.dirs,
     )
@@ -2955,5 +2959,93 @@ async fn json_read_commands_dispatch() {
         },
     ] {
         run_cli(action, &dirs).await.unwrap();
+    }
+}
+
+#[test]
+fn parses_agent_messages_json() {
+    assert!(matches!(
+        parse(&["agent", "messages", "--all", "--json"]).unwrap(),
+        CliAction::AgentMessages {
+            view: MessagesView::Workspace,
+            json: true,
+            ..
+        }
+    ));
+    assert!(matches!(
+        parse(&["agent", "messages", "--json", "--id", "7"]).unwrap(),
+        CliAction::AgentMessages {
+            id: Some(7),
+            json: true,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn message_records_expose_ids_labels_and_delivery_state() {
+    let fx = MailFixture::new();
+    let store = fx.store();
+    let queued = store
+        .enqueue_message(fx.target_ws, fx.target, Some(fx.origin), "hello")
+        .unwrap();
+    let delivered = store
+        .enqueue_message(fx.target_ws, fx.target, None, "from a shell")
+        .unwrap();
+    store.mark_delivered(delivered).unwrap();
+    let dropped = store
+        .enqueue_message(fx.target_ws, fx.target, Some(fx.origin), "lost")
+        .unwrap();
+    store.mark_dropped(dropped, "binary missing").unwrap();
+
+    let rec = |id| {
+        let m = store.message_by_id(id).unwrap().unwrap();
+        serde_json::to_value(crate::cli::mail::message_record(&store, &m, fx.target_ws)).unwrap()
+    };
+    let q = rec(queued);
+    assert_eq!(q["id"], queued);
+    assert_eq!(q["from_id"], fx.origin.0);
+    // Labels are relative to the viewer: the sender lives elsewhere.
+    assert_eq!(q["from"], "r/origin claude");
+    assert_eq!(q["to_id"], fx.target.0);
+    assert_eq!(q["to"], "claude");
+    assert_eq!(q["workspace"], "r/target");
+    assert_eq!(q["bytes"], 5);
+    assert_eq!(q["body"], "hello");
+    assert_eq!(q["state"], "queued");
+    assert!(q["delivered_at"].is_null());
+    assert!(q["drop_reason"].is_null());
+
+    let d = rec(delivered);
+    assert!(d["from_id"].is_null() && d["from"].is_null());
+    assert_eq!(d["state"], "delivered");
+    assert!(d["delivered_at"].is_i64());
+
+    let x = rec(dropped);
+    assert_eq!(x["state"], "dropped");
+    assert_eq!(x["drop_reason"], "binary missing");
+}
+
+#[tokio::test]
+async fn agent_messages_json_dispatches() {
+    let fx = MailFixture::new();
+    let id = fx
+        .store()
+        .enqueue_message(fx.target_ws, fx.target, Some(fx.origin), "hi")
+        .unwrap();
+    let _env = fx.env_as(Some(fx.target));
+    for id in [None, Some(id)] {
+        run_cli(
+            CliAction::AgentMessages {
+                view: MessagesView::Inbox,
+                undelivered: false,
+                limit: 20,
+                id,
+                json: true,
+            },
+            &fx.dirs,
+        )
+        .await
+        .unwrap();
     }
 }

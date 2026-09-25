@@ -10,7 +10,7 @@ pub(in crate::cli) const USAGE_AGENT_SEND: &str =
     "agent send [--workspace <repo>/<slug>] [--file <path>|-] <label|instance-id> [<message…>|-]";
 const USAGE_AGENT_REPLY: &str = "agent reply [--file <path>|-] [<msg-id>] [<message…>|-]";
 const USAGE_AGENT_MESSAGES: &str =
-    "agent messages [--sent|--all] [--undelivered] [--limit <n>] [--id <msg-id>]";
+    "agent messages [--sent|--all] [--undelivered] [--limit <n>] [--id <msg-id>] [--json]";
 const USAGE_AGENT_WAIT: &str = "agent wait [--from <sender>] [--after <msg-id>] [--timeout <secs>]";
 
 fn usage(msg: impl Into<String>) -> Error {
@@ -135,6 +135,7 @@ pub(in crate::cli) fn parse_agent(it: &mut Args) -> Result<CliAction> {
             let mut undelivered = false;
             let mut limit = DEFAULT_MESSAGES_LIMIT;
             let mut id = None;
+            let mut json = false;
             while let Some(arg) = it.next() {
                 match arg.as_str() {
                     "--sent" | "--all" => {
@@ -158,6 +159,7 @@ pub(in crate::cli) fn parse_agent(it: &mut Args) -> Result<CliAction> {
                         })?;
                     }
                     "--id" => id = Some(msg_id_value(it, "--id")?),
+                    "--json" => json = true,
                     other => {
                         return Err(usage(format!(
                             "unexpected argument '{other}'\n{USAGE_AGENT_MESSAGES}"
@@ -170,6 +172,7 @@ pub(in crate::cli) fn parse_agent(it: &mut Args) -> Result<CliAction> {
                 undelivered,
                 limit,
                 id,
+                json,
             })
         }
         Some("wait") => {

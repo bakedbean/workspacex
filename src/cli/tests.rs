@@ -186,6 +186,8 @@ async fn agent_send_dispatch_targets_the_other_workspaces_primary() {
     // ambient environment (this process may itself be running under a
     // live wsx dashboard).
     env.set("XDG_RUNTIME_DIR", tmp.path());
+    // The target's binary must resolve, or the send refuses to queue.
+    stub_agent_binaries(&mut env);
     // Target resolution must come entirely from `workspace`, not from
     // the sender's own identity, so leave the sender unset.
     env.remove("WSX_AGENT_INSTANCE_ID");
@@ -425,6 +427,21 @@ fn parses_agent_wait_flags() {
     assert!(parse(&["agent", "wait", "claude"]).is_err());
 }
 
+/// Point every agent kind's `WSX_<AGENT>_BIN` at an existing binary.
+/// `agent send` refuses a target whose binary isn't installed, and CI has
+/// none of the real agents on PATH.
+fn stub_agent_binaries(env: &mut crate::test_support::EnvGuard) {
+    for var in [
+        "WSX_CLAUDE_BIN",
+        "WSX_PI_BIN",
+        "WSX_HERMES_BIN",
+        "WSX_CODEX_BIN",
+        "WSX_OMP_BIN",
+    ] {
+        env.set(var, crate::test_support::true_path());
+    }
+}
+
 /// Two workspaces in repo `r`, `origin` and `target`, each with a claude
 /// primary, seeded into the DB `run_cli` will open.
 struct MailFixture {
@@ -485,6 +502,7 @@ impl MailFixture {
     ) -> crate::test_support::EnvGuard {
         let mut env = crate::test_support::EnvGuard::new();
         env.set("XDG_RUNTIME_DIR", self._tmp.path());
+        stub_agent_binaries(&mut env);
         env.remove("WSX_WORKSPACE_ID");
         match me {
             Some(id) => env.set("WSX_AGENT_INSTANCE_ID", id.0.to_string()),
@@ -1726,6 +1744,7 @@ async fn workspace_create_with_prompt_queues_it_to_the_new_primary() {
     // no-dashboard warning path is deterministic regardless of whether
     // this process is itself running under a live wsx dashboard.
     env.set("XDG_RUNTIME_DIR", tmp.path());
+    stub_agent_binaries(&mut env);
     env.remove("WSX_AGENT_INSTANCE_ID");
 
     run_cli(
@@ -2426,6 +2445,7 @@ fn seed_current_workspace() -> (
     let mut env = crate::test_support::EnvGuard::new();
     env.set("WSX_WORKSPACE_ID", ws.0.to_string());
     env.set("XDG_RUNTIME_DIR", tmp.path());
+    stub_agent_binaries(&mut env);
     env.remove("WSX_AGENT_INSTANCE_ID");
     (tmp, dirs, ws, env)
 }
@@ -3474,4 +3494,52 @@ async fn agent_remove_refuses_the_primary_and_unknown_labels() {
     assert!(err.contains("claude"), "must list the labels here: {err}");
     let store = Store::open(&dirs.db_path()).unwrap();
     assert_eq!(store.workspace_agents(ws).unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn agent_send_refuses_a_target_whose_binary_is_missing() {
+    use crate::data::store::Store;
+    use crate::pty::session::AgentKind;
+    let (_tmp, dirs, ws, mut env) = seed_current_workspace();
+    env.set("WSX_CODEX_BIN", "/nonexistent/wsx-test-codex");
+    Store::open(&dirs.db_path())
+        .unwrap()
+        .add_workspace_agent(ws, AgentKind::Codex)
+        .unwrap();
+
+    let err = run_cli(parse(&["agent", "send", "codex", "hi"]).unwrap(), &dirs)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("/nonexistent/wsx-test-codex"), "{err}");
+    assert!(
+        err.contains("wsx agent remove codex"),
+        "a peer can be detached: {err}"
+    );
+    let store = Store::open(&dirs.db_path()).unwrap();
+    assert!(
+        store.undelivered_messages().unwrap().is_empty(),
+        "nothing is queued for an agent the dashboard can't start"
+    );
+
+    // The same send to the (installed) primary still queues.
+    run_cli(parse(&["agent", "send", "primary", "hi"]).unwrap(), &dirs)
+        .await
+        .unwrap();
+    assert_eq!(store.undelivered_messages().unwrap().len(), 1);
+}
+
+#[test]
+fn missing_agent_binary_honors_the_bin_override() {
+    use crate::pty::session::{AgentKind, missing_agent_binary};
+    let mut env = crate::test_support::EnvGuard::new();
+    env.set("WSX_PI_BIN", crate::test_support::true_path());
+    assert_eq!(missing_agent_binary(AgentKind::Pi), None);
+    env.set("WSX_PI_BIN", "/nonexistent/pi");
+    assert_eq!(
+        missing_agent_binary(AgentKind::Pi).as_deref(),
+        Some("/nonexistent/pi")
+    );
+    env.set("WSX_PI_BIN", "wsx-test-no-such-binary");
+    assert!(missing_agent_binary(AgentKind::Pi).is_some());
 }

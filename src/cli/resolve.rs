@@ -224,7 +224,8 @@ pub(in crate::cli) fn shell_quote(s: &str) -> String {
 }
 
 /// Queue `body` for `target`, warn when nothing will deliver it, and return
-/// the new message id.
+/// the new message id. Refuses (queues nothing) when the target's agent
+/// binary can't be found.
 ///
 /// The CLI only ever writes to the store; the dashboard is the sole thing
 /// that injects queued messages into an agent PTY (`App::drain_agent_messages`
@@ -240,6 +241,22 @@ pub(in crate::cli) fn enqueue_for_agent(
     target: crate::data::store::AgentInstanceId,
     body: &str,
 ) -> Result<i64> {
+    // The dashboard can't deliver to an agent it can't start, so refuse up
+    // front rather than queue a message it would only drop.
+    if let Some(inst) = store.workspace_agents_by_id(target)?
+        && let Some(bin) = crate::pty::session::missing_agent_binary(inst.agent)
+    {
+        let label = inst.label();
+        let fix = if inst.is_primary {
+            String::new()
+        } else {
+            format!(", or detach it with `wsx agent remove {label}`")
+        };
+        return Err(Error::UserInput(format!(
+            "agent '{label}' runs `{bin}`, which is not on PATH, so the dashboard \
+             cannot start it to deliver this message (not queued). Install it{fix}."
+        )));
+    }
     let from = std::env::var("WSX_AGENT_INSTANCE_ID")
         .ok()
         .and_then(|s| s.parse::<i64>().ok())

@@ -747,6 +747,47 @@ async fn agent_reply_routes_to_a_cross_workspace_sender() {
     assert!(latest > first);
 }
 
+/// With no id, `reply` answers the newest message received, whoever sent it.
+#[tokio::test]
+async fn agent_reply_without_an_id_answers_the_newest_sender() {
+    let fx = MailFixture::new();
+    let store = fx.store();
+    let peer = store
+        .add_workspace_agent(fx.target_ws, crate::pty::session::AgentKind::Codex)
+        .unwrap();
+    store
+        .enqueue_message(fx.target_ws, fx.target, Some(fx.origin), "older")
+        .unwrap();
+    store
+        .enqueue_message(fx.target_ws, fx.target, Some(peer.id), "newer")
+        .unwrap();
+    let _env = fx.env_as(Some(fx.target));
+    run_cli(
+        CliAction::AgentReply {
+            to: None,
+            body: MessageBody::Inline("ack".into()),
+        },
+        &fx.dirs,
+    )
+    .await
+    .unwrap();
+    let to_peer = store
+        .list_messages(crate::data::messages::MessageScope::To(peer.id), false, 10)
+        .unwrap();
+    assert_eq!(to_peer.len(), 1);
+    assert_eq!(to_peer[0].body, "ack");
+    assert!(
+        store
+            .list_messages(
+                crate::data::messages::MessageScope::To(fx.origin),
+                false,
+                10
+            )
+            .unwrap()
+            .is_empty()
+    );
+}
+
 #[tokio::test]
 async fn agent_reply_refuses_mail_it_cannot_answer() {
     let fx = MailFixture::new();
@@ -854,6 +895,13 @@ async fn agent_wait_returns_mail_without_marking_it_delivered() {
     assert!(
         err.contains("no message from r/origin claude after 1s"),
         "{err}"
+    );
+    assert!(
+        err.contains(&format!(
+            "wsx agent wait --from 'r/origin claude' --after {}",
+            got.id
+        )),
+        "the retry hint keeps the filters: {err}"
     );
     let err = run_cli(
         CliAction::AgentWait {

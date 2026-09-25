@@ -246,13 +246,15 @@ pub(in crate::cli) fn full_message(store: &Store, m: &AgentMessage, viewer: Work
 /// How often `wait` re-reads the inbox.
 const WAIT_POLL_MS: u64 = 500;
 
-/// Block until a message for `me` (optionally only from `from`) is recorded,
-/// and return it without marking it delivered.
+/// Block until a message for `me` (optionally only from `from`) with an id
+/// above the cursor is recorded, and return it without marking it delivered.
 ///
-/// With `after`, only ids above it count. Without, the baseline is the newest
-/// id at the moment the wait starts, and messages still queued for `me` count
-/// too — they have not reached the agent yet, so a reply that landed between
-/// `send` and `wait` is not missed. `timeout_secs == 0` waits forever.
+/// The cursor is `after` when given. Otherwise it is `Store::wait_baseline`:
+/// just below the oldest message still queued for `me`, so mail that has not
+/// reached the agent yet counts, else the newest id when the wait starts.
+/// Because nothing is consumed, a second `wait` without `--after` returns the
+/// same message again; chain waits with `--after <last id>`.
+/// `timeout_secs == 0` waits forever.
 pub(in crate::cli) async fn wait_for_message(
     store: &Store,
     me: AgentInstanceId,
@@ -260,22 +262,22 @@ pub(in crate::cli) async fn wait_for_message(
     after: Option<i64>,
     timeout_secs: u64,
 ) -> Result<Option<AgentMessage>> {
-    let (baseline, include_queued) = match after {
-        Some(id) => (id, false),
-        None => (store.max_message_id()?, true),
+    let baseline = match after {
+        Some(id) => id,
+        None => store.wait_baseline(me)?,
     };
-    let deadline = (timeout_secs > 0)
-        .then(|| std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs));
+    // A timeout too large for `Instant` is effectively forever.
+    let deadline = (timeout_secs > 0).then(|| {
+        std::time::Instant::now().checked_add(std::time::Duration::from_secs(timeout_secs))
+    });
     loop {
-        let hit = store
-            .messages_to_since(me, baseline, include_queued)?
-            .into_iter()
-            .find(|m| from.is_none() || m.from_agent_id == from);
-        if hit.is_some() {
-            return Ok(hit);
+        if let Some(m) = store.first_message_to_after(me, baseline, from)? {
+            return Ok(Some(m));
         }
-        if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
-            return Ok(None);
+        if let Some(Some(d)) = deadline {
+            if std::time::Instant::now() >= d {
+                return Ok(None);
+            }
         }
         tokio::time::sleep(std::time::Duration::from_millis(WAIT_POLL_MS)).await;
     }

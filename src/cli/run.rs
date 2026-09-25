@@ -839,10 +839,22 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             let hit =
                 super::mail::wait_for_message(&store, me.id, from_id, after, timeout_secs).await?;
             let Some(m) = hit else {
-                let who = from.map(|f| format!(" from {f}")).unwrap_or_default();
+                let who = from
+                    .as_deref()
+                    .map(|f| format!(" from {f}"))
+                    .unwrap_or_default();
+                // The retry command keeps the caller's filters so a copy-paste
+                // does not silently widen the wait.
+                let mut retry = String::from("wsx agent wait");
+                if let Some(f) = from.as_deref() {
+                    retry.push_str(&format!(" --from {}", super::resolve::shell_quote(f)));
+                }
+                if let Some(a) = after {
+                    retry.push_str(&format!(" --after {a}"));
+                }
                 return Err(Error::UserInput(format!(
-                    "no message{who} after {timeout_secs}s; run `wsx agent wait` again \
-                     (or with --timeout 0 to wait indefinitely)"
+                    "no message{who} after {timeout_secs}s; run `{retry}` again \
+                     (add --timeout 0 to wait indefinitely)"
                 )));
             };
             println!("{}", super::mail::full_message(&store, &m, me.workspace_id));
@@ -854,6 +866,11 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                     m.id
                 );
             }
+            eprintln!(
+                "note: `wait` does not consume messages; to wait for the next one, \
+                 run `wsx agent wait --after {}`",
+                m.id
+            );
         }
         CliAction::AgentAdd { kind } => {
             let ws = resolve_current_workspace(&store)?;

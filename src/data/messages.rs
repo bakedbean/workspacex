@@ -127,36 +127,44 @@ impl Store {
         Ok(v)
     }
 
-    /// Messages to `target` newer than `after_id` — plus, with
-    /// `include_queued`, older ones still undelivered — oldest first.
-    /// `wsx agent wait` polls this: anything past the baseline arrived after
-    /// the wait began, and a queued row has not reached the agent yet
-    /// whenever it was written.
-    pub fn messages_to_since(
+    /// The oldest message to `target` with an id above `after_id`
+    /// (optionally only from `from`), delivered or not. `wsx agent wait`
+    /// polls this.
+    pub fn first_message_to_after(
         &self,
         target: AgentInstanceId,
         after_id: i64,
-        include_queued: bool,
-    ) -> Result<Vec<AgentMessage>> {
+        from: Option<AgentInstanceId>,
+    ) -> Result<Option<AgentMessage>> {
+        use rusqlite::OptionalExtension;
         let mut stmt = self.conn().prepare_cached(&format!(
             "SELECT {MESSAGE_COLUMNS} FROM agent_messages
-             WHERE target_agent_id = ?1 AND (id > ?2 OR (?3 AND delivered_at IS NULL))
-             ORDER BY id ASC"
+             WHERE target_agent_id = ?1 AND id > ?2 AND (?3 IS NULL OR from_agent_id = ?3)
+             ORDER BY id ASC LIMIT 1"
         ))?;
-        let rows = stmt.query_map(
-            rusqlite::params![target.0, after_id, include_queued],
-            row_to_message,
-        )?;
-        Ok(rows.collect::<std::result::Result<_, _>>()?)
+        Ok(stmt
+            .query_row(
+                rusqlite::params![target.0, after_id, from.map(|f| f.0)],
+                row_to_message,
+            )
+            .optional()?)
     }
 
-    /// The highest message id ever assigned (0 for an empty table).
-    pub fn max_message_id(&self) -> Result<i64> {
-        Ok(self
-            .conn()
-            .query_row("SELECT COALESCE(MAX(id), 0) FROM agent_messages", [], |r| {
-                r.get(0)
-            })?)
+    /// Where a `wsx agent wait` without `--after` starts counting: just below
+    /// the oldest message still queued for `target` (it has not reached the
+    /// agent yet), else the newest id overall. One statement, so a delivery
+    /// acked between "what is queued" and "what is newest" cannot make a
+    /// queued message fall through the gap.
+    pub fn wait_baseline(&self, target: AgentInstanceId) -> Result<i64> {
+        Ok(self.conn().query_row(
+            "SELECT COALESCE(
+                 (SELECT MIN(id) - 1 FROM agent_messages
+                  WHERE target_agent_id = ?1 AND delivered_at IS NULL),
+                 (SELECT MAX(id) FROM agent_messages),
+                 0)",
+            [target.0],
+            |r| r.get(0),
+        )?)
     }
 
     /// Retire a message that can never be delivered: stamp `delivered_at` so
@@ -250,7 +258,6 @@ mod tests {
                 .is_some()
         );
         assert!(store.message_by_id(9999).unwrap().is_none());
-        assert_eq!(store.max_message_id().unwrap(), b);
     }
 
     #[test]
@@ -351,41 +358,49 @@ mod tests {
     }
 
     #[test]
-    fn messages_to_since_returns_newer_or_still_queued_rows() {
+    fn wait_baseline_starts_below_queued_mail_else_at_the_newest_id() {
         let store = Store::open_in_memory().unwrap();
         let (ws, target) = seed(&store);
-        let old_delivered = store.enqueue_message(ws, target, None, "seen").unwrap();
-        store.mark_delivered(old_delivered).unwrap();
-        let old_queued = store.enqueue_message(ws, target, None, "queued").unwrap();
-        let baseline = store.max_message_id().unwrap();
-        assert_eq!(
-            store
-                .messages_to_since(target, baseline, true)
-                .unwrap()
-                .iter()
-                .map(|m| m.id)
-                .collect::<Vec<_>>(),
-            vec![old_queued]
-        );
+        assert_eq!(store.wait_baseline(target).unwrap(), 0);
+        let seen = store.enqueue_message(ws, target, None, "seen").unwrap();
+        store.mark_delivered(seen).unwrap();
+        assert_eq!(store.wait_baseline(target).unwrap(), seen);
+        let queued = store.enqueue_message(ws, target, None, "queued").unwrap();
+        let baseline = store.wait_baseline(target).unwrap();
+        assert_eq!(baseline, queued - 1);
+
+        // Found from the baseline even once the dashboard delivers it.
+        store.mark_delivered(queued).unwrap();
+        let got = store
+            .first_message_to_after(target, baseline, None)
+            .unwrap();
+        assert_eq!(got.map(|m| m.id), Some(queued));
         assert!(
             store
-                .messages_to_since(target, baseline, false)
+                .first_message_to_after(target, queued, None)
                 .unwrap()
-                .is_empty(),
-            "without include_queued only rows past the baseline count"
+                .is_none()
         );
-        store.mark_delivered(old_queued).unwrap();
-        assert!(
-            store
-                .messages_to_since(target, baseline, true)
-                .unwrap()
-                .is_empty()
-        );
-        let fresh = store.enqueue_message(ws, target, None, "new").unwrap();
-        store.mark_delivered(fresh).unwrap();
+
+        // `from` filters by sender.
+        let primary = store.primary_instance_id(ws).unwrap().unwrap();
+        let anon = store.enqueue_message(ws, target, None, "anon").unwrap();
+        let signed = store
+            .enqueue_message(ws, target, Some(primary), "signed")
+            .unwrap();
         assert_eq!(
-            store.messages_to_since(target, baseline, true).unwrap()[0].id,
-            fresh
+            store
+                .first_message_to_after(target, queued, None)
+                .unwrap()
+                .map(|m| m.id),
+            Some(anon)
+        );
+        assert_eq!(
+            store
+                .first_message_to_after(target, queued, Some(primary))
+                .unwrap()
+                .map(|m| m.id),
+            Some(signed)
         );
     }
 }

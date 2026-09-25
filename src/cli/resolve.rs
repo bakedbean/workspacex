@@ -165,19 +165,21 @@ pub(in crate::cli) fn join_or_none<'a>(names: impl Iterator<Item = &'a str>) -> 
 /// and a prompt is arbitrary text. An unquoted hint would be a command the
 /// user cannot actually paste.
 pub(in crate::cli) fn retry_send_hint(repo: &str, slug: &str, prompt: &str) -> String {
-    fn shquote(s: &str) -> String {
-        shlex::try_quote(s)
-            .map(|c| c.into_owned())
-            // Only fails on interior NUL, which cannot reach here through
-            // sqlite TEXT or a CLI arg; drop the byte rather than emit an
-            // unquoted arg.
-            .unwrap_or_else(|_| format!("'{}'", s.replace(['\'', '\0'], "")))
-    }
     format!(
         "wsx agent send --workspace {} primary {}",
-        shquote(&format!("{repo}/{slug}")),
-        shquote(prompt)
+        shell_quote(&format!("{repo}/{slug}")),
+        shell_quote(prompt)
     )
+}
+
+/// Quote one argument for a command line printed back to the user.
+pub(in crate::cli) fn shell_quote(s: &str) -> String {
+    shlex::try_quote(s)
+        .map(|c| c.into_owned())
+        // Only fails on interior NUL, which cannot reach here through
+        // sqlite TEXT or a CLI arg; drop the byte rather than emit an
+        // unquoted arg.
+        .unwrap_or_else(|_| format!("'{}'", s.replace(['\'', '\0'], "")))
 }
 
 /// Queue `body` for `target`, warn when nothing will deliver it, and return

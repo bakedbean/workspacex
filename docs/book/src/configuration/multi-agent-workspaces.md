@@ -253,6 +253,13 @@ wsx still keeps one status per workspace, derived from the agents' statuses: the
 
 The dashboard and project-manager pane show that same derived status, but still combine it with the **primary** agent's session signals (its liveness and transcript), as they always have. A peer's push that is older than the primary's latest transcript activity gives way to what the primary's transcript says, so a peer still working while the primary has finished can show as complete there. Per-agent classification in the dashboard is a planned follow-up.
 
+Status hooks (Claude's hooks, Codex's `notify`) infer state from the harness's lifecycle events, so they never erase what an agent said about itself with `wsx status set`. Over a status the agent set:
+
+- a hook reporting the same state keeps the agent's message and only refreshes its timestamp;
+- a hook reporting the end of a turn (`done`, `blocked` or `waiting`) never overrides an agent's own `done`, `blocked` or `waiting`;
+- a hook reporting new work (`working`, or background work) replaces an agent's `done`, `blocked` or `waiting` and drops its message, which described the previous turn; an agent's `working` that parks on background work keeps its message;
+- a hook reporting the end of a turn over an agent's `working` replaces it: the agent finished without saying so.
+
 `wsx status clear` run by an agent clears only that agent's status; run from a plain shell it clears every agent's. Removing an agent drops its status from the workspace's, and a late status push from a removed agent is discarded.
 
 A status has no expiry: a peer whose session died keeps its last status until it reports again, is cleared, or is removed.

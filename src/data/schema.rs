@@ -188,30 +188,17 @@ impl Store {
             // Per-agent status. `workspace_status` stays as the derived,
             // workspace-level row every dashboard reads; `agent_status` holds
             // what each instance last reported (see `data::status`). Create +
-            // backfill only when the table is new, in one transaction: the
-            // ladder re-runs on every open (SCHEMA_V1 resets user_version), and
-            // re-running the backfill would copy a peer-derived workspace row
-            // onto a primary that never reported it.
-            let exists: i64 = self.conn().query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'agent_status'",
-                [],
-                |r| r.get(0),
-            )?;
-            if exists == 0 {
-                let tx = self.conn().unchecked_transaction()?;
-                tx.execute_batch(SCHEMA_V26_AGENT_STATUS)?;
-                // Before this table existed every push landed on the one
-                // workspace row, and the primary is the agent it described.
-                tx.execute(
-                    "INSERT INTO agent_status \
-                         (agent_id, workspace_id, state, message, source, reported_at) \
-                     SELECT a.id, s.workspace_id, s.state, s.message, s.source, s.reported_at \
-                     FROM workspace_status s \
-                     JOIN workspace_agents a \
-                       ON a.workspace_id = s.workspace_id AND a.is_primary = 1",
-                    [],
-                )?;
-                tx.commit()?;
+            // backfill only when the table is new: the ladder re-runs on every
+            // open (SCHEMA_V1 resets user_version), and re-running the backfill
+            // would copy a peer-derived workspace row onto a primary that never
+            // reported it.
+            //
+            // Checked once cheaply, then again under an IMMEDIATE transaction:
+            // two processes upgrading at once (the TUI and a hook) must not
+            // both see the table missing and both backfill, and every later
+            // open should not pay for the write lock.
+            if !has_agent_status_table(self.conn())? {
+                create_agent_status_locked(self.conn())?;
             }
             self.conn().execute("PRAGMA user_version = 26", [])?;
         }
@@ -241,6 +228,36 @@ impl Store {
         }
         Ok(())
     }
+}
+
+fn has_agent_status_table(conn: &rusqlite::Connection) -> Result<bool> {
+    Ok(conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'agent_status'",
+        [],
+        |r| r.get::<_, i64>(0),
+    )? > 0)
+}
+
+/// The v26 create + backfill, under the write lock and re-checked there: a
+/// process that saw the table missing may have lost the race to another.
+pub(crate) fn create_agent_status_locked(conn: &rusqlite::Connection) -> Result<()> {
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+    if !has_agent_status_table(&tx)? {
+        tx.execute_batch(SCHEMA_V26_AGENT_STATUS)?;
+        // Before this table existed every push landed on the one workspace
+        // row, and the primary is the agent it described.
+        tx.execute(
+            "INSERT INTO agent_status \
+                 (agent_id, workspace_id, state, message, source, reported_at) \
+             SELECT a.id, s.workspace_id, s.state, s.message, s.source, s.reported_at \
+             FROM workspace_status s \
+             JOIN workspace_agents a \
+               ON a.workspace_id = s.workspace_id AND a.is_primary = 1",
+            [],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 const SCHEMA_V1: &str = r#"

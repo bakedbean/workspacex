@@ -84,10 +84,16 @@ freshly created workspace's agent.
 
 The rest of the line is the message body. For long or code-heavy bodies use
 `--file <path>`, or `-` (as the body, or `--file -`) to read it from stdin; the
-text is sent verbatim, with trailing whitespace dropped. Options go before the
-target — everything after it is body, so a message may itself start with `--`
-(the one exception: a standalone `--help` or `-h` anywhere prints help). An
-empty body is refused.
+text is sent verbatim, with trailing whitespace dropped. Options may go on
+either side of the target (or `reply`'s message id), up to the first word of
+the message: `send primary --file brief.md` sends the file. From that word on
+everything is body, so a message may itself start with `--verbose` or any
+other unrecognised `--word`. A command option standing alone among the body
+words (`--file` for both commands, `--workspace` for `send`) is refused rather
+than sent, since it was almost certainly misplaced. To send such text, quote
+the whole message (`send primary "pass --file x"`). A message that is
+exactly `--file` or `--workspace` must come from stdin or a file. A standalone
+`--help` or `-h` anywhere prints help. An empty body is refused.
 
 `send` prints the new message's id and size:
 

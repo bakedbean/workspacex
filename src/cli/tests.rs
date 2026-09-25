@@ -42,18 +42,131 @@ fn parses_agent_send_with_workspace_flag() {
 }
 
 #[test]
-fn agent_send_flags_are_only_recognised_before_the_label() {
-    // Everything from the label onward is body, so a message that itself
-    // starts with `--` is preserved verbatim rather than parsed as a flag.
-    match parse(&["agent", "send", "claude", "--workspace", "is", "a", "flag"]).unwrap() {
+fn agent_send_flags_are_recognised_until_the_first_message_word() {
+    let got = |argv: &[&str]| match parse(argv).unwrap() {
         CliAction::AgentSend {
             target,
             body,
             workspace,
-        } => {
-            assert_eq!(target, "claude");
-            assert_eq!(body, MessageBody::Inline("--workspace is a flag".into()));
-            assert_eq!(workspace, None);
+        } => (target, body, workspace),
+        other => panic!("expected AgentSend, got {other:?}"),
+    };
+    let file = || MessageBody::File("/p/brief.md".into());
+    let ws = || Some("r/w".to_string());
+    // Flags before or after the label mean the same thing: an agent that
+    // writes `send primary --file brief.md` must not send the flag as text.
+    for argv in [
+        &[
+            "agent",
+            "send",
+            "--workspace",
+            "r/w",
+            "--file",
+            "/p/brief.md",
+            "primary",
+        ][..],
+        &[
+            "agent",
+            "send",
+            "primary",
+            "--workspace",
+            "r/w",
+            "--file",
+            "/p/brief.md",
+        ][..],
+        &[
+            "agent",
+            "send",
+            "--workspace",
+            "r/w",
+            "primary",
+            "--file",
+            "/p/brief.md",
+        ][..],
+        &[
+            "agent",
+            "send",
+            "--file",
+            "/p/brief.md",
+            "primary",
+            "--workspace",
+            "r/w",
+        ][..],
+    ] {
+        assert_eq!(got(argv), ("primary".into(), file(), ws()), "{argv:?}");
+    }
+    assert_eq!(
+        got(&[
+            "agent",
+            "send",
+            "primary",
+            "--workspace",
+            "r/w",
+            "hi",
+            "there"
+        ]),
+        (
+            "primary".into(),
+            MessageBody::Inline("hi there".into()),
+            ws()
+        )
+    );
+    assert_eq!(
+        got(&["agent", "send", "primary", "--file", "-"]),
+        ("primary".into(), MessageBody::Stdin, None)
+    );
+    // A repeated flag is last-wins, even split across the label.
+    assert_eq!(
+        got(&[
+            "agent",
+            "send",
+            "--workspace",
+            "r/old",
+            "primary",
+            "--workspace",
+            "r/w",
+            "hi"
+        ]),
+        ("primary".into(), MessageBody::Inline("hi".into()), ws())
+    );
+    // Any other `--word` starts the body, which is kept verbatim.
+    assert_eq!(
+        got(&["agent", "send", "claude", "--verbose", "is", "broken"]),
+        (
+            "claude".into(),
+            MessageBody::Inline("--verbose is broken".into()),
+            None
+        )
+    );
+}
+
+#[test]
+fn agent_send_refuses_a_flag_stranded_in_the_message() {
+    // Once the body has started a flag is no longer parsed. Sending it as
+    // text would leave the sender believing a file went out, so refuse.
+    for argv in [
+        &["agent", "send", "primary", "see", "--file", "/p/brief.md"][..],
+        &["agent", "send", "primary", "hi", "--workspace", "r/w"][..],
+        &["agent", "send", "primary", "--verbose", "--file", "x"][..],
+    ] {
+        let err = parse(argv).unwrap_err().to_string();
+        assert!(
+            err.contains("must come before the message"),
+            "{argv:?}: {err}"
+        );
+    }
+    // A flag missing its value after the label is an error, which also
+    // makes a body of exactly `--file` unsendable inline (stdin/file only).
+    assert!(parse(&["agent", "send", "primary", "--file"]).is_err());
+    assert!(parse(&["agent", "send", "primary", "--workspace"]).is_err());
+    assert!(parse(&["agent", "reply", "561", "--file"]).is_err());
+    // `--` is not an end-of-options marker: it starts the body, so a later
+    // option word is still stranded.
+    assert!(parse(&["agent", "send", "primary", "--", "--file", "x"]).is_err());
+    // A flag name inside a quoted (single-word) message is just text.
+    match parse(&["agent", "send", "primary", "pass --file <path>"]).unwrap() {
+        CliAction::AgentSend { body, .. } => {
+            assert_eq!(body, MessageBody::Inline("pass --file <path>".into()))
         }
         other => panic!("expected AgentSend, got {other:?}"),
     }
@@ -392,6 +505,49 @@ fn parses_agent_reply_with_and_without_a_message_id() {
     );
     assert!(parse(&["agent", "reply"]).is_err());
     assert!(parse(&["agent", "reply", "--file", "r.md", "561", "extra"]).is_err());
+}
+
+#[test]
+fn agent_reply_flags_are_recognised_until_the_first_message_word() {
+    let got = |argv: &[&str]| match parse(argv).unwrap() {
+        CliAction::AgentReply { to, body } => (to, body),
+        other => panic!("expected AgentReply, got {other:?}"),
+    };
+    let file = || MessageBody::File("r.md".into());
+    // `--file` before or after the message id.
+    assert_eq!(
+        got(&["agent", "reply", "--file", "r.md", "561"]),
+        (Some(561), file())
+    );
+    assert_eq!(
+        got(&["agent", "reply", "561", "--file", "r.md"]),
+        (Some(561), file())
+    );
+    assert_eq!(
+        got(&["agent", "reply", "#561", "--file", "-"]),
+        (Some(561), MessageBody::Stdin)
+    );
+    // Any other `--word` starts the body verbatim.
+    assert_eq!(
+        got(&["agent", "reply", "561", "--json", "works"]),
+        (Some(561), MessageBody::Inline("--json works".into()))
+    );
+    // A `--file` stranded in an inline body is refused, not sent as text.
+    for argv in [
+        &["agent", "reply", "looks", "good", "--file", "r.md"][..],
+        &["agent", "reply", "561", "see", "--file", "r.md"][..],
+    ] {
+        let err = parse(argv).unwrap_err().to_string();
+        assert!(
+            err.contains("must come before the message"),
+            "{argv:?}: {err}"
+        );
+    }
+    // `--workspace` isn't a reply flag, so it's ordinary text there.
+    assert_eq!(
+        got(&["agent", "reply", "561", "try", "--workspace", "r/w"]),
+        (Some(561), MessageBody::Inline("try --workspace r/w".into()))
+    );
 }
 
 #[test]
@@ -3077,6 +3233,52 @@ fn read_commands_take_json() {
     ));
     // `context show` renders markdown for humans; it has no JSON form.
     assert!(parse(&["context", "show", "--json"]).is_err());
+}
+
+/// Bare `status`/`recap` is `show`, so `show`'s flags work without it.
+#[test]
+fn bare_status_and_recap_take_show_flags() {
+    for group in ["status", "recap"] {
+        for (args, want_ws, want_json) in [
+            (vec!["--json"], None, true),
+            (vec!["--workspace", "r/w"], Some("r/w"), false),
+            (vec!["--workspace", "r/w", "--json"], Some("r/w"), true),
+            (vec!["--json", "--workspace", "r/w"], Some("r/w"), true),
+        ] {
+            let mut argv = vec![group];
+            argv.extend(&args);
+            let (workspace, json) = match parse(&argv).unwrap() {
+                CliAction::StatusShow { workspace, json } if group == "status" => (workspace, json),
+                CliAction::RecapShow { workspace, json } if group == "recap" => (workspace, json),
+                other => panic!("{argv:?} parsed as {other:?}"),
+            };
+            assert_eq!(workspace.as_deref(), want_ws, "{argv:?}");
+            assert_eq!(json, want_json, "{argv:?}");
+        }
+        // Flag errors still name the show usage, and unknown words still fail.
+        let err = parse(&[group, "--bogus"]).unwrap_err().to_string();
+        assert!(err.contains("--bogus") && err.contains("show"), "{err}");
+        let err = parse(&[group, "--workspace"]).unwrap_err().to_string();
+        assert!(err.contains("--workspace needs value"), "{err}");
+        let err = parse(&[group, "bogus"]).unwrap_err().to_string();
+        assert!(
+            err.contains(&format!("unknown {group} subcommand: bogus")),
+            "{err}"
+        );
+    }
+    // The other subcommands are untouched.
+    assert!(matches!(
+        parse(&["status", "clear"]).unwrap(),
+        CliAction::StatusClear
+    ));
+    assert!(matches!(
+        parse(&["recap", "clear"]).unwrap(),
+        CliAction::RecapClear
+    ));
+    assert!(matches!(
+        parse(&["status", "--help"]).unwrap(),
+        CliAction::Help(_)
+    ));
 }
 
 #[test]

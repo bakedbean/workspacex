@@ -41,13 +41,60 @@ fn msg_id_value(it: &mut Args, flag: &str) -> Result<i64> {
     parse_msg_id(&v).ok_or_else(|| usage(format!("{flag} expects a message id, got '{v}'")))
 }
 
+/// The flags `send`/`reply` take ahead of the message.
+#[derive(Default)]
+struct BodyFlags {
+    /// Whether `--workspace` is a flag here (`send`) or not (`reply`).
+    takes_workspace: bool,
+    workspace: Option<String>,
+    file: Option<MessageBody>,
+}
+
+impl BodyFlags {
+    fn names(&self) -> &'static [&'static str] {
+        if self.takes_workspace {
+            &["--file", "--workspace"]
+        } else {
+            &["--file"]
+        }
+    }
+
+    /// Consume flags up to the next positional word and return it. Called
+    /// between positionals too, so flags may sit either side of the label
+    /// or message id; only the body itself is left unparsed.
+    fn take_until_word(&mut self, it: &mut Args) -> Result<Option<String>> {
+        while let Some(arg) = it.next() {
+            match arg.as_str() {
+                "--file" => {
+                    self.file = Some(file_source(flag_value(it, "--file", "<path> or -")?));
+                }
+                "--workspace" if self.takes_workspace => {
+                    self.workspace = Some(flag_value(it, "--workspace", "<repo>/<slug>")?);
+                }
+                _ => return Ok(Some(arg)),
+            }
+        }
+        Ok(None)
+    }
+}
+
 /// The body for `send`/`reply` from the positional words left after the
-/// target, given whether `--file` already supplied one.
+/// target, given whether `--file` already supplied one. `flags` are the
+/// flag names the command takes: one of them as a word of an inline body
+/// was surely meant as a flag, so it is refused rather than sent as text.
 fn body_from(
     file: Option<MessageBody>,
     rest: Vec<String>,
+    flags: &[&str],
     usage_line: &str,
 ) -> Result<MessageBody> {
+    if file.is_none() && rest.len() > 1 {
+        if let Some(flag) = rest.iter().find(|w| flags.contains(&w.as_str())) {
+            return Err(usage(format!(
+                "{flag} must come before the message (quote the message if it is text)\n{usage_line}"
+            )));
+        }
+    }
     match (file, rest.as_slice()) {
         (Some(b), []) => Ok(b),
         (Some(_), _) => Err(usage(format!(
@@ -83,52 +130,46 @@ pub(in crate::cli) fn parse_agent(it: &mut Args) -> Result<CliAction> {
             ))),
         },
         Some("send") => {
-            let mut workspace: Option<String> = None;
-            let mut file: Option<MessageBody> = None;
-            // Flags are recognised ONLY before the label. Everything from the
-            // label onward is positional, so a message body that itself starts
-            // with `--` is preserved verbatim.
-            let target = loop {
-                let arg = it.next().ok_or_else(|| usage(USAGE_AGENT_SEND))?;
-                match arg.as_str() {
-                    "--workspace" => {
-                        workspace = Some(flag_value(it, "--workspace", "<repo>/<slug>")?);
-                    }
-                    "--file" => file = Some(file_source(flag_value(it, "--file", "<path> or -")?)),
-                    _ => break arg,
-                }
+            let mut flags = BodyFlags {
+                takes_workspace: true,
+                ..Default::default()
             };
-            let body = body_from(file, it.collect(), USAGE_AGENT_SEND)?;
+            // Flags are recognised before and after the label, up to the
+            // first message word. From there on the body is verbatim, so a
+            // message that itself starts with `--` is preserved.
+            let target = flags
+                .take_until_word(it)?
+                .ok_or_else(|| usage(USAGE_AGENT_SEND))?;
+            let rest: Vec<String> = flags.take_until_word(it)?.into_iter().chain(it).collect();
+            let names = flags.names();
+            let body = body_from(flags.file, rest, names, USAGE_AGENT_SEND)?;
             Ok(CliAction::AgentSend {
                 target,
                 body,
-                workspace,
+                workspace: flags.workspace,
             })
         }
         Some("reply") => {
-            let mut file: Option<MessageBody> = None;
-            let mut rest: Vec<String> = Vec::new();
-            // Same rule as `send`: flags only before the first positional.
-            while let Some(arg) = it.next() {
-                if arg == "--file" {
-                    file = Some(file_source(flag_value(it, "--file", "<path> or -")?));
-                } else {
-                    rest.push(arg);
-                    rest.extend(&mut *it);
+            let mut flags = BodyFlags::default();
+            // Same rule as `send`, with the optional message id in the
+            // label's place.
+            let first = flags.take_until_word(it)?;
+            let (to, rest) = match first.as_deref().and_then(parse_msg_id) {
+                Some(id) => {
+                    let next = flags.take_until_word(it)?;
+                    // The first word is the message id only when something is
+                    // left to be the body — `wsx agent reply 42` sends "42" to
+                    // the latest sender rather than failing for want of a body.
+                    if next.is_some() || flags.file.is_some() {
+                        (Some(id), next.into_iter().chain(it).collect())
+                    } else {
+                        (None, first.into_iter().collect())
+                    }
                 }
-            }
-            // The first word is the message id only when something is left to
-            // be the body — `wsx agent reply 42` sends "42" to the latest
-            // sender rather than failing for want of a body.
-            let has_body_after_first = file.is_some() || rest.len() > 1;
-            let to = match rest.first().and_then(|w| parse_msg_id(w)) {
-                Some(id) if has_body_after_first => {
-                    rest.remove(0);
-                    Some(id)
-                }
-                _ => None,
+                None => (None, first.into_iter().chain(it).collect()),
             };
-            let body = body_from(file, rest, USAGE_AGENT_REPLY)?;
+            let names = flags.names();
+            let body = body_from(flags.file, rest, names, USAGE_AGENT_REPLY)?;
             Ok(CliAction::AgentReply { to, body })
         }
         Some("messages") => {

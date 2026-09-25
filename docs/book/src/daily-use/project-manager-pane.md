@@ -20,7 +20,9 @@ first.
 - **Header line**: workspace name, branch, and coding agent, plus the
   agent-pushed status in brackets — `[blocked 4s]`, `[waiting 12m]`, etc. —
   with its message appended when the agent reported one. This is the same
-  status set via `wsx status set`.
+  status set via `wsx status set`. With several agents in a workspace it's
+  the most urgent of their statuses (see
+  [Per-agent status](../configuration/multi-agent-workspaces.md#per-agent-status)).
 - **Recap lines** — `goal:`, `state:`, `next:` — the agent's own account of
   what the workspace is for, where it's at, and what's left. Only fields the
   agent has actually set are shown. Workspaces whose agent hasn't run since
@@ -43,8 +45,9 @@ wsx recap set --state "tests failing" --next "debug the regex"
 
 Any subset of `--goal`, `--state`, and `--next` can be set at once (at
 least one is required); omitted flags leave the existing value untouched.
-`wsx recap show` prints the current recap, and `wsx recap clear` deletes
-it. This isn't something you normally run by hand — the standing operating
+`wsx recap show` prints the current recap (`--workspace <repo>/<slug>` for
+another workspace's, `--json` for machine-readable output), and
+`wsx recap clear` deletes it. This isn't something you normally run by hand — the standing operating
 doctrine wsx injects into every session (see `process_doctrine` in
 [Global settings](../configuration/global-settings.md)) instructs the agent
 to set the goal once scope is clear and refresh state/next alongside its

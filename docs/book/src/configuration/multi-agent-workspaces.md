@@ -104,7 +104,7 @@ the recipient can see which workspace the work came from:
 …your message body…
 ```
 
-If the sender is the `wsx` CLI itself (not another agent — i.e. `$WSX_AGENT_INSTANCE_ID` is unset), the banner is just `[message #<id>]`. If the target agent isn't running yet, wsx spawns it first, then delivers. Sending to a label that doesn't exist in the target workspace errors with that workspace's agent labels listed inline (`wsx agent list` only reports the current workspace, so it can't describe another one).
+If the sender is the `wsx` CLI itself (not another agent — i.e. `$WSX_AGENT_INSTANCE_ID` is unset), the banner is just `[message #<id>]`. If the target agent isn't running yet, wsx spawns it first, then delivers. Sending to a label that doesn't exist in the target workspace errors with that workspace's agent labels listed inline; `wsx agent list --workspace <repo>/<slug>` lists them too.
 
 Queued messages are injected by the running `wsx` TUI, so `wsx agent send`
 warns on stderr when no dashboard is running — the message stays queued and is
@@ -197,18 +197,56 @@ possible lost or doubly-injected one. Delivery stays at-least-once either way.
 ### Listing agents
 
 ```bash
-wsx agent list
+wsx agent list [--workspace <repo>/<slug>] [--json]
 ```
 
-Prints one agent per line — its instance id and label, with `(primary)` appended for the primary — for the current workspace:
+Prints one agent per line — its instance id and label, with `(primary)` appended for the primary — followed by that agent's own last status when it has reported one:
 
 ```
-1  claude  (primary)
-2  claude#2
+1  claude  (primary)  working — "running the test suite" (model, 3m ago)
+2  claude#2  done (hook, 10m ago)
 4  codex
 ```
 
-The leading number is the agent's instance id — the same value wsx injects as `$WSX_AGENT_INSTANCE_ID` into that agent's session.
+The leading number is the agent's instance id — the same value wsx injects as `$WSX_AGENT_INSTANCE_ID` into that agent's session. Rows for agents that never reported a status are exactly `<id>  <label>[  (primary)]`.
+
+`--workspace <repo>/<slug>` lists another workspace's agents instead of the current one's. `--json` prints an array of `{id, label, kind, primary, status}` objects, where `status` is `{state, message, source, reported_at}` or `null` (timestamps are epoch milliseconds).
+
+### Per-agent status
+
+Each agent's `wsx status set` and status hooks are recorded against that agent — identified by the `$WSX_AGENT_INSTANCE_ID` wsx injects into its session — so peers sharing a workspace no longer overwrite each other's status. A push with no agent identity (a plain shell, an editor-hosted agent) is recorded against the primary.
+
+The dashboard, project-manager pane, waybar, and menubar still show one status per workspace, derived from the agents' statuses: the one that most needs a human wins — `blocked`, then `working`, then background work, then `waiting`, then `done` — with the most recent push breaking ties. One agent finishing therefore can't mark the workspace done while a peer is still working, and a peer that is blocked surfaces even if another agent is busy.
+
+`wsx status clear` run by an agent clears only that agent's status; run from a plain shell it clears every agent's. Removing an agent drops its status from the workspace's.
+
+```bash
+wsx status show [--workspace <repo>/<slug>] [--json]
+```
+
+Prints the workspace's derived status, then each agent's:
+
+```
+status: blocked — "need your call on the schema" (model, 1m ago)
+agents:
+  claude (primary): working — "implementing" (model, 4m ago)
+  claude#2: blocked — "need your call on the schema" (model, 1m ago)
+```
+
+`--json` prints `{repo, slug, status, agents}` with the same `status` and agent shapes as `wsx agent list --json`.
+
+### Inspecting other workspaces
+
+The read commands take `--workspace <repo>/<slug>` (resolved the same way as `wsx agent send --workspace`), so an agent can check on a workspace it handed work to without reading wsx's database:
+
+```bash
+wsx status show  --workspace backend/add-widgets
+wsx recap show   --workspace backend/add-widgets
+wsx agent list   --workspace backend/add-widgets
+wsx context show --workspace backend/add-widgets
+```
+
+For every workspace at once, `wsx workspace list --json` — see [Workspace management](../cli-reference/workspace-management.md).
 
 ### Agent identity and labels
 

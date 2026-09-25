@@ -22,6 +22,7 @@ When orienting, run these first — they're cheap and authoritative:
 wsx repo list                  # registered repos, source paths, prefixes
 wsx workspace list             # all workspaces, TSV: repo, slug, branch, path
 wsx workspace list <repo>      # filter to one repo
+wsx workspace list --json      # + status, recap, agents, cached PR per workspace
 ```
 
 ## CLI surface
@@ -36,10 +37,11 @@ wsx repo list
 wsx repo set-prefix <repo> <prefix>
 wsx repo set-related-repos <repo> <comma-separated-names>
 
-# Multi-agent: `list`/`add` operate on the CURRENT workspace — no <repo>/<slug>
-# args. The workspace is resolved from $WSX_WORKSPACE_ID, else the cwd's
-# worktree. `send` can target another workspace via --workspace.
-wsx agent list                              # peers here; (primary) marks the original agent
+# Multi-agent: these operate on the CURRENT workspace — resolved from
+# $WSX_WORKSPACE_ID, else the cwd's worktree. `list` and `send` can target
+# another workspace via --workspace; `add` cannot.
+wsx agent list [--workspace <repo>/<slug>] [--json]
+                                            # agents + each one's status; (primary) marks the original agent
 wsx agent add <kind>                        # attach another agent: kind = claude|pi|hermes|codex|omp
 wsx agent send [--workspace <repo>/<slug>] [--file <path>|-] <label|instance-id> [<message…>|-]
                                             # async message to an agent; omit
@@ -59,7 +61,10 @@ wsx agent wait [--from <sender>] [--after <msg-id>] [--timeout <secs>]
                                             # block until a message for you arrives
 wsx agent whoami                            # your label, instance id, workspace
 
-wsx context show                            # markdown digest of this workspace (for editor-hosted agents)
+# Read another workspace's state with these — never query wsx's sqlite db directly.
+wsx status show  [--workspace <repo>/<slug>] [--json]   # workspace status + each agent's
+wsx recap show   [--workspace <repo>/<slug>] [--json]
+wsx context show [--workspace <repo>/<slug>]            # markdown digest (for editor-hosted agents)
 wsx context write                           # same, written under the state dir; prints the path
 ```
 
@@ -87,6 +92,8 @@ wsx status set done    --message "implemented and tests green"
 - `blocked` — when you stop to ask the user a question or need a decision.
 - `waiting` — when parked on something external (a build, CI, a long-running command).
 - `done` — when the task is complete.
+
+Status is recorded per agent (from `$WSX_AGENT_INSTANCE_ID`), so peers in the same workspace don't overwrite each other; the dashboard shows the most urgent one (blocked > working > waiting > done). `wsx status show` prints the workspace's status and each agent's.
 
 The `--message` is a short one-liner shown in the PM pane and the waybar menu subtext. Claude Code hooks also report coarse state automatically, but an explicit `set` with a message is always clearer — prefer it at the transitions above.
 
@@ -140,8 +147,9 @@ wsx agent send --workspace <repo>/<slug> primary "<brief>"
 ```
 
 Always pass `--name` — an unnamed workspace forces the new agent to rename it
-before it can start. Use `primary` as the label: you cannot run `wsx agent
-list` against another workspace, and a fresh workspace has exactly one agent.
+before it can start. Use `primary` as the label: a fresh workspace has exactly one
+agent, and `primary` is always it. To check on the handoff later, use
+`wsx status show --workspace <repo>/<slug>` and `wsx recap show --workspace <repo>/<slug>`.
 
 **The brief.** It is the receiving agent's *only* context. Write it so it still
 makes sense if this session were deleted.

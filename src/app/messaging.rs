@@ -5,10 +5,18 @@ use crate::data::messages::AgentMessage;
 use crate::data::store::Store;
 
 /// The banner injected into the receiving agent. Pure + testable.
-pub fn delivery_banner(from_label: Option<&str>, body: &str) -> String {
+///
+/// Carries the message id so the receiver can cite it (`agent messages --id`,
+/// `agent wait --after`) and recognise a message it already read through
+/// `agent wait`, plus the exact reply command when there is an agent to reply
+/// to. A sender-less message (a shell or an editor-hosted agent) has no one
+/// to reply to, so it gets no hint.
+pub fn delivery_banner(id: i64, from_label: Option<&str>, body: &str) -> String {
     match from_label {
-        Some(f) => format!("[message from {f}]\n{body}"),
-        None => format!("[message]\n{body}"),
+        Some(f) => {
+            format!("[message #{id} from {f}; reply with: wsx agent reply {id} <message>]\n{body}")
+        }
+        None => format!("[message #{id}]\n{body}"),
     }
 }
 
@@ -408,7 +416,7 @@ impl crate::app::App {
                 .iter()
                 .map(|m| {
                     let from = sender_label(&self.store, m);
-                    (m.id, delivery_banner(from.as_deref(), &m.body))
+                    (m.id, delivery_banner(m.id, from.as_deref(), &m.body))
                 })
                 .collect();
             for m in &msgs {
@@ -836,10 +844,10 @@ mod tests {
     #[test]
     fn banner_tags_sender() {
         assert_eq!(
-            delivery_banner(Some("claude#2"), "hi"),
-            "[message from claude#2]\nhi"
+            delivery_banner(561, Some("claude#2"), "hi"),
+            "[message #561 from claude#2; reply with: wsx agent reply 561 <message>]\nhi"
         );
-        assert_eq!(delivery_banner(None, "hi"), "[message]\nhi");
+        assert_eq!(delivery_banner(7, None, "hi"), "[message #7]\nhi");
     }
 
     #[test]
@@ -879,8 +887,12 @@ mod tests {
         let label = sender_label(&store, &msg);
         assert_eq!(label.as_deref(), Some("workspacex/parent-task claude"));
         assert_eq!(
-            delivery_banner(label.as_deref(), "TASK: build it"),
-            "[message from workspacex/parent-task claude]\nTASK: build it"
+            delivery_banner(msg.id, label.as_deref(), "TASK: build it"),
+            format!(
+                "[message #{0} from workspacex/parent-task claude; \
+                 reply with: wsx agent reply {0} <message>]\nTASK: build it",
+                msg.id
+            )
         );
     }
 

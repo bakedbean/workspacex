@@ -56,8 +56,8 @@ pub static GROUPS: &[GroupInfo] = &[
         blurb: "List, add, and message agents in a workspace",
         commands: &[
             CmdInfo {
-                usage: "list",
-                blurb: "Show agents in the current workspace",
+                usage: "list [--workspace <repo>/<slug>]",
+                blurb: "Show agents and each one's own status, here or in another workspace",
             },
             CmdInfo {
                 usage: "add <kind>",
@@ -235,11 +235,15 @@ pub static GROUPS: &[GroupInfo] = &[
         commands: &[
             CmdInfo {
                 usage: "set <working|waiting|blocked|done> [--message <text>]",
-                blurb: "Set workspace status (model push path)",
+                blurb: "Set this agent's status (model push path)",
             },
             CmdInfo {
                 usage: "clear",
-                blurb: "Clear workspace status",
+                blurb: "Clear status (from an agent: its own; from a shell: every agent's)",
+            },
+            CmdInfo {
+                usage: "show [--workspace <repo>/<slug>]",
+                blurb: "Print the workspace status and each agent's, here or in another workspace",
             },
             CmdInfo {
                 usage: "from-hook [--agent <kind>]",
@@ -258,8 +262,8 @@ pub static GROUPS: &[GroupInfo] = &[
                         no filler (e.g. \"Audit V2 invoices, CV-04964, bug from #2835\")",
             },
             CmdInfo {
-                usage: "show",
-                blurb: "Print the current recap",
+                usage: "show [--workspace <repo>/<slug>]",
+                blurb: "Print the recap, here or in another workspace",
             },
             CmdInfo {
                 usage: "clear",
@@ -272,7 +276,7 @@ pub static GROUPS: &[GroupInfo] = &[
         blurb: "Workspace context digest for editor-hosted agents",
         commands: &[
             CmdInfo {
-                usage: "show",
+                usage: "show [--workspace <repo>/<slug>]",
                 blurb: "Print the digest (branch, agents, status, recap, recent commits, \
                         primary agent's last message, instructions for an external agent)",
             },

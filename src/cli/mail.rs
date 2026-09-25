@@ -120,8 +120,8 @@ pub(in crate::cli) fn resolve_send_target(
     let target_id = store
         .resolve_instance_label(target_ws.id, target)?
         .ok_or_else(|| {
-            // `wsx agent list` only reports the CURRENT workspace, so
-            // list the target's labels inline instead of pointing at it.
+            // List the target's labels inline: the sender is mid-task
+            // and the recovery is one retry away.
             let labels = store
                 .workspace_agents(target_ws.id)
                 .map(|v| {

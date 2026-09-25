@@ -188,7 +188,10 @@ pub enum CliAction {
         slug: String,
     },
     MenubarRefresh,
-    AgentList,
+    AgentList {
+        /// `<repo>/<slug>` to inspect another workspace; `None` = current.
+        workspace: Option<String>,
+    },
     AgentSend {
         /// A label (`claude#2`, `primary`) or a numeric instance id.
         target: String,
@@ -227,6 +230,10 @@ pub enum CliAction {
         message: Option<String>,
     },
     StatusClear,
+    /// `wsx status show` — the workspace's derived status plus each agent's.
+    StatusShow {
+        workspace: Option<String>,
+    },
     StatusFromHook {
         /// The harness whose event payload is on stdin. `None` falls back to
         /// the resolved workspace's agent kind.
@@ -250,10 +257,14 @@ pub enum CliAction {
         state_short: Option<String>,
         next_short: Option<String>,
     },
-    RecapShow,
+    RecapShow {
+        workspace: Option<String>,
+    },
     RecapClear,
     /// `wsx context show` — print the workspace context digest.
-    ContextShow,
+    ContextShow {
+        workspace: Option<String>,
+    },
     /// `wsx context write` — write the digest under the state dir, print its path.
     ContextWrite,
 }

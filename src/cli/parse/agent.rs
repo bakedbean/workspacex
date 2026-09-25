@@ -1,6 +1,6 @@
 //! `wsx agent` — listing agents, sending them prompts, and reading replies.
 
-use super::Args;
+use super::{Args, parse_workspace_flag};
 use crate::cli::action::{
     CliAction, DEFAULT_MESSAGES_LIMIT, DEFAULT_WAIT_TIMEOUT_SECS, MessageBody, MessagesView,
 };
@@ -68,7 +68,9 @@ fn file_source(path: String) -> MessageBody {
 
 pub(in crate::cli) fn parse_agent(it: &mut Args) -> Result<CliAction> {
     match it.next().as_deref() {
-        Some("list") => Ok(CliAction::AgentList),
+        Some("list") => Ok(CliAction::AgentList {
+            workspace: parse_workspace_flag(it, "agent list [--workspace <repo>/<slug>]")?,
+        }),
         Some("whoami") => match it.next() {
             None => Ok(CliAction::AgentWhoami),
             Some(extra) => Err(usage(format!(

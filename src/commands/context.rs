@@ -184,21 +184,13 @@ pub fn render(d: &ContextDigest) -> String {
     };
     out.push_str(&format!("- agents: {agents}\n"));
 
-    let status = match &d.status {
-        None => "-".to_string(),
-        Some(s) => {
-            let age = format_age(d.now_ms, s.reported_at);
-            let source = if s.source.trim().is_empty() {
-                "-"
-            } else {
-                s.source.as_str()
-            };
-            match s.message.as_deref().filter(|m| !m.trim().is_empty()) {
-                Some(m) => format!("{} — \"{}\" ({}, {})", s.state.as_str(), m, source, age),
-                None => format!("{} ({}, {})", s.state.as_str(), source, age),
-            }
-        }
-    };
+    let status = crate::commands::inspect::format_status(
+        d.status
+            .as_ref()
+            .map(crate::commands::inspect::StatusRecord::from)
+            .as_ref(),
+        d.now_ms,
+    );
     out.push_str(&format!("- status: {status}\n"));
 
     if let Some(r) = &d.recap {

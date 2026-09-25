@@ -37,6 +37,31 @@ fn is_version(tok: &str) -> bool {
 
 pub(in crate::cli) type Args = dyn Iterator<Item = String>;
 
+/// Consume the trailing flags of a read-only inspection command
+/// (`agent list`, `status show`, `recap show`, `context show`): the
+/// `--workspace <repo>/<slug>` that points it at another workspace.
+/// Anything else is a usage error naming `usage`.
+pub(in crate::cli) fn parse_workspace_flag(it: &mut Args, usage: &str) -> Result<Option<String>> {
+    let mut workspace = None;
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--workspace" => {
+                workspace = Some(it.next().ok_or_else(|| Error::Usage {
+                    group: None,
+                    msg: "--workspace needs value (<repo>/<slug>)".into(),
+                })?);
+            }
+            other => {
+                return Err(Error::Usage {
+                    group: None,
+                    msg: format!("unexpected argument: {other} (usage: {usage})"),
+                });
+            }
+        }
+    }
+    Ok(workspace)
+}
+
 pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
     let mut rest: Vec<String> = args.into_iter().skip(1).collect();
     let first = if rest.is_empty() {

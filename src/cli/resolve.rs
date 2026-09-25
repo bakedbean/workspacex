@@ -161,6 +161,18 @@ pub(in crate::cli) fn resolve_workspace_spec(
         })
 }
 
+/// The workspace a command acts on: the `--workspace <repo>/<slug>` spec
+/// when given, else the one this invocation runs inside.
+pub(in crate::cli) fn target_workspace(
+    store: &crate::data::store::Store,
+    spec: Option<&str>,
+) -> Result<crate::data::store::Workspace> {
+    match spec {
+        Some(spec) => resolve_workspace_spec(store, spec),
+        None => resolve_current_workspace(store),
+    }
+}
+
 /// Comma-join names for an error hint, or `(none)` when the list is empty.
 pub(in crate::cli) fn join_or_none<'a>(names: impl Iterator<Item = &'a str>) -> String {
     let v: Vec<&str> = names.collect();

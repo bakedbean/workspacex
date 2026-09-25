@@ -3,7 +3,7 @@
 //! Both write to the dashboard rather than doing work, and both accept
 //! the same hook/notify shapes, so they share a file.
 
-use super::Args;
+use super::{Args, parse_workspace_flag};
 use crate::cli::action::CliAction;
 use crate::error::{Error, Result};
 
@@ -32,6 +32,9 @@ pub(in crate::cli) fn parse_status(it: &mut Args) -> Result<CliAction> {
             Ok(CliAction::StatusSet { state, message })
         }
         Some("clear") => Ok(CliAction::StatusClear),
+        Some("show") => Ok(CliAction::StatusShow {
+            workspace: parse_workspace_flag(it, "status show [--workspace <repo>/<slug>]")?,
+        }),
         Some("from-hook") => {
             let mut agent = None;
             while let Some(arg) = it.next() {
@@ -121,7 +124,9 @@ pub(in crate::cli) fn parse_recap(it: &mut Args) -> Result<CliAction> {
                 next_short,
             })
         }
-        Some("show") => Ok(CliAction::RecapShow),
+        Some("show") => Ok(CliAction::RecapShow {
+            workspace: parse_workspace_flag(it, "recap show [--workspace <repo>/<slug>]")?,
+        }),
         Some("clear") => Ok(CliAction::RecapClear),
         other => Err(Error::Usage {
             group: None,
@@ -132,7 +137,14 @@ pub(in crate::cli) fn parse_recap(it: &mut Args) -> Result<CliAction> {
 
 pub(in crate::cli) fn parse_context(it: &mut Args) -> Result<CliAction> {
     let action = match it.next().as_deref() {
-        Some("show") => CliAction::ContextShow,
+        Some("show") => {
+            return Ok(CliAction::ContextShow {
+                workspace: parse_workspace_flag(
+                    it,
+                    "wsx context show [--workspace <repo>/<slug>]",
+                )?,
+            });
+        }
         Some("write") => CliAction::ContextWrite,
         other => {
             return Err(Error::Usage {

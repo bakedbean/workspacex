@@ -216,9 +216,9 @@ async fn agent_send_dispatch_targets_the_other_workspaces_primary() {
 }
 
 /// The unknown-label error must offer `primary` alongside the concrete
-/// labels. A cross-workspace sender cannot run `wsx agent list` against
-/// the target, so this error is the one place it learns how to recover —
-/// and `primary` is the label that works whatever kind the target runs.
+/// labels, so a sender mid-task recovers with one retry instead of a
+/// separate `wsx agent list --workspace` — and `primary` is the label that
+/// works whatever kind the target runs.
 #[tokio::test]
 async fn agent_send_unknown_label_error_offers_the_primary_alias() {
     use crate::config::Dirs;
@@ -2116,7 +2116,7 @@ fn workspace_create_accepts_every_agent_kind() {
 fn parses_agent_list_and_add() {
     assert!(matches!(
         parse(&["agent", "list"]).unwrap(),
-        CliAction::AgentList
+        CliAction::AgentList { workspace: None }
     ));
     assert!(matches!(
         parse(&["agent", "add", "codex"]).unwrap(),
@@ -2448,7 +2448,7 @@ fn recap_set_short_flag_alone_satisfies_at_least_one() {
 fn parses_recap_show_and_clear() {
     assert!(matches!(
         parse(&["recap", "show"]).unwrap(),
-        CliAction::RecapShow
+        CliAction::RecapShow { workspace: None }
     ));
     assert!(matches!(
         parse(&["recap", "clear"]).unwrap(),
@@ -2460,7 +2460,7 @@ fn parses_recap_show_and_clear() {
 fn parses_context_show_and_write() {
     assert!(matches!(
         parse(&["context", "show"]).unwrap(),
-        CliAction::ContextShow
+        CliAction::ContextShow { workspace: None }
     ));
     assert!(matches!(
         parse(&["context", "write"]).unwrap(),
@@ -2672,4 +2672,184 @@ fn theme_usage_errors_are_tagged_with_the_group() {
             other => panic!("{other:?}"),
         }
     }
+}
+
+#[test]
+fn read_commands_take_an_optional_workspace_flag() {
+    let spec = || Some("meals backend/api-fix".to_string());
+    assert!(matches!(
+        parse(&["agent", "list"]).unwrap(),
+        CliAction::AgentList { workspace: None }
+    ));
+    assert!(matches!(
+        parse(&["agent", "list", "--workspace", "meals backend/api-fix"]).unwrap(),
+        CliAction::AgentList { workspace } if workspace == spec()
+    ));
+    assert!(matches!(
+        parse(&["status", "show"]).unwrap(),
+        CliAction::StatusShow { workspace: None }
+    ));
+    assert!(matches!(
+        parse(&["status", "show", "--workspace", "meals backend/api-fix"]).unwrap(),
+        CliAction::StatusShow { workspace } if workspace == spec()
+    ));
+    assert!(matches!(
+        parse(&["recap", "show", "--workspace", "meals backend/api-fix"]).unwrap(),
+        CliAction::RecapShow { workspace } if workspace == spec()
+    ));
+    assert!(matches!(
+        parse(&["context", "show", "--workspace", "meals backend/api-fix"]).unwrap(),
+        CliAction::ContextShow { workspace } if workspace == spec()
+    ));
+    assert!(matches!(
+        parse(&["context", "show"]).unwrap(),
+        CliAction::ContextShow { workspace: None }
+    ));
+}
+
+#[test]
+fn read_command_flags_reject_junk() {
+    for args in [
+        &["agent", "list", "--workspace"][..],
+        &["status", "show", "extra"][..],
+        &["recap", "show", "--wat"][..],
+        &["context", "show", "--workspace"][..],
+        &["context", "write", "--workspace", "r/w"][..],
+    ] {
+        assert!(
+            matches!(parse(args), Err(Error::Usage { .. })),
+            "{args:?} must be a usage error"
+        );
+    }
+}
+
+/// Seed `r/here` (primary claude + peer claude#2) and `r/there` (primary
+/// codex) in the DB file `run_cli` opens.
+fn seed_two_workspaces(
+    dirs: &crate::config::Dirs,
+) -> (
+    crate::data::store::WorkspaceId,
+    crate::data::store::AgentInstanceId,
+    crate::data::store::AgentInstanceId,
+) {
+    use crate::data::store::{NewWorkspace, Store};
+    use crate::pty::session::AgentKind;
+    let store = Store::open(&dirs.db_path()).unwrap();
+    let repo = store
+        .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+        .unwrap();
+    let mut ids = Vec::new();
+    for (name, kind) in [("here", AgentKind::Claude), ("there", AgentKind::Codex)] {
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name,
+                branch: &format!("wsx/{name}"),
+                worktree_path: &std::path::PathBuf::from(format!("/tmp/r/{name}")),
+                yolo: false,
+                agent: kind,
+                shared: false,
+            })
+            .unwrap();
+        store.add_primary_agent(ws, kind, 1).unwrap();
+        ids.push(ws);
+    }
+    let here = ids[0];
+    let primary = store.primary_instance_id(here).unwrap().unwrap();
+    let peer = store
+        .add_workspace_agent(here, AgentKind::Claude)
+        .unwrap()
+        .id;
+    (here, primary, peer)
+}
+
+/// `wsx status set` from a peer lands on the peer's own row, and its
+/// `status clear` leaves the primary's alone — the overwrite this per-agent
+/// schema exists to stop.
+#[tokio::test]
+async fn status_set_and_clear_are_attributed_to_the_calling_agent() {
+    use crate::config::Dirs;
+    use crate::data::store::{ReportedState, Store};
+    use crate::test_support::EnvGuard;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dirs = Dirs::for_test(tmp.path());
+    let (here, primary, peer) = seed_two_workspaces(&dirs);
+
+    let mut env = EnvGuard::new();
+    env.set("WSX_WORKSPACE_ID", here.0.to_string());
+    env.set("WSX_AGENT_INSTANCE_ID", primary.0.to_string());
+    let set = |state: &str| CliAction::StatusSet {
+        state: state.to_string(),
+        message: None,
+    };
+    run_cli(set("working"), &dirs).await.unwrap();
+    env.set("WSX_AGENT_INSTANCE_ID", peer.0.to_string());
+    run_cli(set("done"), &dirs).await.unwrap();
+
+    let store = Store::open(&dirs.db_path()).unwrap();
+    let all = store.agent_statuses(here).unwrap();
+    assert_eq!(all[&primary].state, ReportedState::Working);
+    assert_eq!(all[&peer].state, ReportedState::Done);
+    assert_eq!(
+        store.workspace_status(here).unwrap().unwrap().state,
+        ReportedState::Working,
+        "a peer finishing must not mark the workspace done"
+    );
+
+    run_cli(CliAction::StatusClear, &dirs).await.unwrap();
+    let all = store.agent_statuses(here).unwrap();
+    assert!(!all.contains_key(&peer));
+    assert!(
+        all.contains_key(&primary),
+        "clear from a peer is scoped to it"
+    );
+
+    // A shell with no agent identity clears the whole workspace.
+    env.remove("WSX_AGENT_INSTANCE_ID");
+    run_cli(CliAction::StatusClear, &dirs).await.unwrap();
+    assert!(store.agent_statuses(here).unwrap().is_empty());
+    assert!(store.workspace_status(here).unwrap().is_none());
+}
+
+/// Every read command resolves `--workspace` through the same spec resolver
+/// as `agent send`, so a bad spec fails with the valid alternatives listed.
+#[tokio::test]
+async fn read_commands_resolve_another_workspace() {
+    use crate::config::Dirs;
+    use crate::test_support::EnvGuard;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dirs = Dirs::for_test(tmp.path());
+    let (here, _, _) = seed_two_workspaces(&dirs);
+    let mut env = EnvGuard::new();
+    env.set("WSX_WORKSPACE_ID", here.0.to_string());
+
+    let w = |s: &str| Some(s.to_string());
+    for action in [
+        CliAction::AgentList {
+            workspace: w("r/there"),
+        },
+        CliAction::StatusShow {
+            workspace: w("r/there"),
+        },
+        CliAction::RecapShow {
+            workspace: w("r/there"),
+        },
+        CliAction::ContextShow {
+            workspace: w("r/there"),
+        },
+    ] {
+        run_cli(action, &dirs).await.unwrap();
+    }
+    let err = run_cli(
+        CliAction::StatusShow {
+            workspace: w("r/nope"),
+        },
+        &dirs,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("here") && err.contains("there"), "{err}");
 }

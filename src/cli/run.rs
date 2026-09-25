@@ -704,12 +704,13 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 println!("note: running sessions keep their current backend until restarted");
             }
         }
-        CliAction::AgentList => {
-            let ws = resolve_current_workspace(&store)?;
-            for inst in store.workspace_agents(ws.id)? {
-                let tag = if inst.is_primary { "  (primary)" } else { "" };
-                println!("{}  {}{}", inst.id.0, inst.label(), tag);
-            }
+        CliAction::AgentList { workspace } => {
+            let ws = target_workspace(&store, workspace.as_deref())?;
+            let agents = crate::commands::inspect::agents(&store, ws.id)?;
+            print!(
+                "{}",
+                crate::commands::inspect::render_agents(&agents, crate::data::store::now_ms())
+            );
         }
         CliAction::AgentSend {
             target,
@@ -898,6 +899,14 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             }
             println!("status cleared");
         }
+        CliAction::StatusShow { workspace } => {
+            let ws = target_workspace(&store, workspace.as_deref())?;
+            let view = crate::commands::inspect::status_view(&store, &ws)?;
+            print!(
+                "{}",
+                crate::commands::inspect::render_status(&view, crate::data::store::now_ms())
+            );
+        }
         CliAction::StatusFromHook { agent } => {
             use std::io::Read;
             let mut buf = String::new();
@@ -979,27 +988,18 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             )?;
             println!("recap updated");
         }
-        CliAction::RecapShow => {
-            let ws = resolve_current_workspace(&store)?;
-            match store.workspace_recap(ws.id)? {
-                Some(r) => {
-                    println!("goal:        {}", r.goal.as_deref().unwrap_or("-"));
-                    println!("state:       {}", r.state.as_deref().unwrap_or("-"));
-                    println!("next:        {}", r.next.as_deref().unwrap_or("-"));
-                    println!("goal-short:  {}", r.goal_short.as_deref().unwrap_or("-"));
-                    println!("state-short: {}", r.state_short.as_deref().unwrap_or("-"));
-                    println!("next-short:  {}", r.next_short.as_deref().unwrap_or("-"));
-                }
-                None => println!("no recap set"),
-            }
+        CliAction::RecapShow { workspace } => {
+            let ws = target_workspace(&store, workspace.as_deref())?;
+            let view = crate::commands::inspect::recap_view(&store, &ws)?;
+            print!("{}", crate::commands::inspect::render_recap(&view));
         }
         CliAction::RecapClear => {
             let ws = resolve_current_workspace(&store)?;
             store.clear_workspace_recap(ws.id)?;
             println!("recap cleared");
         }
-        CliAction::ContextShow => {
-            let ws = resolve_current_workspace(&store)?;
+        CliAction::ContextShow { workspace } => {
+            let ws = target_workspace(&store, workspace.as_deref())?;
             let digest = crate::commands::context::gather(&store, &ws).await?;
             print!("{}", crate::commands::context::render(&digest));
         }

@@ -4,13 +4,9 @@
 
 Terminal UI for managing Claude Code, Pi, Hermes, Codex, or oh-my-pi sessions in git worktrees.
 
-## Parallel Agent Sessions
-### Deploy multiple workspaces at once all working in parallel with real time feedback 
-https://github.com/user-attachments/assets/17962906-abde-4589-81e1-58737212645b
+## 🌐 Website
 
-## Multi Agent Sessions
-### Deploy multiple agents to the same workspace, orchestrate with the wsx CLI
-https://github.com/user-attachments/assets/30c68dc1-9954-4dc6-b1a1-a8559ea5d665
+**https://workspace-x.com**
 
 ## 📖 Documentation
 

@@ -13,7 +13,7 @@ impl StatusIntegration for ClaudeStatus {
     /// - `PreToolUse` for AskUserQuestion/ExitPlanMode -> Blocked
     /// - `Notification` permission_prompt              -> Blocked
     /// - `Notification` idle_prompt                    -> Waiting
-    /// - `Stop` with a non-empty `background_tasks`     -> Busy (parked, not done)
+    /// - `Stop` with non-monitor `background_tasks`     -> Busy (parked, not done)
     /// - `Stop` with a `?`-terminated last message     -> Blocked (best-effort)
     /// - `Stop` otherwise                              -> Done
     fn parse_event(&self, json: &serde_json::Value) -> Option<ReportedState> {
@@ -36,16 +36,27 @@ impl StatusIntegration for ClaudeStatus {
             "Stop" => {
                 // A `Stop` fires whenever the main agent's turn ends — including
                 // when it dispatched a background subagent/task and yielded to
-                // wait for it. `background_tasks` (Claude Code v2.1.145+) is
-                // non-empty in exactly that case, distinguishing "parked, will
-                // auto-resume" from a genuine completion. Older Claude omits the
+                // wait for it. `background_tasks` (Claude Code v2.1.145+) lists
+                // that in-flight work, and a non-monitor entry distinguishes
+                // "parked, will auto-resume" from a genuine completion. Older Claude omits the
                 // field; treat absent/empty as "nothing pending". Reported as
                 // Busy so the dashboard keeps showing work-in-progress rather
                 // than flipping to ✓ while a subagent runs in its own session.
+                //
+                // `monitor` tasks don't count: they are watchers (e.g. the
+                // live-update watcher Claude Code starts after an artifact is
+                // published) that can stay open for the rest of the session,
+                // long after the work they were started for has finished.
+                // Counting them would pin the workspace to Busy indefinitely,
+                // since `Busy` is exempt from the freshness gate.
                 let background_pending = json
                     .get("background_tasks")
                     .and_then(|v| v.as_array())
-                    .is_some_and(|tasks| !tasks.is_empty());
+                    .is_some_and(|tasks| {
+                        tasks
+                            .iter()
+                            .any(|t| t.get("type").and_then(|v| v.as_str()) != Some("monitor"))
+                    });
                 if background_pending {
                     return Some(ReportedState::Busy);
                 }
@@ -227,6 +238,70 @@ mod tests {
                 "background_tasks": []
             })),
             Some(ReportedState::Done)
+        );
+    }
+
+    #[test]
+    fn stop_with_only_monitor_tasks_is_done() {
+        // A live-update watcher (e.g. one auto-started after publishing a
+        // claude.ai artifact) stays in `background_tasks` for the rest of the
+        // session. It waits on outside events rather than doing work that will
+        // resume the turn, so it must not pin the workspace to Busy.
+        assert_eq!(
+            ev(serde_json::json!({
+                "hook_event_name": "Stop",
+                "last_assistant_message": "Design doc published.",
+                "background_tasks": [{"id": "w1", "type": "monitor", "status": "running"}]
+            })),
+            Some(ReportedState::Done)
+        );
+    }
+
+    #[test]
+    fn stop_with_only_monitor_tasks_and_question_is_blocked() {
+        // With the monitor ignored, the usual trailing-`?` heuristic applies.
+        assert_eq!(
+            ev(serde_json::json!({
+                "hook_event_name": "Stop",
+                "last_assistant_message": "Want me to open a PR?",
+                "background_tasks": [{"id": "w1", "type": "monitor", "status": "running"}]
+            })),
+            Some(ReportedState::Blocked)
+        );
+    }
+
+    #[test]
+    fn stop_with_untyped_or_unknown_tasks_is_busy() {
+        // Only an explicit "monitor" is excluded; anything unrecognized stays
+        // conservatively Busy.
+        for task in [
+            serde_json::json!({"id": "t1", "status": "running"}),
+            serde_json::json!({"id": "t1", "type": null, "status": "running"}),
+            serde_json::json!({"id": "t1", "type": "teammate", "status": "running"}),
+            serde_json::json!({"id": "t1", "type": "Monitor", "status": "running"}),
+        ] {
+            assert_eq!(
+                ev(serde_json::json!({
+                    "hook_event_name": "Stop",
+                    "background_tasks": [task.clone()]
+                })),
+                Some(ReportedState::Busy),
+                "task: {task}"
+            );
+        }
+    }
+
+    #[test]
+    fn stop_with_monitor_and_subagent_is_busy() {
+        assert_eq!(
+            ev(serde_json::json!({
+                "hook_event_name": "Stop",
+                "background_tasks": [
+                    {"id": "w1", "type": "monitor", "status": "running"},
+                    {"id": "t1", "type": "subagent", "status": "running"}
+                ]
+            })),
+            Some(ReportedState::Busy)
         );
     }
 

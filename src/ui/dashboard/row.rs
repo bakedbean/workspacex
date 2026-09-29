@@ -21,7 +21,7 @@ use crate::pty::session::AgentKind;
 use crate::ui::dashboard::column_content::{ColumnBody, ColumnEmphasis, RecapSegment, RowColumn};
 use crate::ui::dashboard::spinner;
 use crate::ui::dashboard::status::Status;
-use crate::ui::text::{truncate, truncate_pad, truncate_words};
+use crate::ui::text::{display_width, truncate, truncate_pad, truncate_words};
 use crate::ui::theme::Theme;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -397,7 +397,7 @@ pub fn render(
         )
         .max(1);
     let branch_truncated = truncate(&branch_text, branch_target);
-    let branch_visible_width = branch_truncated.chars().count();
+    let branch_visible_width = display_width(&branch_truncated);
     let mut name_style = Style::default().add_modifier(Modifier::BOLD);
     if inputs.yolo {
         name_style = name_style.fg(theme.warn);
@@ -414,7 +414,7 @@ pub fn render(
         .unwrap_or_else(|| theme.dim_style())
         .add_modifier(Modifier::BOLD);
     // Split the ALREADY-truncated text rather than truncating the glyph and
-    // the name separately, so the column's char budget is accounted for in
+    // the name separately, so the column's cell budget is accounted for in
     // exactly one place and `branch_visible_width` above stays authoritative.
     // The `<glyph> ` prefix is two chars; in a column too narrow to hold even
     // that, everything left goes to the glyph span. `split_off` hands the
@@ -499,7 +499,7 @@ pub fn render(
         } else {
             theme.status_style(inputs.status)
         };
-        let mut used = token.chars().count();
+        let mut used = display_width(&token);
         spans.push(Span::styled(token, token_style));
         let avail = body_width.saturating_sub(used);
         let (rest, rest_style) = match &col.body {
@@ -523,7 +523,7 @@ pub fn render(
             }
             ColumnBody::Empty => (String::new(), theme.dim_style()),
         };
-        used += rest.chars().count();
+        used += display_width(&rest);
         if !rest.is_empty() {
             spans.push(Span::styled(rest, rest_style));
         }
@@ -585,9 +585,9 @@ pub fn pr_chip_spans(
     // clipped off the end.
     match chip.mark() {
         Some((mark, d)) => {
-            let head_width = pr_width.saturating_sub(mark.chars().count() + 1);
+            let head_width = pr_width.saturating_sub(display_width(&mark) + 1);
             let head = truncate(&chip.lifecycle_text, head_width);
-            let used = head.chars().count() + 1 + mark.chars().count();
+            let used = display_width(&head) + 1 + display_width(&mark);
             vec![
                 Span::styled(head, chip_style),
                 Span::raw(" ".to_string()),
@@ -631,7 +631,7 @@ pub fn diff_spans(diff: Option<DiffStats>, width: usize, theme: &Theme) -> Vec<S
     }
 }
 
-/// Char-offset and char-width of the clickable PR chip within a workspace
+/// Cell offset and cell width of the clickable PR chip within a workspace
 /// row, or `None` when the chip cell is blank. Offsets are relative to the
 /// row's left edge; the caller adds the list area origin (and the row's y)
 /// to build a screen rect. Padding to the chip cell's right is excluded so
@@ -639,7 +639,7 @@ pub fn diff_spans(diff: Option<DiffStats>, width: usize, theme: &Theme) -> Vec<S
 pub fn pr_chip_hit_span(inputs: &RowInputs, widths: ColumnWidths) -> Option<(u16, u16)> {
     let chip = pr_chip(inputs, widths.pr)?;
     let x = widths.agent + GUTTER_WIDTH + ELBOW_WIDTH + GLYPH_WIDTH + widths.branch;
-    let width = truncate(&chip.text(), widths.pr).chars().count();
+    let width = display_width(&truncate(&chip.text(), widths.pr));
     Some((x as u16, width as u16))
 }
 
@@ -663,7 +663,7 @@ const SEG_SEP: &str = " · ";
 /// instead of stranding blank space after a fixed clip.
 const FALLBACK_SEGMENT_FLOOR: usize = 32;
 
-/// Width-fit the recap segments into `avail` chars.
+/// Width-fit the recap segments into `avail` cells.
 ///
 /// Pass 1 — inclusion at base widths: authored short forms count at full
 /// length (they render verbatim), fallback full fields at
@@ -682,7 +682,7 @@ fn fit_segments(segments: &[RecapSegment], avail: usize) -> String {
     let mut widths: Vec<usize> = Vec::with_capacity(segments.len());
     let mut used = 0usize;
     for (i, seg) in segments.iter().enumerate() {
-        let len = seg.text.chars().count();
+        let len = display_width(&seg.text);
         let base = if seg.authored {
             len
         } else {
@@ -708,7 +708,7 @@ fn fit_segments(segments: &[RecapSegment], avail: usize) -> String {
         if leftover == 0 {
             break;
         }
-        let len = seg.text.chars().count();
+        let len = display_width(&seg.text);
         if !seg.authored && len > *w {
             let grow = (len - *w).min(leftover);
             *w += grow;
@@ -724,26 +724,22 @@ fn fit_segments(segments: &[RecapSegment], avail: usize) -> String {
     let mut out = String::new();
     let mut bonus = 0usize;
     for (w, seg) in widths.iter().zip(segments) {
-        let len = seg.text.chars().count();
+        let len = display_width(&seg.text);
         let mut target = *w;
         if !seg.authored && len > target && bonus > 0 {
             let grow = (len - target).min(bonus);
             target += grow;
             bonus -= grow;
         }
-        let rendered = if len <= target {
-            seg.text.clone()
-        } else {
-            truncate_words(&seg.text, target)
-        };
-        bonus += target - rendered.chars().count();
+        let rendered = truncate_words(&seg.text, target);
+        bonus += target - display_width(&rendered);
         out.push_str(SEG_SEP);
         out.push_str(&rendered);
     }
     // The accrued shortfall can even re-admit segments pass 1 dropped: same
     // inclusion rule (whole base width fits), against bonus width only.
     for seg in segments.iter().skip(widths.len()) {
-        let len = seg.text.chars().count();
+        let len = display_width(&seg.text);
         let base = if seg.authored {
             len
         } else {
@@ -759,12 +755,8 @@ fn fit_segments(segments: &[RecapSegment], avail: usize) -> String {
             target += grow;
             bonus -= grow;
         }
-        let rendered = if len <= target {
-            seg.text.clone()
-        } else {
-            truncate_words(&seg.text, target)
-        };
-        bonus += target - rendered.chars().count();
+        let rendered = truncate_words(&seg.text, target);
+        bonus += target - display_width(&rendered);
         out.push_str(SEG_SEP);
         out.push_str(&rendered);
     }
@@ -780,10 +772,6 @@ fn left_pad(s: &str, target: usize) -> String {
         out.push_str(s);
         out
     }
-}
-
-fn display_width(s: &str) -> usize {
-    s.chars().count()
 }
 
 fn format_ago(secs: Option<u64>) -> String {
@@ -1263,6 +1251,34 @@ mod tests {
             fit_segments(&segs, 52),
             " · one two three four five six seven… · 3/12 done"
         );
+    }
+
+    #[test]
+    fn fit_segments_budgets_wide_text_in_cells() {
+        // 6 chars but 12 cells: it must be cut to the 9 cells left after
+        // the separator, not rendered whole because 6 chars fit.
+        assert_eq!(fit_segments(&[au("日本語の目標")], 12), " · 日本語の…");
+        // A control char renders as the space it's counted as.
+        assert_eq!(fit_segments(&[au("fix\tbug")], 20), " · fix bug");
+    }
+
+    #[test]
+    fn wide_branch_and_recap_keep_the_row_to_its_cells() {
+        let theme = Theme::wsx();
+        let mut inputs = base();
+        inputs.branch = "機能/日本語のブランチ名".into();
+        inputs.column = Some(RowColumn {
+            token: "作業中".to_string(),
+            reported: false,
+            body: ColumnBody::Recap {
+                segments: vec![au("日本語の目標"), fb(&"長い説明文 ".repeat(20))],
+            },
+        });
+        for total in [100, 160] {
+            let text = line_text(&render(&inputs, ColumnWidths::default(), 0, &theme, total));
+            assert_eq!(display_width(&text), total, "{text:?}");
+            assert!(text.trim_end().ends_with("29s ago"), "{text:?}");
+        }
     }
 
     #[test]

@@ -261,6 +261,8 @@ Status hooks (Claude's hooks, Codex's `notify`) infer state from the harness's l
 - an agent's `working` keeps its message when the hook repeats `working`, or when the turn parks on background work;
 - a hook reporting a turn's end over an agent's `working` replaces it, because the agent finished without saying so.
 
+For Claude, "background work" means a subagent, shell, workflow or other task still in flight when the turn ends. Monitor tasks don't count: a watcher, such as the one Claude Code keeps open after publishing a claude.ai artifact, can outlive every turn in the session. So a turn that ends with only a monitor running reads as finished, even when the agent is deliberately waiting on that monitor (for example, on a CI run).
+
 `wsx status clear` run by an agent clears only that agent's status; run from a plain shell it clears every agent's. Removing an agent drops its status from the workspace's, and a late status push from a removed agent is discarded.
 
 A status has no expiry: a peer whose session died keeps its last status until it reports again, is cleared, or is removed.

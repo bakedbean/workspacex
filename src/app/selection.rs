@@ -97,10 +97,13 @@ impl App {
         // point the focused leaf at a sessionless instance, and the next
         // draw's "leaf session missing -> bounce to Dashboard" guard would
         // then collapse the whole split. Same for Refused (a live archive
-        // refused the ensure). Mirror attach_workspace and bail.
+        // refused the ensure) and WorktreeMissing. Mirror attach_workspace
+        // and bail.
         match ensure_instance_session(self, inst, true)? {
             AttachReady::Ok => {}
-            AttachReady::AgentMissing | AttachReady::Refused => return Ok(()),
+            AttachReady::AgentMissing | AttachReady::Refused | AttachReady::WorktreeMissing => {
+                return Ok(());
+            }
         }
         let Some(instance) = self.store.workspace_agents_by_id(inst)? else {
             return Ok(());
@@ -215,7 +218,9 @@ mod select_by_name_tests {
                 repo_id: repo,
                 name: "a",
                 branch: "x/a",
-                worktree_path: std::path::Path::new("/tmp/r/a"),
+                // An existing directory: `open_selects_and_attaches` really
+                // spawns the agent in it.
+                worktree_path: std::path::Path::new("."),
                 yolo: false,
                 agent: crate::pty::session::AgentKind::Claude,
                 shared: false,

@@ -142,10 +142,38 @@ pub(crate) fn ensure_workspace_session(
                 });
                 return Ok(AttachReady::AgentMissing);
             }
+            Err(crate::error::Error::WorktreeMissing(path)) => {
+                app.modal = Some(worktree_missing_modal(app, ws_id, &path));
+                return Ok(AttachReady::WorktreeMissing);
+            }
             Err(e) => return Err(e),
         }
     }
     Ok(AttachReady::Ok)
+}
+
+/// The error shown when a spawn is refused because the workspace's worktree
+/// is gone: a create that failed before git made one, or a worktree deleted
+/// by hand. Archive is the way out, and it copes with the missing directory.
+fn worktree_missing_modal(
+    app: &App,
+    ws_id: crate::data::store::WorkspaceId,
+    path: &std::path::Path,
+) -> crate::ui::modal::Modal {
+    let name = app
+        .workspaces
+        .iter()
+        .find(|(_, w)| w.id == ws_id)
+        .map(|(_, w)| w.name.as_str())
+        .unwrap_or("this workspace");
+    crate::ui::modal::Modal::Error {
+        message: format!(
+            "The worktree for '{name}' is missing:\n{}\n\n\
+             No agent was started. Archive the workspace\n\
+             (d on the dashboard) to remove it.",
+            path.display()
+        ),
+    }
 }
 
 /// Ensure a specific agent *instance* has a live PTY session, spawning one in
@@ -161,6 +189,7 @@ pub(crate) fn ensure_workspace_session(
 /// handlers, `switch_focused_pane_to`, `restore_attached_state`) so the user
 /// sees the modal. Pass `false` for background callers (e.g. the message drain)
 /// so a missing binary doesn't pop a modal over the user's unrelated view.
+/// A missing worktree's error modal follows the same rule.
 ///
 /// Enforces `attach_is_blocked` for non-primary instances directly (they
 /// never reach `ensure_workspace_session`). Primary instances delegate
@@ -217,6 +246,12 @@ pub(crate) fn ensure_instance_session(
                     });
                 }
                 return Ok(AttachReady::AgentMissing);
+            }
+            Err(crate::error::Error::WorktreeMissing(path)) => {
+                if surface_missing {
+                    app.modal = Some(worktree_missing_modal(app, ws_id, &path));
+                }
+                return Ok(AttachReady::WorktreeMissing);
             }
             Err(e) => return Err(e),
         }
@@ -371,11 +406,13 @@ pub(crate) fn attach_workspace(
     // too — see `AttachReady::Refused`.
     match ensure_workspace_session(app, ws_id)? {
         AttachReady::Ok => {}
-        // Attach didn't happen (AgentMissing modal is up, or attach was
-        // refused because an archive is tearing this workspace down) —
-        // leave the workspace's attention marker alone so a failed open
-        // doesn't silently dismiss it.
-        AttachReady::AgentMissing | AttachReady::Refused => return Ok(()),
+        // Attach didn't happen (AgentMissing or missing-worktree modal is
+        // up, or attach was refused because an archive is tearing this
+        // workspace down) — leave the workspace's attention marker alone so
+        // a failed open doesn't silently dismiss it.
+        AttachReady::AgentMissing | AttachReady::Refused | AttachReady::WorktreeMissing => {
+            return Ok(());
+        }
     }
     app.workspace_needs_attention.remove(&ws_id);
     if app

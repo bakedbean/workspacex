@@ -290,11 +290,14 @@ pub(super) async fn confirm_share(
                 app.modal = Some(Modal::Error {
                     message: e.to_string(),
                 });
-            } else if !matches!(app.modal, Some(Modal::AgentMissing { .. })) {
+            } else if !matches!(
+                app.modal,
+                Some(Modal::AgentMissing { .. } | Modal::Error { .. })
+            ) {
                 // Only clear the modal if toggle_workspace_shared didn't
-                // leave an AgentMissing modal up for the user (mirrors the
-                // UpdatesPanel Enter handler's rule above) — otherwise
-                // we'd wipe that modal right back off.
+                // leave an AgentMissing or missing-worktree modal up for the
+                // user (mirrors the UpdatesPanel Enter handler's rule above)
+                // — otherwise we'd wipe that modal right back off.
                 app.modal = None;
             }
         }

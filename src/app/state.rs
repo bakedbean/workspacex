@@ -1160,4 +1160,63 @@ mod strip_instances_tests {
         let outcome = crate::app::ensure_instance_session(&mut app, primary.id, false).unwrap();
         assert_eq!(outcome, crate::app::AttachReady::Refused);
     }
+
+    /// A workspace whose worktree is gone (a create git refused, or a
+    /// worktree deleted by hand) must not start its agent anywhere else. The
+    /// spawn is refused, and the ensure turns that into an error pointing at
+    /// archive rather than an `Err`, which would end the event loop.
+    #[test]
+    fn ensure_workspace_session_refuses_a_missing_worktree() {
+        // A binary that cannot be found, so a spawn that got past the guard
+        // fails as AgentMissing instead of launching a real agent.
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let mut app = test_app();
+        app.store.set_setting("mcp_mirror", "off").unwrap();
+        let ws = app.test_workspace("vanished");
+        assert!(
+            !app.workspace_path(ws).unwrap().exists(),
+            "the fixture's worktree must not exist"
+        );
+
+        let outcome = crate::app::ensure_workspace_session(&mut app, ws).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::WorktreeMissing);
+        assert!(
+            app.primary_instance(ws)
+                .and_then(|i| app.sessions.get(i))
+                .is_none(),
+            "no session may be started for a missing worktree"
+        );
+        match &app.modal {
+            Some(crate::ui::modal::Modal::Error { message }) => {
+                assert!(message.contains("'vanished'"), "{message}");
+                assert!(message.contains("Archive the workspace"), "{message}");
+            }
+            other => panic!("expected an error modal, got {other:?}"),
+        }
+    }
+
+    /// An added agent is refused the same way, and a background caller
+    /// (`surface_missing = false`) gets no modal, as with a missing binary.
+    #[test]
+    fn ensure_instance_session_refuses_a_missing_worktree_quietly() {
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let mut app = test_app();
+        app.store.set_setting("mcp_mirror", "off").unwrap();
+        let ws = app.test_workspace("vanished-peer");
+        let peer = app
+            .store
+            .add_workspace_agent(ws, AgentKind::Claude)
+            .unwrap();
+
+        let outcome = crate::app::ensure_instance_session(&mut app, peer.id, false).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::WorktreeMissing);
+        assert!(app.sessions.get(peer.id).is_none());
+        assert!(app.modal.is_none(), "a background ensure must stay quiet");
+    }
 }

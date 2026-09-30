@@ -145,11 +145,18 @@ pub(super) async fn updates_panel(
                     AttachReady::Refused => {
                         // A live archive refused the attach; leave view alone.
                     }
+                    AttachReady::WorktreeMissing => {
+                        // The missing-worktree error is set; leave view alone.
+                    }
                 }
             }
-            // Only close the Updates-panel if AgentMissing didn't
-            // replace the modal — otherwise we'd wipe the new modal.
-            if !matches!(app.modal, Some(Modal::AgentMissing { .. })) {
+            // Only close the Updates-panel if AgentMissing or the
+            // missing-worktree error didn't replace the modal — otherwise
+            // we'd wipe the new modal.
+            if !matches!(
+                app.modal,
+                Some(Modal::AgentMissing { .. } | Modal::Error { .. })
+            ) {
                 app.modal = None;
             }
         }
@@ -215,11 +222,18 @@ pub(super) async fn updates_panel(
                     AttachReady::Refused => {
                         // A live archive refused the attach; leave view alone.
                     }
+                    AttachReady::WorktreeMissing => {
+                        // The missing-worktree error is set; leave view alone.
+                    }
                 }
             }
-            // Only close the Updates-panel if AgentMissing didn't
-            // replace the modal — otherwise we'd wipe the new modal.
-            if !matches!(app.modal, Some(Modal::AgentMissing { .. })) {
+            // Only close the Updates-panel if AgentMissing or the
+            // missing-worktree error didn't replace the modal — otherwise
+            // we'd wipe the new modal.
+            if !matches!(
+                app.modal,
+                Some(Modal::AgentMissing { .. } | Modal::Error { .. })
+            ) {
                 app.modal = None;
             }
         }

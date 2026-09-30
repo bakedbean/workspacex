@@ -1406,8 +1406,8 @@ fn accepts_lazygit_cmd() {
 }
 
 #[test]
-fn accepts_chronox_cmd() {
-    assert!(known_setting_key("chronox_cmd"));
+fn rejects_removed_chronox_cmd() {
+    assert!(!known_setting_key("chronox_cmd"));
 }
 
 #[test]

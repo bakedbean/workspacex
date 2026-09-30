@@ -147,7 +147,7 @@ pub enum Modal {
         selected: usize,
     },
     /// Static reference card for the workspace-only actions
-    /// (edit/term/diff/lazygit/chronox) — the ones that act only on a
+    /// (edit/term/diff/lazygit/rename/…) — the ones that act only on a
     /// selected workspace. Carries no state — dismissed without side effects.
     WorkspaceActions,
     /// Browse the tmux-shared workspace listing fetched from a remote wsx
@@ -384,9 +384,8 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
             "These apply to the selected workspace:\n\n  \
              e   edit        t   term\n  \
              v   diff        g   lazygit\n  \
-             c   chronox     r   rename\n  \
-             C   name color  o   setup log\n  \
-             x   cancel setup\n\n  \
+             r   rename      C   name color\n  \
+             o   setup log   x   cancel setup\n\n  \
              ?/Esc  close"
                 .to_string(),
         ),
@@ -602,6 +601,6 @@ mod tests {
         assert!(text.contains("term"), "missing 'term':\n{text}");
         assert!(text.contains("diff"), "missing 'diff':\n{text}");
         assert!(text.contains("lazygit"), "missing 'lazygit':\n{text}");
-        assert!(text.contains("chronox"), "missing 'chronox':\n{text}");
+        assert!(!text.contains("chronox"), "unexpected 'chronox':\n{text}");
     }
 }

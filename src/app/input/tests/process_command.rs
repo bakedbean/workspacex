@@ -290,18 +290,18 @@ async fn workspace_actions_overlay_navigates_and_dismisses() {
         app.modal
     );
 
-    // 3. Action key 'c' closes the card (no workspace selected, so the
+    // 3. Action key 'g' closes the card (no workspace selected, so the
     //    action itself no-ops — the important thing is the overlay closes).
     handle_key_modal(
         &mut app,
         &shared,
-        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
     )
     .await
     .unwrap();
     assert!(
         app.modal.is_none(),
-        "action key 'c' should close the overlay"
+        "action key 'g' should close the overlay"
     );
 
     // 4. Re-open with '?', then Enter closes the card.

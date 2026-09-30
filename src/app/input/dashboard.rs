@@ -529,16 +529,6 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             }
             // 'g' on a Repo header is intentionally a no-op.
         }
-        (KeyCode::Char('c'), _) => {
-            if let Some(SelectionTarget::Workspace(id)) = app.selected_target()
-                && let Some(path) = app.workspace_path(id)
-            {
-                let cmd = app.store.get_setting("chronox_cmd").ok().flatten();
-                let r = crate::commands::external::open_in_chronox(&path, cmd.as_deref());
-                report_external_open(app, r);
-            }
-            // 'c' on a Repo header is intentionally a no-op.
-        }
         (KeyCode::Char('K'), _) => match app.selected_target() {
             Some(SelectionTarget::Workspace(id)) => {
                 app.modal = Some(Modal::ProcessList {
@@ -648,7 +638,7 @@ pub(in crate::app::input) async fn handle_key_dashboard(
                 app.modal = Some(Modal::WorkspaceActions);
             }
         }
-        // `C` (not `c`, which is chronox) opens the name-color picker for the
+        // `C` opens the name-color picker for the
         // selected workspace. `current` is snapshotted here so the grid can
         // mark the applied color without re-reading the store each frame.
         (KeyCode::Char('C'), _) => {

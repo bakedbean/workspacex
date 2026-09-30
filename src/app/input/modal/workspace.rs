@@ -365,7 +365,6 @@ pub(super) async fn workspace_actions(
         | KeyCode::Char('t')
         | KeyCode::Char('v')
         | KeyCode::Char('g')
-        | KeyCode::Char('c')
         | KeyCode::Char('C')
         | KeyCode::Enter => {
             app.modal = None;

@@ -16,7 +16,6 @@ pub(in crate::cli) fn known_setting_key(k: &str) -> bool {
             | "terminal_cmd"
             | "diff_cmd"
             | "lazygit_cmd"
-            | "chronox_cmd"
             | "notifications"
             | "notification_bell_question"
             | "notification_bell_complete"

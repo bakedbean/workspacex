@@ -1406,11 +1406,6 @@ fn accepts_lazygit_cmd() {
 }
 
 #[test]
-fn accepts_chronox_cmd() {
-    assert!(known_setting_key("chronox_cmd"));
-}
-
-#[test]
 fn accepts_mcp_mirror() {
     assert!(known_setting_key("mcp_mirror"));
 }

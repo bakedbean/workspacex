@@ -150,14 +150,6 @@ pub(in crate::app::input) async fn dispatch_leader_action(
             }
             Ok(())
         }
-        KeyCode::Char('c') => {
-            if let Some(path) = app.workspace_path(id) {
-                let cmd = app.store.get_setting("chronox_cmd").ok().flatten();
-                let r = crate::commands::external::open_in_chronox(&path, cmd.as_deref());
-                report_external_open(app, r);
-            }
-            Ok(())
-        }
         KeyCode::Char('k') => {
             app.modal = Some(Modal::ProcessList {
                 workspace_id: id,

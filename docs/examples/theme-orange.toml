@@ -88,6 +88,20 @@ format       = "[ $agent_bar ](bg:ash)[](fg:ash bg:orange)[ $workspace ](bg:o
 right_format = "([](fg:soot)[( $procs )](bg:soot fg:orange)[](fg:smoke bg:soot)[( $diff )](bg:smoke fg:orange)[](fg:orange bg:smoke)[( $pr )](bg:orange fg:black))"
 fill         = " "
 
+# The DETAIL pane's pinned-command row: the chips on the same block the
+# attached bottom bar gives them, capped, with no rule after.
+[dashboard_detail]
+format = "([ $pins ](bg:soot fg:orange)[](fg:soot))"
+fill   = " "
+
+# The DETAIL pane's reply row, drawn as a shell prompt: the agent and name
+# blocks, then the prompt character (in the agent's colour while typing,
+# dim otherwise) and the draft. The send/cancel hint is the right prompt.
+[dashboard_detail_reply]
+format       = "[ $agent_bar ](bg:ash)[](fg:ash bg:orange)[ $workspace ](bg:orange fg:black bold)[](fg:orange) $prompt "
+right_format = "([](fg:ash)[ $keys ](bg:ash fg:orange))"
+fill         = " "
+
 # --- segments (unset fields keep the bundled defaults) -------------------
 
 # Brand colours are theme tokens (`brand`, `wordmark`), same as the bundled

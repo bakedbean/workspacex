@@ -73,6 +73,20 @@ format       = "[ $agent_bar ](bg:nord1)[](fg:nord1 bg:nord8)[ $workspace ](b
 right_format = "([](fg:nord1)[( $procs )( $diff )](bg:nord1 fg:nord4)[](fg:nord10 bg:nord1)[( $pr )](bg:nord10 fg:nord6))"
 fill         = " "
 
+# The DETAIL pane's pinned-command row: the chips on the same block the
+# attached bottom bar gives them, capped, with no rule after.
+[dashboard_detail]
+format = "([ $pins ](bg:nord2 fg:nord4)[](fg:nord2))"
+fill   = " "
+
+# The DETAIL pane's reply row, drawn as a shell prompt: the agent and name
+# blocks, then the prompt character (in the agent's colour while typing,
+# dim otherwise) and the draft. The send/cancel hint is the right prompt.
+[dashboard_detail_reply]
+format       = "[ $agent_bar ](bg:nord1)[](fg:nord1 bg:nord8)[ $workspace ](bg:nord8 fg:nord0 bold)[](fg:nord8) $prompt "
+right_format = "([](fg:nord1)[ $keys ](bg:nord1 fg:nord4))"
+fill         = " "
+
 # --- segments (unset fields keep the bundled defaults) -------------------
 
 [group]

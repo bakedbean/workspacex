@@ -214,6 +214,16 @@ row (name, branch, PR chip, diff, procs, status) picks up the change, since
 it is the `[dashboard_detail_header]` bar. Clicking its PR chip still opens
 the PR.
 
+Select a workspace row and look at the DETAIL pane's bottom row. Expected:
+it reads as a shell prompt, `❯ Reply to agent` with the `❯` and the
+placeholder dim. Press `Tab`. Expected: the `❯` takes the agent's colour,
+the cursor sits on the placeholder's first cell, and `↵ send  Esc cancel`
+pills appear flush right. Type past the row's width. Expected: the draft
+scrolls so its end stays visible and the cursor follows it. With an example
+theme (`docs/examples/theme-orange.toml`), expected: the prompt opens with the
+agent and name blocks, and the pinned-chip row above it sits on the same
+block as the attached bottom bar's pins, with no rule after.
+
 Exit the scratch wsx session when finished. Close the dedicated shells to
 restore your normal environment; remove only the scratch directory you
 created once it is no longer needed.

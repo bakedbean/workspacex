@@ -221,6 +221,19 @@ impl BarSpecs {
     /// has something to draw asks this rather than rendering first: it
     /// depends on what the theme places, not on what the fleet currently
     /// counts, so the row does not come and go with the numbers.
+    /// `agent`'s own glyph from `[agent_bar.symbols]`, or `None` when the
+    /// theme draws no icon for that kind (no entry, or an empty one). The
+    /// fallback `symbol` is not an icon, so it never answers here.
+    pub fn agent_symbol(&self, agent: crate::pty::session::AgentKind) -> Option<&str> {
+        self.segments
+            .get("agent_bar")?
+            .symbols
+            .iter()
+            .find(|(kind, _)| *kind == agent)
+            .map(|(_, glyph)| glyph.as_str())
+            .filter(|glyph| !glyph.is_empty())
+    }
+
     pub fn places_module(&self, bar: &BarSpec) -> bool {
         format::vars(&bar.format)
             .into_iter()
@@ -929,6 +942,18 @@ mod tests {
         assert!(!specs.palette.contains_key("ok"));
         assert!(specs.segments["workspace"].palette.is_empty());
         assert_eq!(specs.palette["global"], Color::Rgb(0x12, 0x34, 0x56));
+    }
+
+    /// `agent_symbol` answers only a kind's own icon: a kind without an
+    /// entry, or with an empty one, gets `None`, not the fallback `symbol`.
+    #[test]
+    fn agent_symbol_is_the_kinds_icon_only() {
+        use crate::pty::session::AgentKind;
+        let specs = ok("[agent_bar.symbols]\nclaude = \"C\"\npi = \"\"\n");
+        assert_eq!(specs.agent_symbol(AgentKind::Claude), Some("C"));
+        assert_eq!(specs.agent_symbol(AgentKind::Pi), None);
+        assert_eq!(specs.agent_symbol(AgentKind::Codex), None);
+        assert_eq!(ok("").agent_symbol(AgentKind::Claude), None);
     }
 
     /// `[agent_bar.symbols]` maps agent kinds to their own glyph; kinds

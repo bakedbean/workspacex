@@ -11,6 +11,7 @@ use crate::config::detail_bar_config::DetailBarConfig;
 use crate::data::store::{Repo, Workspace, WorkspaceRecap};
 use crate::git::DiffStats;
 use crate::git::forge::{BranchLifecycle, ReviewDecision};
+use crate::pty::session::AgentKind;
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::Frame;
@@ -148,7 +149,14 @@ pub fn render(
         (None, chunks[2])
     };
 
+    // A bar theme that draws the agent's kind (`[agent_bar.symbols]`)
+    // puts that icon at the head of the header in place of the gutter.
+    let agent_icon = inputs
+        .bar_specs
+        .agent_symbol(inputs.workspace.agent)
+        .map(|glyph| (glyph, inputs.workspace.agent));
     let (header, pr_chip) = build_header_strip(
+        agent_icon,
         &inputs.workspace.name,
         &inputs.workspace.branch,
         inputs.lifecycle,
@@ -447,6 +455,7 @@ const GUTTER: &str = "▍";
 /// caller can make it clickable.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_header_strip(
+    agent_icon: Option<(&str, AgentKind)>,
     name: &str,
     branch: &str,
     lifecycle: Option<BranchLifecycle>,
@@ -464,9 +473,15 @@ pub(crate) fn build_header_strip(
     let mut col: usize = 0;
     let mut pr_chip: Option<HeaderChip> = None;
 
-    let gutter = GUTTER.to_string();
-    col += gutter.chars().count();
-    spans.push(Span::styled(gutter, theme.status_style(status)));
+    // The lead cell: the agent's icon in its identity colour when the bar
+    // theme has one for its kind, else the status-coloured gutter. Counted
+    // in cells, since a theme icon may be a wide glyph.
+    let (lead, lead_style) = match agent_icon {
+        Some((glyph, agent)) => (glyph.to_string(), theme.agent_style(agent)),
+        None => (GUTTER.to_string(), theme.status_style(status)),
+    };
+    col += unicode_width::UnicodeWidthStr::width(lead.as_str());
+    spans.push(Span::styled(lead, lead_style));
 
     col += 1;
     spans.push(Span::raw(" ".to_string()));
@@ -922,6 +937,7 @@ mod tests {
     fn header_strip_contains_all_chips_in_order() {
         let theme = Theme::wsx();
         let (line, _) = build_header_strip(
+            None,
             "repo-overview",
             "bakedbean/repo-overview",
             Some(BranchLifecycle::PrOpen),
@@ -960,6 +976,7 @@ mod tests {
     fn header_strip_omits_diff_when_none() {
         let theme = Theme::wsx();
         let (line, _) = build_header_strip(
+            None,
             "ws",
             "br",
             None,
@@ -982,6 +999,7 @@ mod tests {
     fn header_strip_omits_lifecycle_when_none() {
         let theme = Theme::wsx();
         let (line, chip) = build_header_strip(
+            None,
             "ws",
             "br",
             None,
@@ -1009,6 +1027,7 @@ mod tests {
         // stale number is somehow present.
         let theme = Theme::wsx();
         let (line, chip) = build_header_strip(
+            None,
             "ws",
             "br",
             Some(BranchLifecycle::NoPr),
@@ -1027,10 +1046,48 @@ mod tests {
         assert!(chip.is_none(), "no chip rect for NoPr: {text:?}");
     }
 
+    /// A bar theme icon for the agent's kind replaces the status gutter,
+    /// takes the agent's colour, and shifts the PR chip rect by its cells.
+    #[test]
+    fn header_strip_leads_with_the_agent_icon_in_place_of_the_gutter() {
+        let theme = Theme::wsx();
+        let build = |icon| {
+            build_header_strip(
+                icon,
+                "ws",
+                "br",
+                Some(BranchLifecycle::PrOpen),
+                Some(7),
+                None,
+                None,
+                None,
+                0,
+                Status::Idle,
+                None,
+                &theme,
+                120,
+            )
+        };
+        let (plain, plain_chip) = build(None);
+        assert!(line_to_string(&plain).starts_with(GUTTER), "{plain:?}");
+
+        let (line, chip) = build(Some(("🤖", AgentKind::Claude)));
+        let text = line_to_string(&line);
+        assert!(text.starts_with("🤖 ws"), "{text:?}");
+        assert!(!text.contains(GUTTER), "gutter replaced: {text:?}");
+        assert_eq!(
+            line.spans[0].style.fg,
+            theme.agent_style(AgentKind::Claude).fg
+        );
+        // The icon is two cells wide against the gutter's one.
+        assert_eq!(chip.unwrap().start, plain_chip.unwrap().start + 1);
+    }
+
     #[test]
     fn header_strip_marks_an_approved_pr_and_covers_it_with_the_chip_rect() {
         let theme = Theme::wsx();
         let (line, chip) = build_header_strip(
+            None,
             "ws",
             "br",
             Some(BranchLifecycle::PrOpen),
@@ -1063,6 +1120,7 @@ mod tests {
     fn header_strip_leaves_a_merged_pr_unmarked() {
         let theme = Theme::wsx();
         let (line, _) = build_header_strip(
+            None,
             "ws",
             "br",
             Some(BranchLifecycle::PrMerged),
@@ -1085,6 +1143,7 @@ mod tests {
     fn header_strip_shows_pr_number_and_reports_chip() {
         let theme = Theme::wsx();
         let (line, chip) = build_header_strip(
+            None,
             "ws",
             "br",
             Some(BranchLifecycle::PrOpen),

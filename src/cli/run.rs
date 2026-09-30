@@ -75,6 +75,17 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         #[cfg(not(target_os = "linux"))]
         return Err(waybar_linux_only());
     }
+    if matches!(action, CliAction::SetupPlasma) {
+        #[cfg(target_os = "linux")]
+        {
+            for line in crate::desktop::plasma::install::run()? {
+                println!("{line}");
+            }
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err(plasma_linux_only());
+    }
     if matches!(action, CliAction::MenubarPlugin) {
         #[cfg(target_os = "macos")]
         {
@@ -1146,6 +1157,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         CliAction::SetupInstallSkill
         | CliAction::WaybarStatus
         | CliAction::SetupWaybar
+        | CliAction::SetupPlasma
         | CliAction::MenubarPlugin
         | CliAction::SetupMenubar => {
             unreachable!("handled before store open")
@@ -1160,6 +1172,11 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
 #[cfg(not(target_os = "linux"))]
 fn waybar_linux_only() -> Error {
     Error::UserInput("wsx waybar is only available on Linux (waybar integration)".into())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn plasma_linux_only() -> Error {
+    Error::UserInput("wsx setup plasma is only available on Linux (KDE Plasma integration)".into())
 }
 
 #[cfg(not(target_os = "macos"))]

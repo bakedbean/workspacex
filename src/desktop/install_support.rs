@@ -1,5 +1,5 @@
-//! Shared helpers for the `wsx setup waybar` and `wsx setup menubar`
-//! installers.
+//! Shared helpers for the `wsx setup waybar`, `wsx setup plasma`, and
+//! `wsx setup menubar` installers.
 
 use std::path::{Path, PathBuf};
 
@@ -21,11 +21,11 @@ pub(crate) fn write_atomic(path: &Path, content: &str) -> Result<()> {
 }
 
 /// Picks the wsx binary path baked into the installed plugin/menu
-/// (waybar's elephant menu, SwiftBar's plugin shim).
+/// (waybar's elephant menu, the Plasma applet, SwiftBar's plugin shim).
 ///
 /// Dev builds (`cargo run`, `target/debug/wsx`, …) live in paths that vanish
 /// the moment the build directory is cleaned or the branch is switched — if
-/// `wsx setup waybar`/`wsx setup menubar` ran from one of those, the baked
+/// a `wsx setup` installer ran from one of those, the baked
 /// path silently stops resolving and the menu/plugin shows nothing useful
 /// forever with no obvious cause. `~/.local/bin/wsx` is the stable install
 /// target every documented install path uses, so prefer it whenever it's

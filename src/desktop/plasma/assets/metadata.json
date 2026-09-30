@@ -1,0 +1,13 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Category": "Development Tools",
+        "Description": "Live wsx workspace count and status, with a list to jump to any workspace",
+        "Icon": "vcs-branch",
+        "Id": "io.github.bakedbean.wsx",
+        "License": "MIT",
+        "Name": "wsx",
+        "Website": "https://github.com/bakedbean/workspacex"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

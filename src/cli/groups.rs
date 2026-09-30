@@ -230,6 +230,10 @@ pub static GROUPS: &[GroupInfo] = &[
                 blurb: "Install the waybar module into ~/.config/waybar",
             },
             CmdInfo {
+                usage: "plasma",
+                blurb: "Install the KDE Plasma 6 panel applet",
+            },
+            CmdInfo {
                 usage: "menubar",
                 blurb: "Install the SwiftBar plugin shim",
             },

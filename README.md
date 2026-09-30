@@ -111,6 +111,34 @@ systemd unit, or replaces a bare elephant process (e.g. Hyprland
 `exec-once`) with the same executable and arguments. Restart walker
 yourself to pick up the theme.
 
+## KDE Plasma applet (Linux)
+
+On KDE Plasma 6, a panel applet mirrors the waybar module: a branch icon
+plus your live workspace count, colored by the most urgent status
+(blocked/done/waiting/working, taken from your color scheme), with the
+per-workspace tooltip on hover. Clicking it opens a list of every repo's
+workspaces (status glyph, status message, and the PR number wsx has
+cached); pick one to jump to it, the same as `wsx waybar jump`.
+
+```bash
+wsx setup plasma
+```
+
+installs the applet into
+`~/.local/share/plasma/plasmoids/io.github.bakedbean.wsx`. Add it to a panel
+with right-click → *Add or Manage Widgets* and search for "wsx". It runs wsx
+through the path baked in at install time, so re-run `wsx setup plasma`
+after moving wsx. plasmashell keeps an applet's QML loaded until it
+restarts: after re-running setup with the applet already on a panel, run
+`kquitapp6 plasmashell && kstart plasmashell`. To remove it:
+`kpackagetool6 --type Plasma/Applet --remove io.github.bakedbean.wsx`.
+
+On KDE Plasma, jump focuses the TUI's window through a KWin script loaded
+over D-Bus (`dbus-send`). It finds the window by the TUI's process ancestry,
+so a terminal that serves several windows from one process may raise a
+sibling window instead. Like the waybar commands, this is Linux-only and
+errors on other platforms.
+
 ## macOS menubar (SwiftBar)
 
 On macOS, a [SwiftBar](https://github.com/swiftbar/SwiftBar) plugin mirrors

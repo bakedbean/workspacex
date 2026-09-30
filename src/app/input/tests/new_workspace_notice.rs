@@ -80,6 +80,53 @@ async fn enter_with_a_taken_name_shows_inline_notice_and_does_not_spawn() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn enter_with_an_invalid_branch_name_shows_inline_notice_and_does_not_spawn() {
+    let (mut app, repo_id) = app_with_existing_workspace();
+    app.modal = Some(crate::ui::modal::Modal::NewWorkspace {
+        repo_id,
+        name_buffer: "wsx integration".to_string(),
+        yolo: false,
+        shared: false,
+        agent: crate::pty::session::AgentKind::Claude,
+        notice: None,
+    });
+    let shared = dummy_shared();
+    handle_key_modal(
+        &mut app,
+        &shared,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await
+    .unwrap();
+    match &app.modal {
+        Some(crate::ui::modal::Modal::NewWorkspace {
+            name_buffer,
+            notice,
+            ..
+        }) => {
+            assert_eq!(
+                name_buffer, "wsx integration",
+                "buffer must survive the refusal"
+            );
+            assert_eq!(
+                notice.as_deref(),
+                Some("'wsx integration' is not a valid git branch name")
+            );
+        }
+        other => panic!("expected NewWorkspace modal with a notice, got {other:?}"),
+    }
+    assert!(
+        app.in_flight.is_empty(),
+        "an invalid name must never spawn a create task"
+    );
+    assert_eq!(
+        app.store.workspaces(repo_id).unwrap().len(),
+        1,
+        "no row should be inserted for it"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn typing_after_a_duplicate_notice_clears_it() {
     let (mut app, repo_id) = app_with_existing_workspace();
     // Simulate: user already hit a duplicate once (notice set), then

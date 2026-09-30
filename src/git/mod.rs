@@ -203,6 +203,32 @@ pub(super) mod tests {
     }
 
     #[tokio::test]
+    async fn is_valid_branch_name_applies_gits_rule() {
+        for ok in ["wsx/fix-login", "CV-04964", "feat_x.y", "wsx/nested/name"] {
+            assert!(is_valid_branch_name(ok).await.unwrap(), "{ok:?} is valid");
+        }
+        for bad in [
+            "wsx integration",
+            "wsx/a..b",
+            "-leading-dash",
+            "wsx/a~b",
+            "wsx/a:b",
+            "wsx/a?b",
+            "wsx/a*b",
+            "wsx/a[b",
+            "wsx/a\\b",
+            "wsx/.hidden",
+            "wsx/x.lock",
+            "wsx/",
+        ] {
+            assert!(
+                !is_valid_branch_name(bad).await.unwrap(),
+                "{bad:?} is invalid"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn preflight_succeeds_when_git_on_path() {
         preflight().await.unwrap();
     }
@@ -467,6 +493,20 @@ pub async fn fetch_for_base(repo: &Path, base: Option<&str>) -> Result<()> {
     }
     run(repo, &["fetch", prefix, rest]).await?;
     Ok(())
+}
+
+/// Whether git accepts `branch` as a new branch name. This is `git
+/// check-ref-format --branch`, the same rule `git worktree add -b` applies, so
+/// a caller can refuse a name before doing anything it would have to undo.
+/// Needs no repository, since the rule is about the name alone. Errors only
+/// when git itself cannot be run.
+pub async fn is_valid_branch_name(branch: &str) -> Result<bool> {
+    let out = Command::new("git")
+        .args(["check-ref-format", "--branch", branch])
+        .output()
+        .await
+        .map_err(|e| Error::Git(format!("spawn git: {e}")))?;
+    Ok(out.status.success())
 }
 
 pub async fn create_worktree(

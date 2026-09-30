@@ -178,7 +178,7 @@ format = "$agent_bar $workspace  $branch(  $pr)(  $diff)(  $procs)  $status"
 fill   = " "
 
 [dashboard_detail_reply]
-format       = "$prompt "
+format       = "($pins  )$prompt "
 right_format = "$keys"
 fill         = " "
 ```
@@ -204,7 +204,10 @@ keyboard chord works either way).
 
 `[dashboard_detail]` is the dashboard's own DETAIL pane (the pane shown when
 a workspace row is selected, distinct from the attached view): its
-pinned-command chip row, followed by a rule to the edge. `$pins` is the only
+pinned-command chip row, followed by a rule to the edge. The bundled reply
+row places `$pins` itself, which folds this row away (see below), so it is
+drawn only when a theme leaves `$pins` out of `[dashboard_detail_reply]` or
+places a module here. `$pins` is the only
 data-bearing segment there — every other registered segment renders empty if
 you put it in this bar's format.
 
@@ -225,12 +228,13 @@ draws them, so wide and combined characters (CJK, emoji sequences, accents)
 are never split. `$prompt` is the prompt character; `$keys` holds the
 `↵ send` / `Esc cancel` hint, present only while the row has focus (`Tab`
 from a selected workspace). `$agent_bar`, `$workspace`, `$branch`, `$pins`,
-and modules carry data here too, so a theme can open the prompt with the
-same agent and name blocks as the header:
+and modules carry data here too. The bundled row leads with the pinned
+chips, `($pins  )$prompt `; the example themes put them on the block their
+attached bottom bar gives `$pins`:
 
 ```toml
 [dashboard_detail_reply]
-format       = "[ $agent_bar ](bg:ash)[\ue0b0](fg:ash bg:orange)[ $workspace ](bg:orange fg:black bold)[\ue0b0](fg:orange) $prompt "
+format       = "([ $pins ](bg:soot fg:orange)[\ue0b0](fg:soot) )$prompt "
 right_format = "([\ue0b2](fg:ash)[ $keys ](bg:ash fg:orange))"
 ```
 
@@ -239,20 +243,19 @@ To make that room the right side goes first, whole; then the prompt's
 droppable segments (`priority` below 100), lowest first; and a prompt still
 too long is clipped at 12 cells from the edge.
 
-The pinned-chip row takes powerline blocks the same way; the example themes
-put `$pins` on the block their attached bottom bar gives it:
-`format = "([ $pins ](bg:soot fg:orange)[\ue0b0](fg:soot))"` with `fill = " "`.
+**Folding the chip row into the prompt.** With `$pins` in
+`[dashboard_detail_reply]` — on either side — the separate pinned-chip row
+is dropped, saving a row; the chips stay clickable where the reply row draws
+them. The separate row is kept only when `[dashboard_detail]` places a
+module, in which case both rows show the chips. Chips on the right side go
+with it when the row is too narrow for the draft. To get the separate row
+back, leave `$pins` out: `format = "$prompt "`.
 
-**Folding the chip row into the prompt.** Place `$pins` in
-`[dashboard_detail_reply]` — on either side — and the separate pinned-chip
-row is dropped, saving a row; the chips stay clickable where the reply row
-draws them. `format = "($pins  )$prompt "` leads the prompt with them. The
-separate row is kept only when `[dashboard_detail]` places a module, in which
-case both rows show the chips. Chips on the right side go with it when the
-row is too narrow for the draft.
-
-The reply row replaced a hand-built `┃ Reply to agent ┃` chip. The stock row
-now reads `❯ ` then the draft, and its hint is drawn as `[keys]` pills.
+The reply row replaced a hand-built `┃ Reply to agent ┃` chip, and the
+pinned chips moved onto it. The stock row now reads `1 PR  2 Feedback  ❯ `
+then the draft, and its hint is drawn as `[keys]` pills. A dim rule under it
+(`detail_bar_config.bottom_rule`, on by default) separates the pane from the
+dashboard footer.
 
 Drawing the header row through the engine changes the stock look slightly. It
 starts with `$agent_bar`, the agent-coloured `▎`, where the hand-built row

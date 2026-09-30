@@ -64,17 +64,13 @@ format       = "[ $agent_bar ](bg:hl_med)[](fg:hl_med bg:rose)[ $workspace ](
 right_format = "([](fg:hl_high)[( $procs )( $diff )](bg:hl_high fg:text)[](fg:pine bg:hl_high)[( $pr )](bg:pine fg:text))"
 fill         = " "
 
-# The DETAIL pane's pinned-command row: the chips on the same block the
-# attached bottom bar gives them, capped, with no rule after.
-[dashboard_detail]
-format = "([ $pins ](bg:hl_high fg:text)[](fg:hl_high))"
-fill   = " "
-
-# The DETAIL pane's reply row, drawn as a shell prompt: the agent and name
-# blocks, then the prompt character (in the agent's colour while typing,
-# dim otherwise) and the draft. The send/cancel hint is the right prompt.
+# The DETAIL pane's reply row, drawn as a shell prompt: the pinned-command
+# chips on the same block the attached bottom bar gives them (which folds
+# the separate chip row into this one), then the prompt character (in the
+# agent's colour while typing, dim otherwise) and the draft. The
+# send/cancel hint is the right prompt.
 [dashboard_detail_reply]
-format       = "[ $agent_bar ](bg:hl_med)[](fg:hl_med bg:rose)[ $workspace ](bg:rose fg:base bold)[](fg:rose) $prompt "
+format       = "([ $pins ](bg:hl_high fg:text)[](fg:hl_high) )$prompt "
 right_format = "([](fg:hl_med)[ $keys ](bg:hl_med fg:text))"
 fill         = " "
 

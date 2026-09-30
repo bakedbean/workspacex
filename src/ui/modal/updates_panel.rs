@@ -71,6 +71,9 @@ impl PanelInputs<'_> {
 pub struct PanelView<'a> {
     pub selected: usize,
     pub filter: Option<&'a str>,
+    /// `app.tick`, driving the live-status spinner so a row animates in
+    /// lockstep with the same workspace's dashboard row.
+    pub tick: u32,
 }
 
 /// The filter needle, if the user has typed anything past `/`. `Some("")`
@@ -304,6 +307,7 @@ pub fn render_updates_panel(
                 needs_attention: inputs.needs_attention.contains(id),
                 awaiting: inputs.awaiting.get(id),
                 status: item.map(|i| i.status).unwrap_or(Status::Idle),
+                agent: item.map(|i| i.row.agent),
                 lifecycle: item.and_then(|i| i.row.lifecycle),
                 pr_number: item.and_then(|i| i.row.pr_number),
                 review: item.and_then(|i| i.row.review),
@@ -313,6 +317,7 @@ pub fn render_updates_panel(
             lines.push(workspace_row(
                 &row,
                 is_selected,
+                view.tick,
                 now_ms,
                 name_col,
                 inputs.pr_width,
@@ -454,6 +459,9 @@ struct RowData<'a> {
     needs_attention: bool,
     awaiting: Option<&'a (String, i64)>,
     status: Status,
+    /// The primary agent, whose identity color the live spinner wears.
+    /// `None` when the dashboard built no item for the workspace.
+    agent: Option<crate::pty::session::AgentKind>,
     lifecycle: Option<BranchLifecycle>,
     pr_number: Option<u32>,
     review: Option<crate::git::forge::ReviewDecision>,
@@ -461,9 +469,13 @@ struct RowData<'a> {
     diff: Option<crate::git::DiffStats>,
 }
 
+// 8 inputs: the row's data plus the frame-level knobs (selection, tick,
+// clock, widths, theme) the panel threads through for every row.
+#[allow(clippy::too_many_arguments)]
 fn workspace_row<'a>(
     row: &RowData<'a>,
     is_selected: bool,
+    tick: u32,
     now_ms: i64,
     name_col: usize,
     pr_width: usize,
@@ -507,6 +519,17 @@ fn workspace_row<'a>(
         theme.err_style()
     } else {
         theme.status_style(row.status)
+    };
+    // A live status animates the dashboard's spinner in place of the static
+    // glyph, in the primary agent's color — the same cell the dashboard row
+    // draws (`crate::ui::dashboard::row::render`), so a workspace spinning
+    // there spins here too.
+    let (glyph, glyph_style) = match row.agent {
+        Some(agent) if !row.failed && row.status.is_live() => (
+            crate::ui::dashboard::spinner::frame(tick),
+            theme.agent_style(agent),
+        ),
+        _ => (glyph, status_fg),
     };
     // Lifecycle wins on the name even when the workspace is failed — a
     // failed workspace can still have a merged PR. Bold so the name
@@ -552,7 +575,7 @@ fn workspace_row<'a>(
 
     let mut spans = vec![
         Span::raw("  "),
-        Span::styled(format!("{glyph} "), status_fg),
+        Span::styled(format!("{glyph} "), glyph_style),
         Span::styled(truncate_pad(row.label, name_col), name_style),
         Span::raw(" ".repeat(COL_GAP_W)),
     ];
@@ -672,6 +695,7 @@ mod workspace_row_tests {
             needs_attention,
             awaiting,
             status,
+            agent: None,
             lifecycle,
             pr_number: None,
             review: None,
@@ -681,6 +705,7 @@ mod workspace_row_tests {
         workspace_row(
             &row,
             is_selected,
+            0,
             now_ms,
             name_col,
             crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
@@ -976,6 +1001,157 @@ mod workspace_row_tests {
         }
     }
 
+    /// A live status (Thinking, Waiting) animates the dashboard's spinner in
+    /// place of the static glyph, advancing with the tick and wearing the
+    /// primary agent's color — the same cell the dashboard row draws. The
+    /// status text keeps the status hue.
+    #[test]
+    fn workspace_row_spins_for_live_status_like_the_dashboard() {
+        use crate::pty::session::AgentKind;
+        let theme = Theme::ansi();
+        let w = fixture_workspace("alpha");
+        for (status, activity, needs_attention, label) in [
+            (Status::Thinking, ActivityState::Active, false, "active"),
+            (Status::Waiting, ActivityState::Waiting, true, "waiting"),
+        ] {
+            for tick in [0u32, 1] {
+                let row = RowData {
+                    label: &w.name,
+                    failed: false,
+                    events: None,
+                    activity: Some(activity),
+                    needs_attention,
+                    awaiting: None,
+                    status,
+                    agent: Some(AgentKind::Claude),
+                    lifecycle: None,
+                    pr_number: None,
+                    review: None,
+                    unresolved: None,
+                    diff: None,
+                };
+                let line = workspace_row(
+                    &row,
+                    false,
+                    tick,
+                    10_000,
+                    20,
+                    crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
+                    98,
+                    &theme,
+                );
+                let frame = crate::ui::dashboard::spinner::frame(tick);
+                let glyph_span = &line.spans[1];
+                assert_eq!(
+                    glyph_span.content,
+                    format!("{frame} "),
+                    "{status:?} at tick {tick}"
+                );
+                assert_eq!(
+                    glyph_span.style.fg,
+                    theme.agent_style(AgentKind::Claude).fg,
+                    "{status:?} spinner wears the agent color"
+                );
+                let text_span = span_containing(&line, label);
+                assert_eq!(
+                    text_span.style.fg,
+                    theme.status_style(status).fg,
+                    "{status:?} status text keeps the status color"
+                );
+            }
+        }
+    }
+
+    /// Non-live statuses keep their static glyph even with an agent known,
+    /// and a live status with no dashboard item (`agent: None`) falls back
+    /// to the static glyph rather than guessing an agent color.
+    #[test]
+    fn workspace_row_static_glyph_when_not_live_or_agent_unknown() {
+        use crate::pty::session::AgentKind;
+        let theme = Theme::ansi();
+        let w = fixture_workspace("alpha");
+        let cases = [
+            (
+                Status::Complete,
+                Some(ActivityState::Complete),
+                Some(AgentKind::Claude),
+                '\u{2713}',
+            ),
+            (
+                Status::Idle,
+                Some(ActivityState::Idle),
+                Some(AgentKind::Claude),
+                '●',
+            ),
+            (Status::Thinking, Some(ActivityState::Active), None, '●'),
+        ];
+        for (status, activity, agent, glyph) in cases {
+            let row = RowData {
+                label: &w.name,
+                failed: false,
+                events: None,
+                activity,
+                needs_attention: false,
+                awaiting: None,
+                status,
+                agent,
+                lifecycle: None,
+                pr_number: None,
+                review: None,
+                unresolved: None,
+                diff: None,
+            };
+            let line = workspace_row(
+                &row,
+                false,
+                1,
+                10_000,
+                20,
+                crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
+                98,
+                &theme,
+            );
+            assert_eq!(
+                line.spans[1].content,
+                format!("{glyph} "),
+                "{status:?} with agent {agent:?}"
+            );
+        }
+    }
+
+    /// A failed workspace never spins, even if its last status was live.
+    #[test]
+    fn workspace_row_failed_does_not_spin() {
+        let theme = Theme::ansi();
+        let w = fixture_workspace("alpha");
+        let row = RowData {
+            label: &w.name,
+            failed: true,
+            events: None,
+            activity: Some(ActivityState::Active),
+            needs_attention: false,
+            awaiting: None,
+            status: Status::Thinking,
+            agent: Some(crate::pty::session::AgentKind::Claude),
+            lifecycle: None,
+            pr_number: None,
+            review: None,
+            unresolved: None,
+            diff: None,
+        };
+        let line = workspace_row(
+            &row,
+            false,
+            0,
+            10_000,
+            20,
+            crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
+            98,
+            &theme,
+        );
+        assert_eq!(line.spans[1].content, "✕ ");
+    }
+
     /// Failed workspaces ignore the canonical status hue and paint glyph +
     /// text with err — failure is the same urgency signal regardless of what
     /// the classifier said before the failure.
@@ -1091,6 +1267,7 @@ mod workspace_row_tests {
             needs_attention: false,
             awaiting: None,
             status: Status::Idle,
+            agent: None,
             lifecycle,
             pr_number: Some(42),
             review: Some(crate::git::forge::ReviewDecision::ChangesRequested),
@@ -1114,6 +1291,7 @@ mod workspace_row_tests {
         let line = workspace_row(
             &row,
             false,
+            0,
             10_000,
             20,
             crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
@@ -1154,6 +1332,7 @@ mod workspace_row_tests {
             let line = workspace_row(
                 row,
                 false,
+                0,
                 10_000,
                 20,
                 crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
@@ -1172,6 +1351,7 @@ mod workspace_row_tests {
         let body = line_text(&workspace_row(
             &without,
             false,
+            0,
             10_000,
             20,
             crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
@@ -1193,6 +1373,7 @@ mod workspace_row_tests {
             let line = workspace_row(
                 &row,
                 false,
+                0,
                 10_000,
                 20,
                 crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
@@ -1828,6 +2009,17 @@ mod render_tests {
         group_mode: GroupMode,
         statuses: &HashMap<WorkspaceId, Status>,
     ) -> String {
+        draw_at_tick(repos, ws, filter, group_mode, statuses, 0)
+    }
+
+    fn draw_at_tick(
+        repos: &[Repo],
+        ws: &[(RepoId, Workspace)],
+        filter: Option<&str>,
+        group_mode: GroupMode,
+        statuses: &HashMap<WorkspaceId, Status>,
+        tick: u32,
+    ) -> String {
         let theme = Theme::ansi();
         let events = HashMap::new();
         let attention = HashSet::new();
@@ -1858,6 +2050,7 @@ mod render_tests {
         let view = PanelView {
             selected: 0,
             filter,
+            tick,
         };
         let mut term = Terminal::new(TestBackend::new(PANEL_MAX_WIDTH, 25)).unwrap();
         term.draw(|f| render_updates_panel(f, f.area(), &inputs, &view, 10_000, &theme))
@@ -1871,6 +2064,27 @@ mod render_tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// The panel threads `PanelView::tick` and the dashboard item's status
+    /// through to the row: a Thinking workspace draws the spinner frame for
+    /// the current tick, an idle one keeps its static glyph.
+    #[test]
+    fn live_workspace_spins_at_the_view_tick() {
+        let repos = vec![fixture_repo_named(1, "alpha-repo")];
+        let ws = vec![fixture_ws(1, 1, "busy"), fixture_ws(2, 1, "quiet")];
+        let statuses = HashMap::from([(WorkspaceId(1), Status::Thinking)]);
+        let tick = 3;
+        let out = draw_at_tick(&repos, &ws, None, GroupMode::Repo, &statuses, tick);
+        let frame = crate::ui::dashboard::spinner::frame(tick);
+        let line_of = |name: &str| {
+            out.lines()
+                .find(|l| l.contains(name))
+                .unwrap_or_else(|| panic!("row for {name}: {out}"))
+                .to_string()
+        };
+        assert!(line_of("busy").contains(&format!("{frame} busy")), "{out}");
+        assert!(!line_of("quiet").contains(frame), "{out}");
     }
 
     /// A repo whose workspaces all filter out loses its header too — an

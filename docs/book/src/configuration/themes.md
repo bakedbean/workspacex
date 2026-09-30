@@ -286,7 +286,10 @@ yours winning, like a segment palette. An empty entry (`pi = ""`) is an
 override, not an absence: that kind shows no glyph rather than `symbol`.
 The `agents` pills read the same table through their `$icon` variable,
 and a `[module.<name>]` format through `$icon_<kind>`, so each harness's
-glyph is drawn once and appears everywhere the theme names it.
+glyph is drawn once and appears everywhere the theme names it. The
+dashboard detail bar's header leads with the selected workspace's
+agent icon, in its agent color, in place of the status bar when the
+table has a (non-empty) entry for that kind.
 
 An item whose `format` renders empty — an empty `format`, or one whose
 variables are all absent for that item — is dropped as if it were never in

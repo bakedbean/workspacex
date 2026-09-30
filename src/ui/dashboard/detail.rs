@@ -198,17 +198,24 @@ pub fn render(
         Vec::new()
     };
 
-    let reply = build_reply_row(
-        inputs.reply_draft,
-        inputs.reply_focused,
+    // The reply row is a themed bar too (`[dashboard_detail_reply]`), drawn
+    // like a shell prompt with the draft between its two sides.
+    let reply = crate::ui::bar::dashboard_detail_reply(
+        inputs.bar_specs,
         theme,
-        reply_area.width as usize,
+        &crate::ui::bar::DetailReplyInputs {
+            agent: inputs.workspace.agent,
+            name: &inputs.workspace.name,
+            branch: &inputs.workspace.branch,
+            draft: inputs.reply_draft,
+            focused: inputs.reply_focused,
+            fleet: inputs.fleet,
+        },
+        reply_area.width,
     );
-    f.render_widget(Paragraph::new(reply), reply_area);
-
+    f.render_widget(Paragraph::new(reply.line), reply_area);
     if inputs.reply_focused {
-        let cx = reply_cursor_x(inputs.reply_draft, reply_area.width as usize);
-        f.set_cursor_position((reply_area.x + cx, reply_area.y));
+        f.set_cursor_position((reply_area.x + reply.cursor_x, reply_area.y));
     }
 
     DetailDrawOutput {
@@ -555,74 +562,6 @@ fn display_relative_path(file: &str, worktree_path: &std::path::Path) -> String 
         .and_then(|p| p.to_str())
         .map(str::to_string)
         .unwrap_or_else(|| file.to_string())
-}
-
-const REPLY_CHIP: &str = "┃ Reply to agent ┃";
-const REPLY_HINT: &str = "  ↵ send · Esc cancel";
-
-/// Reply input row. Returns a `Line` plus an optional cursor X-offset
-/// (within the line) that the caller passes to `f.set_cursor_position`
-/// when `focused == true`. The caller adds `area.x` and the row's `y`.
-pub(crate) fn build_reply_row(
-    draft: &str,
-    focused: bool,
-    theme: &Theme,
-    width: usize,
-) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let chip_style = if focused {
-        Style::default().fg(theme.path).add_modifier(Modifier::BOLD)
-    } else {
-        theme.dim_style()
-    };
-    spans.push(Span::styled(REPLY_CHIP.to_string(), chip_style));
-    spans.push(Span::raw(" ".to_string()));
-
-    let hint_width = if focused {
-        REPLY_HINT.chars().count()
-    } else {
-        0
-    };
-    let chip_width = REPLY_CHIP.chars().count() + 1; // chip + 1 trailing space
-    let field_width = width
-        .saturating_sub(chip_width)
-        .saturating_sub(hint_width)
-        .max(1);
-
-    // Right-align the cursor in the visible window: take the LAST
-    // `field_width - 1` chars (reserve 1 cell for the cursor when
-    // focused; when unfocused that cell holds the trailing space).
-    let cursor_room = if focused { 1 } else { 0 };
-    let visible_chars = field_width.saturating_sub(cursor_room).max(1);
-    let total = draft.chars().count();
-    let skip = total.saturating_sub(visible_chars);
-    let visible: String = draft.chars().skip(skip).collect();
-    let padding = field_width.saturating_sub(visible.chars().count() + cursor_room);
-    spans.push(Span::styled(visible, Style::default()));
-    if padding > 0 {
-        spans.push(Span::raw(" ".repeat(padding)));
-    }
-
-    if focused {
-        spans.push(Span::styled(REPLY_HINT.to_string(), theme.dim_style()));
-    }
-
-    Line::from(spans)
-}
-
-/// Cursor x-offset (within the reply row) when focused. Returns the
-/// column where `f.set_cursor_position` should be set.
-pub(super) fn reply_cursor_x(draft: &str, width: usize) -> u16 {
-    let chip_width = REPLY_CHIP.chars().count() + 1;
-    let hint_width = REPLY_HINT.chars().count();
-    let field_width = width
-        .saturating_sub(chip_width)
-        .saturating_sub(hint_width)
-        .max(1);
-    let visible_chars = field_width.saturating_sub(1).max(1);
-    let total = draft.chars().count();
-    let visible_count = total.min(visible_chars);
-    (chip_width + visible_count) as u16
 }
 
 fn truncate_to_chars(s: &str, max: usize) -> String {
@@ -983,20 +922,62 @@ mod tests {
         assert_eq!(pr.unwrap().start_col, col_of(&text, "⏺ #152"));
     }
 
-    #[test]
-    fn reply_input_row_shows_chip_and_draft() {
+    fn reply_row(draft: &str, focused: bool, width: u16) -> crate::ui::bar::bars::ReplyRendered {
         let theme = Theme::wsx();
-        let line = build_reply_row("hello agent", false, &theme, 80);
-        let text = line_to_string(&line);
-        assert!(text.contains("Reply to agent"), "chip present: {text:?}");
-        assert!(text.contains("hello agent"), "draft present: {text:?}");
+        crate::ui::bar::dashboard_detail_reply(
+            &bar_specs(),
+            &theme,
+            &crate::ui::bar::DetailReplyInputs {
+                agent: AgentKind::Claude,
+                name: "foo",
+                branch: "wsx/foo",
+                draft,
+                focused,
+                fleet: crate::ui::bar::fleet::empty(),
+            },
+            width,
+        )
+    }
+
+    #[test]
+    fn reply_input_row_is_a_prompt_then_the_draft() {
+        let text = line_to_string(&reply_row("hello agent", false, 80).line);
+        assert!(
+            text.starts_with("❯ hello agent"),
+            "prompt, then draft: {text:?}"
+        );
+        assert!(
+            !text.contains("Reply to agent"),
+            "no placeholder over a draft: {text:?}"
+        );
+    }
+
+    #[test]
+    fn reply_input_row_shows_placeholder_when_empty() {
+        let text = line_to_string(&reply_row("", false, 80).line);
+        assert!(text.starts_with("❯ Reply to agent"), "ghost text: {text:?}");
+    }
+
+    #[test]
+    fn reply_input_row_prompt_is_live_only_when_focused() {
+        let theme = Theme::wsx();
+        let focused = reply_row("", true, 80).line;
+        let idle = reply_row("", false, 80).line;
+        assert_eq!(
+            focused.spans[0].style.fg,
+            theme.agent_style(AgentKind::Claude).fg,
+            "focused prompt wears the agent colour"
+        );
+        assert_eq!(
+            idle.spans[0].style.fg,
+            theme.dim_style().fg,
+            "idle prompt is dim"
+        );
     }
 
     #[test]
     fn reply_input_row_shows_send_hint_when_focused() {
-        let theme = Theme::wsx();
-        let line = build_reply_row("", true, &theme, 80);
-        let text = line_to_string(&line);
+        let text = line_to_string(&reply_row("", true, 80).line);
         assert!(
             text.contains("send"),
             "send hint present when focused: {text:?}"
@@ -1005,13 +986,12 @@ mod tests {
             text.contains("cancel"),
             "cancel hint present when focused: {text:?}"
         );
+        assert_eq!(text.chars().count(), 80, "row fills the width: {text:?}");
     }
 
     #[test]
     fn reply_input_row_hides_hints_when_unfocused() {
-        let theme = Theme::wsx();
-        let line = build_reply_row("", false, &theme, 80);
-        let text = line_to_string(&line);
+        let text = line_to_string(&reply_row("", false, 80).line);
         assert!(
             !text.contains("send"),
             "send hint absent when unfocused: {text:?}"
@@ -1026,13 +1006,34 @@ mod tests {
     fn reply_input_row_scrolls_long_drafts_to_end() {
         // A long draft must show its END (where the cursor lives), not
         // its beginning — otherwise the user can't see what they're typing.
-        let theme = Theme::wsx();
-        let long: String = "a".repeat(60);
-        // Construct with " END" appended so we can detect that the tail is visible.
-        let draft = format!("{long} END");
-        let line = build_reply_row(&draft, true, &theme, 60);
-        let text = line_to_string(&line);
+        let draft = format!("{} END", "a".repeat(60));
+        let rendered = reply_row(&draft, true, 60);
+        let text = line_to_string(&rendered.line);
         assert!(text.contains("END"), "tail of draft visible: {text:?}");
+        assert_eq!(text.chars().count(), 60, "row fits the width: {text:?}");
+        let end = text.find("END").map(|b| text[..b].chars().count()).unwrap();
+        assert_eq!(
+            rendered.cursor_x as usize,
+            end + 3,
+            "cursor just past the draft"
+        );
+    }
+
+    #[test]
+    fn reply_input_row_cursor_sits_after_prompt_and_draft() {
+        assert_eq!(
+            reply_row("", true, 80).cursor_x,
+            2,
+            "on the placeholder's first cell"
+        );
+        assert_eq!(reply_row("hi", true, 80).cursor_x, 4);
+    }
+
+    #[test]
+    fn reply_input_row_drops_the_hint_when_too_narrow() {
+        let text = line_to_string(&reply_row("typing", true, 20).line);
+        assert!(!text.contains("send"), "hint yields to the draft: {text:?}");
+        assert!(text.starts_with("❯ typing"), "{text:?}");
     }
 
     #[test]

@@ -879,7 +879,7 @@ mod tests {
         );
         assert_eq!(
             specs.dashboard_detail_reply.format,
-            format::parse("$prompt ").unwrap()
+            format::parse("($pins  )$prompt ").unwrap()
         );
         assert_eq!(
             specs.dashboard_detail_reply.right_format,

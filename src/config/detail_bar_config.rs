@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 fn default_visible() -> bool {
     true
 }
+fn default_bottom_rule() -> bool {
+    true
+}
 fn default_percent() -> u8 {
     30
 }
@@ -38,7 +41,7 @@ pub struct DetailBarConfig {
     pub containers: Vec<Vec<String>>,
     /// Draw a rule under the reply row, separating the bar from the
     /// dashboard footer below it. Costs one row.
-    #[serde(default)]
+    #[serde(default = "default_bottom_rule")]
     pub bottom_rule: bool,
 }
 
@@ -58,7 +61,7 @@ impl Default for DetailBarConfig {
             visible: default_visible(),
             height: Height::default(),
             containers: default_containers(),
-            bottom_rule: false,
+            bottom_rule: default_bottom_rule(),
         }
     }
 }
@@ -354,14 +357,16 @@ mod tests {
             containers: vec![vec![], vec![]],
             ..Default::default()
         };
-        assert_eq!(cfg.preferred_height(20), DetailBarConfig::CHROME_ROWS);
-        assert_eq!(cfg.preferred_height(100), DetailBarConfig::CHROME_ROWS);
+        // The default bottom rule is chrome too: 5 rows.
+        assert_eq!(cfg.preferred_height(20), DetailBarConfig::CHROME_ROWS + 1);
+        assert_eq!(cfg.preferred_height(100), DetailBarConfig::CHROME_ROWS + 1);
     }
 
     #[test]
     fn minimum_height_chrome_only_when_no_body() {
         let cfg = DetailBarConfig {
             containers: vec![vec![]],
+            bottom_rule: false,
             ..Default::default()
         };
         assert_eq!(cfg.minimum_height(), DetailBarConfig::CHROME_ROWS);
@@ -473,11 +478,11 @@ mod tests {
     }
 
     #[test]
-    fn bottom_rule_defaults_off_and_overrides_per_repo() {
+    fn bottom_rule_defaults_on_and_overrides_per_repo() {
         let cfg: DetailBarConfig = serde_json::from_str("{}").unwrap();
-        assert!(!cfg.bottom_rule);
-        let ovr: DetailBarOverride = serde_json::from_str(r#"{"bottom_rule": true}"#).unwrap();
-        assert!(cfg.with_override(&ovr).bottom_rule);
+        assert!(cfg.bottom_rule);
+        let ovr: DetailBarOverride = serde_json::from_str(r#"{"bottom_rule": false}"#).unwrap();
+        assert!(!cfg.with_override(&ovr).bottom_rule);
     }
 
     /// The rule is chrome: a body-less bar grows by it.

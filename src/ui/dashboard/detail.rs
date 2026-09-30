@@ -1343,8 +1343,9 @@ mod tests {
             fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
         };
-        // Width 100, height exactly CHROME_ROWS (4).
-        let text = render_to_text(&mut inputs, 100, DetailBarConfig::CHROME_ROWS);
+        // Width 100, height exactly the chrome: 4 rows plus the default
+        // bottom rule.
+        let text = render_to_text(&mut inputs, 100, cfg.chrome_rows());
         assert!(text.contains("Reply to agent"), "reply chip: {text:?}");
         assert!(
             !text.contains("SESSION SUMMARY"),
@@ -1528,7 +1529,16 @@ mod tests {
             },
         ];
         let mut offsets = [0u16; 4];
-        let specs = bar_specs();
+        // The bundled reply row folds the chips in; a theme that leaves
+        // `$pins` out of it keeps the separate row.
+        let specs = crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse(
+                "[dashboard_detail_reply]\nformat = \"$prompt \"\n",
+            )
+            .unwrap(),
+            &Theme::wsx(),
+        )
+        .unwrap();
         let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
@@ -1736,8 +1746,8 @@ mod tests {
         );
     }
 
-    /// A theme that places `$pins` in the reply row folds the chip row into
-    /// it: no separate row, the chips lead the prompt, and their click
+    /// `$pins` in the reply row — the bundled default — folds the chip row
+    /// into it: no separate row, the chips lead the prompt, and their click
     /// rects land on the reply row.
     #[test]
     fn pins_in_the_reply_row_fold_the_chip_row_into_it() {
@@ -1750,14 +1760,8 @@ mod tests {
             submit: true,
         }];
         let mut offsets = [0u16; 4];
-        let specs = crate::config::theme_file::resolve(
-            crate::config::theme_file::ThemeFile::parse(
-                "[dashboard_detail_reply]\nformat = \"($pins  )$prompt \"\n",
-            )
-            .unwrap(),
-            &Theme::wsx(),
-        )
-        .unwrap();
+        // The bundled default places `$pins` in the reply row.
+        let specs = bar_specs();
         let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
@@ -1794,21 +1798,21 @@ mod tests {
             .unwrap();
         let buf = terminal.backend().buffer();
         let row = |y: u16| -> String { (0..w).map(|x| buf[(x, y)].symbol()).collect() };
-        let last = row(h - 1);
+        let last = row(h - 2); // above the bottom rule
         assert!(
             last.starts_with(" 1  PR  ❯ Reply to agent"),
             "chips lead the prompt: {last:?}"
         );
         assert!(
-            !row(h - 2).contains(" PR "),
+            !row(h - 3).contains(" PR "),
             "no separate chip row: {:?}",
-            row(h - 2)
+            row(h - 3)
         );
         assert_eq!(rects.len(), 1, "one chip rect");
         assert_eq!(rects[0].0, 0);
         assert_eq!(
             rects[0].1,
-            Rect::new(0, h - 1, 6, 1),
+            Rect::new(0, h - 2, 6, 1),
             "the chip's own cells, ` 1 ` and ` PR`, on the reply row"
         );
     }

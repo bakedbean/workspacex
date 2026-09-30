@@ -81,7 +81,7 @@ fill   = " "
 # here: $prompt, $agent_bar, $workspace, $branch, $pins, $keys, and modules.
 # Placing $pins here folds the separate pinned-chip row into this one.
 [dashboard_detail_reply]
-format       = "$prompt "
+format       = "($pins  )$prompt "
 right_format = "$keys"
 fill         = " "
 

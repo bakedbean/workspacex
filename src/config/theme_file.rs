@@ -38,6 +38,10 @@ pub struct ThemeFile {
     /// part of the flattened `segments` map, like the other bars.
     #[serde(default)]
     pub dashboard_detail: BarTable,
+    /// The dashboard detail pane's header row: agent, name, branch, PR,
+    /// diff, procs, status.
+    #[serde(default)]
+    pub dashboard_detail_header: BarTable,
     /// User-composed modules, `[module.<name>]`. Declared before the
     /// flattened `segments` map so serde routes the `module` table here
     /// rather than treating it as a segment named `module`.
@@ -183,6 +187,9 @@ impl ThemeFile {
         self.attached_top = self.attached_top.merge_over(base.attached_top);
         self.attached_bottom = self.attached_bottom.merge_over(base.attached_bottom);
         self.dashboard_detail = self.dashboard_detail.merge_over(base.dashboard_detail);
+        self.dashboard_detail_header = self
+            .dashboard_detail_header
+            .merge_over(base.dashboard_detail_header);
         for (name, tbl) in base.segments {
             let mine = self.segments.remove(&name).unwrap_or_default();
             self.segments.insert(name, mine.merge_over(tbl));
@@ -204,6 +211,7 @@ pub struct BarSpecs {
     pub attached_top: BarSpec,
     pub attached_bottom: BarSpec,
     pub dashboard_detail: BarSpec,
+    pub dashboard_detail_header: BarSpec,
     pub segments: HashMap<String, SegmentConfig>,
     /// Names of every `[module.<name>]`, sorted by name (the `BTreeMap`
     /// this is built from yields keys in that order, not table order).
@@ -653,17 +661,18 @@ fn check_singleton_scope(loc: &str, nodes: &[&[Node]], verb: &str, errors: &mut 
 }
 
 /// Reject a singleton segment placed more than once among the bars that
-/// would each try to route its one click target. Four independent
+/// would each try to route its one click target. Five independent
 /// scopes: the attached pair together, the dashboard footer's own two
 /// sides, the dashboard header's own two sides, and the dashboard detail
-/// pane's pinned-chip row on its own (a singleton may appear once in each
-/// without conflicting with the other scopes).
+/// pane's pinned-chip and header rows, each on its own (a singleton may
+/// appear once in each without conflicting with the other scopes).
 fn check_singletons(
     dashboard: &BarSpec,
     header: &BarSpec,
     top: &BarSpec,
     bottom: &BarSpec,
     detail: &BarSpec,
+    detail_header: &BarSpec,
     errors: &mut Vec<ThemeError>,
 ) {
     let attached_nodes: [&[Node]; 4] = [
@@ -697,6 +706,13 @@ fn check_singletons(
         "[dashboard_detail]",
         &detail_nodes,
         "in the dashboard detail pane's pinned-chip row",
+        errors,
+    );
+    let detail_header_nodes: [&[Node]; 2] = [&detail_header.format, &detail_header.right_format];
+    check_singleton_scope(
+        "[dashboard_detail_header]",
+        &detail_header_nodes,
+        "in the dashboard detail pane's header row",
         errors,
     );
 }
@@ -770,6 +786,13 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
         &resolver,
         &mut errors,
     );
+    let dashboard_detail_header = resolve_bar(
+        "dashboard_detail_header",
+        &file.dashboard_detail_header,
+        &allowed_names,
+        &resolver,
+        &mut errors,
+    );
 
     check_singletons(
         &dashboard_footer,
@@ -777,6 +800,7 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
         &attached_top,
         &attached_bottom,
         &dashboard_detail,
+        &dashboard_detail_header,
         &mut errors,
     );
 
@@ -788,6 +812,7 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
             attached_top,
             attached_bottom,
             dashboard_detail,
+            dashboard_detail_header,
             segments,
             modules,
         })
@@ -837,6 +862,11 @@ mod tests {
         assert_eq!(
             specs.dashboard_detail.format,
             format::parse("($pins  )").unwrap()
+        );
+        assert_eq!(
+            specs.dashboard_detail_header.format,
+            format::parse("$agent_bar $workspace  $branch(  $pr)(  $diff)(  $procs)  $status")
+                .unwrap()
         );
         assert_eq!(
             specs.dashboard_header.format,

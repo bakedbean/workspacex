@@ -66,6 +66,13 @@ format     = "($pins  )"
 fill       = "─"
 fill_style = "fg:dim"
 
+# The dashboard detail pane's header row: the selected workspace's agent,
+# name, branch, PR chip, diff, running procs, and status. Only these
+# segments (and modules) carry data here; others render empty.
+[dashboard_detail_header]
+format = "$agent_bar $workspace  $branch(  $pr)(  $diff)(  $procs)  $status"
+fill   = " "
+
 # --- segments ---------------------------------------------------------
 
 # The wordmark on the dashboard's top line. Variables: $symbol $name $mark $view
@@ -127,6 +134,18 @@ format = "[$symbol]($style)"
 # Focused workspace. Variables: $repo $name
 [workspace]
 format = "[($repo/)$name]($style)"
+
+# The workspace's git branch (dashboard detail header). $style is the muted
+# `dim` hue. Variables: $symbol $branch
+[branch]
+symbol = "⎇"
+format = "[$symbol $branch]($style)"
+
+# The workspace's dashboard status (dashboard detail header). $style is the
+# status colour; $ago (how long it has held: 12s, 4m, 2h) is absent when
+# unknown. Variables: $glyph $label $ago
+[status]
+format = "[$glyph $label]($style)([  · $ago](fg:dim))"
 
 # Cross-workspace attention entries: one item per workspace, folded into
 # `more_format` when they don't fit. $glyph carries the entry's status

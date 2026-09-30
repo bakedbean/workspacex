@@ -1202,12 +1202,60 @@ mod segment_registry_drift_tests {
             .iter()
             .map(|d| d.name)
             .filter(|name| !DASHBOARD_HEADER_ONLY.contains(name))
+            .filter(|name| !DETAIL_HEADER_ONLY.contains(name))
             .collect();
         assert_eq!(
             got, expected,
             "attached_segments's output must cover every registered segment name \
-             that isn't dashboard-header-only"
+             that isn't dashboard-header-only or detail-header-only"
         );
+    }
+
+    /// The detail header's two segments of its own: registered, but
+    /// carrying the dashboard selection's branch and status, which the
+    /// attached bars don't have.
+    const DETAIL_HEADER_ONLY: [&str; 2] = ["branch", "status"];
+
+    /// Every input present at once, so each of the detail header's
+    /// segments — its own two plus the attached ones it shares — renders.
+    #[test]
+    fn detail_header_segments_cover_their_registered_names() {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        let resolver = specs.resolver(&theme);
+        let inputs = crate::ui::bar::DetailHeaderInputs {
+            agent: AgentKind::Claude,
+            name: "foo",
+            branch: "wsx/foo",
+            pr: Some(ChipPr {
+                lifecycle: BranchLifecycle::PrOpen,
+                number: 42,
+                review: Some(ReviewDecision::Approved),
+                unresolved: None,
+            }),
+            diff: Some(DiffStats {
+                added: 1,
+                removed: 2,
+            }),
+            procs: 1,
+            status: crate::ui::dashboard::status::Status::Thinking,
+            ago_secs: Some(5),
+            fleet: crate::ui::bar::fleet::empty(),
+        };
+        let segments =
+            crate::ui::bar::bars::detail_header_segments(&specs, &theme, &inputs, &resolver);
+        let got: BTreeSet<&str> = segments.keys().map(String::as_str).collect();
+        let expected: BTreeSet<&str> = ["agent_bar", "workspace", "pr", "diff", "procs"]
+            .into_iter()
+            .chain(DETAIL_HEADER_ONLY)
+            .collect();
+        assert_eq!(got, expected);
+        for name in expected {
+            assert!(
+                SEGMENTS.iter().any(|d| d.name == name),
+                "detail header's `{name}` segment must be in registry::SEGMENTS"
+            );
+        }
     }
 
     /// The dashboard header's five segments: registered like any other, but

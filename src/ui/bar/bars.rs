@@ -209,6 +209,103 @@ pub fn dashboard_detail(
     )
 }
 
+/// What the dashboard detail pane's header row shows: the selected
+/// workspace's identity, PR, and activity. `pub(crate)` because `ChipPr`
+/// is.
+pub(crate) struct DetailHeaderInputs<'a> {
+    pub agent: crate::pty::session::AgentKind,
+    pub name: &'a str,
+    pub branch: &'a str,
+    pub pr: Option<crate::ui::attached::ChipPr>,
+    pub diff: Option<crate::git::DiffStats>,
+    pub procs: u32,
+    pub status: crate::ui::dashboard::status::Status,
+    pub ago_secs: Option<u64>,
+    pub fleet: &'a SegmentMap,
+}
+
+/// Build the detail header's segments. `pub(super)` for the drift test,
+/// like `attached_segments`.
+pub(super) fn detail_header_segments(
+    specs: &BarSpecs,
+    theme: &Theme,
+    inputs: &DetailHeaderInputs<'_>,
+    resolver: &style::Resolver<'_>,
+) -> SegmentMap {
+    let mut segments = SegmentMap::new();
+    put(
+        &mut segments,
+        "agent_bar",
+        providers::agent_bar(cfg(specs, "agent_bar"), Some(inputs.agent), theme, resolver),
+    );
+    // No repo: the dashboard already shows which repo the selection is in.
+    put(
+        &mut segments,
+        "workspace",
+        providers::workspace(
+            cfg(specs, "workspace"),
+            "",
+            inputs.name,
+            inputs.pr.map(|p| p.lifecycle),
+            theme,
+            resolver,
+        ),
+    );
+    put(
+        &mut segments,
+        "branch",
+        providers::branch(cfg(specs, "branch"), inputs.branch, theme, resolver),
+    );
+    put(
+        &mut segments,
+        "pr",
+        providers::pr(cfg(specs, "pr"), inputs.pr, theme, resolver),
+    );
+    put(
+        &mut segments,
+        "diff",
+        providers::diff(cfg(specs, "diff"), inputs.diff, theme, resolver),
+    );
+    put(
+        &mut segments,
+        "procs",
+        providers::procs(cfg(specs, "procs"), inputs.procs, theme, resolver),
+    );
+    put(
+        &mut segments,
+        "status",
+        providers::status(
+            cfg(specs, "status"),
+            inputs.status,
+            inputs.ago_secs,
+            theme,
+            resolver,
+        ),
+    );
+    put_modules(&mut segments, specs, inputs.fleet, resolver);
+    segments
+}
+
+/// The dashboard detail pane's header row: agent, name, branch, PR chip,
+/// diff, procs, and status. Its `$pr` carries `Hit::Pr`, which the pane
+/// turns into the PR link.
+pub(crate) fn dashboard_detail_header(
+    specs: &BarSpecs,
+    theme: &Theme,
+    inputs: &DetailHeaderInputs<'_>,
+    width: u16,
+) -> Rendered {
+    let resolver = specs.resolver(theme);
+    let segments = detail_header_segments(specs, theme, inputs, &resolver);
+    render_bar(
+        &specs.dashboard_detail_header,
+        &segments,
+        &specs.segments,
+        width,
+        &resolver,
+    )
+}
+
 /// Everything both attached bars need, so any attached segment can appear
 /// in either bar's format and keep its click. `pub(crate)`, not `pub`: it
 /// carries `ChipPr`/`ChipModelTokens`, which are themselves `pub(crate)`.

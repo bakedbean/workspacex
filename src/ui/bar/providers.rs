@@ -387,6 +387,54 @@ pub fn workspace(
     eval_segment(cfg, &v, style, &[], resolver)
 }
 
+/// The workspace's git branch. `$symbol` is `symbol`, else `⎇`; `$style`
+/// is the muted `dim` hue. Absent for an empty branch name.
+pub fn branch(
+    cfg: &SegmentConfig,
+    branch: &str,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
+    if branch.is_empty() {
+        return None;
+    }
+    let symbol = cfg.symbol.clone().unwrap_or_else(|| "⎇".to_string());
+    eval_segment(
+        cfg,
+        &vars(vec![("symbol", var(symbol)), ("branch", var(branch))]),
+        theme.dim_style(),
+        &[],
+        resolver,
+    )
+}
+
+/// The workspace's dashboard status: `$glyph` and `$label` as the row
+/// draws them, `$style` the status colour, and `$ago` how long it has held
+/// (`12s`, `4m`, `2h`) — absent when unknown, so `( · $ago)` collapses.
+pub fn status(
+    cfg: &SegmentConfig,
+    status: Status,
+    ago_secs: Option<u64>,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
+    let mut v = vars(vec![
+        ("glyph", var(status.glyph().to_string())),
+        ("label", var(status.label())),
+    ]);
+    if let Some(s) = ago_secs {
+        let ago = match s {
+            s if s < 60 => format!("{s}s"),
+            s if s < 3600 => format!("{}m", s / 60),
+            s => format!("{}h", s / 3600),
+        };
+        v.insert("ago".to_string(), var(ago));
+    }
+    eval_segment(cfg, &v, theme.status_style(status), &[], resolver)
+}
+
 /// Cross-workspace attention entries: one item per entry, greedy-fitted
 /// to `items.max_width` using the theme's own item, separator, and tail
 /// widths. `$glyph` arrives pre-styled in the entry's status color;

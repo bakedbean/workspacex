@@ -1,17 +1,39 @@
 # Releasing
 
-A release is driven by a git tag. Everything after the tag is automatic.
+A release is driven by a git tag. Merging a version bump to main creates the
+tag, and everything after that is automatic.
 
 ## Cut a release
 
-1. Set the new version in `Cargo.toml` and run `cargo check` so `Cargo.lock`
-   picks it up. Commit both files.
-2. Tag the commit and push the tag:
+1. In a pull request, set the new version in `Cargo.toml`, run `cargo check`
+   so `Cargo.lock` picks it up, and set the same version in
+   `nix/package.nix`.
+2. Merge the pull request.
 
-   ```bash
-   git tag v0.2.0
-   git push origin v0.2.0
-   ```
+The Tag release workflow (`tag-release.yml`) runs on every push to main that
+touches `Cargo.toml`. It reads the version, and if no tag exists for it yet,
+tags the merge commit `v<version>` and starts the Release workflow for that
+tag. A change to `Cargo.toml` that leaves the version alone finds the tag
+already there and does nothing.
+
+The workflow starts Release explicitly instead of relying on the tag push.
+A push made with the workflow's `GITHUB_TOKEN` does not start other
+workflows, so Release's `push: tags` trigger never fires for it. A manual
+run (`workflow_dispatch`) is exempt from that rule.
+
+### Tag by hand
+
+If the Tag release workflow did not run or failed, tag the merge commit
+yourself and push the tag. A tag pushed with your own credentials starts
+the Release workflow directly:
+
+```bash
+git tag v0.2.0 <merge-commit>
+git push origin v0.2.0
+```
+
+If the tag already exists but no release was published, run the Release
+workflow by hand instead (see [Rebuild an existing tag](#rebuild-an-existing-tag)).
 
 The tag must match the version in `Cargo.toml`. The Release workflow compares
 them and stops if they disagree, because a mismatch would ship binaries whose
@@ -19,12 +41,12 @@ them and stops if they disagree, because a mismatch would ship binaries whose
 
 ## What the workflow does
 
-Pushing the tag runs four jobs in order: `test`, `build`, `release`, then
+The Release workflow runs four jobs in order: `test`, `build`, `release`, then
 `homebrew`.
 
 The `test` job runs the same commands as `ci.yml` on Linux and macOS. It is
 here because `ci.yml` runs only on pushes to main and on pull requests, so a
-tag push starts no tests of its own. Nothing is published if it fails.
+tag starts no tests of its own. Nothing is published if it fails.
 
 The `build` job compiles four targets and packages each one as
 `wsx-<version>-<target>.tar.gz` with a matching `.sha256` file:
@@ -55,7 +77,8 @@ the new version and checksums.
 ## Rebuild an existing tag
 
 Run the Release workflow by hand from the Actions tab and give it the tag
-name. It replaces the assets on the existing release instead of failing.
+name. It publishes the release if there is none yet, or replaces the assets
+on the existing one instead of failing.
 
 ## Update the formula by hand
 

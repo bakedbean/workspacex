@@ -176,6 +176,11 @@ fill_style = "fg:dim"
 [dashboard_detail_header]
 format = "$agent_bar $workspace  $branch(  $pr)(  $diff)(  $procs)  $status"
 fill   = " "
+
+[dashboard_detail_reply]
+format       = "($pins  )$prompt "
+right_format = "$keys"
+fill         = " "
 ```
 
 `[dashboard_footer]`'s right side is the bundled `funnel` module — see
@@ -199,7 +204,10 @@ keyboard chord works either way).
 
 `[dashboard_detail]` is the dashboard's own DETAIL pane (the pane shown when
 a workspace row is selected, distinct from the attached view): its
-pinned-command chip row, followed by a rule to the edge. `$pins` is the only
+pinned-command chip row, followed by a rule to the edge. The bundled reply
+row places `$pins` itself, which folds this row away (see below), so it is
+drawn only when a theme leaves `$pins` out of `[dashboard_detail_reply]` or
+places a module here. `$pins` is the only
 data-bearing segment there — every other registered segment renders empty if
 you put it in this bar's format.
 
@@ -210,7 +218,46 @@ segments render empty there. The segments it shares with the attached bars
 use the same `[segment]` tables, so a restyled `[pr]` or `[procs]` shows up
 in both places. Its `$pr` chip is clickable and opens the PR.
 
-Drawing this row through the engine changes the stock look slightly. It
+`[dashboard_detail_reply]` is that pane's bottom row, where you type a reply
+to the agent, laid out like a shell prompt. `format` is the prompt drawn
+before the draft and `right_format` a right prompt after it; the draft fills
+the gap and `fill` pads what it leaves. While the draft is empty it shows a
+dim `Reply to agent` placeholder. Long drafts scroll so their end, where the
+cursor is, stays in view; widths are measured per grapheme, as the terminal
+draws them, so wide and combined characters (CJK, emoji sequences, accents)
+are never split. `$prompt` is the prompt character; `$keys` holds the
+`↵ send` / `Esc cancel` hint, present only while the row has focus (`Tab`
+from a selected workspace). `$agent_bar`, `$workspace`, `$branch`, `$pins`,
+and modules carry data here too. The bundled row leads with the pinned
+chips, `($pins  )$prompt `; the example themes put them on the block their
+attached bottom bar gives `$pins`:
+
+```toml
+[dashboard_detail_reply]
+format       = "([ $pins ](bg:soot fg:orange)[\ue0b0](fg:soot) )$prompt "
+right_format = "([\ue0b2](fg:ash)[ $keys ](bg:ash fg:orange))"
+```
+
+The draft always keeps at least 12 cells (the whole row, when narrower).
+To make that room the right side goes first, whole; then the prompt's
+droppable segments (`priority` below 100), lowest first; and a prompt still
+too long is clipped at 12 cells from the edge.
+
+**Folding the chip row into the prompt.** With `$pins` in
+`[dashboard_detail_reply]` — on either side — the separate pinned-chip row
+is dropped, saving a row; the chips stay clickable where the reply row draws
+them. The separate row is kept only when `[dashboard_detail]` places a
+module, in which case both rows show the chips. Chips on the right side go
+with it when the row is too narrow for the draft. To get the separate row
+back, leave `$pins` out: `format = "$prompt "`.
+
+The reply row replaced a hand-built `┃ Reply to agent ┃` chip, and the
+pinned chips moved onto it. The stock row now reads `1 PR  2 Feedback  ❯ `
+then the draft, and its hint is drawn as `[keys]` pills. A dim rule under it
+(`detail_bar_config.bottom_rule`, on by default) separates the pane from the
+dashboard footer.
+
+Drawing the header row through the engine changes the stock look slightly. It
 starts with `$agent_bar`, the agent-coloured `▎`, where the hand-built row
 had a status-coloured bar. The name takes the PR-lifecycle tint, and procs
 read `● 3p` and are hidden at zero.
@@ -381,9 +428,10 @@ default, 100, and so never drops.
 | `keys` | `$key $label` | One pill per key hint. Clickable. |
 | `version` | `$version` | |
 | `usage` | `$label $spark` | The activity sparkline. Clickable. |
-| `agent_bar` | `$symbol` | `$style` includes the agent's identity color. `$symbol` is the focused agent's entry in `[agent_bar.symbols]` (keys `claude`, `pi`, `hermes`, `codex`, `omp`) when the theme sets one, else `symbol`. Attached and detail header. |
-| `workspace` | `$repo $name` | `$repo` is absent when there is no repo name, and always in the detail header. `$style` includes the PR-lifecycle tint (green open, purple merged, red closed), or the header style without a PR. Attached and detail header. |
-| `branch` | `$symbol $branch` | The workspace's git branch; `symbol` defaults to `⎇`, `$style` is the muted `dim` hue. Detail header only. |
+| `agent_bar` | `$symbol` | `$style` includes the agent's identity color. `$symbol` is the focused agent's entry in `[agent_bar.symbols]` (keys `claude`, `pi`, `hermes`, `codex`, `omp`) when the theme sets one, else `symbol`. Attached, detail header, and detail reply rows. |
+| `workspace` | `$repo $name` | `$repo` is absent when there is no repo name, and always in the detail pane's rows. `$style` includes the PR-lifecycle tint (green open, purple merged, red closed), or the header style without a PR; the reply row always takes the header style. Attached, detail header, and detail reply rows. |
+| `branch` | `$symbol $branch` | The workspace's git branch; `symbol` defaults to `⎇`, `$style` is the muted `dim` hue. Detail header and reply rows. |
+| `prompt` | `$symbol $agent` | The reply row's prompt character; `symbol` defaults to `❯`, `$agent` is the kind's name (`claude`, `pi`, …). `$style` is the agent's colour, bold, while the row has focus, and the muted `dim` hue otherwise. Detail reply row only. |
 | `status` | `$glyph $label $ago` | The workspace's dashboard status as its row shows it; `$style` includes the status colour. `$ago` is how long it has held (`12s`, `4m`, `2h`), absent when unknown. Detail header only. |
 | `attention` | `$glyph $repo $name $age` | One item per workspace needing attention. `$glyph` is the entry's dashboard status glyph in its status color; `$style` is the name's PR-lifecycle tint (open, merged, …) or the muted `path` hue. Entries that don't fit fold into `more_format` (`$count`); the first entry always renders, and if it alone would push the tail off the bar its `$name` is shortened with an ellipsis (assuming one `$name` in the format; a format without `$name`, or a very long `$repo`, has nothing to yield and simply clips). Clickable: each entry, and the tail. |
 | `pins` | `$index $label` | One chip per pinned command. Clickable. |
@@ -402,9 +450,9 @@ and `tags`, though each records one hit per entry/chip like
 fitted to the one bar that places it. Put one of these five in more than
 one place across the two attached bars' `format`/`right_format` (or twice
 within the dashboard footer's own `format`/`right_format`, or twice within
-the dashboard header's, or twice within either of the dashboard detail
-pane's two rows) and only the last-routed placement would be clickable, so
-`wsx theme check` rejects it as a duplicate instead. These five scopes are
+the dashboard header's, or twice within any one of the dashboard detail
+pane's three rows) and only the last-routed placement would be clickable, so
+`wsx theme check` rejects it as a duplicate instead. These six scopes are
 independent: a
 singleton segment may appear once in each without conflicting with the
 others.
@@ -416,7 +464,9 @@ and `usage` work in all three bars, not just the dashboard footer — put
 the same way. `keys` uses the attached view's leader-key hints in both
 attached bars. On the dashboard footer, only `keys`, `version`, and `usage`
 produce output; on the dashboard header, only `brand`, `group`, `sort`,
-`filter`, and `counts`; on the dashboard detail pane's row, only `pins`;
+`filter`, and `counts`; on the dashboard detail pane's pinned-chip row, only
+`pins`; on its reply row, only `prompt`, `agent_bar`, `workspace`,
+`branch`, `pins`, and `keys`;
 other segments render empty in each. Segments also render empty when their
 underlying data is absent.
 

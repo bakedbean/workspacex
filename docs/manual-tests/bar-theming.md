@@ -214,6 +214,31 @@ row (name, branch, PR chip, diff, procs, status) picks up the change, since
 it is the `[dashboard_detail_header]` bar. Clicking its PR chip still opens
 the PR.
 
+Select a workspace row and look at the DETAIL pane's reply row, with pinned
+commands configured. Expected: it reads as a shell prompt, the pinned chips
+then `❯ Reply to agent` with the `❯` and the placeholder dim; there is no
+separate chip row, clicking a chip still fires its command, and a dim rule
+under the row separates it from the footer. Press `Tab`. Expected: the `❯` takes the agent's colour,
+the cursor sits on the placeholder's first cell, and `↵ send  Esc cancel`
+pills appear flush right. Type past the row's width. Expected: the draft
+scrolls so its end stays visible and the cursor follows it. With an example
+theme (`docs/examples/theme-orange.toml`), expected: the chips sit on the same
+block as the attached bottom bar's pins, capped, before the `❯`.
+
+Set `[dashboard_detail_reply] format = "$prompt "`. Expected: the separate
+chip row comes back above the reply row. Restore it, then narrow the terminal
+until the row is tight. Expected: the send/cancel hint drops first and the
+draft keeps at least 12 cells.
+
+Type an emoji sequence such as 👩‍💻 or an accented letter such as é
+(decomposed). Expected: the cursor sits directly after it, not a cell or two
+further right.
+
+Run `wsx config set detail_bar_config '{"bottom_rule": false}'`. Expected:
+the rule under the reply row is gone and the pane gives the row back. Set
+`{"bottom_rule": true, "height": {"min_rows": 5, "max_rows": 5}}`. Expected:
+the pane still draws at that height.
+
 Exit the scratch wsx session when finished. Close the dedicated shells to
 restore your normal environment; remove only the scratch directory you
 created once it is no longer needed.

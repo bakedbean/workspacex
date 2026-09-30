@@ -73,6 +73,18 @@ fill_style = "fg:dim"
 format = "$agent_bar $workspace  $branch(  $pr)(  $diff)(  $procs)  $status"
 fill   = " "
 
+# The dashboard detail pane's reply row, laid out like a shell prompt:
+# `format` is the prompt before the draft, `right_format` a right prompt
+# after it. The draft (or, while empty, a dim "Reply to agent" placeholder)
+# fills the gap, and `fill` pads what it leaves. $keys is the send/cancel
+# hint, present only while the row has focus. Segments that carry data
+# here: $prompt, $agent_bar, $workspace, $branch, $pins, $keys, and modules.
+# Placing $pins here folds the separate pinned-chip row into this one.
+[dashboard_detail_reply]
+format       = "($pins  )$prompt "
+right_format = "$keys"
+fill         = " "
+
 # --- segments ---------------------------------------------------------
 
 # The wordmark on the dashboard's top line. Variables: $symbol $name $mark $view
@@ -146,6 +158,13 @@ format = "[$symbol $branch]($style)"
 # unknown. Variables: $glyph $label $ago
 [status]
 format = "[$glyph $label]($style)([  · $ago](fg:dim))"
+
+# The reply row's prompt character (dashboard detail reply row). $style is
+# the agent's colour, bold, while the row has focus, and the muted `dim`
+# hue otherwise. Variables: $symbol $agent (the kind's name: claude, pi, …)
+[prompt]
+symbol = "❯"
+format = "[$symbol]($style)"
 
 # Cross-workspace attention entries: one item per workspace, folded into
 # `more_format` when they don't fit. $glyph carries the entry's status

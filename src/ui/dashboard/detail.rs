@@ -87,11 +87,12 @@ pub fn render(
     use ratatui::widgets::Paragraph;
 
     // The chip row holds pinned commands and whatever `[module.*]` the
-    // theme places in `[dashboard_detail]`. Either earns it a row.
-    let chip_present = !inputs.pinned.is_empty()
-        || inputs
-            .bar_specs
-            .places_module(&inputs.bar_specs.dashboard_detail);
+    // theme places in `[dashboard_detail]`. Either earns it a row — unless
+    // the reply row places `$pins` itself, which folds the chips into it.
+    let specs = inputs.bar_specs;
+    let pins_in_reply = specs.places(&specs.dashboard_detail_reply, "pins");
+    let chip_present = (!inputs.pinned.is_empty() && !pins_in_reply)
+        || specs.places_module(&specs.dashboard_detail);
     let has_body = inputs.config.has_body();
     // The body region holds the top horizontal rule, container content,
     // and bottom horizontal rule as a single 3+ row strip — so that
@@ -99,10 +100,12 @@ pub fn render(
     // all three rows. When `!has_body` it collapses to just the two
     // rule rows (no content between).
     let body_region_rows: u16 = if has_body { 3 } else { 2 };
+    let bottom_rule = inputs.config.bottom_rule;
     let min_rows: u16 = 1 // header
         + body_region_rows
         + if chip_present { 1 } else { 0 } // chip slot
-        + 1; // reply
+        + 1 // reply
+        + u16::from(bottom_rule);
     let needed = inputs.config.minimum_height().max(min_rows);
     if area.height == 0 || area.height < needed {
         return DetailDrawOutput::default();
@@ -113,20 +116,17 @@ pub fn render(
     } else {
         Constraint::Length(body_region_rows)
     };
-    let constraints: Vec<Constraint> = if chip_present {
-        vec![
-            Constraint::Length(1), // header
-            body_region_constraint,
-            Constraint::Length(1), // chips
-            Constraint::Length(1), // reply
-        ]
-    } else {
-        vec![
-            Constraint::Length(1), // header
-            body_region_constraint,
-            Constraint::Length(1), // reply
-        ]
-    };
+    let mut constraints = vec![
+        Constraint::Length(1), // header
+        body_region_constraint,
+    ];
+    if chip_present {
+        constraints.push(Constraint::Length(1)); // chips
+    }
+    constraints.push(Constraint::Length(1)); // reply
+    if bottom_rule {
+        constraints.push(Constraint::Length(1)); // rule above the footer
+    }
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(constraints)
@@ -134,11 +134,18 @@ pub fn render(
 
     let header_area = chunks[0];
     let body_region = chunks[1];
-    let (chip_area, reply_area) = if chip_present {
-        (Some(chunks[2]), chunks[3])
-    } else {
-        (None, chunks[2])
-    };
+    let reply_index = 2 + usize::from(chip_present);
+    let chip_area = chip_present.then(|| chunks[2]);
+    let reply_area = chunks[reply_index];
+    if bottom_rule {
+        // The same dim rule the body region draws, so the reply row reads
+        // as the pane's last row rather than part of the footer below.
+        let rule = Line::from(Span::styled(
+            "─".repeat(area.width as usize),
+            theme.dim_style(),
+        ));
+        f.render_widget(Paragraph::new(rule), chunks[reply_index + 1]);
+    }
 
     // The header row is a themed bar (`[dashboard_detail_header]`); its
     // `$pr` chip carries `Hit::Pr`, which becomes the PR link rect.
@@ -178,7 +185,7 @@ pub fn render(
     // strip and row (above/elsewhere), so the chip row here carries pinned
     // commands only — no right-justified agent pills, procs, diff, or PR chip.
     // Themed via `[dashboard_detail]`, the fourth bar the engine draws.
-    let chip_rects = if let Some(area) = chip_area {
+    let mut chip_rects: Vec<(usize, Rect)> = if let Some(area) = chip_area {
         let rendered = crate::ui::bar::dashboard_detail(
             inputs.bar_specs,
             theme,
@@ -198,17 +205,33 @@ pub fn render(
         Vec::new()
     };
 
-    let reply = build_reply_row(
-        inputs.reply_draft,
-        inputs.reply_focused,
+    // The reply row is a themed bar too (`[dashboard_detail_reply]`), drawn
+    // like a shell prompt with the draft between its two sides.
+    let reply = crate::ui::bar::dashboard_detail_reply(
+        inputs.bar_specs,
         theme,
-        reply_area.width as usize,
+        &crate::ui::bar::DetailReplyInputs {
+            agent: inputs.workspace.agent,
+            name: &inputs.workspace.name,
+            branch: &inputs.workspace.branch,
+            draft: inputs.reply_draft,
+            focused: inputs.reply_focused,
+            pinned: inputs.pinned,
+            fleet: inputs.fleet,
+        },
+        reply_area.width,
     );
-    f.render_widget(Paragraph::new(reply), reply_area);
-
-    if inputs.reply_focused {
-        let cx = reply_cursor_x(inputs.reply_draft, reply_area.width as usize);
-        f.set_cursor_position((reply_area.x + cx, reply_area.y));
+    f.render_widget(Paragraph::new(reply.line), reply_area);
+    chip_rects.extend(
+        crate::ui::bar::render::hit_rects(reply_area, &reply.hits)
+            .into_iter()
+            .filter_map(|(rect, hit)| match hit {
+                crate::ui::bar::segment::Hit::PinnedChip(i) => Some((i, rect)),
+                _ => None,
+            }),
+    );
+    if inputs.reply_focused && reply_area.width > 0 {
+        f.set_cursor_position((reply_area.x + reply.cursor_x, reply_area.y));
     }
 
     DetailDrawOutput {
@@ -555,74 +578,6 @@ fn display_relative_path(file: &str, worktree_path: &std::path::Path) -> String 
         .and_then(|p| p.to_str())
         .map(str::to_string)
         .unwrap_or_else(|| file.to_string())
-}
-
-const REPLY_CHIP: &str = "┃ Reply to agent ┃";
-const REPLY_HINT: &str = "  ↵ send · Esc cancel";
-
-/// Reply input row. Returns a `Line` plus an optional cursor X-offset
-/// (within the line) that the caller passes to `f.set_cursor_position`
-/// when `focused == true`. The caller adds `area.x` and the row's `y`.
-pub(crate) fn build_reply_row(
-    draft: &str,
-    focused: bool,
-    theme: &Theme,
-    width: usize,
-) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let chip_style = if focused {
-        Style::default().fg(theme.path).add_modifier(Modifier::BOLD)
-    } else {
-        theme.dim_style()
-    };
-    spans.push(Span::styled(REPLY_CHIP.to_string(), chip_style));
-    spans.push(Span::raw(" ".to_string()));
-
-    let hint_width = if focused {
-        REPLY_HINT.chars().count()
-    } else {
-        0
-    };
-    let chip_width = REPLY_CHIP.chars().count() + 1; // chip + 1 trailing space
-    let field_width = width
-        .saturating_sub(chip_width)
-        .saturating_sub(hint_width)
-        .max(1);
-
-    // Right-align the cursor in the visible window: take the LAST
-    // `field_width - 1` chars (reserve 1 cell for the cursor when
-    // focused; when unfocused that cell holds the trailing space).
-    let cursor_room = if focused { 1 } else { 0 };
-    let visible_chars = field_width.saturating_sub(cursor_room).max(1);
-    let total = draft.chars().count();
-    let skip = total.saturating_sub(visible_chars);
-    let visible: String = draft.chars().skip(skip).collect();
-    let padding = field_width.saturating_sub(visible.chars().count() + cursor_room);
-    spans.push(Span::styled(visible, Style::default()));
-    if padding > 0 {
-        spans.push(Span::raw(" ".repeat(padding)));
-    }
-
-    if focused {
-        spans.push(Span::styled(REPLY_HINT.to_string(), theme.dim_style()));
-    }
-
-    Line::from(spans)
-}
-
-/// Cursor x-offset (within the reply row) when focused. Returns the
-/// column where `f.set_cursor_position` should be set.
-pub(super) fn reply_cursor_x(draft: &str, width: usize) -> u16 {
-    let chip_width = REPLY_CHIP.chars().count() + 1;
-    let hint_width = REPLY_HINT.chars().count();
-    let field_width = width
-        .saturating_sub(chip_width)
-        .saturating_sub(hint_width)
-        .max(1);
-    let visible_chars = field_width.saturating_sub(1).max(1);
-    let total = draft.chars().count();
-    let visible_count = total.min(visible_chars);
-    (chip_width + visible_count) as u16
 }
 
 fn truncate_to_chars(s: &str, max: usize) -> String {
@@ -983,20 +938,63 @@ mod tests {
         assert_eq!(pr.unwrap().start_col, col_of(&text, "⏺ #152"));
     }
 
-    #[test]
-    fn reply_input_row_shows_chip_and_draft() {
+    fn reply_row(draft: &str, focused: bool, width: u16) -> crate::ui::bar::bars::ReplyRendered {
         let theme = Theme::wsx();
-        let line = build_reply_row("hello agent", false, &theme, 80);
-        let text = line_to_string(&line);
-        assert!(text.contains("Reply to agent"), "chip present: {text:?}");
-        assert!(text.contains("hello agent"), "draft present: {text:?}");
+        crate::ui::bar::dashboard_detail_reply(
+            &bar_specs(),
+            &theme,
+            &crate::ui::bar::DetailReplyInputs {
+                agent: AgentKind::Claude,
+                name: "foo",
+                branch: "wsx/foo",
+                draft,
+                focused,
+                pinned: &[],
+                fleet: crate::ui::bar::fleet::empty(),
+            },
+            width,
+        )
+    }
+
+    #[test]
+    fn reply_input_row_is_a_prompt_then_the_draft() {
+        let text = line_to_string(&reply_row("hello agent", false, 80).line);
+        assert!(
+            text.starts_with("❯ hello agent"),
+            "prompt, then draft: {text:?}"
+        );
+        assert!(
+            !text.contains("Reply to agent"),
+            "no placeholder over a draft: {text:?}"
+        );
+    }
+
+    #[test]
+    fn reply_input_row_shows_placeholder_when_empty() {
+        let text = line_to_string(&reply_row("", false, 80).line);
+        assert!(text.starts_with("❯ Reply to agent"), "ghost text: {text:?}");
+    }
+
+    #[test]
+    fn reply_input_row_prompt_is_live_only_when_focused() {
+        let theme = Theme::wsx();
+        let focused = reply_row("", true, 80).line;
+        let idle = reply_row("", false, 80).line;
+        assert_eq!(
+            focused.spans[0].style.fg,
+            theme.agent_style(AgentKind::Claude).fg,
+            "focused prompt wears the agent colour"
+        );
+        assert_eq!(
+            idle.spans[0].style.fg,
+            theme.dim_style().fg,
+            "idle prompt is dim"
+        );
     }
 
     #[test]
     fn reply_input_row_shows_send_hint_when_focused() {
-        let theme = Theme::wsx();
-        let line = build_reply_row("", true, &theme, 80);
-        let text = line_to_string(&line);
+        let text = line_to_string(&reply_row("", true, 80).line);
         assert!(
             text.contains("send"),
             "send hint present when focused: {text:?}"
@@ -1005,13 +1003,12 @@ mod tests {
             text.contains("cancel"),
             "cancel hint present when focused: {text:?}"
         );
+        assert_eq!(text.chars().count(), 80, "row fills the width: {text:?}");
     }
 
     #[test]
     fn reply_input_row_hides_hints_when_unfocused() {
-        let theme = Theme::wsx();
-        let line = build_reply_row("", false, &theme, 80);
-        let text = line_to_string(&line);
+        let text = line_to_string(&reply_row("", false, 80).line);
         assert!(
             !text.contains("send"),
             "send hint absent when unfocused: {text:?}"
@@ -1026,13 +1023,129 @@ mod tests {
     fn reply_input_row_scrolls_long_drafts_to_end() {
         // A long draft must show its END (where the cursor lives), not
         // its beginning — otherwise the user can't see what they're typing.
-        let theme = Theme::wsx();
-        let long: String = "a".repeat(60);
-        // Construct with " END" appended so we can detect that the tail is visible.
-        let draft = format!("{long} END");
-        let line = build_reply_row(&draft, true, &theme, 60);
-        let text = line_to_string(&line);
+        let draft = format!("{} END", "a".repeat(60));
+        let rendered = reply_row(&draft, true, 60);
+        let text = line_to_string(&rendered.line);
         assert!(text.contains("END"), "tail of draft visible: {text:?}");
+        assert_eq!(text.chars().count(), 60, "row fits the width: {text:?}");
+        let end = text.find("END").map(|b| text[..b].chars().count()).unwrap();
+        assert_eq!(
+            rendered.cursor_x as usize,
+            end + 3,
+            "cursor just past the draft"
+        );
+    }
+
+    #[test]
+    fn reply_input_row_cursor_sits_after_prompt_and_draft() {
+        assert_eq!(
+            reply_row("", true, 80).cursor_x,
+            2,
+            "on the placeholder's first cell"
+        );
+        assert_eq!(reply_row("hi", true, 80).cursor_x, 4);
+    }
+
+    fn reply_row_with(
+        theme_src: &str,
+        name: &str,
+        draft: &str,
+        focused: bool,
+        width: u16,
+    ) -> crate::ui::bar::bars::ReplyRendered {
+        let theme = Theme::wsx();
+        let specs = crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse(theme_src).unwrap(),
+            &theme,
+        )
+        .unwrap();
+        crate::ui::bar::dashboard_detail_reply(
+            &specs,
+            &theme,
+            &crate::ui::bar::DetailReplyInputs {
+                agent: AgentKind::Claude,
+                name,
+                branch: "wsx/foo",
+                draft,
+                focused,
+                pinned: &[],
+                fleet: crate::ui::bar::fleet::empty(),
+            },
+            width,
+        )
+    }
+
+    /// A prompt too long for the row sheds its droppable segments so the
+    /// draft keeps its room, as any bar does on overflow.
+    #[test]
+    fn reply_input_row_drops_a_droppable_prompt_segment_for_the_draft() {
+        let src = "[dashboard_detail_reply]\nformat = \"($workspace )$prompt \"\n\
+                   [workspace]\npriority = 1\n";
+        let name = "abcdefghijklmnopqrstuvwxyz";
+        let wide = line_to_string(&reply_row_with(src, name, "HELLO", true, 80).line);
+        assert!(
+            wide.starts_with("abcdefghijklmnopqrstuvwxyz ❯ HELLO"),
+            "{wide:?}"
+        );
+        let narrow = reply_row_with(src, name, "HELLO", true, 20);
+        let text = line_to_string(&narrow.line);
+        assert!(text.starts_with("❯ HELLO"), "name dropped: {text:?}");
+        assert_eq!(narrow.cursor_x, 7);
+    }
+
+    /// With nothing droppable, the prompt is clipped rather than let it
+    /// swallow the draft.
+    #[test]
+    fn reply_input_row_clips_an_undroppable_prompt() {
+        let src = "[dashboard_detail_reply]\nformat = \"$workspace $prompt \"\n";
+        let rendered = reply_row_with(src, "abcdefghijklmnopqrstuvwxyz", "HELLO", true, 20);
+        let text = line_to_string(&rendered.line);
+        assert_eq!(text.chars().count(), 20, "{text:?}");
+        assert!(
+            text.starts_with("abcdefgh"),
+            "prompt clipped to 8 cells: {text:?}"
+        );
+        assert!(text.contains("HELLO"), "draft still visible: {text:?}");
+        assert_eq!(rendered.cursor_x, 13, "cursor after the draft");
+    }
+
+    /// Widths are per grapheme, as the terminal draws them: a ZWJ emoji is
+    /// one 2-cell cluster, and a base keeps its combining mark.
+    #[test]
+    fn reply_input_row_measures_graphemes() {
+        assert_eq!(
+            reply_row("👩‍💻", true, 80).cursor_x,
+            4,
+            "ZWJ sequence is 2 cells"
+        );
+        assert_eq!(
+            reply_row("日本", true, 80).cursor_x,
+            6,
+            "CJK is 2 cells each"
+        );
+        assert_eq!(
+            reply_row("e\u{301}", true, 80).cursor_x,
+            3,
+            "combining mark is 0"
+        );
+        // At 20 cells the field is 18, 17 with the cursor: an odd budget
+        // for 2-cell clusters, so the tail keeps 8 whole ones (16 cells).
+        let rendered = reply_row(&"👩‍💻".repeat(12), true, 20);
+        let text = line_to_string(&rendered.line);
+        assert_eq!(text.matches("👩‍💻").count(), 8, "{text:?}");
+        assert_eq!(rendered.cursor_x, 18);
+        let marks = line_to_string(&reply_row(&"e\u{301}".repeat(30), true, 20).line);
+        assert!(
+            marks["❯ ".len()..].starts_with('e'),
+            "the tail starts on a base, not a stray mark: {marks:?}"
+        );
+    }
+
+    #[test]
+    fn reply_input_row_drops_the_hint_when_too_narrow() {
+        let text = line_to_string(&reply_row("typing", true, 20).line);
+        assert!(!text.contains("send"), "hint yields to the draft: {text:?}");
+        assert!(text.starts_with("❯ typing"), "{text:?}");
     }
 
     #[test]
@@ -1091,6 +1204,101 @@ mod tests {
         assert!(text.contains("Reply to agent"), "reply chip: {text:?}");
     }
 
+    /// `bottom_rule` puts a dim rule under the reply row, as the pane's
+    /// last row, keeping the reply row directly above it.
+    #[test]
+    fn bottom_rule_draws_under_the_reply_row() {
+        let (_store, repo, ws) = seed_workspace();
+        let cfg = DetailBarConfig {
+            bottom_rule: true,
+            ..DetailBarConfig::default()
+        };
+        let reg = make_registry();
+        let mut offsets = [0u16; 4];
+        let specs = bar_specs();
+        let mut inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: None,
+            recap: None,
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            review: None,
+            unresolved: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+            config: &cfg,
+            registry: &reg,
+            pinned: &[],
+            bar_specs: &specs,
+            fleet: crate::ui::bar::fleet::empty(),
+            scroll_offsets: &mut offsets,
+        };
+        let text = render_to_text(&mut inputs, 60, 10);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[9], "─".repeat(60), "rule is the last row: {text}");
+        assert!(
+            lines[8].contains("Reply to agent"),
+            "reply above it: {text}"
+        );
+    }
+
+    /// The height the dashboard allocates must fit what the renderer needs:
+    /// a small body bar with `bottom_rule` still draws in its preferred
+    /// height rather than going blank.
+    #[test]
+    fn bottom_rule_fits_the_allocated_height_of_a_small_bar() {
+        let (_store, repo, ws) = seed_workspace();
+        let mut cfg = DetailBarConfig {
+            bottom_rule: true,
+            ..DetailBarConfig::default()
+        };
+        cfg.height.min_rows = 5;
+        cfg.height.max_rows = 5;
+        let reg = make_registry();
+        let mut offsets = [0u16; 4];
+        let specs = bar_specs();
+        let h = cfg.preferred_height(40);
+        let mut inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: None,
+            recap: None,
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            review: None,
+            unresolved: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+            config: &cfg,
+            registry: &reg,
+            pinned: &[],
+            bar_specs: &specs,
+            fleet: crate::ui::bar::fleet::empty(),
+            scroll_offsets: &mut offsets,
+        };
+        let text = render_to_text(&mut inputs, 60, h);
+        assert!(text.contains("Reply to agent"), "h={h}: {text}");
+        assert!(
+            text.lines().last().unwrap().starts_with('─'),
+            "rule last: {text}"
+        );
+    }
+
     #[test]
     fn chrome_only_mode_renders_header_and_reply_no_body_labels() {
         let (_store, repo, ws) = seed_workspace();
@@ -1135,8 +1343,9 @@ mod tests {
             fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
         };
-        // Width 100, height exactly CHROME_ROWS (4).
-        let text = render_to_text(&mut inputs, 100, DetailBarConfig::CHROME_ROWS);
+        // Width 100, height exactly the chrome: 4 rows plus the default
+        // bottom rule.
+        let text = render_to_text(&mut inputs, 100, cfg.chrome_rows());
         assert!(text.contains("Reply to agent"), "reply chip: {text:?}");
         assert!(
             !text.contains("SESSION SUMMARY"),
@@ -1320,7 +1529,16 @@ mod tests {
             },
         ];
         let mut offsets = [0u16; 4];
-        let specs = bar_specs();
+        // The bundled reply row folds the chips in; a theme that leaves
+        // `$pins` out of it keeps the separate row.
+        let specs = crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse(
+                "[dashboard_detail_reply]\nformat = \"$prompt \"\n",
+            )
+            .unwrap(),
+            &Theme::wsx(),
+        )
+        .unwrap();
         let mut inputs = DetailInputs {
             repo: &repo,
             workspace: &ws,
@@ -1525,6 +1743,77 @@ mod tests {
         assert_eq!(
             with_disabled, without,
             "a disabled module must not add a row"
+        );
+    }
+
+    /// `$pins` in the reply row — the bundled default — folds the chip row
+    /// into it: no separate row, the chips lead the prompt, and their click
+    /// rects land on the reply row.
+    #[test]
+    fn pins_in_the_reply_row_fold_the_chip_row_into_it() {
+        let (_store, repo, ws) = seed_workspace();
+        let cfg = DetailBarConfig::default();
+        let reg = make_registry();
+        let pinned = vec![crate::commands::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+            submit: true,
+        }];
+        let mut offsets = [0u16; 4];
+        // The bundled default places `$pins` in the reply row.
+        let specs = bar_specs();
+        let mut inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: None,
+            recap: None,
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            review: None,
+            unresolved: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+            config: &cfg,
+            registry: &reg,
+            pinned: &pinned,
+            bar_specs: &specs,
+            fleet: crate::ui::bar::fleet::empty(),
+            scroll_offsets: &mut offsets,
+        };
+        let (w, h) = (100u16, 12u16);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
+        let mut rects: Vec<(usize, ratatui::layout::Rect)> = Vec::new();
+        terminal
+            .draw(|f| {
+                rects = render(f, Rect::new(0, 0, w, h), &mut inputs, &Theme::wsx()).chip_rects;
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let row = |y: u16| -> String { (0..w).map(|x| buf[(x, y)].symbol()).collect() };
+        let last = row(h - 2); // above the bottom rule
+        assert!(
+            last.starts_with(" 1  PR  ❯ Reply to agent"),
+            "chips lead the prompt: {last:?}"
+        );
+        assert!(
+            !row(h - 3).contains(" PR "),
+            "no separate chip row: {:?}",
+            row(h - 3)
+        );
+        assert_eq!(rects.len(), 1, "one chip rect");
+        assert_eq!(rects[0].0, 0);
+        assert_eq!(
+            rects[0].1,
+            Rect::new(0, h - 2, 6, 1),
+            "the chip's own cells, ` 1 ` and ` PR`, on the reply row"
         );
     }
 

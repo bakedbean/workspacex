@@ -27,7 +27,7 @@ wsx
    space. The keybind footer stays at the bottom.
 
 3. **Reply input via Tab.** With a workspace selected, press Tab.
-   Expected: the cursor appears in the `┃ Reply to agent ┃` input
+   Expected: the cursor appears in the `❯ Reply to agent` input
    field. Type `ping`. Press Enter. Expected: the field clears, focus
    returns to the dashboard list, and (when you attach into the
    workspace via Enter) the `ping` message appears as a user prompt

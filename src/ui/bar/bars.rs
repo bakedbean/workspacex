@@ -5,7 +5,7 @@
 use super::format;
 use super::providers;
 use super::render::{Rendered, eval, render_bar};
-use super::segment::{Hit, Segment, SegmentConfig, SegmentMap};
+use super::segment::{Hit, HitSpan, Segment, SegmentConfig, SegmentMap};
 use super::style;
 use crate::config::theme_file::BarSpecs;
 use crate::ui::dashboard::layout::GroupMode;
@@ -304,6 +304,194 @@ pub(crate) fn dashboard_detail_header(
         width,
         &resolver,
     )
+}
+
+/// What the dashboard detail pane's reply row shows: the selected
+/// workspace's identity for the prompt, and the draft being typed.
+pub(crate) struct DetailReplyInputs<'a> {
+    pub agent: crate::pty::session::AgentKind,
+    pub name: &'a str,
+    pub branch: &'a str,
+    pub draft: &'a str,
+    pub focused: bool,
+    /// `$pins`' chips, so a theme can lead the prompt with them and fold
+    /// the pinned-chip row into this one.
+    pub pinned: &'a [crate::commands::pinned::PinnedCommand],
+    pub fleet: &'a SegmentMap,
+}
+
+/// The reply row, plus the cursor column (relative to the line's first
+/// cell) the caller hands `set_cursor_position` while the row has focus.
+pub(crate) struct ReplyRendered {
+    pub line: ratatui::text::Line<'static>,
+    pub cursor_x: u16,
+    /// Columns relative to the first cell of the line, as `Rendered::hits`.
+    pub hits: Vec<HitSpan>,
+}
+
+/// The draft field's ghost text while it is empty.
+pub const REPLY_PLACEHOLDER: &str = "Reply to agent";
+
+/// The right prompt yields rather than squeeze the draft below this many
+/// cells.
+const REPLY_MIN_FIELD: u16 = 12;
+
+/// Build the reply row's segments. `pub(super)` for the drift test, like
+/// `detail_header_segments`.
+pub(super) fn detail_reply_segments(
+    specs: &BarSpecs,
+    theme: &Theme,
+    inputs: &DetailReplyInputs<'_>,
+    resolver: &style::Resolver<'_>,
+) -> SegmentMap {
+    let mut segments = SegmentMap::new();
+    put(
+        &mut segments,
+        "prompt",
+        providers::prompt(
+            cfg(specs, "prompt"),
+            inputs.agent,
+            inputs.focused,
+            theme,
+            resolver,
+        ),
+    );
+    put(
+        &mut segments,
+        "agent_bar",
+        providers::agent_bar(cfg(specs, "agent_bar"), Some(inputs.agent), theme, resolver),
+    );
+    put(
+        &mut segments,
+        "workspace",
+        providers::workspace(
+            cfg(specs, "workspace"),
+            "",
+            inputs.name,
+            None,
+            theme,
+            resolver,
+        ),
+    );
+    put(
+        &mut segments,
+        "branch",
+        providers::branch(cfg(specs, "branch"), inputs.branch, theme, resolver),
+    );
+    put(
+        &mut segments,
+        "pins",
+        providers::pins(cfg(specs, "pins"), inputs.pinned, resolver),
+    );
+    // The hint is for a row being typed into; an idle row has nothing to send.
+    if inputs.focused {
+        put(
+            &mut segments,
+            "keys",
+            providers::keys(
+                cfg(specs, "keys"),
+                &[("↵", "send", None), ("Esc", "cancel", None)],
+                resolver,
+            ),
+        );
+    }
+    put_modules(&mut segments, specs, inputs.fleet, resolver);
+    segments
+}
+
+/// The dashboard detail pane's reply row, drawn like a shell prompt:
+/// `format` (the prompt), then the draft — its tail, so the cursor end
+/// stays in view — then `fill` padding and `right_format` flush right. An
+/// empty draft shows `REPLY_PLACEHOLDER` dimmed, the cursor on its first
+/// cell.
+///
+/// The draft keeps at least `REPLY_MIN_FIELD` cells (or the whole row, when
+/// narrower). To make that room the right side goes first, whole; then
+/// the prompt's droppable segments (`priority` below the default), lowest
+/// first; and a prompt still too long is clipped. The right side keeps one
+/// blank cell before it, like every bar. Widths are measured per grapheme,
+/// as the terminal draws them.
+pub(crate) fn dashboard_detail_reply(
+    specs: &BarSpecs,
+    theme: &Theme,
+    inputs: &DetailReplyInputs<'_>,
+    width: u16,
+) -> ReplyRendered {
+    use ratatui::text::Span;
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+
+    let resolver = specs.resolver(theme);
+    let segments = detail_reply_segments(specs, theme, inputs, &resolver);
+    let spec = &specs.dashboard_detail_reply;
+    let base = resolver.resolve(&spec.style).unwrap_or_default();
+    let reserve = REPLY_MIN_FIELD.min(width);
+    let prompt_room = width - reserve;
+    let prompt = super::render::eval_fitted(
+        &spec.format,
+        &segments,
+        &specs.segments,
+        prompt_room,
+        &resolver,
+        base,
+    );
+    let prompt = super::render::clip(prompt, prompt_room);
+    let (mut right, _) = eval(&spec.right_format, &segments, &resolver, base);
+    let field = |right: &Segment| {
+        width
+            .saturating_sub(prompt.width)
+            .saturating_sub(right.width)
+            .saturating_sub(u16::from(!right.is_empty()))
+    };
+    if !right.is_empty() && field(&right) < REPLY_MIN_FIELD {
+        right = Segment::default();
+    }
+    let field = field(&right);
+
+    // Graphemes from the end while they fit, so a wide one never overhangs
+    // the field and a cluster (ZWJ emoji, a base and its combining marks)
+    // is never split. Focus reserves a cell for the cursor past the last.
+    let budget = field.saturating_sub(u16::from(inputs.focused));
+    let tail = |text: &str, budget: u16| -> (String, u16) {
+        let mut used = 0u16;
+        let mut kept: Vec<&str> = Vec::new();
+        for g in text.graphemes(true).rev() {
+            let w = u16::try_from(g.width()).unwrap_or(u16::MAX);
+            if used.saturating_add(w) > budget {
+                break;
+            }
+            used += w;
+            kept.push(g);
+        }
+        kept.reverse();
+        (kept.concat(), used)
+    };
+    let (text, text_style, cursor_x) = if inputs.draft.is_empty() {
+        // ASCII, so a cell per grapheme; keep its start when narrow.
+        let ghost: String = REPLY_PLACEHOLDER
+            .graphemes(true)
+            .take(usize::from(field))
+            .collect();
+        (ghost, base.patch(theme.dim_style()), prompt.width)
+    } else {
+        let (visible, used) = tail(inputs.draft, budget);
+        (visible, base, prompt.width.saturating_add(used))
+    };
+
+    let mut out = prompt;
+    out.push(Span::styled(text, text_style));
+    let gap = width.saturating_sub(out.width.saturating_add(right.width));
+    if gap > 0 {
+        let fill_style = base.patch(resolver.resolve(&spec.fill_style).unwrap_or_default());
+        let fill = super::render::fill_run(&spec.fill, gap, !right.is_empty());
+        out.push(Span::styled(fill, fill_style));
+    }
+    out.append(right);
+    ReplyRendered {
+        line: ratatui::text::Line::from(out.spans),
+        cursor_x: cursor_x.min(width.saturating_sub(1)),
+        hits: out.hits,
+    }
 }
 
 /// Everything both attached bars need, so any attached segment can appear

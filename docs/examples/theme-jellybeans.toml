@@ -63,6 +63,16 @@ format       = "[ $agent_bar ](bg:plum)[](fg:plum bg:blue)[ $workspace ](bg:b
 right_format = "([](fg:mid)[( $procs )( $diff )](bg:mid fg:fg)[](fg:green bg:mid)[( $pr )](bg:green fg:bg))"
 fill         = " "
 
+# The DETAIL pane's reply row, drawn as a shell prompt: the pinned-command
+# chips on the same block the attached bottom bar gives them (which folds
+# the separate chip row into this one), then the prompt character (in the
+# agent's colour while typing, dim otherwise) and the draft. The
+# send/cancel hint is the right prompt.
+[dashboard_detail_reply]
+format       = "([ $pins ](bg:mid fg:fg)[](fg:mid) )$prompt "
+right_format = "([](fg:plum)[ $keys ](bg:plum fg:fg))"
+fill         = " "
+
 # --- segments (unset fields keep the bundled defaults) -------------------
 
 [group]

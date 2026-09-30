@@ -24,7 +24,8 @@ clamped on save (see below).
     ["session_summary"],
     ["recent_chat"],
     ["processes", "recent_files"]
-  ]
+  ],
+  "bottom_rule": true
 }
 ```
 
@@ -35,6 +36,7 @@ clamped on save (see below).
 | `height.min_rows` | u16           | `8`                 | Floor on the bar's height. Clamped to `[4, 40]`.                                                                                                                                                                                               |
 | `height.max_rows` | u16           | `18`                | Ceiling on the bar's height. Clamped to `[4, 60]`. If `min_rows > max_rows`, the two are swapped on save.                                                                                                                                      |
 | `containers`      | list of lists | (see default above) | Outer length 1–4: one entry per equal-width column. Inner is a list of module IDs stacked vertically within the column. An empty inner list `[]` reserves an empty column. Empty outer list resets to default. Lengths > 4 are truncated to 4. |
+| `bottom_rule`     | bool          | `true`              | Draw a dim rule under the reply row, separating the bar from the dashboard footer below it. Costs one row. `false` gives the row back.                                                                                                  |
 
 **Built-in module IDs:** `session_summary`, `recent_chat`, `processes`,
 `recent_files`. Unknown IDs render a `[unknown: <id>]` placeholder and
@@ -63,8 +65,8 @@ Because the recap comes from the database rather than the session log,
 it appears immediately — it doesn't wait on the `loading…` scan.
 
 When every container is empty (`[[], [], []]`), the bar shrinks to its
-4-row chrome (header + two rules + reply input) regardless of
-`height.percent`. That's how you trim the bar to just the reply input.
+5-row chrome (header + two rules + reply input + bottom rule) regardless of
+`height.percent`, or 4 rows with `bottom_rule` off. That's how you trim the bar to just the reply input.
 
 ### Setting the global value
 

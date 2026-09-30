@@ -143,6 +143,14 @@ pub const SEGMENTS: &[SegmentDef] = &[
         singleton: false,
     },
     SegmentDef {
+        name: "prompt",
+        vars: &["symbol", "agent"],
+        style_vars: STYLE,
+        more_vars: NO_TAIL,
+        items: false,
+        singleton: false,
+    },
+    SegmentDef {
         name: "attention",
         vars: &["glyph", "repo", "name", "age"],
         style_vars: STYLE,

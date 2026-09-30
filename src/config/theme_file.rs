@@ -42,6 +42,10 @@ pub struct ThemeFile {
     /// diff, procs, status.
     #[serde(default)]
     pub dashboard_detail_header: BarTable,
+    /// The dashboard detail pane's reply input row: `format` is the prompt
+    /// drawn before the draft, `right_format` the right prompt after it.
+    #[serde(default)]
+    pub dashboard_detail_reply: BarTable,
     /// User-composed modules, `[module.<name>]`. Declared before the
     /// flattened `segments` map so serde routes the `module` table here
     /// rather than treating it as a segment named `module`.
@@ -190,6 +194,9 @@ impl ThemeFile {
         self.dashboard_detail_header = self
             .dashboard_detail_header
             .merge_over(base.dashboard_detail_header);
+        self.dashboard_detail_reply = self
+            .dashboard_detail_reply
+            .merge_over(base.dashboard_detail_reply);
         for (name, tbl) in base.segments {
             let mine = self.segments.remove(&name).unwrap_or_default();
             self.segments.insert(name, mine.merge_over(tbl));
@@ -212,6 +219,7 @@ pub struct BarSpecs {
     pub attached_bottom: BarSpec,
     pub dashboard_detail: BarSpec,
     pub dashboard_detail_header: BarSpec,
+    pub dashboard_detail_reply: BarSpec,
     pub segments: HashMap<String, SegmentConfig>,
     /// Names of every `[module.<name>]`, sorted by name (the `BTreeMap`
     /// this is built from yields keys in that order, not table order).
@@ -229,6 +237,16 @@ impl BarSpecs {
     /// has something to draw asks this rather than rendering first: it
     /// depends on what the theme places, not on what the fleet currently
     /// counts, so the row does not come and go with the numbers.
+    /// Whether `bar` places the segment `name` on either side and it is
+    /// not disabled.
+    pub fn places(&self, bar: &BarSpec, name: &str) -> bool {
+        format::vars(&bar.format)
+            .into_iter()
+            .chain(format::vars(&bar.right_format))
+            .any(|n| n == name)
+            && self.segments.get(name).is_some_and(|cfg| !cfg.disabled)
+    }
+
     pub fn places_module(&self, bar: &BarSpec) -> bool {
         format::vars(&bar.format)
             .into_iter()
@@ -648,18 +666,15 @@ fn check_singleton_scope(loc: &str, nodes: &[&[Node]], verb: &str, errors: &mut 
 }
 
 /// Reject a singleton segment placed more than once among the bars that
-/// would each try to route its one click target. Five independent
-/// scopes: the attached pair together, the dashboard footer's own two
-/// sides, the dashboard header's own two sides, and the dashboard detail
-/// pane's pinned-chip and header rows, each on its own (a singleton may
-/// appear once in each without conflicting with the other scopes).
+/// would each try to route its one click target. The attached pair is one
+/// scope; every `solo` bar — the dashboard footer and header, and the
+/// detail pane's pinned-chip, header, and reply rows — is its own, across
+/// its two sides (a singleton may appear once in each scope without
+/// conflicting with the others). `solo` is `(location, bar, verb)`.
 fn check_singletons(
-    dashboard: &BarSpec,
-    header: &BarSpec,
     top: &BarSpec,
     bottom: &BarSpec,
-    detail: &BarSpec,
-    detail_header: &BarSpec,
+    solo: &[(&str, &BarSpec, &str)],
     errors: &mut Vec<ThemeError>,
 ) {
     let attached_nodes: [&[Node]; 4] = [
@@ -674,34 +689,10 @@ fn check_singletons(
         "across the attached bars",
         errors,
     );
-    let footer_nodes: [&[Node]; 2] = [&dashboard.format, &dashboard.right_format];
-    check_singleton_scope(
-        "[dashboard_footer]",
-        &footer_nodes,
-        "in the dashboard footer",
-        errors,
-    );
-    let header_nodes: [&[Node]; 2] = [&header.format, &header.right_format];
-    check_singleton_scope(
-        "[dashboard_header]",
-        &header_nodes,
-        "in the dashboard header",
-        errors,
-    );
-    let detail_nodes: [&[Node]; 2] = [&detail.format, &detail.right_format];
-    check_singleton_scope(
-        "[dashboard_detail]",
-        &detail_nodes,
-        "in the dashboard detail pane's pinned-chip row",
-        errors,
-    );
-    let detail_header_nodes: [&[Node]; 2] = [&detail_header.format, &detail_header.right_format];
-    check_singleton_scope(
-        "[dashboard_detail_header]",
-        &detail_header_nodes,
-        "in the dashboard detail pane's header row",
-        errors,
-    );
+    for (loc, bar, verb) in solo {
+        let nodes: [&[Node]; 2] = [&bar.format, &bar.right_format];
+        check_singleton_scope(loc, &nodes, verb, errors);
+    }
 }
 
 /// Merge `file` over the bundled default and resolve it. Every problem is
@@ -780,14 +771,44 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
         &resolver,
         &mut errors,
     );
+    let dashboard_detail_reply = resolve_bar(
+        "dashboard_detail_reply",
+        &file.dashboard_detail_reply,
+        &allowed_names,
+        &resolver,
+        &mut errors,
+    );
 
     check_singletons(
-        &dashboard_footer,
-        &dashboard_header,
         &attached_top,
         &attached_bottom,
-        &dashboard_detail,
-        &dashboard_detail_header,
+        &[
+            (
+                "[dashboard_footer]",
+                &dashboard_footer,
+                "in the dashboard footer",
+            ),
+            (
+                "[dashboard_header]",
+                &dashboard_header,
+                "in the dashboard header",
+            ),
+            (
+                "[dashboard_detail]",
+                &dashboard_detail,
+                "in the dashboard detail pane's pinned-chip row",
+            ),
+            (
+                "[dashboard_detail_header]",
+                &dashboard_detail_header,
+                "in the dashboard detail pane's header row",
+            ),
+            (
+                "[dashboard_detail_reply]",
+                &dashboard_detail_reply,
+                "in the dashboard detail pane's reply row",
+            ),
+        ],
         &mut errors,
     );
 
@@ -800,6 +821,7 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
             attached_bottom,
             dashboard_detail,
             dashboard_detail_header,
+            dashboard_detail_reply,
             segments,
             modules,
         })
@@ -854,6 +876,14 @@ mod tests {
             specs.dashboard_detail_header.format,
             format::parse("$agent_bar $workspace  $branch(  $pr)(  $diff)(  $procs)  $status")
                 .unwrap()
+        );
+        assert_eq!(
+            specs.dashboard_detail_reply.format,
+            format::parse("($pins  )$prompt ").unwrap()
+        );
+        assert_eq!(
+            specs.dashboard_detail_reply.right_format,
+            format::parse("$keys").unwrap()
         );
         assert_eq!(
             specs.dashboard_header.format,

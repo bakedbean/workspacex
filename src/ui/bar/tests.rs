@@ -1203,11 +1203,12 @@ mod segment_registry_drift_tests {
             .map(|d| d.name)
             .filter(|name| !DASHBOARD_HEADER_ONLY.contains(name))
             .filter(|name| !DETAIL_HEADER_ONLY.contains(name))
+            .filter(|name| !DETAIL_REPLY_ONLY.contains(name))
             .collect();
         assert_eq!(
             got, expected,
             "attached_segments's output must cover every registered segment name \
-             that isn't dashboard-header-only or detail-header-only"
+             that isn't dashboard-header-only or detail-pane-only"
         );
     }
 
@@ -1254,6 +1255,46 @@ mod segment_registry_drift_tests {
             assert!(
                 SEGMENTS.iter().any(|d| d.name == name),
                 "detail header's `{name}` segment must be in registry::SEGMENTS"
+            );
+        }
+    }
+
+    /// The reply row's segment of its own: the prompt character, which only
+    /// a row being typed into has.
+    const DETAIL_REPLY_ONLY: [&str; 1] = ["prompt"];
+
+    /// Focused, so the send/cancel `$keys` renders alongside the prompt and
+    /// the identity segments the reply row shares with the header.
+    #[test]
+    fn detail_reply_segments_cover_their_registered_names() {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        let resolver = specs.resolver(&theme);
+        let inputs = crate::ui::bar::DetailReplyInputs {
+            agent: AgentKind::Claude,
+            name: "foo",
+            branch: "wsx/foo",
+            draft: "",
+            focused: true,
+            pinned: &[crate::commands::pinned::PinnedCommand {
+                label: "PR".into(),
+                command: "/pull-request".into(),
+                submit: true,
+            }],
+            fleet: crate::ui::bar::fleet::empty(),
+        };
+        let segments =
+            crate::ui::bar::bars::detail_reply_segments(&specs, &theme, &inputs, &resolver);
+        let got: BTreeSet<&str> = segments.keys().map(String::as_str).collect();
+        let expected: BTreeSet<&str> = ["agent_bar", "workspace", "branch", "pins", "keys"]
+            .into_iter()
+            .chain(DETAIL_REPLY_ONLY)
+            .collect();
+        assert_eq!(got, expected);
+        for name in expected {
+            assert!(
+                SEGMENTS.iter().any(|d| d.name == name),
+                "reply row's `{name}` segment must be in registry::SEGMENTS"
             );
         }
     }

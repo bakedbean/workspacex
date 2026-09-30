@@ -172,6 +172,10 @@ fill_style   = "fg:dim"
 format     = "($pins  )"
 fill       = "─"
 fill_style = "fg:dim"
+
+[dashboard_detail_header]
+format = "$agent_bar $workspace  $branch(  $pr)(  $diff)(  $procs)  $status"
+fill   = " "
 ```
 
 `[dashboard_footer]`'s right side is the bundled `funnel` module — see
@@ -198,6 +202,18 @@ a workspace row is selected, distinct from the attached view): its
 pinned-command chip row, followed by a rule to the edge. `$pins` is the only
 data-bearing segment there — every other registered segment renders empty if
 you put it in this bar's format.
+
+`[dashboard_detail_header]` is that same pane's top row: the selected
+workspace's `$agent_bar`, `$workspace` (the name alone, no `$repo`),
+`$branch`, `$pr`, `$diff`, `$procs`, and `$status`, plus any module. Other
+segments render empty there. The segments it shares with the attached bars
+use the same `[segment]` tables, so a restyled `[pr]` or `[procs]` shows up
+in both places. Its `$pr` chip is clickable and opens the PR.
+
+Drawing this row through the engine changes the stock look slightly. It
+starts with `$agent_bar`, the agent-coloured `▎`, where the hand-built row
+had a status-coloured bar. The name takes the PR-lifecycle tint, and procs
+read `● 3p` and are hidden at zero.
 
 | Key | Meaning |
 |---|---|
@@ -286,10 +302,8 @@ yours winning, like a segment palette. An empty entry (`pi = ""`) is an
 override, not an absence: that kind shows no glyph rather than `symbol`.
 The `agents` pills read the same table through their `$icon` variable,
 and a `[module.<name>]` format through `$icon_<kind>`, so each harness's
-glyph is drawn once and appears everywhere the theme names it. The
-dashboard detail bar's header leads with the selected workspace's
-agent icon, in its agent color, in place of the status bar when the
-table has a (non-empty) entry for that kind.
+glyph is drawn once and appears everywhere the theme names it, including
+`$agent_bar` at the head of the dashboard detail pane's header row.
 
 An item whose `format` renders empty — an empty `format`, or one whose
 variables are all absent for that item — is dropped as if it were never in
@@ -367,8 +381,10 @@ default, 100, and so never drops.
 | `keys` | `$key $label` | One pill per key hint. Clickable. |
 | `version` | `$version` | |
 | `usage` | `$label $spark` | The activity sparkline. Clickable. |
-| `agent_bar` | `$symbol` | `$style` includes the agent's identity color. `$symbol` is the focused agent's entry in `[agent_bar.symbols]` (keys `claude`, `pi`, `hermes`, `codex`, `omp`) when the theme sets one, else `symbol`. Attached only. |
-| `workspace` | `$repo $name` | `$repo` is absent when there is no repo name. `$style` includes the PR-lifecycle tint (green open, purple merged, red closed), or the header style without a PR. Attached only. |
+| `agent_bar` | `$symbol` | `$style` includes the agent's identity color. `$symbol` is the focused agent's entry in `[agent_bar.symbols]` (keys `claude`, `pi`, `hermes`, `codex`, `omp`) when the theme sets one, else `symbol`. Attached and detail header. |
+| `workspace` | `$repo $name` | `$repo` is absent when there is no repo name, and always in the detail header. `$style` includes the PR-lifecycle tint (green open, purple merged, red closed), or the header style without a PR. Attached and detail header. |
+| `branch` | `$symbol $branch` | The workspace's git branch; `symbol` defaults to `⎇`, `$style` is the muted `dim` hue. Detail header only. |
+| `status` | `$glyph $label $ago` | The workspace's dashboard status as its row shows it; `$style` includes the status colour. `$ago` is how long it has held (`12s`, `4m`, `2h`), absent when unknown. Detail header only. |
 | `attention` | `$glyph $repo $name $age` | One item per workspace needing attention. `$glyph` is the entry's dashboard status glyph in its status color; `$style` is the name's PR-lifecycle tint (open, merged, …) or the muted `path` hue. Entries that don't fit fold into `more_format` (`$count`); the first entry always renders, and if it alone would push the tail off the bar its `$name` is shortened with an ellipsis (assuming one `$name` in the format; a format without `$name`, or a very long `$repo`, has nothing to yield and simply clips). Clickable: each entry, and the tail. |
 | `pins` | `$index $label` | One chip per pinned command. Clickable. |
 | `tags` | `$index $label` | The three most-used prompt tags as chips, then the manager chip from `more_format` (`$count` = saved tags). Attached only. Clickable: each chip, and the manager. |
@@ -386,9 +402,10 @@ and `tags`, though each records one hit per entry/chip like
 fitted to the one bar that places it. Put one of these five in more than
 one place across the two attached bars' `format`/`right_format` (or twice
 within the dashboard footer's own `format`/`right_format`, or twice within
-the dashboard header's, or twice within the dashboard detail pane's) and
-only the last-routed placement would be clickable, so `wsx theme check`
-rejects it as a duplicate instead. These four scopes are independent: a
+the dashboard header's, or twice within either of the dashboard detail
+pane's two rows) and only the last-routed placement would be clickable, so
+`wsx theme check` rejects it as a duplicate instead. These five scopes are
+independent: a
 singleton segment may appear once in each without conflicting with the
 others.
 

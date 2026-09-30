@@ -58,6 +58,14 @@ format       = "[ $keys ](bg:nord2 fg:nord4)[](fg:nord2 bg:nord3)[( $pins )](
 right_format = "[](fg:nord1)[( $agents )( $model_tokens )](bg:nord1 fg:nord4)[](fg:nord2 bg:nord1)[( $procs )( $diff )](bg:nord2 fg:nord4)[](fg:nord10 bg:nord2)[( $pr )](bg:nord10 fg:nord6)"
 fill         = " "
 
+# The dashboard DETAIL pane's header row: the agent block, the name on the
+# accent, then branch and status stepping down; on the right the attached
+# bottom bar's tail (procs, diff, PR), dropped whole when all three are.
+[dashboard_detail_header]
+format       = "[ $agent_bar ](bg:nord2)[](fg:nord2 bg:nord8)[ $workspace ](bg:nord8 fg:nord1 bold)[](fg:nord8 bg:nord3)[ $branch ](bg:nord3 fg:nord4)[](fg:nord3 bg:nord1)[ $status ](bg:nord1)[](fg:nord1)"
+right_format = "([](fg:nord2)[( $procs )( $diff )](bg:nord2 fg:nord4)[](fg:nord10 bg:nord2)[( $pr )](bg:nord10 fg:nord6))"
+fill         = " "
+
 # --- segments (unset fields keep the bundled defaults) -------------------
 
 [group]
@@ -134,3 +142,8 @@ format = "[+$added](fg:nord14 bold) [−$removed](fg:nord11)"
 
 [pr]
 format = "[$symbol #$number $label](bold)( [$mark]($mark_style))"
+
+# The branch in the detail header inherits its block's text colour instead
+# of the bundled muted `dim`.
+[branch]
+format = "[$symbol $branch]()"

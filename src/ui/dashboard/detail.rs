@@ -11,7 +11,6 @@ use crate::config::detail_bar_config::DetailBarConfig;
 use crate::data::store::{Repo, Workspace, WorkspaceRecap};
 use crate::git::DiffStats;
 use crate::git::forge::{BranchLifecycle, ReviewDecision};
-use crate::pty::session::AgentKind;
 use crate::ui::dashboard::status::Status;
 use crate::ui::theme::Theme;
 use ratatui::Frame;
@@ -62,14 +61,6 @@ pub struct DetailInputs<'a> {
     /// Per-slot scroll offsets. Borrowed mutably so the container can
     /// clamp them to the current content height during render.
     pub scroll_offsets: &'a mut [u16; 4],
-}
-
-/// Char-offset and char-width of the clickable PR chip within the header
-/// line. `render` converts this into a screen `Rect`.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct HeaderChip {
-    pub start: usize,
-    pub width: usize,
 }
 
 #[derive(Debug, Default)]
@@ -149,46 +140,37 @@ pub fn render(
         (None, chunks[2])
     };
 
-    // A bar theme that draws the agent's kind (`[agent_bar.symbols]`)
-    // puts that icon at the head of the header in place of the gutter.
-    let agent_icon = inputs
-        .bar_specs
-        .agent_symbol(inputs.workspace.agent)
-        .map(|glyph| (glyph, inputs.workspace.agent));
-    let (header, pr_chip) = build_header_strip(
-        agent_icon,
-        &inputs.workspace.name,
-        &inputs.workspace.branch,
-        inputs.lifecycle,
-        inputs.pr_number,
-        inputs.review,
-        inputs.unresolved,
-        inputs.diff,
-        inputs.procs.len() as u32,
-        inputs.status,
-        inputs.ago_secs,
+    // The header row is a themed bar (`[dashboard_detail_header]`); its
+    // `$pr` chip carries `Hit::Pr`, which becomes the PR link rect.
+    let pr = inputs
+        .pr_number
+        .zip(inputs.lifecycle)
+        .map(|(number, lifecycle)| crate::ui::attached::ChipPr {
+            lifecycle,
+            number,
+            review: inputs.review,
+            unresolved: inputs.unresolved,
+        });
+    let header = crate::ui::bar::dashboard_detail_header(
+        inputs.bar_specs,
         theme,
-        header_area.width as usize,
+        &crate::ui::bar::DetailHeaderInputs {
+            agent: inputs.workspace.agent,
+            name: &inputs.workspace.name,
+            branch: &inputs.workspace.branch,
+            pr,
+            diff: inputs.diff,
+            procs: inputs.procs.len() as u32,
+            status: inputs.status,
+            ago_secs: inputs.ago_secs,
+            fleet: inputs.fleet,
+        },
+        header_area.width,
     );
-    f.render_widget(Paragraph::new(header), header_area);
-
-    let pr_link_rect = pr_chip.and_then(|c| {
-        let x = header_area.x.saturating_add(c.start as u16);
-        let right = header_area.x.saturating_add(header_area.width);
-        if x >= right {
-            return None;
-        }
-        let w = (c.width as u16).min(right - x);
-        if w == 0 {
-            return None;
-        }
-        Some(ratatui::layout::Rect {
-            x,
-            y: header_area.y,
-            width: w,
-            height: 1,
-        })
-    });
+    f.render_widget(Paragraph::new(header.line), header_area);
+    let pr_link_rect = crate::ui::bar::render::hit_rects(header_area, &header.hits)
+        .into_iter()
+        .find_map(|(rect, hit)| (hit == crate::ui::bar::segment::Hit::Pr).then_some(rect));
 
     let container_rects = render_body_region(f, body_region, inputs, theme);
 
@@ -448,144 +430,6 @@ fn render_container(
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-const GUTTER: &str = "▍";
-
-/// One-line header strip at the top of the bar. Returns the rendered line
-/// and, when a PR lifecycle chip was drawn, its char-offset + width so the
-/// caller can make it clickable.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn build_header_strip(
-    agent_icon: Option<(&str, AgentKind)>,
-    name: &str,
-    branch: &str,
-    lifecycle: Option<BranchLifecycle>,
-    pr_number: Option<u32>,
-    review: Option<ReviewDecision>,
-    unresolved: Option<u32>,
-    diff: Option<DiffStats>,
-    procs: u32,
-    status: Status,
-    ago_secs: Option<u64>,
-    theme: &Theme,
-    width: usize,
-) -> (Line<'static>, Option<HeaderChip>) {
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut col: usize = 0;
-    let mut pr_chip: Option<HeaderChip> = None;
-
-    // The lead cell: the agent's icon in its identity colour when the bar
-    // theme has one for its kind, else the status-coloured gutter. Counted
-    // in cells, since a theme icon may be a wide glyph.
-    let (lead, lead_style) = match agent_icon {
-        Some((glyph, agent)) => (glyph.to_string(), theme.agent_style(agent)),
-        None => (GUTTER.to_string(), theme.status_style(status)),
-    };
-    col += unicode_width::UnicodeWidthStr::width(lead.as_str());
-    spans.push(Span::styled(lead, lead_style));
-
-    col += 1;
-    spans.push(Span::raw(" ".to_string()));
-
-    col += name.chars().count();
-    spans.push(Span::styled(
-        name.to_string(),
-        Style::default().add_modifier(Modifier::BOLD),
-    ));
-
-    col += 2;
-    spans.push(Span::raw("  ".to_string()));
-
-    let branch_text = format!("⎇ {branch}");
-    col += branch_text.chars().count();
-    spans.push(Span::styled(branch_text, theme.dim_style()));
-
-    if let Some(lc) = lifecycle {
-        // The header lays the chip out inline, so it never has to trade the
-        // lifecycle word against the approval mark — hence the unbounded width.
-        if let Some(chip) = crate::ui::theme::pr_chip(lc, pr_number, review, unresolved, usize::MAX)
-        {
-            col += 2;
-            spans.push(Span::raw("  ".to_string()));
-            let chip_width = chip.width();
-            pr_chip = Some(HeaderChip {
-                // `col` is the running char-offset at this point: the number
-                // of chars before the chip glyph. Any span added above must
-                // bump `col` or this offset drifts. The width spans the whole
-                // chip, mark included, so a click on the mark still opens the PR.
-                start: col,
-                width: chip_width,
-            });
-            col += chip_width;
-            spans.push(Span::styled(
-                chip.lifecycle_text.clone(),
-                theme
-                    .lifecycle_style(Some(lc))
-                    .unwrap_or_else(|| theme.dim_style()),
-            ));
-            if let Some((mark, d)) = chip.mark() {
-                spans.push(Span::raw(" ".to_string()));
-                spans.push(Span::styled(mark, theme.review_style(d)));
-            }
-        }
-    }
-
-    if let Some(d) = diff
-        && (d.added > 0 || d.removed > 0)
-    {
-        col += 2;
-        spans.push(Span::raw("  ".to_string()));
-        let added = format!("+{}", d.added);
-        col += added.chars().count();
-        spans.push(Span::styled(added, theme.ok_style()));
-        col += 1;
-        spans.push(Span::raw(" ".to_string()));
-        let removed = format!("−{}", d.removed);
-        col += removed.chars().count();
-        spans.push(Span::styled(removed, theme.err_style()));
-    }
-
-    col += 2;
-    spans.push(Span::raw("  ".to_string()));
-    let procs_style = if procs > 0 {
-        theme.status_style(Status::Thinking)
-    } else {
-        theme.dim_style()
-    };
-    let procs_text = format!("● {procs} procs");
-    col += procs_text.chars().count();
-    spans.push(Span::styled(procs_text, procs_style));
-
-    col += 2;
-    spans.push(Span::raw("  ".to_string()));
-    let glyph = status.glyph().to_string();
-    col += glyph.chars().count();
-    spans.push(Span::styled(glyph, theme.status_style(status)));
-    col += 1;
-    spans.push(Span::raw(" ".to_string()));
-    let label = status.label().to_string();
-    col += label.chars().count();
-    spans.push(Span::styled(label, theme.status_style(status)));
-
-    let ago = format_ago_short(ago_secs);
-    let ago_text = format!("  · {ago}");
-    col += ago_text.chars().count();
-    spans.push(Span::styled(ago_text, theme.dim_style()));
-
-    // `width` is reserved for future right-truncation; `col` is the final
-    // running char-offset. Both are intentionally unused for now.
-    let _ = (width, col);
-    (Line::from(spans), pr_chip)
-}
-
-fn format_ago_short(secs: Option<u64>) -> String {
-    match secs {
-        None => "—".to_string(),
-        Some(s) if s < 60 => format!("{s}s"),
-        Some(s) if s < 3600 => format!("{}m", s / 60),
-        Some(s) => format!("{}h", s / 3600),
-    }
-}
-
 /// Render the PROCESSES module body. Returns one row per process
 /// (capped at 5, with a "+N more" suffix when over the cap), or a
 /// single "—" placeholder when empty. The host (`render_container`)
@@ -813,6 +657,8 @@ fn truncate_to_chars_left(s: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use crate::git::forge::ReviewDecision;
+    use crate::pty::session::AgentKind;
+    use crate::ui::attached::ChipPr;
     use crate::ui::dashboard::status::Status;
     use crate::ui::theme::Theme;
     use ratatui::Terminal;
@@ -933,91 +779,99 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// The header row's inputs for a Claude workspace `ws` on branch `br`
+    /// with nothing else going on; tests override what they exercise.
+    fn header_inputs() -> crate::ui::bar::DetailHeaderInputs<'static> {
+        crate::ui::bar::DetailHeaderInputs {
+            agent: AgentKind::Claude,
+            name: "ws",
+            branch: "br",
+            pr: None,
+            diff: None,
+            procs: 0,
+            status: Status::Idle,
+            ago_secs: None,
+            fleet: crate::ui::bar::fleet::empty(),
+        }
+    }
+
+    fn chip_pr(lifecycle: BranchLifecycle, review: Option<ReviewDecision>) -> Option<ChipPr> {
+        Some(ChipPr {
+            lifecycle,
+            number: 152,
+            review,
+            unresolved: None,
+        })
+    }
+
+    /// The header row as drawn by `specs`, with its text and the PR chip's
+    /// hit span, if any.
+    fn header_with(
+        specs: &crate::config::theme_file::BarSpecs,
+        inputs: &crate::ui::bar::DetailHeaderInputs<'_>,
+    ) -> (
+        crate::ui::bar::render::Rendered,
+        String,
+        Option<crate::ui::bar::segment::HitSpan>,
+    ) {
+        let rendered = crate::ui::bar::dashboard_detail_header(specs, &Theme::wsx(), inputs, 120);
+        let text = line_to_string(&rendered.line);
+        let pr = rendered
+            .hits
+            .iter()
+            .find(|h| h.hit == crate::ui::bar::segment::Hit::Pr)
+            .cloned();
+        (rendered, text, pr)
+    }
+
+    fn header(
+        inputs: &crate::ui::bar::DetailHeaderInputs<'_>,
+    ) -> (String, Option<crate::ui::bar::segment::HitSpan>) {
+        let (_, text, pr) = header_with(&bar_specs(), inputs);
+        (text, pr)
+    }
+
+    /// The cell column `needle` starts at in `text`.
+    fn col_of(text: &str, needle: &str) -> u16 {
+        let byte = text
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle:?} in {text:?}"));
+        unicode_width::UnicodeWidthStr::width(&text[..byte]) as u16
+    }
+
     #[test]
     fn header_strip_contains_all_chips_in_order() {
-        let theme = Theme::wsx();
-        let (line, _) = build_header_strip(
-            None,
-            "repo-overview",
-            "bakedbean/repo-overview",
-            Some(BranchLifecycle::PrOpen),
-            None,
-            None,
-            None,
-            Some(DiffStats {
+        let (text, _) = header(&crate::ui::bar::DetailHeaderInputs {
+            name: "repo-overview",
+            branch: "bakedbean/repo-overview",
+            pr: chip_pr(BranchLifecycle::PrOpen, None),
+            diff: Some(DiffStats {
                 added: 12,
                 removed: 3,
             }),
-            2,
-            Status::Question,
-            Some(29),
-            &theme,
-            120,
-        );
-        let text = line_to_string(&line);
-        assert!(text.contains("repo-overview"), "name missing: {text:?}");
-        assert!(
-            text.contains("bakedbean/repo-overview"),
-            "branch missing: {text:?}"
-        );
-        assert!(
-            text.contains("+12") && text.contains("−3"),
-            "diff missing: {text:?}"
-        );
-        assert!(
-            text.contains("● 2") || text.contains("2 procs"),
-            "procs missing: {text:?}"
-        );
-        assert!(text.contains("?"), "status glyph missing: {text:?}");
-        assert!(text.contains("29s"), "ago missing: {text:?}");
+            procs: 2,
+            status: Status::Question,
+            ago_secs: Some(29),
+            ..header_inputs()
+        });
+        let order = [
+            "▎ repo-overview",
+            "⎇ bakedbean/repo-overview",
+            "#152 open",
+            "+12 −3",
+            "● 2p",
+            "? question",
+            "· 29s",
+        ];
+        let cols: Vec<u16> = order.iter().map(|n| col_of(&text, n)).collect();
+        assert!(cols.is_sorted(), "{order:?} out of order in {text:?}");
     }
 
     #[test]
-    fn header_strip_omits_diff_when_none() {
-        let theme = Theme::wsx();
-        let (line, _) = build_header_strip(
-            None,
-            "ws",
-            "br",
-            None,
-            None,
-            None,
-            None,
-            None,
-            0,
-            Status::Idle,
-            None,
-            &theme,
-            80,
-        );
-        let text = line_to_string(&line);
-        assert!(!text.contains("+"), "diff cell should be absent: {text:?}");
-        assert!(!text.contains("−"), "diff cell should be absent: {text:?}");
-    }
-
-    #[test]
-    fn header_strip_omits_lifecycle_when_none() {
-        let theme = Theme::wsx();
-        let (line, chip) = build_header_strip(
-            None,
-            "ws",
-            "br",
-            None,
-            None,
-            None,
-            None,
-            None,
-            0,
-            Status::Idle,
-            None,
-            &theme,
-            80,
-        );
-        let text = line_to_string(&line);
-        let lower = text.to_lowercase();
-        assert!(!lower.contains("pr open"), "no pr label: {text:?}");
-        assert!(!lower.contains("merged"), "no pr label: {text:?}");
-        assert!(chip.is_none(), "no chip rect when no lifecycle: {text:?}");
+    fn header_strip_omits_what_the_workspace_lacks() {
+        let (text, pr) = header(&header_inputs());
+        assert_eq!(text.trim_end(), "▎ ws  ⎇ br  · idle", "{text:?}");
+        assert!(pr.is_none(), "no chip without a PR");
     }
 
     #[test]
@@ -1025,154 +879,108 @@ mod tests {
         // `NoPr` is what the store emits for a branch with no PR; its
         // lifecycle_chip glyph is empty, so no chip is drawn even if a
         // stale number is somehow present.
-        let theme = Theme::wsx();
-        let (line, chip) = build_header_strip(
-            None,
-            "ws",
-            "br",
-            Some(BranchLifecycle::NoPr),
-            Some(99),
-            None,
-            None,
-            None,
-            0,
-            Status::Idle,
-            None,
-            &theme,
-            120,
-        );
-        let text = line_to_string(&line);
-        assert!(!text.contains("#99"), "no chip number for NoPr: {text:?}");
-        assert!(chip.is_none(), "no chip rect for NoPr: {text:?}");
+        let (text, pr) = header(&crate::ui::bar::DetailHeaderInputs {
+            pr: chip_pr(BranchLifecycle::NoPr, None),
+            ..header_inputs()
+        });
+        assert!(!text.contains("#152"), "no chip number for NoPr: {text:?}");
+        assert!(pr.is_none(), "no chip rect for NoPr: {text:?}");
     }
 
-    /// A bar theme icon for the agent's kind replaces the status gutter,
-    /// takes the agent's colour, and shifts the PR chip rect by its cells.
+    /// The lead cell is `$agent_bar`: the bundled `▎` in the agent's
+    /// colour, or the kind's `[agent_bar.symbols]` icon when the theme
+    /// draws one — which shifts the PR chip's hit by its extra cell.
     #[test]
-    fn header_strip_leads_with_the_agent_icon_in_place_of_the_gutter() {
-        let theme = Theme::wsx();
-        let build = |icon| {
-            build_header_strip(
-                icon,
-                "ws",
-                "br",
-                Some(BranchLifecycle::PrOpen),
-                Some(7),
-                None,
-                None,
-                None,
-                0,
-                Status::Idle,
-                None,
-                &theme,
-                120,
-            )
+    fn header_strip_leads_with_the_agent_bar() {
+        let inputs = crate::ui::bar::DetailHeaderInputs {
+            pr: chip_pr(BranchLifecycle::PrOpen, None),
+            ..header_inputs()
         };
-        let (plain, plain_chip) = build(None);
-        assert!(line_to_string(&plain).starts_with(GUTTER), "{plain:?}");
-
-        let (line, chip) = build(Some(("🤖", AgentKind::Claude)));
-        let text = line_to_string(&line);
-        assert!(text.starts_with("🤖 ws"), "{text:?}");
-        assert!(!text.contains(GUTTER), "gutter replaced: {text:?}");
+        let theme = Theme::wsx();
+        let (plain, text, plain_pr) = header_with(&bar_specs(), &inputs);
+        assert!(text.starts_with("▎ ws"), "{text:?}");
         assert_eq!(
-            line.spans[0].style.fg,
+            plain.line.spans[0].style.fg,
             theme.agent_style(AgentKind::Claude).fg
         );
-        // The icon is two cells wide against the gutter's one.
-        assert_eq!(chip.unwrap().start, plain_chip.unwrap().start + 1);
+
+        let iconed = crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse("[agent_bar.symbols]\nclaude = \"🤖\"\n")
+                .unwrap(),
+            &theme,
+        )
+        .unwrap();
+        let (line, text, pr) = header_with(&iconed, &inputs);
+        assert!(text.starts_with("🤖 ws"), "{text:?}");
+        assert_eq!(
+            line.line.spans[0].style.fg,
+            theme.agent_style(AgentKind::Claude).fg
+        );
+        // The icon is two cells wide against the bar's one.
+        assert_eq!(pr.unwrap().start_col, plain_pr.unwrap().start_col + 1);
     }
 
     #[test]
     fn header_strip_marks_an_approved_pr_and_covers_it_with_the_chip_rect() {
-        let theme = Theme::wsx();
-        let (line, chip) = build_header_strip(
-            None,
-            "ws",
-            "br",
-            Some(BranchLifecycle::PrOpen),
-            Some(152),
-            Some(ReviewDecision::Approved),
-            None,
-            None,
-            0,
-            Status::Idle,
-            None,
-            &theme,
-            120,
-        );
-        let text = line_to_string(&line);
-        assert!(text.contains("⏺ #152 open ✓"), "marked chip: {text:?}");
+        let (text, pr) = header(&crate::ui::bar::DetailHeaderInputs {
+            pr: chip_pr(BranchLifecycle::PrOpen, Some(ReviewDecision::Approved)),
+            ..header_inputs()
+        });
         // The mark is part of the chip, so the click rect must include it —
-        // otherwise clicking the tick lands on the diff cell.
-        let chip = chip.expect("chip rect should be present");
-        assert_eq!(chip.width, "⏺ #152 open ✓".chars().count());
-        assert!(
-            text.chars()
-                .skip(chip.start)
-                .collect::<String>()
-                .starts_with("⏺ #152 open ✓"),
-            "chip rect starts at the chip: {text:?}"
+        // otherwise clicking the tick lands on the next cell.
+        let pr = pr.expect("chip rect should be present");
+        assert_eq!(pr.start_col, col_of(&text, "⏺ #152 open ✓"));
+        assert_eq!(
+            pr.width as usize,
+            unicode_width::UnicodeWidthStr::width("⏺ #152 open ✓")
         );
     }
 
     #[test]
     fn header_strip_leaves_a_merged_pr_unmarked() {
-        let theme = Theme::wsx();
-        let (line, _) = build_header_strip(
-            None,
-            "ws",
-            "br",
-            Some(BranchLifecycle::PrMerged),
-            Some(152),
-            Some(ReviewDecision::Approved),
-            None,
-            None,
-            0,
-            Status::Idle,
-            None,
-            &theme,
-            120,
-        );
-        let text = line_to_string(&line);
+        let (text, _) = header(&crate::ui::bar::DetailHeaderInputs {
+            pr: chip_pr(BranchLifecycle::PrMerged, Some(ReviewDecision::Approved)),
+            ..header_inputs()
+        });
         assert!(text.contains("⏺ #152 merged"), "chip present: {text:?}");
         assert!(!text.contains('✓'), "merged PRs carry no mark: {text:?}");
     }
 
+    /// A theme's `[dashboard_detail_header]` restyles the row like any other
+    /// bar: here a background block behind the name, the status flush right.
     #[test]
-    fn header_strip_shows_pr_number_and_reports_chip() {
-        let theme = Theme::wsx();
-        let (line, chip) = build_header_strip(
-            None,
-            "ws",
-            "br",
-            Some(BranchLifecycle::PrOpen),
-            Some(152),
-            None,
-            None,
-            None,
-            0,
-            Status::Idle,
-            None,
-            &theme,
-            120,
+    fn header_strip_follows_the_theme() {
+        let specs = crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse(
+                "[dashboard_detail_header]\n\
+                 format = \"[ $workspace ](bg:#303030)( $pr)\"\n\
+                 right_format = \"$status\"\n",
+            )
+            .unwrap(),
+            &Theme::wsx(),
+        )
+        .unwrap();
+        let (rendered, text, pr) = header_with(
+            &specs,
+            &crate::ui::bar::DetailHeaderInputs {
+                pr: chip_pr(BranchLifecycle::PrOpen, None),
+                ..header_inputs()
+            },
         );
-        let text = line_to_string(&line);
-        assert!(text.contains("#152"), "pr number missing: {text:?}");
-        let chip = chip.expect("chip rect should be present");
-        assert_eq!(chip.width, "⏺ #152 open".chars().count());
-        let prefix: String = text.chars().take(chip.start).collect();
-        assert!(
-            !prefix.contains("#152"),
-            "chip.start should point at the chip, prefix was {prefix:?}"
+        assert!(text.starts_with(" ws  ⏺ #152 open"), "{text:?}");
+        assert!(text.ends_with("· idle"), "status flush right: {text:?}");
+        assert!(!text.contains('⎇'), "branch not placed: {text:?}");
+        let name = rendered
+            .line
+            .spans
+            .iter()
+            .find(|s| s.content.as_ref() == "ws")
+            .expect("name span");
+        assert_eq!(
+            name.style.bg,
+            Some(ratatui::style::Color::Rgb(0x30, 0x30, 0x30))
         );
-        assert!(
-            text.chars()
-                .skip(chip.start)
-                .collect::<String>()
-                .starts_with("⏺ #152 open"),
-            "chip.start should land on the chip glyph: {text:?}"
-        );
+        assert_eq!(pr.unwrap().start_col, col_of(&text, "⏺ #152"));
     }
 
     #[test]

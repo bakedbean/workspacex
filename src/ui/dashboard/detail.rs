@@ -87,11 +87,12 @@ pub fn render(
     use ratatui::widgets::Paragraph;
 
     // The chip row holds pinned commands and whatever `[module.*]` the
-    // theme places in `[dashboard_detail]`. Either earns it a row.
-    let chip_present = !inputs.pinned.is_empty()
-        || inputs
-            .bar_specs
-            .places_module(&inputs.bar_specs.dashboard_detail);
+    // theme places in `[dashboard_detail]`. Either earns it a row — unless
+    // the reply row places `$pins` itself, which folds the chips into it.
+    let specs = inputs.bar_specs;
+    let pins_in_reply = specs.places(&specs.dashboard_detail_reply, "pins");
+    let chip_present = (!inputs.pinned.is_empty() && !pins_in_reply)
+        || specs.places_module(&specs.dashboard_detail);
     let has_body = inputs.config.has_body();
     // The body region holds the top horizontal rule, container content,
     // and bottom horizontal rule as a single 3+ row strip — so that
@@ -178,7 +179,7 @@ pub fn render(
     // strip and row (above/elsewhere), so the chip row here carries pinned
     // commands only — no right-justified agent pills, procs, diff, or PR chip.
     // Themed via `[dashboard_detail]`, the fourth bar the engine draws.
-    let chip_rects = if let Some(area) = chip_area {
+    let mut chip_rects: Vec<(usize, Rect)> = if let Some(area) = chip_area {
         let rendered = crate::ui::bar::dashboard_detail(
             inputs.bar_specs,
             theme,
@@ -209,11 +210,20 @@ pub fn render(
             branch: &inputs.workspace.branch,
             draft: inputs.reply_draft,
             focused: inputs.reply_focused,
+            pinned: inputs.pinned,
             fleet: inputs.fleet,
         },
         reply_area.width,
     );
     f.render_widget(Paragraph::new(reply.line), reply_area);
+    chip_rects.extend(
+        crate::ui::bar::render::hit_rects(reply_area, &reply.hits)
+            .into_iter()
+            .filter_map(|(rect, hit)| match hit {
+                crate::ui::bar::segment::Hit::PinnedChip(i) => Some((i, rect)),
+                _ => None,
+            }),
+    );
     if inputs.reply_focused {
         f.set_cursor_position((reply_area.x + reply.cursor_x, reply_area.y));
     }
@@ -933,6 +943,7 @@ mod tests {
                 branch: "wsx/foo",
                 draft,
                 focused,
+                pinned: &[],
                 fleet: crate::ui::bar::fleet::empty(),
             },
             width,
@@ -1526,6 +1537,83 @@ mod tests {
         assert_eq!(
             with_disabled, without,
             "a disabled module must not add a row"
+        );
+    }
+
+    /// A theme that places `$pins` in the reply row folds the chip row into
+    /// it: no separate row, the chips lead the prompt, and their click
+    /// rects land on the reply row.
+    #[test]
+    fn pins_in_the_reply_row_fold_the_chip_row_into_it() {
+        let (_store, repo, ws) = seed_workspace();
+        let cfg = DetailBarConfig::default();
+        let reg = make_registry();
+        let pinned = vec![crate::commands::pinned::PinnedCommand {
+            label: "PR".into(),
+            command: "/pull-request".into(),
+            submit: true,
+        }];
+        let mut offsets = [0u16; 4];
+        let specs = crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse(
+                "[dashboard_detail_reply]\nformat = \"($pins  )$prompt \"\n",
+            )
+            .unwrap(),
+            &Theme::wsx(),
+        )
+        .unwrap();
+        let mut inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: None,
+            recap: None,
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            review: None,
+            unresolved: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+            config: &cfg,
+            registry: &reg,
+            pinned: &pinned,
+            bar_specs: &specs,
+            fleet: crate::ui::bar::fleet::empty(),
+            scroll_offsets: &mut offsets,
+        };
+        let (w, h) = (100u16, 12u16);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
+        let mut rects: Vec<(usize, ratatui::layout::Rect)> = Vec::new();
+        terminal
+            .draw(|f| {
+                rects = render(f, Rect::new(0, 0, w, h), &mut inputs, &Theme::wsx()).chip_rects;
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let row = |y: u16| -> String { (0..w).map(|x| buf[(x, y)].symbol()).collect() };
+        let last = row(h - 1);
+        assert!(
+            last.starts_with(" 1  PR  ❯ Reply to agent"),
+            "chips lead the prompt: {last:?}"
+        );
+        assert!(
+            !row(h - 2).contains(" PR "),
+            "no separate chip row: {:?}",
+            row(h - 2)
+        );
+        assert_eq!(rects.len(), 1, "one chip rect");
+        assert_eq!(rects[0].0, 0);
+        assert_eq!(
+            rects[0].1.y,
+            h - 1,
+            "the chip is clickable on the reply row"
         );
     }
 

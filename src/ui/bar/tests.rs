@@ -1276,12 +1276,17 @@ mod segment_registry_drift_tests {
             branch: "wsx/foo",
             draft: "",
             focused: true,
+            pinned: &[crate::commands::pinned::PinnedCommand {
+                label: "PR".into(),
+                command: "/pull-request".into(),
+                submit: true,
+            }],
             fleet: crate::ui::bar::fleet::empty(),
         };
         let segments =
             crate::ui::bar::bars::detail_reply_segments(&specs, &theme, &inputs, &resolver);
         let got: BTreeSet<&str> = segments.keys().map(String::as_str).collect();
-        let expected: BTreeSet<&str> = ["agent_bar", "workspace", "branch", "keys"]
+        let expected: BTreeSet<&str> = ["agent_bar", "workspace", "branch", "pins", "keys"]
             .into_iter()
             .chain(DETAIL_REPLY_ONLY)
             .collect();

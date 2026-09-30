@@ -237,6 +237,16 @@ impl BarSpecs {
     /// has something to draw asks this rather than rendering first: it
     /// depends on what the theme places, not on what the fleet currently
     /// counts, so the row does not come and go with the numbers.
+    /// Whether `bar` places the segment `name` on either side and it is
+    /// not disabled.
+    pub fn places(&self, bar: &BarSpec, name: &str) -> bool {
+        format::vars(&bar.format)
+            .into_iter()
+            .chain(format::vars(&bar.right_format))
+            .any(|n| n == name)
+            && self.segments.get(name).is_some_and(|cfg| !cfg.disabled)
+    }
+
     pub fn places_module(&self, bar: &BarSpec) -> bool {
         format::vars(&bar.format)
             .into_iter()

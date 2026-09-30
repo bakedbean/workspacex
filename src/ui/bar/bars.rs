@@ -5,7 +5,7 @@
 use super::format;
 use super::providers;
 use super::render::{Rendered, eval, render_bar};
-use super::segment::{Hit, Segment, SegmentConfig, SegmentMap};
+use super::segment::{Hit, HitSpan, Segment, SegmentConfig, SegmentMap};
 use super::style;
 use crate::config::theme_file::BarSpecs;
 use crate::ui::dashboard::layout::GroupMode;
@@ -314,6 +314,9 @@ pub(crate) struct DetailReplyInputs<'a> {
     pub branch: &'a str,
     pub draft: &'a str,
     pub focused: bool,
+    /// `$pins`' chips, so a theme can lead the prompt with them and fold
+    /// the pinned-chip row into this one.
+    pub pinned: &'a [crate::commands::pinned::PinnedCommand],
     pub fleet: &'a SegmentMap,
 }
 
@@ -322,6 +325,8 @@ pub(crate) struct DetailReplyInputs<'a> {
 pub(crate) struct ReplyRendered {
     pub line: ratatui::text::Line<'static>,
     pub cursor_x: u16,
+    /// Columns relative to the first cell of the line, as `Rendered::hits`.
+    pub hits: Vec<HitSpan>,
 }
 
 /// The draft field's ghost text while it is empty.
@@ -372,6 +377,11 @@ pub(super) fn detail_reply_segments(
         &mut segments,
         "branch",
         providers::branch(cfg(specs, "branch"), inputs.branch, theme, resolver),
+    );
+    put(
+        &mut segments,
+        "pins",
+        providers::pins(cfg(specs, "pins"), inputs.pinned, resolver),
     );
     // The hint is for a row being typed into; an idle row has nothing to send.
     if inputs.focused {
@@ -458,6 +468,7 @@ pub(crate) fn dashboard_detail_reply(
     ReplyRendered {
         line: ratatui::text::Line::from(out.spans),
         cursor_x: cursor_x.min(width.saturating_sub(1)),
+        hits: out.hits,
     }
 }
 

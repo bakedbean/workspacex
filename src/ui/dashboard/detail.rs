@@ -100,10 +100,12 @@ pub fn render(
     // all three rows. When `!has_body` it collapses to just the two
     // rule rows (no content between).
     let body_region_rows: u16 = if has_body { 3 } else { 2 };
+    let bottom_rule = inputs.config.bottom_rule;
     let min_rows: u16 = 1 // header
         + body_region_rows
         + if chip_present { 1 } else { 0 } // chip slot
-        + 1; // reply
+        + 1 // reply
+        + u16::from(bottom_rule);
     let needed = inputs.config.minimum_height().max(min_rows);
     if area.height == 0 || area.height < needed {
         return DetailDrawOutput::default();
@@ -114,20 +116,17 @@ pub fn render(
     } else {
         Constraint::Length(body_region_rows)
     };
-    let constraints: Vec<Constraint> = if chip_present {
-        vec![
-            Constraint::Length(1), // header
-            body_region_constraint,
-            Constraint::Length(1), // chips
-            Constraint::Length(1), // reply
-        ]
-    } else {
-        vec![
-            Constraint::Length(1), // header
-            body_region_constraint,
-            Constraint::Length(1), // reply
-        ]
-    };
+    let mut constraints = vec![
+        Constraint::Length(1), // header
+        body_region_constraint,
+    ];
+    if chip_present {
+        constraints.push(Constraint::Length(1)); // chips
+    }
+    constraints.push(Constraint::Length(1)); // reply
+    if bottom_rule {
+        constraints.push(Constraint::Length(1)); // rule above the footer
+    }
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(constraints)
@@ -135,11 +134,18 @@ pub fn render(
 
     let header_area = chunks[0];
     let body_region = chunks[1];
-    let (chip_area, reply_area) = if chip_present {
-        (Some(chunks[2]), chunks[3])
-    } else {
-        (None, chunks[2])
-    };
+    let reply_index = 2 + usize::from(chip_present);
+    let chip_area = chip_present.then(|| chunks[2]);
+    let reply_area = chunks[reply_index];
+    if bottom_rule {
+        // The same dim rule the body region draws, so the reply row reads
+        // as the pane's last row rather than part of the footer below.
+        let rule = Line::from(Span::styled(
+            "─".repeat(area.width as usize),
+            theme.dim_style(),
+        ));
+        f.render_widget(Paragraph::new(rule), chunks[reply_index + 1]);
+    }
 
     // The header row is a themed bar (`[dashboard_detail_header]`); its
     // `$pr` chip carries `Hit::Pr`, which becomes the PR link rect.
@@ -1101,6 +1107,52 @@ mod tests {
         assert!(text.contains("RECENT CHAT"), "chat label: {text:?}");
         assert!(text.contains("PROCESSES"), "procs label: {text:?}");
         assert!(text.contains("Reply to agent"), "reply chip: {text:?}");
+    }
+
+    /// `bottom_rule` puts a dim rule under the reply row, as the pane's
+    /// last row, keeping the reply row directly above it.
+    #[test]
+    fn bottom_rule_draws_under_the_reply_row() {
+        let (_store, repo, ws) = seed_workspace();
+        let cfg = DetailBarConfig {
+            bottom_rule: true,
+            ..DetailBarConfig::default()
+        };
+        let reg = make_registry();
+        let mut offsets = [0u16; 4];
+        let specs = bar_specs();
+        let mut inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: None,
+            recap: None,
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            review: None,
+            unresolved: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+            config: &cfg,
+            registry: &reg,
+            pinned: &[],
+            bar_specs: &specs,
+            fleet: crate::ui::bar::fleet::empty(),
+            scroll_offsets: &mut offsets,
+        };
+        let text = render_to_text(&mut inputs, 60, 10);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[9], "─".repeat(60), "rule is the last row: {text}");
+        assert!(
+            lines[8].contains("Reply to agent"),
+            "reply above it: {text}"
+        );
     }
 
     #[test]

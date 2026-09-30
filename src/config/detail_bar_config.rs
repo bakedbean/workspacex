@@ -36,6 +36,10 @@ pub struct DetailBarConfig {
     pub height: Height,
     #[serde(default = "default_containers")]
     pub containers: Vec<Vec<String>>,
+    /// Draw a rule under the reply row, separating the bar from the
+    /// dashboard footer below it. Costs one row.
+    #[serde(default)]
+    pub bottom_rule: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +58,7 @@ impl Default for DetailBarConfig {
             visible: default_visible(),
             height: Height::default(),
             containers: default_containers(),
+            bottom_rule: false,
         }
     }
 }
@@ -72,6 +77,12 @@ impl DetailBarConfig {
     /// Number of always-on chrome rows (header + 2 rules + reply).
     pub const CHROME_ROWS: u16 = 4;
 
+    /// The chrome rows this config draws: `CHROME_ROWS`, plus one for
+    /// `bottom_rule`.
+    pub fn chrome_rows(&self) -> u16 {
+        Self::CHROME_ROWS + u16::from(self.bottom_rule)
+    }
+
     /// True when at least one container is non-empty.
     pub fn has_body(&self) -> bool {
         self.containers.iter().any(|c| !c.is_empty())
@@ -82,16 +93,16 @@ impl DetailBarConfig {
         if self.has_body() {
             self.height.min_rows
         } else {
-            Self::CHROME_ROWS
+            self.chrome_rows()
         }
     }
 
     /// Compute the bar's preferred height for the current terminal.
-    /// Returns `CHROME_ROWS` when no container has any modules.
+    /// Returns `chrome_rows()` when no container has any modules.
     /// Defensive against inverted `min_rows`/`max_rows`.
     pub fn preferred_height(&self, total: u16) -> u16 {
         if !self.has_body() {
-            return Self::CHROME_ROWS;
+            return self.chrome_rows();
         }
         let target = (u32::from(total) * u32::from(self.height.percent) / 100) as u16;
         let lo = self.height.min_rows.min(self.height.max_rows);
@@ -118,6 +129,9 @@ impl DetailBarConfig {
         }
         if let Some(c) = &ovr.containers {
             self.containers = c.clone();
+        }
+        if let Some(b) = ovr.bottom_rule {
+            self.bottom_rule = b;
         }
         self
     }
@@ -158,6 +172,8 @@ pub struct DetailBarOverride {
     pub height: Option<HeightOverride>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub containers: Option<Vec<Vec<String>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bottom_rule: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -453,6 +469,27 @@ mod tests {
     }
 
     #[test]
+    fn bottom_rule_defaults_off_and_overrides_per_repo() {
+        let cfg: DetailBarConfig = serde_json::from_str("{}").unwrap();
+        assert!(!cfg.bottom_rule);
+        let ovr: DetailBarOverride = serde_json::from_str(r#"{"bottom_rule": true}"#).unwrap();
+        assert!(cfg.with_override(&ovr).bottom_rule);
+    }
+
+    /// The rule is chrome: a body-less bar grows by it.
+    #[test]
+    fn bottom_rule_adds_a_chrome_row() {
+        let cfg = DetailBarConfig {
+            containers: vec![vec![], vec![]],
+            bottom_rule: true,
+            ..DetailBarConfig::default()
+        };
+        assert_eq!(cfg.chrome_rows(), DetailBarConfig::CHROME_ROWS + 1);
+        assert_eq!(cfg.minimum_height(), DetailBarConfig::CHROME_ROWS + 1);
+        assert_eq!(cfg.preferred_height(100), DetailBarConfig::CHROME_ROWS + 1);
+    }
+
+    #[test]
     fn with_override_replaces_height_per_field() {
         let cfg = DetailBarConfig::default();
         let ovr = DetailBarOverride {
@@ -500,10 +537,12 @@ mod tests {
                 max_rows: None,
             }),
             containers: Some(vec![vec!["recent_chat".into()]]),
+            bottom_rule: Some(true),
         };
         let json = serde_json::to_string(&ovr).unwrap();
         let parsed: DetailBarOverride = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.visible, Some(false));
+        assert_eq!(parsed.bottom_rule, Some(true));
         assert_eq!(parsed.height.unwrap().percent, Some(20));
         assert_eq!(
             parsed.containers.unwrap(),

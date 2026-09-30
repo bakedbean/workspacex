@@ -26,6 +26,7 @@ pub(super) fn draw_modal(f: &mut ratatui::Frame, app: &mut App, area: ratatui::l
             let view = crate::ui::modal::PanelView {
                 selected: *selected,
                 filter: filter.as_deref(),
+                tick: app.tick,
             };
             crate::ui::modal::render_updates_panel(f, area, &inputs, &view, now_ms, &app.theme);
         }

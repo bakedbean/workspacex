@@ -1010,9 +1010,9 @@ mod workspace_row_tests {
         use crate::pty::session::AgentKind;
         let theme = Theme::ansi();
         let w = fixture_workspace("alpha");
-        for (status, activity) in [
-            (Status::Thinking, ActivityState::Active),
-            (Status::Waiting, ActivityState::Waiting),
+        for (status, activity, needs_attention, label) in [
+            (Status::Thinking, ActivityState::Active, false, "active"),
+            (Status::Waiting, ActivityState::Waiting, true, "waiting"),
         ] {
             for tick in [0u32, 1] {
                 let row = RowData {
@@ -1020,7 +1020,7 @@ mod workspace_row_tests {
                     failed: false,
                     events: None,
                     activity: Some(activity),
-                    needs_attention: false,
+                    needs_attention,
                     awaiting: None,
                     status,
                     agent: Some(AgentKind::Claude),
@@ -1052,7 +1052,70 @@ mod workspace_row_tests {
                     theme.agent_style(AgentKind::Claude).fg,
                     "{status:?} spinner wears the agent color"
                 );
+                let text_span = span_containing(&line, label);
+                assert_eq!(
+                    text_span.style.fg,
+                    theme.status_style(status).fg,
+                    "{status:?} status text keeps the status color"
+                );
             }
+        }
+    }
+
+    /// Non-live statuses keep their static glyph even with an agent known,
+    /// and a live status with no dashboard item (`agent: None`) falls back
+    /// to the static glyph rather than guessing an agent color.
+    #[test]
+    fn workspace_row_static_glyph_when_not_live_or_agent_unknown() {
+        use crate::pty::session::AgentKind;
+        let theme = Theme::ansi();
+        let w = fixture_workspace("alpha");
+        let cases = [
+            (
+                Status::Complete,
+                Some(ActivityState::Complete),
+                Some(AgentKind::Claude),
+                '\u{2713}',
+            ),
+            (
+                Status::Idle,
+                Some(ActivityState::Idle),
+                Some(AgentKind::Claude),
+                '●',
+            ),
+            (Status::Thinking, Some(ActivityState::Active), None, '●'),
+        ];
+        for (status, activity, agent, glyph) in cases {
+            let row = RowData {
+                label: &w.name,
+                failed: false,
+                events: None,
+                activity,
+                needs_attention: false,
+                awaiting: None,
+                status,
+                agent,
+                lifecycle: None,
+                pr_number: None,
+                review: None,
+                unresolved: None,
+                diff: None,
+            };
+            let line = workspace_row(
+                &row,
+                false,
+                1,
+                10_000,
+                20,
+                crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
+                98,
+                &theme,
+            );
+            assert_eq!(
+                line.spans[1].content,
+                format!("{glyph} "),
+                "{status:?} with agent {agent:?}"
+            );
         }
     }
 
@@ -1946,6 +2009,17 @@ mod render_tests {
         group_mode: GroupMode,
         statuses: &HashMap<WorkspaceId, Status>,
     ) -> String {
+        draw_at_tick(repos, ws, filter, group_mode, statuses, 0)
+    }
+
+    fn draw_at_tick(
+        repos: &[Repo],
+        ws: &[(RepoId, Workspace)],
+        filter: Option<&str>,
+        group_mode: GroupMode,
+        statuses: &HashMap<WorkspaceId, Status>,
+        tick: u32,
+    ) -> String {
         let theme = Theme::ansi();
         let events = HashMap::new();
         let attention = HashSet::new();
@@ -1976,7 +2050,7 @@ mod render_tests {
         let view = PanelView {
             selected: 0,
             filter,
-            tick: 0,
+            tick,
         };
         let mut term = Terminal::new(TestBackend::new(PANEL_MAX_WIDTH, 25)).unwrap();
         term.draw(|f| render_updates_panel(f, f.area(), &inputs, &view, 10_000, &theme))
@@ -1990,6 +2064,27 @@ mod render_tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// The panel threads `PanelView::tick` and the dashboard item's status
+    /// through to the row: a Thinking workspace draws the spinner frame for
+    /// the current tick, an idle one keeps its static glyph.
+    #[test]
+    fn live_workspace_spins_at_the_view_tick() {
+        let repos = vec![fixture_repo_named(1, "alpha-repo")];
+        let ws = vec![fixture_ws(1, 1, "busy"), fixture_ws(2, 1, "quiet")];
+        let statuses = HashMap::from([(WorkspaceId(1), Status::Thinking)]);
+        let tick = 3;
+        let out = draw_at_tick(&repos, &ws, None, GroupMode::Repo, &statuses, tick);
+        let frame = crate::ui::dashboard::spinner::frame(tick);
+        let line_of = |name: &str| {
+            out.lines()
+                .find(|l| l.contains(name))
+                .unwrap_or_else(|| panic!("row for {name}: {out}"))
+                .to_string()
+        };
+        assert!(line_of("busy").contains(&format!("{frame} busy")), "{out}");
+        assert!(!line_of("quiet").contains(frame), "{out}");
     }
 
     /// A repo whose workspaces all filter out loses its header too — an

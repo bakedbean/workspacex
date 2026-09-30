@@ -435,6 +435,36 @@ pub fn status(
     eval_segment(cfg, &v, theme.status_style(status), &[], resolver)
 }
 
+/// The reply row's prompt character, drawn before the draft like a shell's
+/// `❯`. `$symbol` is `symbol`, else `❯`; `$agent` the kind's name
+/// (`claude`); `$style` the agent's colour, bold, while the row has focus,
+/// and the muted `dim` hue otherwise — a live prompt against an idle one.
+pub fn prompt(
+    cfg: &SegmentConfig,
+    agent: AgentKind,
+    focused: bool,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
+    let symbol = cfg.symbol.clone().unwrap_or_else(|| "❯".to_string());
+    let style = if focused {
+        theme.agent_style(agent).add_modifier(Modifier::BOLD)
+    } else {
+        theme.dim_style()
+    };
+    eval_segment(
+        cfg,
+        &vars(vec![
+            ("symbol", var(symbol)),
+            ("agent", var(agent.store_value())),
+        ]),
+        style,
+        &[],
+        resolver,
+    )
+}
+
 /// Cross-workspace attention entries: one item per entry, greedy-fitted
 /// to `items.max_width` using the theme's own item, separator, and tail
 /// widths. `$glyph` arrives pre-styled in the entry's status color;

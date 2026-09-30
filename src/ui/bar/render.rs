@@ -118,7 +118,7 @@ fn eval_full(
     (out, produced)
 }
 
-fn fill_run(fill: &str, cells: u16, trailing_blank: bool) -> String {
+pub(super) fn fill_run(fill: &str, cells: u16, trailing_blank: bool) -> String {
     let ch = fill.chars().next().unwrap_or(' ');
     let mut buffer = [0; 4];
     let glyph = ch.encode_utf8(&mut buffer);

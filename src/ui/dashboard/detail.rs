@@ -230,7 +230,7 @@ pub fn render(
                 _ => None,
             }),
     );
-    if inputs.reply_focused {
+    if inputs.reply_focused && reply_area.width > 0 {
         f.set_cursor_position((reply_area.x + reply.cursor_x, reply_area.y));
     }
 
@@ -1046,6 +1046,101 @@ mod tests {
         assert_eq!(reply_row("hi", true, 80).cursor_x, 4);
     }
 
+    fn reply_row_with(
+        theme_src: &str,
+        name: &str,
+        draft: &str,
+        focused: bool,
+        width: u16,
+    ) -> crate::ui::bar::bars::ReplyRendered {
+        let theme = Theme::wsx();
+        let specs = crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse(theme_src).unwrap(),
+            &theme,
+        )
+        .unwrap();
+        crate::ui::bar::dashboard_detail_reply(
+            &specs,
+            &theme,
+            &crate::ui::bar::DetailReplyInputs {
+                agent: AgentKind::Claude,
+                name,
+                branch: "wsx/foo",
+                draft,
+                focused,
+                pinned: &[],
+                fleet: crate::ui::bar::fleet::empty(),
+            },
+            width,
+        )
+    }
+
+    /// A prompt too long for the row sheds its droppable segments so the
+    /// draft keeps its room, as any bar does on overflow.
+    #[test]
+    fn reply_input_row_drops_a_droppable_prompt_segment_for_the_draft() {
+        let src = "[dashboard_detail_reply]\nformat = \"($workspace )$prompt \"\n\
+                   [workspace]\npriority = 1\n";
+        let name = "abcdefghijklmnopqrstuvwxyz";
+        let wide = line_to_string(&reply_row_with(src, name, "HELLO", true, 80).line);
+        assert!(
+            wide.starts_with("abcdefghijklmnopqrstuvwxyz ❯ HELLO"),
+            "{wide:?}"
+        );
+        let narrow = reply_row_with(src, name, "HELLO", true, 20);
+        let text = line_to_string(&narrow.line);
+        assert!(text.starts_with("❯ HELLO"), "name dropped: {text:?}");
+        assert_eq!(narrow.cursor_x, 7);
+    }
+
+    /// With nothing droppable, the prompt is clipped rather than let it
+    /// swallow the draft.
+    #[test]
+    fn reply_input_row_clips_an_undroppable_prompt() {
+        let src = "[dashboard_detail_reply]\nformat = \"$workspace $prompt \"\n";
+        let rendered = reply_row_with(src, "abcdefghijklmnopqrstuvwxyz", "HELLO", true, 20);
+        let text = line_to_string(&rendered.line);
+        assert_eq!(text.chars().count(), 20, "{text:?}");
+        assert!(
+            text.starts_with("abcdefgh"),
+            "prompt clipped to 8 cells: {text:?}"
+        );
+        assert!(text.contains("HELLO"), "draft still visible: {text:?}");
+        assert_eq!(rendered.cursor_x, 13, "cursor after the draft");
+    }
+
+    /// Widths are per grapheme, as the terminal draws them: a ZWJ emoji is
+    /// one 2-cell cluster, and a base keeps its combining mark.
+    #[test]
+    fn reply_input_row_measures_graphemes() {
+        assert_eq!(
+            reply_row("👩‍💻", true, 80).cursor_x,
+            4,
+            "ZWJ sequence is 2 cells"
+        );
+        assert_eq!(
+            reply_row("日本", true, 80).cursor_x,
+            6,
+            "CJK is 2 cells each"
+        );
+        assert_eq!(
+            reply_row("e\u{301}", true, 80).cursor_x,
+            3,
+            "combining mark is 0"
+        );
+        // At 20 cells the field is 18, 17 with the cursor: an odd budget
+        // for 2-cell clusters, so the tail keeps 8 whole ones (16 cells).
+        let rendered = reply_row(&"👩‍💻".repeat(12), true, 20);
+        let text = line_to_string(&rendered.line);
+        assert_eq!(text.matches("👩‍💻").count(), 8, "{text:?}");
+        assert_eq!(rendered.cursor_x, 18);
+        let marks = line_to_string(&reply_row(&"e\u{301}".repeat(30), true, 20).line);
+        assert!(
+            marks["❯ ".len()..].starts_with('e'),
+            "the tail starts on a base, not a stray mark: {marks:?}"
+        );
+    }
+
     #[test]
     fn reply_input_row_drops_the_hint_when_too_narrow() {
         let text = line_to_string(&reply_row("typing", true, 20).line);
@@ -1152,6 +1247,55 @@ mod tests {
         assert!(
             lines[8].contains("Reply to agent"),
             "reply above it: {text}"
+        );
+    }
+
+    /// The height the dashboard allocates must fit what the renderer needs:
+    /// a small body bar with `bottom_rule` still draws in its preferred
+    /// height rather than going blank.
+    #[test]
+    fn bottom_rule_fits_the_allocated_height_of_a_small_bar() {
+        let (_store, repo, ws) = seed_workspace();
+        let mut cfg = DetailBarConfig {
+            bottom_rule: true,
+            ..DetailBarConfig::default()
+        };
+        cfg.height.min_rows = 5;
+        cfg.height.max_rows = 5;
+        let reg = make_registry();
+        let mut offsets = [0u16; 4];
+        let specs = bar_specs();
+        let h = cfg.preferred_height(40);
+        let mut inputs = DetailInputs {
+            repo: &repo,
+            workspace: &ws,
+            events: None,
+            recap: None,
+            procs: &[],
+            diff: None,
+            diff_per_file: None,
+            lifecycle: None,
+            pr_title: None,
+            pr_number: None,
+            review: None,
+            unresolved: None,
+            status: Status::Idle,
+            ago_secs: None,
+            reply_draft: "",
+            reply_focused: false,
+            events_scanned: true,
+            config: &cfg,
+            registry: &reg,
+            pinned: &[],
+            bar_specs: &specs,
+            fleet: crate::ui::bar::fleet::empty(),
+            scroll_offsets: &mut offsets,
+        };
+        let text = render_to_text(&mut inputs, 60, h);
+        assert!(text.contains("Reply to agent"), "h={h}: {text}");
+        assert!(
+            text.lines().last().unwrap().starts_with('─'),
+            "rule last: {text}"
         );
     }
 
@@ -1663,9 +1807,9 @@ mod tests {
         assert_eq!(rects.len(), 1, "one chip rect");
         assert_eq!(rects[0].0, 0);
         assert_eq!(
-            rects[0].1.y,
-            h - 1,
-            "the chip is clickable on the reply row"
+            rects[0].1,
+            Rect::new(0, h - 1, 6, 1),
+            "the chip's own cells, ` 1 ` and ` PR`, on the reply row"
         );
     }
 

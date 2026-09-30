@@ -88,10 +88,13 @@ impl DetailBarConfig {
         self.containers.iter().any(|c| !c.is_empty())
     }
 
-    /// Smallest terminal height at which the bar can render usefully.
+    /// Smallest terminal height at which the bar can render usefully. With
+    /// a body that is `min_rows`, but never less than the chrome plus one
+    /// content row, so `bottom_rule` can't push a small bar below what the
+    /// renderer needs.
     pub fn minimum_height(&self) -> u16 {
         if self.has_body() {
-            self.height.min_rows
+            self.height.min_rows.max(self.chrome_rows() + 1)
         } else {
             self.chrome_rows()
         }
@@ -105,8 +108,9 @@ impl DetailBarConfig {
             return self.chrome_rows();
         }
         let target = (u32::from(total) * u32::from(self.height.percent) / 100) as u16;
-        let lo = self.height.min_rows.min(self.height.max_rows);
-        let hi = self.height.min_rows.max(self.height.max_rows);
+        let floor = self.chrome_rows() + 1;
+        let lo = self.height.min_rows.min(self.height.max_rows).max(floor);
+        let hi = self.height.min_rows.max(self.height.max_rows).max(floor);
         target.clamp(lo, hi)
     }
 

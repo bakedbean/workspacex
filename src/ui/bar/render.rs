@@ -222,6 +222,81 @@ pub fn render_bar(
     }
 }
 
+/// Evaluate one side on its own, dropping droppable segments — `priority`
+/// below [`DEFAULT_PRIORITY`], lowest first, ties to the first occurrence —
+/// until it is at most `max_width` cells or nothing droppable is left. The
+/// one-sided form of `render_bar`'s overflow rule, for a bar that must leave
+/// room beside it; the result may still be overlong.
+pub fn eval_fitted(
+    nodes: &[Node],
+    segments: &SegmentMap,
+    configs: &HashMap<String, SegmentConfig>,
+    max_width: u16,
+    resolver: &Resolver,
+    base: Style,
+) -> Segment {
+    let names = format::vars(nodes);
+    let mut excluded: Vec<&str> = Vec::new();
+    let mut out = eval(nodes, segments, resolver, base).0;
+    while out.width > max_width {
+        let victim = names
+            .iter()
+            .copied()
+            .filter(|name| {
+                !excluded.contains(name)
+                    && priority(configs, name) < DEFAULT_PRIORITY
+                    && segments
+                        .get(*name)
+                        .is_some_and(|segment| !segment.is_empty())
+            })
+            .min_by_key(|name| priority(configs, name));
+        let Some(victim) = victim else { break };
+        excluded.push(victim);
+        out = eval_excluding(nodes, segments, resolver, base, &excluded).0;
+    }
+    out
+}
+
+/// Cut `segment` to its first `max` cells, at grapheme boundaries, so a
+/// wide grapheme that would straddle the edge goes whole. Hits are clipped
+/// to the cells that remain.
+pub fn clip(segment: Segment, max: u16) -> Segment {
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+    if segment.width <= max {
+        return segment;
+    }
+    let mut out = Segment::default();
+    'spans: for span in segment.spans {
+        let mut kept = String::new();
+        let mut used = out.width;
+        let mut cut = false;
+        for g in span.content.graphemes(true) {
+            let w = u16::try_from(g.width()).unwrap_or(u16::MAX);
+            if used.saturating_add(w) > max {
+                cut = true;
+                break;
+            }
+            used += w;
+            kept.push_str(g);
+        }
+        out.push(Span::styled(kept, span.style));
+        if cut {
+            break 'spans;
+        }
+    }
+    out.hits = segment
+        .hits
+        .into_iter()
+        .filter(|hit| hit.start_col < out.width)
+        .map(|hit| HitSpan {
+            width: hit.width.min(out.width - hit.start_col),
+            ..hit
+        })
+        .collect();
+    out
+}
+
 /// Convert line-relative hits to absolute, nonempty screen rects within `area`.
 pub fn hit_rects(area: Rect, hits: &[HitSpan]) -> Vec<(Rect, Hit)> {
     if area.height == 0 {

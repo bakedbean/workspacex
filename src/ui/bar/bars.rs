@@ -403,8 +403,14 @@ pub(super) fn detail_reply_segments(
 /// `format` (the prompt), then the draft — its tail, so the cursor end
 /// stays in view — then `fill` padding and `right_format` flush right. An
 /// empty draft shows `REPLY_PLACEHOLDER` dimmed, the cursor on its first
-/// cell. The right side keeps one blank cell before it, like every bar,
-/// and is omitted when it would leave the draft under `REPLY_MIN_FIELD`.
+/// cell.
+///
+/// The draft keeps at least `REPLY_MIN_FIELD` cells (or the whole row, when
+/// narrower). To make that room the right side goes first, whole; then
+/// the prompt's droppable segments (`priority` below the default), lowest
+/// first; and a prompt still too long is clipped. The right side keeps one
+/// blank cell before it, like every bar. Widths are measured per grapheme,
+/// as the terminal draws them.
 pub(crate) fn dashboard_detail_reply(
     specs: &BarSpecs,
     theme: &Theme,
@@ -412,13 +418,24 @@ pub(crate) fn dashboard_detail_reply(
     width: u16,
 ) -> ReplyRendered {
     use ratatui::text::Span;
-    use unicode_width::UnicodeWidthChar;
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
 
     let resolver = specs.resolver(theme);
     let segments = detail_reply_segments(specs, theme, inputs, &resolver);
     let spec = &specs.dashboard_detail_reply;
     let base = resolver.resolve(&spec.style).unwrap_or_default();
-    let (prompt, _) = eval(&spec.format, &segments, &resolver, base);
+    let reserve = REPLY_MIN_FIELD.min(width);
+    let prompt_room = width - reserve;
+    let prompt = super::render::eval_fitted(
+        &spec.format,
+        &segments,
+        &specs.segments,
+        prompt_room,
+        &resolver,
+        base,
+    );
+    let prompt = super::render::clip(prompt, prompt_room);
     let (mut right, _) = eval(&spec.right_format, &segments, &resolver, base);
     let field = |right: &Segment| {
         width
@@ -431,25 +448,30 @@ pub(crate) fn dashboard_detail_reply(
     }
     let field = field(&right);
 
-    // Take chars from the end while they fit, measuring cells, so a wide
-    // character never overhangs the field. Focus reserves a cell for the
-    // cursor past the last one.
+    // Graphemes from the end while they fit, so a wide one never overhangs
+    // the field and a cluster (ZWJ emoji, a base and its combining marks)
+    // is never split. Focus reserves a cell for the cursor past the last.
     let budget = field.saturating_sub(u16::from(inputs.focused));
     let tail = |text: &str, budget: u16| -> (String, u16) {
         let mut used = 0u16;
-        let mut kept: Vec<char> = Vec::new();
-        for c in text.chars().rev() {
-            let w = u16::try_from(c.width().unwrap_or(0)).unwrap_or(u16::MAX);
+        let mut kept: Vec<&str> = Vec::new();
+        for g in text.graphemes(true).rev() {
+            let w = u16::try_from(g.width()).unwrap_or(u16::MAX);
             if used.saturating_add(w) > budget {
                 break;
             }
             used += w;
-            kept.push(c);
+            kept.push(g);
         }
-        (kept.into_iter().rev().collect(), used)
+        kept.reverse();
+        (kept.concat(), used)
     };
     let (text, text_style, cursor_x) = if inputs.draft.is_empty() {
-        let ghost: String = REPLY_PLACEHOLDER.chars().take(usize::from(field)).collect();
+        // ASCII, so a cell per grapheme; keep its start when narrow.
+        let ghost: String = REPLY_PLACEHOLDER
+            .graphemes(true)
+            .take(usize::from(field))
+            .collect();
         (ghost, base.patch(theme.dim_style()), prompt.width)
     } else {
         let (visible, used) = tail(inputs.draft, budget);

@@ -1,7 +1,7 @@
 class Wsx < Formula
   desc "Terminal UI for managing coding agent sessions in git worktrees"
   homepage "https://github.com/bakedbean/workspacex"
-  version "0.1.1"
+  version "0.1.3"
   license "MIT"
 
   # The checksums below are placeholders until the first tagged release.
@@ -10,23 +10,23 @@ class Wsx < Formula
   # then opens a pull request with the result.
   on_macos do
     on_arm do
-      url "https://github.com/bakedbean/workspacex/releases/download/v0.1.1/wsx-0.1.1-aarch64-apple-darwin.tar.gz"
-      sha256 "7089b81bb914700dddd13e372fbf9444d28b1befd32ef4a6327a97d11f3bc4f9"
+      url "https://github.com/bakedbean/workspacex/releases/download/v0.1.3/wsx-0.1.3-aarch64-apple-darwin.tar.gz"
+      sha256 "d70b286cdff4292ee0611b5d6b9d50e572cf31284298c8b63622e06eec189876"
     end
     on_intel do
-      url "https://github.com/bakedbean/workspacex/releases/download/v0.1.1/wsx-0.1.1-x86_64-apple-darwin.tar.gz"
-      sha256 "1d9a80c124fbfa265ca653dd38110afdf038faa6f330b2c22ea58342c631079b"
+      url "https://github.com/bakedbean/workspacex/releases/download/v0.1.3/wsx-0.1.3-x86_64-apple-darwin.tar.gz"
+      sha256 "fcaaf33aab23aef39f5a7b353ea6c3a60e38a84159f769ffadd540ecd5822e64"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/bakedbean/workspacex/releases/download/v0.1.1/wsx-0.1.1-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "4e2a358eeb63df0cf7a34977b74b9cada340955296a32cc85f7a874b73d496e8"
+      url "https://github.com/bakedbean/workspacex/releases/download/v0.1.3/wsx-0.1.3-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "d502284df28c5722fd50053c3ac84c5575db11c759c93178b43933d6d18eea8d"
     end
     on_intel do
-      url "https://github.com/bakedbean/workspacex/releases/download/v0.1.1/wsx-0.1.1-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "b4b06d021c6f239880309e4dd038d66b358640b2e25c8c9ff7022c06e76fef0c"
+      url "https://github.com/bakedbean/workspacex/releases/download/v0.1.3/wsx-0.1.3-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "198c18424cea282046febc36c85d86ac0e6677745f5b7957f4be481d733784a8"
     end
   end
 

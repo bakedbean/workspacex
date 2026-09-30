@@ -1,0 +1,68 @@
+name: Tag release
+
+# Merging a version bump to main cuts a release. This workflow tags the merge
+# commit with the version from Cargo.toml, then starts release.yml for that
+# tag. A push that touches Cargo.toml without changing the version finds the
+# tag already there and does nothing.
+on:
+  push:
+    branches: [main]
+    paths: [Cargo.toml]
+
+# Two bumps merged close together each get their own tag. Queue the runs
+# rather than cancel one, so neither version is skipped.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # push the tag
+  actions: write # start release.yml
+
+jobs:
+  tag:
+    name: tag the version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The same command release.yml uses to check the tag, so the tag made
+      # here always passes that check. rustup installs the channel pinned in
+      # rust-toolchain.toml first. `--locked` fails the run if Cargo.lock was
+      # not bumped with Cargo.toml, which the release build would reject too.
+      - name: Read the version from Cargo.toml
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(cargo metadata --no-deps --locked --format-version 1 \
+            | jq -r '.packages[] | select(.name == "wsx") | .version')"
+          if [ -z "$version" ] || [ "$version" = "null" ]; then
+            echo "could not read the wsx version from Cargo.toml" >&2
+            exit 1
+          fi
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and start the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "$TAG already exists, nothing to do"
+            exit 0
+          fi
+          # Tag the commit that triggered this run, not the tip of main,
+          # which may have moved on by the time the run starts.
+          git tag "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+          # A push made with GITHUB_TOKEN starts no other workflows, so the
+          # tag push above does not fire release.yml's `push: tags` trigger.
+          # workflow_dispatch is exempt from that rule, so start it directly.
+          # `--ref` runs release.yml as it is on this branch; the workflow
+          # then checks out the tag itself. If this step fails after the
+          # push, a re-run sees the tag and stops, so run Release by hand
+          # from the Actions tab with the tag name instead.
+          gh workflow run release.yml --ref "$GITHUB_REF_NAME" -f tag="$TAG"
+          echo "pushed $TAG and started the Release workflow"

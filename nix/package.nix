@@ -6,7 +6,7 @@
 
 rustPlatform.buildRustPackage {
   pname = "wsx";
-  version = "0.1.1";
+  version = "0.1.2";
 
   # Everything except the trees nothing in the build reads. Keep this an
   # exclude list, not an include list: the crate and its tests reach well

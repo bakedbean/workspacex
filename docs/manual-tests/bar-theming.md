@@ -224,6 +224,20 @@ theme (`docs/examples/theme-orange.toml`), expected: the prompt opens with the
 agent and name blocks, and the pinned-chip row above it sits on the same
 block as the attached bottom bar's pins, with no rule after.
 
+Set `[dashboard_detail_reply] format = "($pins  )$prompt "` with pinned
+commands configured. Expected: the separate chip row is gone, the chips lead
+the prompt, and clicking one still fires its command. Narrow the terminal
+until the row is tight. Expected: the send/cancel hint drops first and the
+draft keeps at least 12 cells.
+
+Type an emoji sequence such as 👩‍💻 or an accented letter such as é
+(decomposed). Expected: the cursor sits directly after it, not a cell or two
+further right.
+
+Run `wsx config set detail_bar_config '{"bottom_rule": true}'`. Expected: a
+dim rule under the reply row separates it from the footer, and the pane still
+draws at its smallest allowed height.
+
 Exit the scratch wsx session when finished. Close the dedicated shells to
 restore your normal environment; remove only the scratch directory you
 created once it is no longer needed.

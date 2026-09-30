@@ -27,11 +27,15 @@ pub enum SelectionTarget {
 /// was not touched because `attach_is_blocked` refused it (a live archive
 /// is tearing the workspace down) — callers should treat this exactly like
 /// `AgentMissing`: skip the view switch, set no session, leave things alone.
+/// `WorktreeMissing` signals that the spawn was refused because the
+/// workspace's worktree does not exist; the helper put up a `Modal::Error`
+/// pointing at archive, and callers treat it like `AgentMissing` too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttachReady {
     Ok,
     AgentMissing,
     Refused,
+    WorktreeMissing,
 }
 
 #[derive(Debug, Clone)]

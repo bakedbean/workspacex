@@ -120,9 +120,12 @@ pub(super) async fn agents_panel(
             // (and returns AgentMissing) if the binary is absent — in that
             // case leave that modal up; otherwise close the panel. Refused
             // (a live archive) is vanishingly unlikely here — the panel
-            // requires an attached workspace — but is handled the same way.
+            // requires an attached workspace — but is handled the same way,
+            // as is WorktreeMissing, which leaves its error modal up.
             match ensure_instance_session(app, inst.id, true)? {
-                AttachReady::AgentMissing | AttachReady::Refused => {}
+                AttachReady::AgentMissing | AttachReady::Refused | AttachReady::WorktreeMissing => {
+                    // Leave up whatever modal the ensure raised.
+                }
                 AttachReady::Ok => app.modal = None,
             }
             // Refill `agent_roster` so it reflects the new instance —

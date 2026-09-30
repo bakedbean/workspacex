@@ -19,6 +19,8 @@ async fn ensure_workspace_session_sets_modal_when_binary_missing() {
     use crate::pty::session::AgentKind;
     let mut env = EnvGuard::new();
     env.set("WSX_HERMES_BIN", "/nonexistent/wsx-test-hermes");
+    // A worktree that exists, so the spawn gets as far as the binary.
+    let worktree = tempfile::TempDir::new().unwrap();
     let store = Store::open_in_memory().unwrap();
     let repo_id = store
         .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -28,7 +30,7 @@ async fn ensure_workspace_session_sets_modal_when_binary_missing() {
             repo_id,
             name: "ws",
             branch: "repo/ws",
-            worktree_path: std::path::Path::new("/tmp/wsx-test/ws"),
+            worktree_path: worktree.path(),
             yolo: false,
             agent: AgentKind::Hermes,
             shared: false,
@@ -503,7 +505,29 @@ async fn agents_panel_x_on_sole_pane_with_unspawnable_primary_shows_agent_missin
         PathBuf::from("/tmp/wsx-test"),
     )
     .unwrap();
-    let ws = app.test_workspace("peer-remove-missing");
+    // A worktree that exists, so the primary's spawn gets as far as the
+    // binary; `test_workspace`'s fixture path does not.
+    let worktree = tempfile::TempDir::new().unwrap();
+    let repo = app
+        .store
+        .add_repo(
+            std::path::Path::new("/tmp/peer-remove-missing-repo"),
+            "peer-remove-missing",
+            "wsx",
+        )
+        .unwrap();
+    let ws = app
+        .store
+        .insert_workspace(&crate::data::store::NewWorkspace {
+            repo_id: repo,
+            name: "peer-remove-missing",
+            branch: "wsx/peer-remove-missing",
+            worktree_path: worktree.path(),
+            yolo: false,
+            agent: AgentKind::Claude,
+            shared: false,
+        })
+        .unwrap();
     app.store
         .set_workspace_state(ws, crate::data::store::WorkspaceState::Ready)
         .unwrap();

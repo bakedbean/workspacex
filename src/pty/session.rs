@@ -863,6 +863,13 @@ pub fn spawn_session(
     identity: Option<SpawnIdentity>,
     tmux: Option<&str>,
 ) -> Result<Session> {
+    // portable-pty and `tmux new-session -c` both fall back to `$HOME` for a
+    // cwd that is not a directory, which would start the agent outside any
+    // worktree while its system prompt says it is in one. Refuse before
+    // anything, including the hermes/codex preparation below, touches it.
+    if !cwd.is_dir() {
+        return Err(Error::WorktreeMissing(cwd.to_path_buf()));
+    }
     let mut child_cmd = match agent {
         AgentKind::Claude => build_claude_command(cwd, &mode, remote),
         AgentKind::Pi => {
@@ -2273,6 +2280,44 @@ mod tests {
                 assert_eq!(binary, "/nonexistent/wsx-test-bin-does-not-exist");
             }
             other => panic!("expected AgentBinaryMissing, got {other:?}"),
+        }
+    }
+
+    /// A worktree that is gone (never created, or deleted by hand) must not
+    /// spawn the agent in `$HOME` on either path: direct, where portable-pty
+    /// falls back silently, or shared, where `tmux new-session -c` does.
+    #[test]
+    fn spawn_session_refuses_a_missing_worktree_on_both_paths() {
+        // Binaries that cannot be found, so a spawn that got past the guard
+        // fails as AgentBinaryMissing instead of launching a real agent.
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        env.set("WSX_TMUX_BIN", "/nonexistent/wsx-test-tmux-does-not-exist");
+        let root = tempfile::TempDir::new().unwrap();
+        let cwd = root.path().join("gone");
+        for tmux in [None, Some("wsx-test-missing-worktree")] {
+            let result = spawn_session(
+                &cwd,
+                80,
+                24,
+                SpawnMode::Fresh {
+                    rename_ctx: None,
+                    custom_instructions: None,
+                    doctrine: None,
+                    additional_dirs: vec![],
+                    yolo: false,
+                    pin_session_id: None,
+                },
+                crate::agent::remote_control::RemoteOpts::disabled(),
+                AgentKind::Claude,
+                None,
+                tmux,
+            );
+            match result {
+                Err(Error::WorktreeMissing(path)) => assert_eq!(path, cwd),
+                Err(other) => panic!("tmux={tmux:?}: expected WorktreeMissing, got {other:?}"),
+                Ok(_) => panic!("tmux={tmux:?}: spawn must refuse a missing worktree"),
+            }
         }
     }
 

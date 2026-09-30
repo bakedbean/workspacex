@@ -290,6 +290,20 @@ async fn workspace_actions_overlay_navigates_and_dismisses() {
         app.modal
     );
 
+    // `c` (formerly chronox) is no longer an action, so the card stays open.
+    handle_key_modal(
+        &mut app,
+        &shared,
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(app.modal, Some(Modal::WorkspaceActions)),
+        "'c' should be ignored by the overlay, got {:?}",
+        app.modal
+    );
+
     // 3. Action key 'g' closes the card (no workspace selected, so the
     //    action itself no-ops — the important thing is the overlay closes).
     handle_key_modal(

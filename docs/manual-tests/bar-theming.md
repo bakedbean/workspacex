@@ -209,6 +209,11 @@ the dashboard's own DETAIL pane's pinned-command chips — the pane shown when
 a workspace row is selected, separate from the attached view — since that
 row is built from `[pins]` too, through the `[dashboard_detail]` bar.
 
+Restyle `[pr]` or `[procs]` the same way. Expected: the DETAIL pane's header
+row (name, branch, PR chip, diff, procs, status) picks up the change, since
+it is the `[dashboard_detail_header]` bar. Clicking its PR chip still opens
+the PR.
+
 Exit the scratch wsx session when finished. Close the dedicated shells to
 restore your normal environment; remove only the scratch directory you
 created once it is no longer needed.

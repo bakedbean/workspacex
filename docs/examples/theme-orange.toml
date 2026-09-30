@@ -80,6 +80,14 @@ format       = "[ $keys ](bg:ash fg:orange)[](fg:ash bg:soot)[( $pins )](bg:s
 right_format = "[](fg:ash)[( $agents )](bg:ash fg:cream)[](fg:charcoal bg:ash)[( $model_tokens )](bg:charcoal fg:cream)[](fg:soot bg:charcoal)[( $procs )](bg:soot fg:orange)[](fg:smoke bg:soot)[( $diff )](bg:smoke fg:orange)[](fg:orange bg:smoke)[( $pr )](bg:orange fg:black)"
 fill         = " "
 
+# The dashboard DETAIL pane's header row: the agent block, the name on the
+# accent, then branch and status stepping down; on the right the attached
+# bottom bar's tail (procs, diff, PR), dropped whole when all three are.
+[dashboard_detail_header]
+format       = "[ $agent_bar ](bg:ash)[](fg:ash bg:orange)[ $workspace ](bg:orange fg:black bold)[](fg:orange bg:soot)[ $branch ](bg:soot fg:cream)[](fg:soot bg:charcoal)[ $status ](bg:charcoal)[](fg:charcoal)"
+right_format = "([](fg:soot)[( $procs )](bg:soot fg:orange)[](fg:smoke bg:soot)[( $diff )](bg:smoke fg:orange)[](fg:orange bg:smoke)[( $pr )](bg:orange fg:black))"
+fill         = " "
+
 # --- segments (unset fields keep the bundled defaults) -------------------
 
 # Brand colours are theme tokens (`brand`, `wordmark`), same as the bundled
@@ -209,3 +217,8 @@ merged = "lilac"
 err    = "rose"
 warn   = "butter"
 dim    = "chalk"
+
+# The branch in the detail header inherits its block's text colour instead
+# of the bundled muted `dim`.
+[branch]
+format = "[$symbol $branch]()"

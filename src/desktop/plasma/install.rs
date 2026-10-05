@@ -13,7 +13,7 @@
 
 use std::path::Path;
 
-use crate::desktop::install_support::{preferred_wsx_bin, write_atomic};
+use crate::desktop::install_support::{preferred_wsx_bin, shell_quote, write_atomic};
 use crate::error::{Error, Result};
 
 /// The applet's plugin id: its package directory name, and what
@@ -29,12 +29,9 @@ const MAIN_QML: &str = include_str!("assets/contents/ui/main.qml");
 /// substituted as a JSON string literal, which QML reads as a JS string, so
 /// no path can break out of it.
 fn main_qml(wsx_bin: &str) -> String {
-    let quoted = shlex::try_quote(wsx_bin)
-        .map(|c| c.into_owned())
-        .unwrap_or_else(|_| wsx_bin.to_string());
     MAIN_QML.replace(
         "__WSX_BIN__",
-        &serde_json::Value::String(quoted).to_string(),
+        &serde_json::Value::String(shell_quote(wsx_bin)).to_string(),
     )
 }
 

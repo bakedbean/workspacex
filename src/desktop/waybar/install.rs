@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use crate::desktop::install_support::{preferred_wsx_bin, write_atomic};
+use crate::desktop::install_support::{preferred_wsx_bin, shell_quote, write_atomic};
 use crate::error::{Error, Result};
 
 /// The wsx waybar module definition, embedded at compile time.
@@ -245,11 +245,11 @@ pub fn install_into(waybar_dir: &Path, epoch: u64) -> Result<Vec<String>> {
 pub fn install_elephant_menu_into(config_root: &Path, wsx_bin: &str) -> Result<String> {
     let dir = config_root.join("elephant/menus");
     std::fs::create_dir_all(&dir)?;
-    let quoted = shlex::try_quote(wsx_bin)
-        .map(|c| c.into_owned())
-        .unwrap_or_else(|_| wsx_bin.to_string());
     let path = dir.join("wsx.lua");
-    std::fs::write(&path, MENU_LUA.replace("__WSX_BIN__", &quoted))?;
+    std::fs::write(
+        &path,
+        MENU_LUA.replace("__WSX_BIN__", &shell_quote(wsx_bin)),
+    )?;
     Ok(format!("installed elephant menu: {}", path.display()))
 }
 

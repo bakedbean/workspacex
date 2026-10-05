@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use crate::data::store::Store;
+use crate::desktop::install_support::shell_quote;
 use crate::error::{Error, Result};
 
 pub fn jump(repo: &str, slug: &str, terminal_cmd: Option<&str>) -> Result<()> {
@@ -103,12 +104,6 @@ fn focus_app_of(tui_pid: u32) {
     }
 }
 
-fn shquote(s: &str) -> String {
-    shlex::try_quote(s)
-        .map(|c| c.into_owned())
-        .unwrap_or_else(|_| format!("'{}'", s.replace(['\'', '\0'], "")))
-}
-
 /// terminal_cmd is honored only when it carries a `{cmd}` placeholder —
 /// a bare app-open command (`open -a iTerm`) cannot run a command, and
 /// guessing an argv position would misfire.
@@ -151,8 +146,8 @@ fn spawn_tui(repo: &str, slug: &str, terminal_cmd: Option<&str>) -> Result<()> {
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("wsx"));
     let cmd = format!(
         "{} --select {}",
-        shquote(&exe.display().to_string()),
-        shquote(&format!("{repo}/{slug}"))
+        shell_quote(&exe.display().to_string()),
+        shell_quote(&format!("{repo}/{slug}"))
     );
     if let Some(full) = resolve_terminal_template(terminal_cmd, &cmd) {
         return spawn_detached("/bin/sh", &["-c", &full]);

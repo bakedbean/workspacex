@@ -5,18 +5,16 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::desktop::install_support::{preferred_wsx_bin, write_atomic};
+use crate::desktop::install_support::{preferred_wsx_bin, shell_quote, write_atomic};
 use crate::error::Result;
 
 /// Filename encodes SwiftBar's refresh interval.
 pub(crate) const SHIM_NAME: &str = "wsx-menubar.10s.sh";
 
 fn shim(wsx_bin: &str) -> String {
-    let quoted = shlex::try_quote(wsx_bin)
-        .map(|c| c.into_owned())
-        .unwrap_or_else(|_| wsx_bin.to_string());
     format!(
-        "#!/bin/sh\n# Installed by `wsx setup menubar`. Re-run it after moving wsx.\nexec {quoted} menubar plugin\n"
+        "#!/bin/sh\n# Installed by `wsx setup menubar`. Re-run it after moving wsx.\nexec {} menubar plugin\n",
+        shell_quote(wsx_bin)
     )
 }
 

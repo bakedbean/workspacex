@@ -20,6 +20,17 @@ pub(crate) fn write_atomic(path: &Path, content: &str) -> Result<()> {
     })
 }
 
+/// Shell-quote one argument for a command line wsx writes out: the wsx path
+/// baked into an installed plugin or menu, or a repo/slug in a jump command.
+/// `shlex` refuses only an interior NUL, which no path or sqlite TEXT value
+/// can carry, so drop the byte and single-quote rather than emit the
+/// argument unquoted.
+pub(crate) fn shell_quote(s: &str) -> String {
+    shlex::try_quote(s)
+        .map(|c| c.into_owned())
+        .unwrap_or_else(|_| format!("'{}'", s.replace(['\'', '\0'], "")))
+}
+
 /// Picks the wsx binary path baked into the installed plugin/menu
 /// (waybar's elephant menu, the Plasma applet, SwiftBar's plugin shim).
 ///
@@ -49,6 +60,15 @@ pub(crate) fn preferred_wsx_bin(home: Option<PathBuf>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_quote_quotes_only_when_needed_and_never_emits_a_nul() {
+        assert_eq!(shell_quote("/usr/local/bin/wsx"), "/usr/local/bin/wsx");
+        assert_eq!(shell_quote("/opt/my tools/wsx"), "'/opt/my tools/wsx'");
+        assert_eq!(shell_quote("it's"), "\"it's\"");
+        // shlex refuses a NUL; the byte is dropped and the rest still quoted.
+        assert_eq!(shell_quote("/opt/a\0b/wsx"), "'/opt/ab/wsx'");
+    }
 
     #[test]
     fn preferred_wsx_bin_prefers_installed_path_when_present() {

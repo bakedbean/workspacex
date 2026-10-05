@@ -141,17 +141,93 @@ callDBus("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting", "unloadScript",
     )
 }
 
-/// One `dbus-send` call to KWin; the reply on success.
-fn kwin_call(path: &str, method: &str, args: &[String]) -> Option<String> {
-    let out = Command::new("dbus-send")
-        .args([
-            "--session",
-            "--print-reply",
-            "--dest=org.kde.KWin",
-            path,
-            method,
-        ])
-        .args(args)
+/// A command-line D-Bus client to reach KWin through. `dbus-send` isn't
+/// always installed (Fedora packages it separately, in dbus-tools), while
+/// Plasma ships `qdbus6`, and GLib's `gdbus` is nearly everywhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DbusClient {
+    DbusSend,
+    Qdbus(&'static str),
+    Gdbus,
+}
+
+/// Tried in order; the first one on `PATH` is used.
+const DBUS_CLIENTS: [DbusClient; 4] = [
+    DbusClient::DbusSend,
+    DbusClient::Qdbus("qdbus6"),
+    DbusClient::Qdbus("qdbus"),
+    DbusClient::Gdbus,
+];
+
+impl DbusClient {
+    fn program(self) -> &'static str {
+        match self {
+            DbusClient::DbusSend => "dbus-send",
+            DbusClient::Qdbus(program) => program,
+            DbusClient::Gdbus => "gdbus",
+        }
+    }
+
+    /// Arguments calling `method` (`interface.member`) on KWin's object
+    /// `path`, passing each of `args` as a string.
+    fn argv(self, path: &str, method: &str, args: &[&str]) -> Vec<String> {
+        let mut argv: Vec<String> = match self {
+            DbusClient::DbusSend => vec![
+                "--session".into(),
+                "--print-reply".into(),
+                "--dest=org.kde.KWin".into(),
+                path.into(),
+                method.into(),
+            ],
+            DbusClient::Qdbus(_) => vec!["org.kde.KWin".into(), path.into(), method.into()],
+            DbusClient::Gdbus => vec![
+                "call".into(),
+                "--session".into(),
+                "--dest".into(),
+                "org.kde.KWin".into(),
+                "--object-path".into(),
+                path.into(),
+                "--method".into(),
+                method.into(),
+            ],
+        };
+        argv.extend(args.iter().map(|arg| match self {
+            DbusClient::DbusSend => format!("string:{arg}"),
+            DbusClient::Qdbus(_) | DbusClient::Gdbus => (*arg).to_string(),
+        }));
+        argv
+    }
+
+    /// The script id in this client's `loadScript` reply: `   int32 7`
+    /// (dbus-send), `7` (qdbus) or `(7,)` (gdbus). KWin answers -1 when it
+    /// refuses the script, which fails the unsigned parse.
+    fn parse_script_id(self, reply: &str) -> Option<u32> {
+        let id = match self {
+            DbusClient::DbusSend => reply.split("int32").nth(1)?,
+            DbusClient::Qdbus(_) => reply,
+            DbusClient::Gdbus => reply
+                .trim()
+                .strip_prefix('(')?
+                .strip_suffix(')')?
+                .trim_end_matches(','),
+        };
+        id.trim().parse().ok()
+    }
+}
+
+/// The first of [`DBUS_CLIENTS`] with a program in one of `path`'s
+/// directories.
+fn find_dbus_client(path: Option<&std::ffi::OsStr>) -> Option<DbusClient> {
+    let dirs: Vec<PathBuf> = std::env::split_paths(path?).collect();
+    DBUS_CLIENTS
+        .into_iter()
+        .find(|client| dirs.iter().any(|dir| dir.join(client.program()).is_file()))
+}
+
+/// One call to KWin through `client`; the reply on success.
+fn kwin_call(client: DbusClient, path: &str, method: &str, args: &[&str]) -> Option<String> {
+    let out = Command::new(client.program())
+        .args(client.argv(path, method, args))
         .output()
         .ok()?;
     out.status
@@ -159,25 +235,27 @@ fn kwin_call(path: &str, method: &str, args: &[String]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// The script id in a `loadScript` reply (`   int32 7`). KWin answers -1
-/// when it refuses the script, which fails the unsigned parse.
-fn parse_script_id(reply: &str) -> Option<u32> {
-    reply.split("int32").nth(1)?.trim().parse().ok()
-}
-
 /// Focus the TUI's window under KWin (Plasma), where there is no hyprctl:
 /// load [`kwin_focus_script`] over D-Bus and run it. Best-effort like the
 /// Hyprland path — the selection already happened.
 fn focus_kwin_window(chain: &[u32]) {
+    let Some(client) = find_dbus_client(std::env::var_os("PATH").as_deref()) else {
+        let msg = "can't raise the TUI's window: no D-Bus client to reach KWin \
+                   (install dbus-send, qdbus6, qdbus or gdbus)";
+        tracing::warn!("{msg}");
+        eprintln!("wsx: {msg}");
+        return;
+    };
     let dir = crate::app::ipc::socket_dir();
     // Clear earlier jumps' files, and unload any of their scripts that never
     // got to unload themselves.
     for (stale, stale_name) in stale_kwin_scripts(&dir, SystemTime::now()) {
         let _ = std::fs::remove_file(stale);
         let _ = kwin_call(
+            client,
             "/Scripting",
             "org.kde.kwin.Scripting.unloadScript",
-            &[format!("string:{stale_name}")],
+            &[&stale_name],
         );
     }
     let id = kwin_script_id();
@@ -189,19 +267,18 @@ fn focus_kwin_window(chain: &[u32]) {
         return;
     }
     let Some(id) = kwin_call(
+        client,
         "/Scripting",
         "org.kde.kwin.Scripting.loadScript",
-        &[
-            format!("string:{}", path.display()),
-            format!("string:{name}"),
-        ],
+        &[&path.display().to_string(), &name],
     )
-    .and_then(|reply| parse_script_id(&reply)) else {
+    .and_then(|reply| client.parse_script_id(&reply)) else {
         // Never loaded, so KWin won't read it.
         let _ = std::fs::remove_file(&path);
         return;
     };
     let _ = kwin_call(
+        client,
         &format!("/Scripting/Script{id}"),
         "org.kde.kwin.Script.run",
         &[],
@@ -286,12 +363,83 @@ mod focus_tests {
     }
 
     #[test]
-    fn parses_kwin_script_id() {
-        let reply = "method return time=1.2 sender=:1.5 -> destination=:1.9 serial=4 \
-                     reply_serial=2\n   int32 7\n";
-        assert_eq!(parse_script_id(reply), Some(7));
-        assert_eq!(parse_script_id("method return\n   int32 -1\n"), None);
-        assert_eq!(parse_script_id(""), None);
+    fn parses_each_clients_script_id() {
+        let dbus_send = "method return time=1.2 sender=:1.5 -> destination=:1.9 serial=4 \
+                         reply_serial=2\n   int32 7\n";
+        assert_eq!(DbusClient::DbusSend.parse_script_id(dbus_send), Some(7));
+        assert_eq!(
+            DbusClient::DbusSend.parse_script_id("method return\n   int32 -1\n"),
+            None
+        );
+        assert_eq!(DbusClient::Qdbus("qdbus6").parse_script_id("7\n"), Some(7));
+        assert_eq!(DbusClient::Qdbus("qdbus6").parse_script_id("-1\n"), None);
+        assert_eq!(DbusClient::Gdbus.parse_script_id("(7,)\n"), Some(7));
+        assert_eq!(DbusClient::Gdbus.parse_script_id("(-1,)\n"), None);
+        for client in DBUS_CLIENTS {
+            assert_eq!(client.parse_script_id(""), None, "{client:?}");
+        }
+    }
+
+    #[test]
+    fn each_client_passes_strings_its_own_way() {
+        let args = ["/run/w/kwin-focus-1-2.js", "wsx-focus-1-2"];
+        assert_eq!(
+            DbusClient::DbusSend.argv("/Scripting", "org.kde.kwin.Scripting.loadScript", &args),
+            [
+                "--session",
+                "--print-reply",
+                "--dest=org.kde.KWin",
+                "/Scripting",
+                "org.kde.kwin.Scripting.loadScript",
+                "string:/run/w/kwin-focus-1-2.js",
+                "string:wsx-focus-1-2",
+            ]
+        );
+        assert_eq!(
+            DbusClient::Qdbus("qdbus6").argv(
+                "/Scripting",
+                "org.kde.kwin.Scripting.loadScript",
+                &args
+            ),
+            [
+                "org.kde.KWin",
+                "/Scripting",
+                "org.kde.kwin.Scripting.loadScript",
+                "/run/w/kwin-focus-1-2.js",
+                "wsx-focus-1-2",
+            ]
+        );
+        assert_eq!(
+            DbusClient::Gdbus.argv("/Scripting/Script3", "org.kde.kwin.Script.run", &[]),
+            [
+                "call",
+                "--session",
+                "--dest",
+                "org.kde.KWin",
+                "--object-path",
+                "/Scripting/Script3",
+                "--method",
+                "org.kde.kwin.Script.run",
+            ]
+        );
+    }
+
+    #[test]
+    fn picks_the_first_dbus_client_on_path() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let path = std::env::join_paths([a.path(), b.path()]).unwrap();
+        assert_eq!(find_dbus_client(Some(&path)), None);
+        assert_eq!(find_dbus_client(None), None);
+        std::fs::write(b.path().join("gdbus"), "").unwrap();
+        assert_eq!(find_dbus_client(Some(&path)), Some(DbusClient::Gdbus));
+        std::fs::write(a.path().join("qdbus6"), "").unwrap();
+        assert_eq!(
+            find_dbus_client(Some(&path)),
+            Some(DbusClient::Qdbus("qdbus6"))
+        );
+        std::fs::write(b.path().join("dbus-send"), "").unwrap();
+        assert_eq!(find_dbus_client(Some(&path)), Some(DbusClient::DbusSend));
     }
 
     #[test]

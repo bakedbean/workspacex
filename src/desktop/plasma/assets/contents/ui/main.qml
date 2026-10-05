@@ -41,8 +41,10 @@ PlasmoidItem {
     // The last rows, serialized, to skip rebuilding an unchanged list; empty
     // until the first payload arrives.
     property string rowsJson: ""
-    // Why the last jump failed, shown in the popup until the next one.
+    // Why the last jump failed, or what it warned about when it got through
+    // but couldn't raise the TUI's window. Shown in the popup until the next.
     property string jumpError: ""
+    property string jumpWarning: ""
 
     readonly property bool hasStatus: statusTooltip.length > 0 && statusError.length === 0
     readonly property color statusColor: stateColor(statusClass)
@@ -128,11 +130,17 @@ PlasmoidItem {
 
     function jump(repo, slug) {
         jumpError = "";
+        jumpWarning = "";
         runner.connectSource(wsx + " desktop jump " + shellQuote(repo) + " " + shellQuote(slug));
     }
 
-    // A failed jump's message is about that attempt, not the next opening.
-    onExpandedChanged: if (root.expanded) jumpError = ""
+    // A jump's message is about that attempt, not the next opening.
+    onExpandedChanged: {
+        if (root.expanded) {
+            jumpError = "";
+            jumpWarning = "";
+        }
+    }
 
     ListModel {
         id: rowsModel
@@ -156,19 +164,24 @@ PlasmoidItem {
         }
     }
 
-    // One `wsx desktop jump` per pick. The popup closes once a jump succeeds;
-    // a failure stays up in it, since a terminal that won't launch would
-    // otherwise close the popup with nothing happening.
+    // One `wsx desktop jump` per pick. The popup closes once a jump succeeds
+    // cleanly. A failure stays up in it, since a terminal that won't launch
+    // would otherwise close the popup with nothing happening, and so does a
+    // warning from a jump that selected the workspace but couldn't raise its
+    // window.
     Plasma5Support.DataSource {
         id: runner
         engine: "executable"
         onNewData: function(sourceName, data) {
             disconnectSource(sourceName);
-            if (data["exit code"] === 0) {
-                root.expanded = false;
-            } else {
-                root.jumpError = (data["stderr"] || "").trim()
+            var stderr = (data["stderr"] || "").trim();
+            if (data["exit code"] !== 0) {
+                root.jumpError = stderr
                     || "wsx desktop jump exited with status " + data["exit code"];
+            } else if (stderr.length) {
+                root.jumpWarning = stderr;
+            } else {
+                root.expanded = false;
             }
         }
     }
@@ -229,6 +242,13 @@ PlasmoidItem {
                 Layout.fillWidth: true
                 type: Kirigami.MessageType.Error
                 text: root.jumpError || root.statusError
+                visible: text.length > 0
+            }
+
+            Kirigami.InlineMessage {
+                Layout.fillWidth: true
+                type: Kirigami.MessageType.Warning
+                text: root.jumpWarning
                 visible: text.length > 0
             }
 

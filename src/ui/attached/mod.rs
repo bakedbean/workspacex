@@ -436,12 +436,14 @@ mod tests {
                 kind: AgentKind::Claude,
                 label: "claude".into(),
                 key: Some('q'),
+                spinner: None,
             },
             AgentPill {
                 id: AgentInstanceId(2),
                 kind: AgentKind::Codex,
                 label: "codex".into(),
                 key: Some('w'),
+                spinner: None,
             },
         ];
         (pinned, diff, pr, mt, agents)

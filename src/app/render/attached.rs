@@ -78,11 +78,12 @@ fn gather_local(app: &App, focused: crate::ui::split::AttachTarget) -> AttachedD
             (repo_name, w.name.clone())
         })
         .unwrap_or_default();
-    let agent = app
+    let workspace = app
         .workspaces
         .iter()
         .find(|(_, w)| w.id == focused_id)
-        .map(|(_, w)| w.agent);
+        .map(|(_, w)| w);
+    let agent = workspace.map(|w| w.agent);
 
     // Pinned commands resolve against the FOCUSED pane's workspace.
     let global_pinned = app.store.get_setting("pinned_commands").ok().flatten();
@@ -150,11 +151,21 @@ fn gather_local(app: &App, focused: crate::ui::split::AttachTarget) -> AttachedD
         instances
             .into_iter()
             .enumerate()
-            .map(|(i, inst)| AgentPill {
-                id: inst.id,
-                kind: inst.agent,
-                label: inst.label(),
-                key: keys.get(i).copied(),
+            .map(|(i, inst)| {
+                // Same liveness the dashboard row animates: the primary by
+                // workspace status, a peer by its own PTY output.
+                let busy = if inst.is_primary {
+                    workspace.is_some_and(|ws| app.is_live(ws))
+                } else {
+                    app.peer_is_active(inst.id)
+                };
+                AgentPill {
+                    id: inst.id,
+                    kind: inst.agent,
+                    label: inst.label(),
+                    key: keys.get(i).copied(),
+                    spinner: busy.then(|| crate::ui::dashboard::spinner::frame(app.tick)),
+                }
             })
             .collect()
     } else {

@@ -354,6 +354,15 @@ impl App {
         })
     }
 
+    /// Whether a peer instance is streaming output right now — the activity
+    /// test behind the dashboard strip's peer spinners and the attached
+    /// bar's agent pills. No session or no output yet is not activity.
+    pub fn peer_is_active(&self, id: crate::data::store::AgentInstanceId) -> bool {
+        self.sessions.get(id).is_some_and(|session| {
+            crate::app::classify_activity(session.idle_secs()) == crate::app::ActivityState::Active
+        })
+    }
+
     /// The workspace's agent instances to draw on the dashboard agent strip,
     /// in roster order (primary first). Every registered instance counts
     /// except those whose session exited in this wsx run: a finished

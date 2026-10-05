@@ -774,11 +774,15 @@ pub struct AgentPill {
     pub label: String,
     /// Switch key; `None` past the key pool (see `agent_switch_keys`).
     pub key: Option<char>,
+    /// Spinner frame drawn in place of the dot while the instance is busy
+    /// (the dashboard's liveness test); `None` when idle.
+    pub spinner: Option<char>,
 }
 
 /// Agent pills: `● claude q   ○ codex w`. The active instance gets the
-/// filled dot and a bold label. `$symbol` is the dot plus its space (the
-/// `[agents].symbol` field is not used; the dot encodes active/idle).
+/// filled dot and a bold label; a busy instance's dot becomes its spinner
+/// frame. `$symbol` is the dot plus its space (the `[agents].symbol` field
+/// is not used; the dot encodes focus and activity).
 /// `$icon` is the pill's kind's glyph from `icons` — `[agent_bar.symbols]`,
 /// so a theme draws each harness once — and absent for a kind without one.
 pub fn agents(
@@ -794,7 +798,11 @@ pub fn agents(
         .iter()
         .map(|pill| {
             let is_active = active == Some(pill.id);
-            let dot = if is_active { "● " } else { "○ " };
+            let dot = match pill.spinner {
+                Some(frame) => format!("{frame} "),
+                None if is_active => "● ".to_string(),
+                None => "○ ".to_string(),
+            };
             let label_style = if is_active {
                 Style::default().add_modifier(Modifier::BOLD)
             } else {

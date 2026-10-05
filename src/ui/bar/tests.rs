@@ -672,12 +672,14 @@ mod bottom_tests {
                 kind: AgentKind::Claude,
                 label: "claude".into(),
                 key: Some('q'),
+                spinner: None,
             },
             AgentPill {
                 id: AgentInstanceId(2),
                 kind: AgentKind::Codex,
                 label: "codex".into(),
                 key: Some('w'),
+                spinner: None,
             },
         ]
     }
@@ -804,6 +806,31 @@ mod bottom_tests {
             .find(|s| s.content.as_ref() == "C")
             .unwrap_or_else(|| panic!("icon span in {:?}", out.line));
         assert_eq!(icon.style.fg, theme.agent_style(AgentKind::Claude).fg);
+    }
+
+    #[test]
+    fn busy_agent_pills_swap_their_dot_for_the_spinner_frame() {
+        // Focused or not, a busy pill animates in its agent colour; an idle
+        // one keeps its focus dot.
+        let theme = Theme::wsx();
+        let pinned = cmds(&[]);
+        let mut agents = agents();
+        agents[0].spinner = Some('⠙');
+        agents[1].spinner = Some('⠹');
+        let t = plain(&render(full(&pinned, &agents), 120).line);
+        assert!(t.contains("⠙ claude  q    ⠹ codex  w "), "{t:?}");
+
+        agents[0].spinner = None;
+        let out = render(full(&pinned, &agents), 120);
+        let t = plain(&out.line);
+        assert!(t.contains("● claude  q    ⠹ codex  w "), "{t:?}");
+        let frame = out
+            .line
+            .spans
+            .iter()
+            .find(|s| s.content.contains('⠹'))
+            .unwrap_or_else(|| panic!("spinner span in {:?}", out.line));
+        assert_eq!(frame.style.fg, theme.agent_style(AgentKind::Codex).fg);
     }
 
     #[test]
@@ -1137,12 +1164,14 @@ mod segment_registry_drift_tests {
                 kind: AgentKind::Claude,
                 label: "claude".into(),
                 key: Some('q'),
+                spinner: None,
             },
             AgentPill {
                 id: AgentInstanceId(2),
                 kind: AgentKind::Codex,
                 label: "codex".into(),
                 key: Some('w'),
+                spinner: None,
             },
         ];
         let tags = vec![crate::commands::tags::PromptTag {

@@ -2,6 +2,7 @@
 
 use super::bars::*;
 use super::format;
+use super::providers::AgentPill;
 use super::render::Rendered;
 use super::segment::Hit;
 use super::test_util;
@@ -664,20 +665,22 @@ mod bottom_tests {
             warn: false,
         })
     }
-    fn agents() -> Vec<(AgentInstanceId, AgentKind, String, Option<char>)> {
+    fn agents() -> Vec<AgentPill> {
         vec![
-            (
-                AgentInstanceId(1),
-                AgentKind::Claude,
-                "claude".into(),
-                Some('q'),
-            ),
-            (
-                AgentInstanceId(2),
-                AgentKind::Codex,
-                "codex".into(),
-                Some('w'),
-            ),
+            AgentPill {
+                id: AgentInstanceId(1),
+                kind: AgentKind::Claude,
+                label: "claude".into(),
+                key: Some('q'),
+                spinner: None,
+            },
+            AgentPill {
+                id: AgentInstanceId(2),
+                kind: AgentKind::Codex,
+                label: "codex".into(),
+                key: Some('w'),
+                spinner: None,
+            },
         ]
     }
     fn render(inputs: AttachedInputs<'_>, width: u16) -> Rendered {
@@ -685,10 +688,7 @@ mod bottom_tests {
         let specs = bundled_default(&theme);
         attached_bars(&specs, &theme, inputs, width, width).bottom
     }
-    fn full<'a>(
-        pinned: &'a [PinnedCommand],
-        agents: &'a [(AgentInstanceId, AgentKind, String, Option<char>)],
-    ) -> AttachedInputs<'a> {
+    fn full<'a>(pinned: &'a [PinnedCommand], agents: &'a [AgentPill]) -> AttachedInputs<'a> {
         AttachedInputs {
             repo: "wsx",
             name: "foo",
@@ -806,6 +806,31 @@ mod bottom_tests {
             .find(|s| s.content.as_ref() == "C")
             .unwrap_or_else(|| panic!("icon span in {:?}", out.line));
         assert_eq!(icon.style.fg, theme.agent_style(AgentKind::Claude).fg);
+    }
+
+    #[test]
+    fn busy_agent_pills_swap_their_dot_for_the_spinner_frame() {
+        // Focused or not, a busy pill animates in its agent colour; an idle
+        // one keeps its focus dot.
+        let theme = Theme::wsx();
+        let pinned = cmds(&[]);
+        let mut agents = agents();
+        agents[0].spinner = Some('⠙');
+        agents[1].spinner = Some('⠹');
+        let t = plain(&render(full(&pinned, &agents), 120).line);
+        assert!(t.contains("⠙ claude  q    ⠹ codex  w "), "{t:?}");
+
+        agents[0].spinner = None;
+        let out = render(full(&pinned, &agents), 120);
+        let t = plain(&out.line);
+        assert!(t.contains("● claude  q    ⠹ codex  w "), "{t:?}");
+        let frame = out
+            .line
+            .spans
+            .iter()
+            .find(|s| s.content.contains('⠹'))
+            .unwrap_or_else(|| panic!("spinner span in {:?}", out.line));
+        assert_eq!(frame.style.fg, theme.agent_style(AgentKind::Codex).fg);
     }
 
     #[test]
@@ -929,7 +954,7 @@ mod bottom_tests {
     #[test]
     fn single_agent_stats_block_sits_two_cells_after_the_rule() {
         let pinned = cmds(&[]);
-        let agents: Vec<(AgentInstanceId, AgentKind, String, Option<char>)> = vec![];
+        let agents: Vec<AgentPill> = vec![];
         let mut inputs = full(&pinned, &agents);
         inputs.agents = &[];
         inputs.active_agent = None;
@@ -946,7 +971,7 @@ mod bottom_tests {
     #[test]
     fn no_pr_leaves_only_a_trailing_blank() {
         let pinned = cmds(&[]);
-        let agents: Vec<(AgentInstanceId, AgentKind, String, Option<char>)> = vec![];
+        let agents: Vec<AgentPill> = vec![];
         let mut inputs = full(&pinned, &agents);
         inputs.agents = &[];
         inputs.active_agent = None;
@@ -1134,18 +1159,20 @@ mod segment_registry_drift_tests {
             submit: true,
         }];
         let agents = vec![
-            (
-                AgentInstanceId(1),
-                AgentKind::Claude,
-                "claude".into(),
-                Some('q'),
-            ),
-            (
-                AgentInstanceId(2),
-                AgentKind::Codex,
-                "codex".into(),
-                Some('w'),
-            ),
+            AgentPill {
+                id: AgentInstanceId(1),
+                kind: AgentKind::Claude,
+                label: "claude".into(),
+                key: Some('q'),
+                spinner: None,
+            },
+            AgentPill {
+                id: AgentInstanceId(2),
+                kind: AgentKind::Codex,
+                label: "codex".into(),
+                key: Some('w'),
+                spinner: None,
+            },
         ];
         let tags = vec![crate::commands::tags::PromptTag {
             name: "context".into(),

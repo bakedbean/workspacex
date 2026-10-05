@@ -354,6 +354,19 @@ impl App {
         })
     }
 
+    /// Whether a peer instance is streaming output right now — the activity
+    /// test behind the dashboard strip's peer spinners and the attached
+    /// bar's agent pills. No session, no output yet, or an exited session
+    /// (whose last output can still be fresh) is not activity.
+    pub fn peer_is_active(&self, id: crate::data::store::AgentInstanceId) -> bool {
+        if self.instance_has_exited(id) {
+            return false;
+        }
+        self.sessions.get(id).is_some_and(|session| {
+            crate::app::classify_activity(session.idle_secs()) == crate::app::ActivityState::Active
+        })
+    }
+
     /// The workspace's agent instances to draw on the dashboard agent strip,
     /// in roster order (primary first). Every registered instance counts
     /// except those whose session exited in this wsx run: a finished
@@ -964,6 +977,31 @@ mod strip_instances_tests {
         ) {
             self.sessions.insert_fake_session(id, status);
         }
+    }
+
+    #[test]
+    fn peer_is_active_needs_fresh_output_from_a_live_session() {
+        use std::sync::atomic::Ordering;
+        let mut app = test_app();
+        let ws = app.test_workspace("multi");
+        let running = app.store.add_workspace_agent(ws, AgentKind::Codex).unwrap();
+        let exited = app.store.add_workspace_agent(ws, AgentKind::Pi).unwrap();
+        let unstarted = app.store.add_workspace_agent(ws, AgentKind::Omp).unwrap();
+        app.refresh().unwrap();
+        app.test_spawn_session(running.id, SessionStatus::Running { pid: 2 });
+        app.test_spawn_session(exited.id, SessionStatus::Exited { code: 0 });
+        let now = crate::util::time::now_ms_u64();
+        for id in [running.id, exited.id] {
+            let session = app.sessions.get(id).unwrap();
+            session.activity_ms.store(now, Ordering::Relaxed);
+        }
+
+        assert!(app.peer_is_active(running.id));
+        assert!(
+            !app.peer_is_active(exited.id),
+            "final output of an exited peer"
+        );
+        assert!(!app.peer_is_active(unstarted.id), "no session");
     }
 
     #[test]

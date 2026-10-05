@@ -369,10 +369,7 @@ pub(super) fn build_row_inputs(
                 // Exited instances were filtered by strip_instances. No
                 // session/output yet is not activity; a repaint only lights
                 // this identity cell, never changes the workspace status.
-                active: app.sessions.get(inst.id).is_some_and(|session| {
-                    crate::app::classify_activity(session.idle_secs())
-                        == crate::app::ActivityState::Active
-                }),
+                active: app.peer_is_active(inst.id),
             })
             .collect(),
         status,

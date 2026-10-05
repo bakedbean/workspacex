@@ -8,6 +8,7 @@ use crate::data::store::AgentInstanceId;
 use crate::git::DiffStats;
 use crate::pty::session::AgentKind;
 use crate::ui::attached::ChipPr;
+use crate::ui::bar::AgentPill;
 use crate::ui::detail_modules::session_summary::ChipModelTokens;
 use crate::ui::updates_bar::AttentionItems;
 
@@ -23,7 +24,7 @@ struct AttachedData {
     diff: Option<DiffStats>,
     pr: Option<ChipPr>,
     model_tokens: Option<ChipModelTokens>,
-    agents: Vec<(AgentInstanceId, AgentKind, String, Option<char>)>,
+    agents: Vec<AgentPill>,
     active_agent: Option<AgentInstanceId>,
     version: &'static str,
     window_label: &'static str,
@@ -77,11 +78,12 @@ fn gather_local(app: &App, focused: crate::ui::split::AttachTarget) -> AttachedD
             (repo_name, w.name.clone())
         })
         .unwrap_or_default();
-    let agent = app
+    let workspace = app
         .workspaces
         .iter()
         .find(|(_, w)| w.id == focused_id)
-        .map(|(_, w)| w.agent);
+        .map(|(_, w)| w);
+    let agent = workspace.map(|w| w.agent);
 
     // Pinned commands resolve against the FOCUSED pane's workspace.
     let global_pinned = app.store.get_setting("pinned_commands").ok().flatten();
@@ -141,7 +143,7 @@ fn gather_local(app: &App, focused: crate::ui::split::AttachTarget) -> AttachedD
 
     // Build the agent pill list for the chip row's flush-right block. Only
     // shown when the focused workspace has more than its primary agent.
-    let agents: Vec<(AgentInstanceId, AgentKind, String, Option<char>)> = if instances.len() > 1 {
+    let agents: Vec<AgentPill> = if instances.len() > 1 {
         // Keys cap at 10 (see `agent_switch_keys`); agents past the
         // pool get `None` so they still render and stay clickable
         // rather than being silently dropped by a `zip`.
@@ -149,7 +151,22 @@ fn gather_local(app: &App, focused: crate::ui::split::AttachTarget) -> AttachedD
         instances
             .into_iter()
             .enumerate()
-            .map(|(i, inst)| (inst.id, inst.agent, inst.label(), keys.get(i).copied()))
+            .map(|(i, inst)| {
+                // Same liveness the dashboard row animates: the primary by
+                // workspace status, a peer by its own PTY output.
+                let busy = if inst.is_primary {
+                    workspace.is_some_and(|ws| app.is_live(ws))
+                } else {
+                    app.peer_is_active(inst.id)
+                };
+                AgentPill {
+                    id: inst.id,
+                    kind: inst.agent,
+                    label: inst.label(),
+                    key: keys.get(i).copied(),
+                    spinner: busy.then(|| crate::ui::dashboard::spinner::frame(app.tick)),
+                }
+            })
             .collect()
     } else {
         Vec::new()

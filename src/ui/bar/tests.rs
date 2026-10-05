@@ -2,6 +2,7 @@
 
 use super::bars::*;
 use super::format;
+use super::providers::AgentPill;
 use super::render::Rendered;
 use super::segment::Hit;
 use super::test_util;
@@ -664,20 +665,20 @@ mod bottom_tests {
             warn: false,
         })
     }
-    fn agents() -> Vec<(AgentInstanceId, AgentKind, String, Option<char>)> {
+    fn agents() -> Vec<AgentPill> {
         vec![
-            (
-                AgentInstanceId(1),
-                AgentKind::Claude,
-                "claude".into(),
-                Some('q'),
-            ),
-            (
-                AgentInstanceId(2),
-                AgentKind::Codex,
-                "codex".into(),
-                Some('w'),
-            ),
+            AgentPill {
+                id: AgentInstanceId(1),
+                kind: AgentKind::Claude,
+                label: "claude".into(),
+                key: Some('q'),
+            },
+            AgentPill {
+                id: AgentInstanceId(2),
+                kind: AgentKind::Codex,
+                label: "codex".into(),
+                key: Some('w'),
+            },
         ]
     }
     fn render(inputs: AttachedInputs<'_>, width: u16) -> Rendered {
@@ -685,10 +686,7 @@ mod bottom_tests {
         let specs = bundled_default(&theme);
         attached_bars(&specs, &theme, inputs, width, width).bottom
     }
-    fn full<'a>(
-        pinned: &'a [PinnedCommand],
-        agents: &'a [(AgentInstanceId, AgentKind, String, Option<char>)],
-    ) -> AttachedInputs<'a> {
+    fn full<'a>(pinned: &'a [PinnedCommand], agents: &'a [AgentPill]) -> AttachedInputs<'a> {
         AttachedInputs {
             repo: "wsx",
             name: "foo",
@@ -929,7 +927,7 @@ mod bottom_tests {
     #[test]
     fn single_agent_stats_block_sits_two_cells_after_the_rule() {
         let pinned = cmds(&[]);
-        let agents: Vec<(AgentInstanceId, AgentKind, String, Option<char>)> = vec![];
+        let agents: Vec<AgentPill> = vec![];
         let mut inputs = full(&pinned, &agents);
         inputs.agents = &[];
         inputs.active_agent = None;
@@ -946,7 +944,7 @@ mod bottom_tests {
     #[test]
     fn no_pr_leaves_only_a_trailing_blank() {
         let pinned = cmds(&[]);
-        let agents: Vec<(AgentInstanceId, AgentKind, String, Option<char>)> = vec![];
+        let agents: Vec<AgentPill> = vec![];
         let mut inputs = full(&pinned, &agents);
         inputs.agents = &[];
         inputs.active_agent = None;
@@ -1134,18 +1132,18 @@ mod segment_registry_drift_tests {
             submit: true,
         }];
         let agents = vec![
-            (
-                AgentInstanceId(1),
-                AgentKind::Claude,
-                "claude".into(),
-                Some('q'),
-            ),
-            (
-                AgentInstanceId(2),
-                AgentKind::Codex,
-                "codex".into(),
-                Some('w'),
-            ),
+            AgentPill {
+                id: AgentInstanceId(1),
+                kind: AgentKind::Claude,
+                label: "claude".into(),
+                key: Some('q'),
+            },
+            AgentPill {
+                id: AgentInstanceId(2),
+                kind: AgentKind::Codex,
+                label: "codex".into(),
+                key: Some('w'),
+            },
         ];
         let tags = vec![crate::commands::tags::PromptTag {
             name: "context".into(),

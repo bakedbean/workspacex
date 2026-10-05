@@ -26,3 +26,4 @@ pub use bars::{
     DashboardFooterInputs, DashboardHeaderInputs, cfg, dashboard_detail, dashboard_footer,
     dashboard_header,
 };
+pub use providers::AgentPill;

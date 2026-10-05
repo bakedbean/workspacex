@@ -766,6 +766,16 @@ pub fn tags(cfg: &SegmentConfig, tags: &[PromptTag], resolver: &Resolver) -> Opt
     (!out.is_empty()).then_some(out)
 }
 
+/// One agent instance's pill in the `agents` segment.
+#[derive(Debug, Clone)]
+pub struct AgentPill {
+    pub id: AgentInstanceId,
+    pub kind: AgentKind,
+    pub label: String,
+    /// Switch key; `None` past the key pool (see `agent_switch_keys`).
+    pub key: Option<char>,
+}
+
 /// Agent pills: `● claude q   ○ codex w`. The active instance gets the
 /// filled dot and a bold label. `$symbol` is the dot plus its space (the
 /// `[agents].symbol` field is not used; the dot encodes active/idle).
@@ -773,7 +783,7 @@ pub fn tags(cfg: &SegmentConfig, tags: &[PromptTag], resolver: &Resolver) -> Opt
 /// so a theme draws each harness once — and absent for a kind without one.
 pub fn agents(
     cfg: &SegmentConfig,
-    agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
+    agents: &[AgentPill],
     active: Option<AgentInstanceId>,
     icons: &[(AgentKind, String)],
     theme: &Theme,
@@ -782,8 +792,8 @@ pub fn agents(
     let theme = &cfg.theme(theme);
     let items: Vec<(SegmentMap, Style, Option<Hit>)> = agents
         .iter()
-        .map(|(id, kind, label, key)| {
-            let is_active = active == Some(*id);
+        .map(|pill| {
+            let is_active = active == Some(pill.id);
             let dot = if is_active { "● " } else { "○ " };
             let label_style = if is_active {
                 Style::default().add_modifier(Modifier::BOLD)
@@ -791,17 +801,17 @@ pub fn agents(
                 Style::default()
             };
             let mut v = vars(vec![("symbol", var(dot))]);
-            if let Some((_, icon)) = icons.iter().find(|(k, _)| k == kind) {
+            if let Some((_, icon)) = icons.iter().find(|(k, _)| *k == pill.kind) {
                 v.insert("icon".to_string(), var(icon.clone()));
             }
             v.insert(
                 "label".to_string(),
-                Segment::text(label.clone(), label_style),
+                Segment::text(pill.label.clone(), label_style),
             );
-            if let Some(k) = key {
+            if let Some(k) = pill.key {
                 v.insert("key".to_string(), var(k.to_string()));
             }
-            (v, theme.agent_style(*kind), Some(Hit::Agent(*id)))
+            (v, theme.agent_style(pill.kind), Some(Hit::Agent(pill.id)))
         })
         .collect();
     eval_items(cfg, &items, resolver)

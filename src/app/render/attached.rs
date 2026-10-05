@@ -8,6 +8,7 @@ use crate::data::store::AgentInstanceId;
 use crate::git::DiffStats;
 use crate::pty::session::AgentKind;
 use crate::ui::attached::ChipPr;
+use crate::ui::bar::AgentPill;
 use crate::ui::detail_modules::session_summary::ChipModelTokens;
 use crate::ui::updates_bar::AttentionItems;
 
@@ -23,7 +24,7 @@ struct AttachedData {
     diff: Option<DiffStats>,
     pr: Option<ChipPr>,
     model_tokens: Option<ChipModelTokens>,
-    agents: Vec<(AgentInstanceId, AgentKind, String, Option<char>)>,
+    agents: Vec<AgentPill>,
     active_agent: Option<AgentInstanceId>,
     version: &'static str,
     window_label: &'static str,
@@ -141,7 +142,7 @@ fn gather_local(app: &App, focused: crate::ui::split::AttachTarget) -> AttachedD
 
     // Build the agent pill list for the chip row's flush-right block. Only
     // shown when the focused workspace has more than its primary agent.
-    let agents: Vec<(AgentInstanceId, AgentKind, String, Option<char>)> = if instances.len() > 1 {
+    let agents: Vec<AgentPill> = if instances.len() > 1 {
         // Keys cap at 10 (see `agent_switch_keys`); agents past the
         // pool get `None` so they still render and stay clickable
         // rather than being silently dropped by a `zip`.
@@ -149,7 +150,12 @@ fn gather_local(app: &App, focused: crate::ui::split::AttachTarget) -> AttachedD
         instances
             .into_iter()
             .enumerate()
-            .map(|(i, inst)| (inst.id, inst.agent, inst.label(), keys.get(i).copied()))
+            .map(|(i, inst)| AgentPill {
+                id: inst.id,
+                kind: inst.agent,
+                label: inst.label(),
+                key: keys.get(i).copied(),
+            })
             .collect()
     } else {
         Vec::new()

@@ -3,6 +3,7 @@ use crate::data::store::AgentInstanceId;
 use crate::git::forge::BranchLifecycle;
 use crate::pty::render::render_screen;
 use crate::pty::session::{AgentKind, Session};
+use crate::ui::bar::AgentPill;
 use crate::ui::split::{Divider, SplitDirection};
 use crate::ui::theme::Theme;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -144,7 +145,7 @@ pub(crate) fn render_panes(
     diff: Option<crate::git::DiffStats>,
     pr: Option<ChipPr>,
     model_tokens: Option<crate::ui::detail_modules::session_summary::ChipModelTokens>,
-    agents: &[(AgentInstanceId, AgentKind, String, Option<char>)],
+    agents: &[AgentPill],
     active_agent: Option<AgentInstanceId>,
     fleet: &crate::ui::bar::segment::SegmentMap,
     theme: &Theme,
@@ -397,7 +398,7 @@ mod tests {
         Option<crate::git::DiffStats>,
         Option<ChipPr>,
         Option<crate::ui::detail_modules::session_summary::ChipModelTokens>,
-        Vec<(AgentInstanceId, AgentKind, String, Option<char>)>,
+        Vec<AgentPill>,
     ) {
         use crate::git::forge::{BranchLifecycle, ReviewDecision};
         let pinned = vec![
@@ -430,18 +431,18 @@ mod tests {
             },
         );
         let agents = vec![
-            (
-                AgentInstanceId(1),
-                AgentKind::Claude,
-                "claude".to_string(),
-                Some('q'),
-            ),
-            (
-                AgentInstanceId(2),
-                AgentKind::Codex,
-                "codex".to_string(),
-                Some('w'),
-            ),
+            AgentPill {
+                id: AgentInstanceId(1),
+                kind: AgentKind::Claude,
+                label: "claude".into(),
+                key: Some('q'),
+            },
+            AgentPill {
+                id: AgentInstanceId(2),
+                kind: AgentKind::Codex,
+                label: "codex".into(),
+                key: Some('w'),
+            },
         ];
         (pinned, diff, pr, mt, agents)
     }

@@ -517,12 +517,7 @@ pub(crate) struct AttachedInputs<'a> {
     pub diff: Option<crate::git::DiffStats>,
     pub pr: Option<crate::ui::attached::ChipPr>,
     pub model_tokens: Option<crate::ui::detail_modules::session_summary::ChipModelTokens>,
-    pub agents: &'a [(
-        crate::data::store::AgentInstanceId,
-        crate::pty::session::AgentKind,
-        String,
-        Option<char>,
-    )],
+    pub agents: &'a [providers::AgentPill],
     pub active_agent: Option<crate::data::store::AgentInstanceId>,
     pub fleet: &'a SegmentMap,
 }

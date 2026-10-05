@@ -1,10 +1,10 @@
 # Manual test: KDE Plasma applet
 
 The automated test suite covers the installer (package layout, the baked
-wsx path, idempotent re-runs), the `wsx waybar status` and
-`wsx workspace list --json` payloads the applet renders, and the KWin
-focus script. This procedure covers what tests can't: the applet loading in
-plasmashell, live rendering, the popup, and KWin window focus.
+wsx path, idempotent re-runs), the `wsx desktop status` payload the applet
+renders, the terminal a jump launches, and the KWin focus script with its
+D-Bus clients. This procedure covers what tests can't: the applet loading
+in plasmashell, live rendering, the popup, and KWin window focus.
 
 ## Setup
 
@@ -57,27 +57,38 @@ they use the normal text color. `wsx status clear` reverts.
 Click the applet. Expected: a popup lists workspaces under a header per
 repo, each row showing the status glyph (colored like the indicator), the
 slug, the status message beneath it, and the PR number once wsx has
-cached it. Clicking the applet again closes it; with no workspaces it reads
+cached it. A message with line breaks
+(`wsx status set working --message $'a\nb\nc'`) stays on one line.
+Clicking the applet again closes it; with no workspaces it reads
 "No workspaces".
 
 ## Test 7: jump into a running TUI
 
-With a wsx TUI running in a terminal window, open the popup and click a
-workspace. Expected: the popup closes, the TUI's window comes to the front
-with keyboard focus (KWin script over D-Bus), and the workspace is attached,
-as if you had pressed Enter on it.
+With a wsx TUI running in a terminal window, focus another window, open
+the popup and click a workspace. Expected: the popup closes, the TUI's
+window comes to the front with keyboard focus (KWin script over D-Bus), and
+the workspace is attached, as if you had pressed Enter on it. Picking two
+workspaces in quick succession raises the window both times. With
+`dbus-send` off plasmashell's `PATH`, focus still works through `qdbus6`.
 
 ## Test 8: jump launches a new TUI
 
-Quit all wsx TUIs, then pick a workspace from the popup. Expected: the same
-fallback as `wsx waybar jump` — a new terminal (`$TERMINAL`, else alacritty)
-opens running wsx already attached to that workspace.
+Quit all wsx TUIs, then pick a workspace from the popup. Expected: a new
+terminal opens running wsx already attached to that workspace: the
+`terminal_cmd` template when it contains `{cmd}`, else `$TERMINAL`, else
+konsole on KDE Plasma, else alacritty. With a terminal that can't launch
+(`kquitapp6 plasmashell && TERMINAL=no-such-term kstart plasmashell`, then
+pick a workspace), the popup stays open and shows wsx's
+`failed to launch terminal 'no-such-term'` error.
 
 ## Test 9: no repos / unreadable database
 
 With no repos registered (e.g. `XDG_STATE_HOME` pointed at an empty
 directory before plasmashell starts), expected: the icon shows dimmed with
-no count and the tooltip reads "No workspaces".
+no count and the tooltip reads "No workspaces". When the database can't be
+read for three polls in a row (15s), the icon dims and the tooltip and the
+popup show `Could not read wsx's status: …`; a database that's busy for a
+moment keeps the last status instead of flashing the error.
 
 ## Test 10: moved binary
 

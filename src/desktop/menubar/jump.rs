@@ -127,7 +127,7 @@ fn spawn_detached(prog: &str, args: &[&str]) -> Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     // Own session so it outlives the SwiftBar action process (same
-    // pattern as waybar::jump::spawn_tui).
+    // pattern as desktop::jump::spawn_tui).
     unsafe {
         use std::os::unix::process::CommandExt;
         cmd.pre_exec(|| {

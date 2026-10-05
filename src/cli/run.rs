@@ -1123,7 +1123,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         #[cfg(target_os = "linux")]
         CliAction::WaybarMenu => crate::desktop::waybar::menu::run_menu(&store)?,
         #[cfg(target_os = "linux")]
-        CliAction::WaybarJump { repo, slug } => crate::desktop::waybar::jump::jump(&repo, &slug)?,
+        CliAction::WaybarJump { repo, slug } => crate::desktop::jump::jump(&repo, &slug)?,
         #[cfg(target_os = "linux")]
         CliAction::WaybarMenuEntries => {
             crate::desktop::waybar::entries::run_menu_entries(&store).await?

@@ -10,6 +10,8 @@
 //! Shared:
 //!   - [`rows`] — the platform-neutral workspace row model they render
 //!   - [`install_support`] — helpers for the `wsx setup` installers
+//!   - `jump` and `focus` (Linux) — select a workspace in a running TUI and
+//!     raise its window, for both the waybar module and the Plasma applet
 //!
 //! Jump requests travel back to a running TUI over the socket in
 //! `crate::app::ipc`; this subsystem is that socket's client, never its owner.
@@ -17,6 +19,12 @@
 pub mod rows;
 
 pub(crate) mod install_support;
+
+#[cfg(target_os = "linux")]
+pub(crate) mod focus;
+
+#[cfg(target_os = "linux")]
+pub mod jump;
 
 #[cfg(target_os = "macos")]
 pub mod menubar;

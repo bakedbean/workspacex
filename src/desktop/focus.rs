@@ -1,28 +1,8 @@
-use std::io::Write;
-use std::path::PathBuf;
-use std::process::{Command, Stdio};
+//! Raise a running TUI's terminal window after a jump has selected its
+//! workspace: hyprctl on Hyprland, a KWin script over D-Bus on KDE Plasma.
+//! Best-effort throughout, since the selection has already happened.
 
-use crate::error::{Error, Result};
-
-/// Jump to a workspace: tell a running TUI to select it and focus that
-/// window, or launch a fresh TUI on it.
-pub fn jump(repo: &str, slug: &str) -> Result<()> {
-    for (path, pid) in crate::app::ipc::live_socket_candidates() {
-        match std::os::unix::net::UnixStream::connect(&path) {
-            Ok(mut stream) => {
-                if writeln!(stream, "select {repo} {slug}").is_ok() {
-                    focus_window_of(pid);
-                    return Ok(());
-                }
-            }
-            Err(_) => {
-                // Stale socket from a killed TUI.
-                let _ = std::fs::remove_file(&path);
-            }
-        }
-    }
-    spawn_tui(repo, slug)
-}
+use std::process::Command;
 
 fn ppid_from_stat(stat: &str) -> Option<u32> {
     // comm is parenthesized and may itself contain ')' — split on the LAST ')'.
@@ -60,7 +40,7 @@ fn client_pid_for_chain(clients_json: &str, chain: &[u32]) -> Option<u32> {
     })
 }
 
-fn focus_window_of(tui_pid: u32) {
+pub(crate) fn focus_window_of(tui_pid: u32) {
     if use_kwin(
         std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some(),
         std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
@@ -175,35 +155,8 @@ fn focus_kwin_window(chain: &[u32]) {
     );
 }
 
-fn spawn_tui(repo: &str, slug: &str) -> Result<()> {
-    let term = std::env::var("TERMINAL").unwrap_or_else(|_| "alacritty".into());
-    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("wsx"));
-    let mut cmd = Command::new(&term);
-    cmd.arg("-e")
-        .arg(exe)
-        .arg("--select")
-        .arg(format!("{repo}/{slug}"))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    // Detach into its own session so it outlives the menu/jump process
-    // (same pattern as src/commands/external.rs:262).
-    unsafe {
-        use std::os::unix::process::CommandExt;
-        cmd.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    cmd.spawn()
-        .map_err(|e| Error::UserInput(format!("failed to launch terminal '{term}': {e}")))?;
-    Ok(())
-}
-
 #[cfg(test)]
-mod jump_tests {
+mod focus_tests {
     use super::*;
 
     #[test]

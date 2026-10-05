@@ -158,7 +158,7 @@ fn run_pipe_menu(store: &Store, cmd: Vec<String>) -> Result<()> {
         return Ok(()); // dismissed
     }
     if let Some((repo, slug)) = parse_menu_line(selection) {
-        crate::desktop::waybar::jump::jump(&repo, &slug)?;
+        crate::desktop::jump::jump(&repo, &slug)?;
     }
     Ok(())
 }

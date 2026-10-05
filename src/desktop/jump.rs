@@ -6,6 +6,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use crate::desktop::install_support::shell_quote;
 use crate::desktop::terminal::resolve_terminal_template;
@@ -76,6 +77,24 @@ fn fallback_terminal(
     }
 }
 
+/// How long to watch a `terminal_cmd` template's shell for an early failure.
+const TEMPLATE_GRACE: Duration = Duration::from_millis(300);
+
+/// `child`'s exit code if it exits within `grace`. None while it's still
+/// running, or when a signal ended it.
+fn early_exit_code(child: &mut std::process::Child, grace: Duration) -> Option<i32> {
+    let deadline = Instant::now() + grace;
+    loop {
+        if let Ok(Some(status)) = child.try_wait() {
+            return status.code();
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn spawn_tui(repo: &str, slug: &str, terminal_cmd: Option<&str>) -> Result<()> {
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("wsx"));
     let select = format!("{repo}/{slug}");
@@ -94,6 +113,7 @@ fn spawn_tui(repo: &str, slug: &str, terminal_cmd: Option<&str>) -> Result<()> {
         ),
         &select_cmd,
     );
+    let shell = matches!(launch, Launch::Shell(_));
     let (term, mut cmd) = match launch {
         Launch::Shell(full) => {
             let mut cmd = Command::new("sh");
@@ -120,8 +140,25 @@ fn spawn_tui(repo: &str, slug: &str, terminal_cmd: Option<&str>) -> Result<()> {
             Ok(())
         });
     }
-    cmd.spawn()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| Error::UserInput(format!("failed to launch terminal '{term}': {e}")))?;
+    // `sh -c` itself always starts, so a template naming a terminal that
+    // isn't installed fails only inside it. Give it a moment to exit with
+    // sh's status rather than report a launch that didn't happen.
+    if shell
+        && let Some(code) = early_exit_code(&mut child, TEMPLATE_GRACE)
+        && code != 0
+    {
+        let hint = if code == 127 {
+            ", command not found"
+        } else {
+            ""
+        };
+        return Err(Error::UserInput(format!(
+            "failed to launch terminal_cmd `{term}`: exited with status {code}{hint}"
+        )));
+    }
     Ok(())
 }
 
@@ -151,6 +188,22 @@ mod jump_tests {
             pick_launch(None, Some("  "), "konsole", select),
             Launch::Terminal("konsole".into())
         );
+    }
+
+    #[test]
+    fn a_launch_that_fails_at_once_reports_its_status() {
+        let mut fails = Command::new("sh").args(["-c", "exit 127"]).spawn().unwrap();
+        assert_eq!(
+            early_exit_code(&mut fails, Duration::from_secs(5)),
+            Some(127)
+        );
+        // Still running when the grace period ends: no status, and it's left
+        // running.
+        let mut runs = Command::new("sleep").arg("5").spawn().unwrap();
+        assert_eq!(early_exit_code(&mut runs, Duration::from_millis(50)), None);
+        assert!(runs.try_wait().unwrap().is_none());
+        let _ = runs.kill();
+        let _ = runs.wait();
     }
 
     #[test]

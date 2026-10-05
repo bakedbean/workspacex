@@ -262,6 +262,39 @@ pub(super) mod tests {
     }
 
     #[tokio::test]
+    async fn conflicting_branch_finds_exact_and_overlapping_names() {
+        let dir = init_repo();
+        for b in ["wsx/fix-login", "wsx/foo", "wsx/deep/x"] {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(dir.path())
+                    .args(["branch", b])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        for (branch, expected) in [
+            ("wsx/fix-login", Some("wsx/fix-login")),
+            ("wsx/foo/bar", Some("wsx/foo")),
+            ("wsx/deep", Some("wsx/deep/x")),
+            // A shared string prefix is not a shared path.
+            ("wsx/fo", None),
+            ("wsx/foobar", None),
+            ("wsx/new", None),
+        ] {
+            assert_eq!(
+                conflicting_branch(dir.path(), branch)
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                expected,
+                "{branch}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn preflight_succeeds_when_git_on_path() {
         preflight().await.unwrap();
     }
@@ -545,6 +578,30 @@ pub async fn is_valid_branch_name(branch: &str) -> Result<bool> {
         .await
         .map_err(|e| Error::Git(format!("spawn git: {e}")))?;
     Ok(out.status.success())
+}
+
+/// The existing local branch that stops `git worktree add -b <branch>` from
+/// creating `branch`, if any: one with that exact name, or one whose path
+/// overlaps it, since a ref cannot also be a directory of refs (`wsx/foo`
+/// blocks `wsx/foo/bar`, and `wsx/foo/bar` blocks `wsx/foo`).
+pub async fn conflicting_branch(repo: &Path, branch: &str) -> Result<Option<String>> {
+    let out = run(
+        repo,
+        &["for-each-ref", "--format=%(refname)", "refs/heads/"],
+    )
+    .await?;
+    let overlaps = |longer: &str, shorter: &str| {
+        longer
+            .strip_prefix(shorter)
+            .is_some_and(|rest| rest.starts_with('/'))
+    };
+    Ok(out
+        .lines()
+        .filter_map(|r| r.strip_prefix("refs/heads/"))
+        .find(|existing| {
+            *existing == branch || overlaps(branch, existing) || overlaps(existing, branch)
+        })
+        .map(str::to_string))
 }
 
 /// The `git check-ref-format` run behind `is_valid_branch_name`, kept apart

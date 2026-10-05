@@ -132,7 +132,7 @@ impl App {
         // Sweep stale Pending rows from previous runs.
         let _ = app
             .store
-            .sweep_stale_pending(std::time::Duration::from_secs(300));
+            .sweep_stale_pending(crate::data::store::STALE_PENDING_AFTER);
         // Resolve setup rows stranded by a crashed process (see sweep_stale_running).
         let _ = app.store.sweep_stale_running();
         // Load the retained bucketed activity for the sparkline (up to
@@ -1176,6 +1176,10 @@ mod strip_instances_tests {
         let mut app = test_app();
         app.store.set_setting("mcp_mirror", "off").unwrap();
         let ws = app.test_workspace("vanished");
+        // Settled, as the issue's row was: a create git refused.
+        app.store
+            .set_workspace_state(ws, crate::data::store::WorkspaceState::Failed)
+            .unwrap();
         assert!(
             !app.workspace_path(ws).unwrap().exists(),
             "the fixture's worktree must not exist"
@@ -1209,6 +1213,10 @@ mod strip_instances_tests {
         let mut app = test_app();
         app.store.set_setting("mcp_mirror", "off").unwrap();
         let ws = app.test_workspace("vanished-peer");
+        // Settled, as after a worktree deleted by hand.
+        app.store
+            .set_workspace_state(ws, crate::data::store::WorkspaceState::Ready)
+            .unwrap();
         let peer = app
             .store
             .add_workspace_agent(ws, AgentKind::Claude)
@@ -1218,5 +1226,104 @@ mod strip_instances_tests {
         assert_eq!(outcome, crate::app::AttachReady::WorktreeMissing);
         assert!(app.sessions.get(peer.id).is_none());
         assert!(app.modal.is_none(), "a background ensure must stay quiet");
+    }
+
+    /// A create that has not made its worktree yet is not missing one. Enter
+    /// on its Provisioning row, or a message drained to it, is refused
+    /// quietly and retried, rather than told to archive a row that is about
+    /// to become healthy.
+    #[test]
+    fn ensure_refuses_quietly_while_the_create_has_not_made_the_worktree() {
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let mut app = test_app();
+        app.store.set_setting("mcp_mirror", "off").unwrap();
+        // Inserted `Pending`, as every create's row is until its worktree
+        // exists, whether the create runs here or in another process.
+        let ws = app.test_workspace("provisioning");
+        app.store
+            .add_primary_agent(ws, AgentKind::Claude, 0)
+            .unwrap();
+        let peer = app
+            .store
+            .add_workspace_agent(ws, AgentKind::Claude)
+            .unwrap();
+
+        let outcome = crate::app::ensure_workspace_session(&mut app, ws).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::Refused);
+        let outcome = crate::app::ensure_instance_session(&mut app, peer.id, true).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::Refused);
+        assert!(
+            app.modal.is_none(),
+            "no advice to archive a row still being created"
+        );
+        assert!(app.sessions.get(peer.id).is_none());
+    }
+
+    /// A `Pending` row older than the startup sweep's cutoff belongs to a
+    /// create that died, such as a CLI create killed mid-fetch, and nothing
+    /// will move it on before the next restart. Waiting on it would refuse
+    /// Enter silently and retry its messages every heartbeat for the whole
+    /// session. A create in flight here is still waited on, however long it
+    /// has been running.
+    #[test]
+    fn only_a_live_create_is_waited_on() {
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let mut app = test_app();
+        app.store.set_setting("mcp_mirror", "off").unwrap();
+        let ws = app.test_workspace("died-mid-create");
+        let past_cutoff = crate::data::store::now_ms()
+            - crate::data::store::STALE_PENDING_AFTER.as_millis() as i64
+            - 1_000;
+        app.store
+            .conn()
+            .execute(
+                "UPDATE workspaces SET created_at = ?1 WHERE id = ?2",
+                rusqlite::params![past_cutoff, ws.0],
+            )
+            .unwrap();
+
+        let outcome = crate::app::ensure_workspace_session(&mut app, ws).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::WorktreeMissing);
+
+        app.modal = None;
+        app.in_flight.insert(
+            ws,
+            crate::data::in_flight::InFlight::create(
+                crate::data::progress::SetupProgress::shared(),
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        let outcome = crate::app::ensure_workspace_session(&mut app, ws).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::Refused);
+        assert!(app.modal.is_none());
+    }
+
+    /// A quit mid-create leaves the row `Pending` with setup `Cancelled`, and
+    /// nothing will finish it, so it gets the missing-worktree handling.
+    #[test]
+    fn a_create_abandoned_by_quit_counts_as_settled() {
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let mut app = test_app();
+        app.store.set_setting("mcp_mirror", "off").unwrap();
+        let ws = app.test_workspace("abandoned");
+        app.store
+            .set_setup_status(ws, crate::data::store::SetupStatus::Cancelled)
+            .unwrap();
+
+        let outcome = crate::app::ensure_workspace_session(&mut app, ws).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::WorktreeMissing);
+        assert!(matches!(
+            app.modal,
+            Some(crate::ui::modal::Modal::Error { .. })
+        ));
     }
 }

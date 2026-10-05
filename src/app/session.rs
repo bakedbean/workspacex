@@ -142,6 +142,9 @@ pub(crate) fn ensure_workspace_session(
                 });
                 return Ok(AttachReady::AgentMissing);
             }
+            Err(crate::error::Error::WorktreeMissing(_)) if create_in_progress(app, ws_id) => {
+                return Ok(AttachReady::Refused);
+            }
             Err(crate::error::Error::WorktreeMissing(path)) => {
                 app.modal = Some(worktree_missing_modal(app, ws_id, &path));
                 return Ok(AttachReady::WorktreeMissing);
@@ -150,6 +153,41 @@ pub(crate) fn ensure_workspace_session(
         }
     }
     Ok(AttachReady::Ok)
+}
+
+/// Whether `ws_id`'s create has yet to make its worktree, so a missing one is
+/// not gone, just not there yet. That is a create in flight here, however
+/// long it takes, or a `Pending` row younger than `STALE_PENDING_AFTER` for
+/// one in another process: a row leaves `Pending` as soon as `git worktree
+/// add` succeeds or fails, or the create is cancelled first. A row that stays
+/// `Pending` longer belongs to a create that died (killed mid-fetch, say),
+/// the same call `sweep_stale_pending` makes at the next startup. A row that
+/// a quit mid-create left `Pending` with setup `Cancelled` (see
+/// `confirm_quit`) is settled too. Read from the store rather than
+/// `App::workspaces`, which only catches up with another process's writes on
+/// its next poll. A store error counts as in progress, so it costs a retry
+/// rather than a dropped message.
+///
+/// Such a spawn is `Refused`, with no modal and a retry from the message
+/// drain, rather than treated as a worktree to archive.
+fn create_in_progress(app: &App, ws_id: crate::data::store::WorkspaceId) -> bool {
+    if app
+        .in_flight
+        .get(&ws_id)
+        .is_some_and(|f| f.kind == crate::data::in_flight::InFlightKind::Create)
+    {
+        return true;
+    }
+    let cutoff =
+        crate::data::store::now_ms() - crate::data::store::STALE_PENDING_AFTER.as_millis() as i64;
+    match app.store.workspace_by_id(ws_id) {
+        Err(_) => true,
+        Ok(row) => row.is_some_and(|w| {
+            w.state == crate::data::store::WorkspaceState::Pending
+                && w.setup_status != crate::data::store::SetupStatus::Cancelled
+                && w.created_at >= cutoff
+        }),
+    }
 }
 
 /// The error shown when a spawn is refused because the workspace's worktree
@@ -246,6 +284,9 @@ pub(crate) fn ensure_instance_session(
                     });
                 }
                 return Ok(AttachReady::AgentMissing);
+            }
+            Err(crate::error::Error::WorktreeMissing(_)) if create_in_progress(app, ws_id) => {
+                return Ok(AttachReady::Refused);
             }
             Err(crate::error::Error::WorktreeMissing(path)) => {
                 if surface_missing {
@@ -454,5 +495,31 @@ pub(crate) fn schedule_detach_refresh(app: &mut App, ids: impl IntoIterator<Item
         app.diff_last_poll_ms.remove(&id);
         app.pr_last_poll_ms.remove(&id);
         app.pending_workspace_refresh.insert(id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A store error must not read as a settled workspace: that answer drops
+    /// the workspace's queued messages for good, where a retry costs nothing.
+    #[test]
+    fn create_in_progress_assumes_one_when_the_store_errors() {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        let mut app = App::new(store, std::path::PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws = app.test_workspace("store-error");
+        app.store
+            .set_workspace_state(ws, crate::data::store::WorkspaceState::Ready)
+            .unwrap();
+        assert!(
+            !create_in_progress(&app, ws),
+            "a settled row is not in progress"
+        );
+        app.store
+            .conn()
+            .execute("ALTER TABLE workspaces RENAME TO workspaces_gone", [])
+            .unwrap();
+        assert!(create_in_progress(&app, ws));
     }
 }

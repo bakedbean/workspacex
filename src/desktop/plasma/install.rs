@@ -6,10 +6,9 @@
 //! — so kpackagetool6 isn't needed. Re-running overwrites the package in
 //! place, which also refreshes the wsx binary path baked into it.
 //!
-//! The applet drives existing commands rather than Plasma-specific ones:
-//! `wsx waybar status` for the indicator (its text/class/tooltip payload is
-//! already bar-agnostic), `wsx workspace list --json` for the popup, and
-//! `wsx waybar jump` when a workspace is picked.
+//! The applet drives the desktop-neutral commands: `wsx desktop status` for
+//! the indicator and the popup's rows, and `wsx desktop jump` when a
+//! workspace is picked.
 
 use std::path::Path;
 

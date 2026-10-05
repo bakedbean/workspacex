@@ -1,11 +1,10 @@
 /*
  * wsx panel indicator
  *
- * Polls `wsx waybar status` -- the same JSON the waybar module renders -- and
- * shows a branch icon plus the live workspace count, tinted by the most urgent
- * workspace status, with the per-workspace list as its tooltip. Clicking opens
- * the workspaces from `wsx workspace list --json`; picking one runs
- * `wsx waybar jump`, which opens it in a running TUI or launches one.
+ * Polls `wsx desktop status` and shows a branch icon plus the live workspace
+ * count, tinted by the most urgent workspace status, with the per-workspace
+ * list as its tooltip. Clicking opens the same payload's rows; picking one
+ * runs `wsx desktop jump`, which opens it in a running TUI or launches one.
  *
  * Installed by `wsx setup plasma`; edits are overwritten on re-run.
  */
@@ -25,21 +24,27 @@ PlasmoidItem {
     // shell-quoted, because plasmashell's PATH often lacks ~/.local/bin.
     readonly property string wsx: __WSX_BIN__
 
-    // The last status payload. An empty statusText means no repos are
-    // registered or the database couldn't be read: the waybar module hides
-    // itself then, but a panel applet can't, so it dims instead.
-    property string statusText: ""
+    // The last `wsx desktop status` payload. Its tooltip is empty when no
+    // repo is registered: the waybar module hides itself then, but a panel
+    // applet can't, so it dims instead, as it does when the status can't be
+    // read.
+    property int count: 0
     property string statusClass: "idle"
     property string statusTooltip: ""
-    property string runError: ""
-    // The last `workspace list --json` output, to skip rebuilding an
-    // unchanged list; empty until the first one arrives.
+    // Why the status couldn't be read: wsx failed to run, or it reported an
+    // error reading its database.
+    property string statusError: ""
+    // Polls in a row whose database read failed. The usual cause is a
+    // database busy with the dashboard's writes, which clears by the next
+    // poll or two.
+    property int failedReads: 0
+    // The last rows, serialized, to skip rebuilding an unchanged list; empty
+    // until the first payload arrives.
     property string rowsJson: ""
+    // Why the last jump failed, shown in the popup until the next one.
+    property string jumpError: ""
 
-    readonly property string count: {
-        var m = statusText.match(/(\d+)\s*$/);
-        return m ? m[1] : "";
-    }
+    readonly property bool hasStatus: statusTooltip.length > 0 && statusError.length === 0
     readonly property color statusColor: stateColor(statusClass)
 
     // The waybar stylesheet's four classes, mapped onto the color scheme's
@@ -58,27 +63,21 @@ PlasmoidItem {
     function stateGlyph(state) {
         switch (state) {
         case "blocked": return "!";
-        case "done": return "✓";
-        case "waiting": return "…";
-        case "working": case "busy": return "↻";
-        default: return "·";
+        case "done": return "\u2713";
+        case "waiting": return "\u2026";
+        case "working": case "busy": return "\u21bb";
+        default: return "\u00b7";
         }
     }
 
     toolTipMainText: "wsx"
     toolTipSubText: {
-        if (runError.length) return runError;
+        if (statusError.length) return statusError;
         if (statusTooltip.length) return statusTooltip;
         return "No workspaces";
     }
-    // The tooltip arrives Pango-escaped for waybar and is unescaped below, so
-    // it must render as plain text: a status message is agent-authored.
+    // A status message is agent-authored, so it must never render as markup.
     toolTipTextFormat: Text.PlainText
-
-    function unescapePango(s) {
-        // &amp; last, so an escaped "&lt;" doesn't decode twice.
-        return s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
-    }
 
     function applyStatus(text) {
         try {
@@ -86,30 +85,39 @@ PlasmoidItem {
         } catch (e) {
             return;
         }
-        statusText = d.text || "";
-        statusClass = d["class"] || "idle";
-        statusTooltip = unescapePango(d.tooltip || "");
-        runError = "";
-    }
-
-    function applyRows(text) {
-        try {
-            var rows = JSON.parse(text);
-        } catch (e) {
+        if (d.error) {
+            // Keep the last good status through a brief failure, and show the
+            // error once it lasts three polls, or at once with nothing to show.
+            failedReads += 1;
+            if (failedReads >= 3 || rowsJson.length === 0) {
+                statusError = "Could not read wsx's status:\n" + d.error;
+            }
             return;
         }
-        rowsJson = text;
+        failedReads = 0;
+        statusError = "";
+        count = d.count || 0;
+        statusClass = d["class"] || "idle";
+        statusTooltip = d.tooltip || "";
+        applyRows(d.rows || []);
+    }
+
+    function applyRows(rows) {
+        var json = JSON.stringify(rows);
+        if (json === rowsJson) {
+            return;
+        }
+        rowsJson = json;
         rowsModel.clear();
         for (var i = 0; i < rows.length; i++) {
             var r = rows[i];
-            var status = r.status || {};
             // ListModel roles can't hold null.
             rowsModel.append({
                 repo: r.repo,
                 slug: r.slug,
-                reportedState: status.state || "",
-                message: status.message || "",
-                pr: r.pr && r.pr.number ? "#" + r.pr.number : "",
+                reportedState: r.state || "",
+                message: r.message || "",
+                pr: r.pr_number ? "#" + r.pr_number : "",
             });
         }
     }
@@ -119,9 +127,12 @@ PlasmoidItem {
     }
 
     function jump(repo, slug) {
-        runner.connectSource(wsx + " waybar jump " + shellQuote(repo) + " " + shellQuote(slug));
-        expanded = false;
+        jumpError = "";
+        runner.connectSource(wsx + " desktop jump " + shellQuote(repo) + " " + shellQuote(slug));
     }
+
+    // A failed jump's message is about that attempt, not the next opening.
+    onExpandedChanged: if (root.expanded) jumpError = ""
 
     ListModel {
         id: rowsModel
@@ -129,41 +140,36 @@ PlasmoidItem {
 
     Plasma5Support.DataSource {
         engine: "executable"
-        connectedSources: [root.wsx + " waybar status"]
+        connectedSources: [root.wsx + " desktop status"]
         // The waybar module's poll interval.
         interval: 5000
         onNewData: function(sourceName, data) {
-            // `wsx waybar status` always exits 0, so anything else means the
-            // binary itself couldn't run (moved, deleted, ...).
+            // `wsx desktop status` reports a database it can't read in its
+            // output, so a failed command means wsx itself couldn't run
+            // (moved, deleted, ...).
             if (data["exit code"] === 0) {
                 root.applyStatus(data["stdout"]);
             } else {
-                root.statusText = "";
-                root.statusClass = "idle";
-                root.runError = "Could not run " + sourceName + "\n"
+                root.statusError = "Could not run " + sourceName + "\n"
                     + (data["stderr"] || "").trim();
             }
         }
     }
 
-    // The popup's rows, polled only while it's open.
-    Plasma5Support.DataSource {
-        engine: "executable"
-        connectedSources: root.expanded ? [root.wsx + " workspace list --json"] : []
-        interval: 5000
-        onNewData: function(sourceName, data) {
-            if (data["exit code"] === 0 && data["stdout"] !== root.rowsJson) {
-                root.applyRows(data["stdout"]);
-            }
-        }
-    }
-
-    // One-shot commands, dropped once they finish.
+    // One `wsx desktop jump` per pick. The popup closes once a jump succeeds;
+    // a failure stays up in it, since a terminal that won't launch would
+    // otherwise close the popup with nothing happening.
     Plasma5Support.DataSource {
         id: runner
         engine: "executable"
-        onNewData: function(sourceName) {
+        onNewData: function(sourceName, data) {
             disconnectSource(sourceName);
+            if (data["exit code"] === 0) {
+                root.expanded = false;
+            } else {
+                root.jumpError = (data["stderr"] || "").trim()
+                    || "wsx desktop jump exited with status " + data["exit code"];
+            }
         }
     }
 
@@ -188,7 +194,7 @@ PlasmoidItem {
             flow: vertical ? GridLayout.TopToBottom : GridLayout.LeftToRight
             columnSpacing: Kirigami.Units.smallSpacing
             rowSpacing: Kirigami.Units.smallSpacing
-            opacity: root.statusText.length ? 1.0 : 0.5
+            opacity: root.hasStatus ? 1.0 : 0.5
 
             Kirigami.Icon {
                 Layout.alignment: Qt.AlignCenter
@@ -202,7 +208,7 @@ PlasmoidItem {
 
             PlasmaComponents.Label {
                 Layout.alignment: Qt.AlignCenter
-                visible: root.count.length > 0
+                visible: root.hasStatus
                 text: root.count
                 color: root.statusColor
             }
@@ -216,78 +222,91 @@ PlasmoidItem {
         Layout.preferredHeight: Kirigami.Units.gridUnit * 22
         collapseMarginsHint: true
 
-        contentItem: PlasmaComponents.ScrollView {
-            // Wrap to the popup's width instead of scrolling sideways.
-            contentWidth: availableWidth
+        contentItem: ColumnLayout {
+            spacing: 0
 
-            ListView {
-                id: list
+            Kirigami.InlineMessage {
+                Layout.fillWidth: true
+                type: Kirigami.MessageType.Error
+                text: root.jumpError || root.statusError
+                visible: text.length > 0
+            }
 
-                model: rowsModel
-                section.property: "repo"
-                section.delegate: PlasmaExtras.ListSectionHeader {
-                    required property string section
+            PlasmaComponents.ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                // Wrap to the popup's width instead of scrolling sideways.
+                contentWidth: availableWidth
 
-                    width: ListView.view.width
-                    text: section
-                }
+                ListView {
+                    id: list
 
-                delegate: PlasmaComponents.ItemDelegate {
-                    required property string repo
-                    required property string slug
-                    required property string reportedState
-                    required property string message
-                    required property string pr
+                    model: rowsModel
+                    section.property: "repo"
+                    section.delegate: PlasmaExtras.ListSectionHeader {
+                        required property string section
 
-                    width: ListView.view.width
-                    onClicked: root.jump(repo, slug)
+                        width: ListView.view.width
+                        text: section
+                    }
 
-                    contentItem: RowLayout {
-                        spacing: Kirigami.Units.smallSpacing
+                    delegate: PlasmaComponents.ItemDelegate {
+                        required property string repo
+                        required property string slug
+                        required property string reportedState
+                        required property string message
+                        required property string pr
 
-                        PlasmaComponents.Label {
-                            Layout.preferredWidth: Kirigami.Units.gridUnit
-                            horizontalAlignment: Text.AlignHCenter
-                            text: root.stateGlyph(reportedState)
-                            color: root.stateColor(reportedState)
-                        }
+                        width: ListView.view.width
+                        onClicked: root.jump(repo, slug)
 
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 0
+                        contentItem: RowLayout {
+                            spacing: Kirigami.Units.smallSpacing
 
                             PlasmaComponents.Label {
-                                Layout.fillWidth: true
-                                text: slug
-                                textFormat: Text.PlainText
-                                elide: Text.ElideRight
+                                Layout.preferredWidth: Kirigami.Units.gridUnit
+                                horizontalAlignment: Text.AlignHCenter
+                                text: root.stateGlyph(reportedState)
+                                color: root.stateColor(reportedState)
                             }
-                            PlasmaComponents.Label {
+
+                            ColumnLayout {
                                 Layout.fillWidth: true
-                                visible: message.length > 0
-                                text: message
-                                textFormat: Text.PlainText
-                                elide: Text.ElideRight
-                                font: Kirigami.Theme.smallFont
+                                spacing: 0
+
+                                PlasmaComponents.Label {
+                                    Layout.fillWidth: true
+                                    text: slug
+                                    textFormat: Text.PlainText
+                                    elide: Text.ElideRight
+                                }
+                                PlasmaComponents.Label {
+                                    Layout.fillWidth: true
+                                    visible: message.length > 0
+                                    text: message
+                                    textFormat: Text.PlainText
+                                    elide: Text.ElideRight
+                                    font: Kirigami.Theme.smallFont
+                                    opacity: 0.7
+                                }
+                            }
+
+                            PlasmaComponents.Label {
+                                visible: pr.length > 0
+                                text: pr
                                 opacity: 0.7
                             }
                         }
-
-                        PlasmaComponents.Label {
-                            visible: pr.length > 0
-                            text: pr
-                            opacity: 0.7
-                        }
                     }
-                }
 
-                PlasmaExtras.PlaceholderMessage {
-                    anchors.centerIn: parent
-                    width: parent.width - Kirigami.Units.gridUnit * 4
-                    // Not before the first list arrives, or it flashes on open.
-                    visible: root.rowsJson.length > 0 && list.count === 0
-                    iconName: "vcs-branch"
-                    text: "No workspaces"
+                    PlasmaExtras.PlaceholderMessage {
+                        anchors.centerIn: parent
+                        width: parent.width - Kirigami.Units.gridUnit * 4
+                        // Not before the first list arrives, or it flashes on open.
+                        visible: root.rowsJson.length > 0 && list.count === 0
+                        iconName: "vcs-branch"
+                        text: "No workspaces"
+                    }
                 }
             }
         }

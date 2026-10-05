@@ -1123,7 +1123,10 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         #[cfg(target_os = "linux")]
         CliAction::WaybarMenu => crate::desktop::waybar::menu::run_menu(&store)?,
         #[cfg(target_os = "linux")]
-        CliAction::WaybarJump { repo, slug } => crate::desktop::jump::jump(&repo, &slug)?,
+        CliAction::WaybarJump { repo, slug } => {
+            let terminal_cmd = store.get_setting("terminal_cmd")?;
+            crate::desktop::jump::jump(&repo, &slug, terminal_cmd.as_deref())?
+        }
         #[cfg(target_os = "linux")]
         CliAction::WaybarMenuEntries => {
             crate::desktop::waybar::entries::run_menu_entries(&store).await?

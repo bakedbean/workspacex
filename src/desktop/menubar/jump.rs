@@ -9,6 +9,7 @@ use std::process::{Command, Stdio};
 
 use crate::data::store::Store;
 use crate::desktop::install_support::shell_quote;
+use crate::desktop::terminal::resolve_terminal_template;
 use crate::error::{Error, Result};
 
 pub fn jump(repo: &str, slug: &str, terminal_cmd: Option<&str>) -> Result<()> {
@@ -102,17 +103,6 @@ fn focus_app_of(tui_pid: u32) {
             return;
         }
     }
-}
-
-/// terminal_cmd is honored only when it carries a `{cmd}` placeholder —
-/// a bare app-open command (`open -a iTerm`) cannot run a command, and
-/// guessing an argv position would misfire.
-fn resolve_terminal_template(configured: Option<&str>, cmd: &str) -> Option<String> {
-    let t = configured?.trim();
-    if t.is_empty() || !t.contains("{cmd}") {
-        return None;
-    }
-    Some(t.replace("{cmd}", cmd))
 }
 
 fn iterm_installed() -> bool {
@@ -232,19 +222,6 @@ mod jump_tests {
         assert_eq!(chain.first(), Some(&std::process::id()));
         assert!(chain.len() >= 2, "expected self + parent, got {chain:?}");
         assert!(chain.len() <= 32);
-    }
-
-    #[test]
-    fn terminal_template_requires_cmd_placeholder() {
-        // With {cmd}: substituted. Without: None → caller falls through to
-        // the osascript paths (a bare `open -a iTerm` can't carry a command).
-        assert_eq!(
-            resolve_terminal_template(Some("alacritty -e {cmd}"), "wsx --select r/s"),
-            Some("alacritty -e wsx --select r/s".into())
-        );
-        assert_eq!(resolve_terminal_template(Some("open -a iTerm"), "x"), None);
-        assert_eq!(resolve_terminal_template(None, "x"), None);
-        assert_eq!(resolve_terminal_template(Some("  "), "x"), None);
     }
 
     #[test]

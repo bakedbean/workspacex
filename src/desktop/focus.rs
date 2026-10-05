@@ -61,12 +61,16 @@ pub(crate) fn focus_window_of(tui_pid: u32) {
     }
 }
 
-/// Whether to focus through KWin rather than hyprctl: a KDE session per
-/// `$XDG_CURRENT_DESKTOP` (a colon-separated list; Plasma sets `KDE`), unless
-/// Hyprland is running, since some Hyprland setups export `KDE` there too.
+/// Whether `$XDG_CURRENT_DESKTOP`, a colon-separated list, names a KDE
+/// Plasma session (Plasma sets `KDE`).
+pub(crate) fn is_kde(current_desktop: Option<&str>) -> bool {
+    current_desktop.is_some_and(|d| d.split(':').any(|d| d.eq_ignore_ascii_case("kde")))
+}
+
+/// Whether to focus through KWin rather than hyprctl: a KDE session, unless
+/// Hyprland is running, since some Hyprland setups export `KDE` too.
 fn use_kwin(hyprland: bool, current_desktop: Option<&str>) -> bool {
-    !hyprland
-        && current_desktop.is_some_and(|d| d.split(':').any(|d| d.eq_ignore_ascii_case("kde")))
+    !hyprland && is_kde(current_desktop)
 }
 
 /// Each jump's KWin script is named `wsx-focus-<id>` and loaded from

@@ -158,7 +158,8 @@ fn run_pipe_menu(store: &Store, cmd: Vec<String>) -> Result<()> {
         return Ok(()); // dismissed
     }
     if let Some((repo, slug)) = parse_menu_line(selection) {
-        crate::desktop::jump::jump(&repo, &slug)?;
+        let terminal_cmd = store.get_setting("terminal_cmd")?;
+        crate::desktop::jump::jump(&repo, &slug, terminal_cmd.as_deref())?;
     }
     Ok(())
 }

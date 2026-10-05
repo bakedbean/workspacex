@@ -32,5 +32,8 @@ pub mod menubar;
 #[cfg(target_os = "linux")]
 pub mod plasma;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) mod terminal;
+
 #[cfg(target_os = "linux")]
 pub mod waybar;

@@ -98,8 +98,8 @@ writes `wsx.jsonc`/`wsx.css` into `~/.config/waybar/` and patches
 `wsx waybar jump <repo> <slug>` focuses a running TUI and opens that
 workspace (attaching as if you pressed Enter on it), or launches a new TUI
 already attached, in `terminal_cmd` when it contains a `{cmd}` placeholder,
-else `$TERMINAL`, else alacritty. These commands are Linux-only and error
-on other platforms.
+else `$TERMINAL`, else konsole in a KDE Plasma session that has it, else
+alacritty. These commands are Linux-only and error on other platforms.
 
 When [walker](https://github.com/abenz1267/walker) and elephant are
 installed, setup also writes an elephant menu provider and a `wsx` walker
@@ -138,17 +138,19 @@ Under the hood the applet polls `wsx desktop status` every 5s: one JSON
 document with the workspace count, the most urgent status, a plain-text
 tooltip and a row per workspace. Picking a workspace runs
 `wsx desktop jump <repo> <slug>`, the same jump as `wsx waybar jump`. With no
-TUI running it launches one in `terminal_cmd` when that contains `{cmd}`
-(for example `wsx config set terminal_cmd 'konsole -e {cmd}'`), else
-`$TERMINAL`, else konsole on KDE Plasma, else alacritty; if the launch
-fails, the popup shows the error.
+TUI running it launches one, in konsole on Plasma unless `$TERMINAL` names
+another terminal or `terminal_cmd` holds a `{cmd}` template. `terminal_cmd`
+is also the dashboard's `[t]` terminal, which doesn't substitute `{cmd}`,
+so if you use `[t]` leave it without one. If the launch fails, the popup
+shows the error.
 
 On KDE Plasma, jump focuses the TUI's window through a KWin script loaded
-over D-Bus, using the first of `dbus-send`, `qdbus6`, `qdbus` and `gdbus`
-it finds. It finds the window by the TUI's process ancestry, so a terminal
-that serves several windows from one process may raise a sibling window
-instead. Like the waybar commands, `wsx setup plasma` and
-`wsx desktop jump` are Linux-only and error on other platforms.
+over D-Bus, through the first of `dbus-send`, `qdbus6`, `qdbus` and `gdbus`
+that works; when none can, the popup shows why. It finds the window by the
+TUI's process ancestry, so a terminal that serves several windows from one
+process may raise a sibling window instead. Like the waybar commands,
+`wsx setup plasma` and `wsx desktop jump` are Linux-only and error on other
+platforms.
 
 ## macOS menubar (SwiftBar)
 

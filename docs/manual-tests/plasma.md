@@ -69,26 +69,31 @@ the popup and click a workspace. Expected: the popup closes, the TUI's
 window comes to the front with keyboard focus (KWin script over D-Bus), and
 the workspace is attached, as if you had pressed Enter on it. Picking two
 workspaces in quick succession raises the window both times. With
-`dbus-send` off plasmashell's `PATH`, focus still works through `qdbus6`.
+`dbus-send` off plasmashell's `PATH`, focus still works through `qdbus6`;
+with no D-Bus client at all, the workspace is still attached and the popup
+stays open with a "can't raise the TUI's window" warning.
 
 ## Test 8: jump launches a new TUI
 
 Quit all wsx TUIs, then pick a workspace from the popup. Expected: a new
 terminal opens running wsx already attached to that workspace: the
 `terminal_cmd` template when it contains `{cmd}`, else `$TERMINAL`, else
-konsole on KDE Plasma, else alacritty. With a terminal that can't launch
-(`kquitapp6 plasmashell && TERMINAL=no-such-term kstart plasmashell`, then
-pick a workspace), the popup stays open and shows wsx's
-`failed to launch terminal 'no-such-term'` error.
+konsole in a Plasma session that has it, else alacritty. With a terminal
+that can't launch (`kquitapp6 plasmashell && TERMINAL=no-such-term kstart
+plasmashell`, then pick a workspace), the popup stays open and shows wsx's
+`failed to launch terminal 'no-such-term'` error; a `terminal_cmd` template
+naming a missing terminal shows `exited with status 127, command not
+found`.
 
 ## Test 9: no repos / unreadable database
 
 With no repos registered (e.g. `XDG_STATE_HOME` pointed at an empty
 directory before plasmashell starts), expected: the icon shows dimmed with
 no count and the tooltip reads "No workspaces". When the database can't be
-read for three polls in a row (15s), the icon dims and the tooltip and the
-popup show `Could not read wsx's status: …`; a database that's busy for a
-moment keeps the last status instead of flashing the error.
+read for three polls in a row (about 10 seconds), the icon dims and the
+tooltip and the popup show `Could not read wsx's status: …`; a database
+that's busy for a moment keeps the last status instead of flashing the
+error.
 
 ## Test 10: moved binary
 

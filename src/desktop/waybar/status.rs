@@ -162,6 +162,36 @@ mod status_tests {
     }
 
     #[test]
+    fn payload_is_pinned_exactly() {
+        // The other tests check pieces; this pins the whole payload, since it
+        // is now built from the shared desktop summary.
+        let store = seed();
+        let ws = store.all_workspaces().unwrap();
+        store
+            .set_workspace_status(ws[0].id, ReportedState::Working, Some("hacking"), "model")
+            .unwrap();
+        store
+            .set_workspace_status(
+                ws[1].id,
+                ReportedState::Blocked,
+                Some("need <input>"),
+                "model",
+            )
+            .unwrap();
+        assert_eq!(
+            status_payload(&store).unwrap(),
+            StatusPayload {
+                text: "\u{e725} 2".into(),
+                class: "blocked".into(),
+                tooltip:
+                    "alpha\n  \u{21bb} one \u{2014} hacking\n  ! two \u{2014} need &lt;input&gt;\n\
+                          empty\n  (no workspaces)"
+                        .into(),
+            }
+        );
+    }
+
+    #[test]
     fn no_repos_hides_module() {
         let store = Store::open_in_memory().unwrap();
         let p = status_payload(&store).unwrap();

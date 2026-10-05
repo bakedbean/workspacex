@@ -294,6 +294,79 @@ pub(super) mod tests {
         }
     }
 
+    /// A repo with `core.ignorecase`, as on macOS or a casefolded Linux
+    /// filesystem, can't hold two branches that differ only in case: as loose
+    /// refs the second `git worktree add -b` fails after the row is in, and
+    /// as packed refs git creates a near-duplicate. Both the exact match and
+    /// the path overlap must ignore case there.
+    #[tokio::test]
+    async fn conflicting_branch_ignores_case_where_the_repo_does() {
+        let dir = init_repo();
+        let git = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        git(&["config", "core.ignorecase", "true"]);
+        git(&["branch", "wsx/Fix-Login"]);
+        git(&["branch", "wsx/Deep/x"]);
+        for (branch, expected) in [
+            ("wsx/fix-login", Some("wsx/Fix-Login")),
+            ("wsx/FIX-LOGIN", Some("wsx/Fix-Login")),
+            ("wsx/fix-login/more", Some("wsx/Fix-Login")),
+            ("wsx/deep", Some("wsx/Deep/x")),
+            ("wsx/fix-logout", None),
+        ] {
+            assert_eq!(
+                conflicting_branch(dir.path(), branch)
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                expected,
+                "{branch}"
+            );
+        }
+    }
+
+    /// Without `core.ignorecase`, a case-only difference is a different branch
+    /// that git creates without complaint, so it must not be refused.
+    #[tokio::test]
+    async fn conflicting_branch_keeps_case_where_the_repo_does() {
+        let dir = init_repo();
+        let git = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        // Set explicitly: `git init` turns it on where the filesystem folds
+        // case, as on the macOS CI runners.
+        git(&["config", "core.ignorecase", "false"]);
+        git(&["branch", "wsx/Fix-Login"]);
+        assert_eq!(
+            conflicting_branch(dir.path(), "wsx/fix-login")
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            conflicting_branch(dir.path(), "wsx/Fix-Login")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("wsx/Fix-Login")
+        );
+    }
+
     #[tokio::test]
     async fn preflight_succeeds_when_git_on_path() {
         preflight().await.unwrap();
@@ -584,24 +657,52 @@ pub async fn is_valid_branch_name(branch: &str) -> Result<bool> {
 /// creating `branch`, if any: one with that exact name, or one whose path
 /// overlaps it, since a ref cannot also be a directory of refs (`wsx/foo`
 /// blocks `wsx/foo/bar`, and `wsx/foo/bar` blocks `wsx/foo`).
+///
+/// Where the repo has `core.ignorecase` set, as git does on a case-insensitive
+/// filesystem (macOS by default), names are compared without case. There
+/// `wsx/Fix-Login` blocks `wsx/fix-login`. As a loose ref, the new branch
+/// fails as already existing. As a packed ref, git creates a second branch
+/// that differs only in case.
 pub async fn conflicting_branch(repo: &Path, branch: &str) -> Result<Option<String>> {
     let out = run(
         repo,
         &["for-each-ref", "--format=%(refname)", "refs/heads/"],
     )
     .await?;
+    let fold = ignores_case(repo).await;
+    let key = |name: &str| {
+        if fold {
+            name.to_lowercase()
+        } else {
+            name.to_string()
+        }
+    };
     let overlaps = |longer: &str, shorter: &str| {
         longer
             .strip_prefix(shorter)
             .is_some_and(|rest| rest.starts_with('/'))
     };
+    let wanted = key(branch);
     Ok(out
         .lines()
         .filter_map(|r| r.strip_prefix("refs/heads/"))
         .find(|existing| {
-            *existing == branch || overlaps(branch, existing) || overlaps(existing, branch)
+            let existing = key(existing);
+            existing == wanted || overlaps(&wanted, &existing) || overlaps(&existing, &wanted)
         })
         .map(str::to_string))
+}
+
+/// Whether `repo` has `core.ignorecase` set to true. Unset, as on a
+/// case-sensitive filesystem, reads as false.
+async fn ignores_case(repo: &Path) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["config", "--bool", "core.ignorecase"])
+        .output()
+        .await
+        .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true")
 }
 
 /// The `git check-ref-format` run behind `is_valid_branch_name`, kept apart

@@ -220,12 +220,45 @@ pub(super) mod tests {
             "wsx/.hidden",
             "wsx/x.lock",
             "wsx/",
+            "HEAD",
+            "@{-1}",
+            "wsx/x@{-1}",
         ] {
             assert!(
                 !is_valid_branch_name(bad).await.unwrap(),
                 "{bad:?} is invalid"
             );
         }
+    }
+
+    /// `check-ref-format --branch` expands `@{-N}` against the repository in
+    /// the current directory, so run from one with a previous checkout it
+    /// passed `@{-1}`, and `git worktree add -b @{-1}` then failed after the
+    /// row was inserted. The check must not consult any repository.
+    #[tokio::test]
+    async fn branch_name_check_ignores_the_repository_it_runs_in() {
+        let dir = init_repo();
+        let git = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        git(&["checkout", "-q", "-b", "other"]);
+        git(&["checkout", "-q", "main"]);
+        let out = branch_name_check("@{-1}")
+            .current_dir(dir.path())
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            !out.status.success(),
+            "@{{-1}} must not resolve to the previous branch"
+        );
     }
 
     #[tokio::test]
@@ -495,18 +528,32 @@ pub async fn fetch_for_base(repo: &Path, base: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Whether git accepts `branch` as a new branch name. This is `git
-/// check-ref-format --branch`, the same rule `git worktree add -b` applies, so
-/// a caller can refuse a name before doing anything it would have to undo.
-/// Needs no repository, since the rule is about the name alone. Errors only
-/// when git itself cannot be run.
+/// Whether `branch` is syntactically valid as a new branch name, by the rule
+/// `git worktree add -b` applies, so a caller can refuse a name before doing
+/// anything it would have to undo. This is `git check-ref-format
+/// refs/heads/<branch>` plus the two rules `--branch` adds on top: no leading
+/// `-`, and not `HEAD`. `--branch` itself is not used because it expands
+/// `@{-N}` against whatever repository the current directory is in. Purely
+/// syntactic, so it needs no repository. Errors only when git itself cannot
+/// be run.
 pub async fn is_valid_branch_name(branch: &str) -> Result<bool> {
-    let out = Command::new("git")
-        .args(["check-ref-format", "--branch", branch])
+    if branch.starts_with('-') || branch == "HEAD" {
+        return Ok(false);
+    }
+    let out = branch_name_check(branch)
         .output()
         .await
         .map_err(|e| Error::Git(format!("spawn git: {e}")))?;
     Ok(out.status.success())
+}
+
+/// The `git check-ref-format` run behind `is_valid_branch_name`, kept apart
+/// so a test can run it from inside a repository whose `@{-1}` resolves.
+fn branch_name_check(branch: &str) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.arg("check-ref-format")
+        .arg(format!("refs/heads/{branch}"));
+    cmd
 }
 
 pub async fn create_worktree(

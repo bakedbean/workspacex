@@ -155,14 +155,8 @@ fn ensure_primary_session(
                 }
                 return Ok(AttachReady::AgentMissing);
             }
-            Err(crate::error::Error::WorktreeMissing(_)) if create_in_progress(app, ws_id) => {
-                return Ok(AttachReady::Refused);
-            }
             Err(crate::error::Error::WorktreeMissing(path)) => {
-                if surface_missing {
-                    app.modal = Some(worktree_missing_modal(app, ws_id, &path));
-                }
-                return Ok(AttachReady::WorktreeMissing);
+                return Ok(missing_worktree_outcome(app, ws_id, &path, surface_missing));
             }
             Err(e) => return Err(e),
         }
@@ -203,6 +197,36 @@ fn create_in_progress(app: &App, ws_id: crate::data::store::WorkspaceId) -> bool
                 && w.created_at >= cutoff
         }),
     }
+}
+
+/// What an ensure answers when the spawn was refused because `path`, the
+/// worktree, does not exist: `Refused` while the create has yet to make it,
+/// otherwise `WorktreeMissing`, with its error modal when `surface_missing`.
+fn missing_worktree_outcome(
+    app: &mut App,
+    ws_id: crate::data::store::WorkspaceId,
+    path: &std::path::Path,
+    surface_missing: bool,
+) -> AttachReady {
+    if create_in_progress(app, ws_id) {
+        return AttachReady::Refused;
+    }
+    if surface_missing {
+        app.modal = Some(worktree_missing_modal(app, ws_id, path));
+    }
+    AttachReady::WorktreeMissing
+}
+
+/// The same answer before anything is added, for a caller that would
+/// otherwise insert agent rows an ensure then refuses: `Some` when `ws_id`'s
+/// worktree is missing, `None` when there is one to start agents in.
+pub(crate) fn refuse_without_worktree(
+    app: &mut App,
+    ws_id: crate::data::store::WorkspaceId,
+    surface_missing: bool,
+) -> Option<AttachReady> {
+    let path = app.workspace_path(ws_id)?;
+    (!path.is_dir()).then(|| missing_worktree_outcome(app, ws_id, &path, surface_missing))
 }
 
 /// The error shown when a spawn is refused because the workspace's worktree
@@ -302,14 +326,8 @@ pub(crate) fn ensure_instance_session(
                 }
                 return Ok(AttachReady::AgentMissing);
             }
-            Err(crate::error::Error::WorktreeMissing(_)) if create_in_progress(app, ws_id) => {
-                return Ok(AttachReady::Refused);
-            }
             Err(crate::error::Error::WorktreeMissing(path)) => {
-                if surface_missing {
-                    app.modal = Some(worktree_missing_modal(app, ws_id, &path));
-                }
-                return Ok(AttachReady::WorktreeMissing);
+                return Ok(missing_worktree_outcome(app, ws_id, &path, surface_missing));
             }
             Err(e) => return Err(e),
         }

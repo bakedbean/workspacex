@@ -69,8 +69,8 @@ pub(crate) use repo_setting::apply_repo_setting;
 pub(crate) use run::rescan_processes;
 pub(crate) use selection::reset_detail_scroll_on_workspace_change;
 pub(crate) use session::{
-    attach_workspace, ensure_instance_session, ensure_workspace_session, restore_attached_state,
-    save_layout_for, schedule_detach_refresh, toggle_workspace_shared,
+    attach_workspace, ensure_instance_session, ensure_workspace_session, refuse_without_worktree,
+    restore_attached_state, save_layout_for, schedule_detach_refresh, toggle_workspace_shared,
 };
 pub(crate) use spawn::{
     build_added_spawn_info, build_spawn_info, resolve_primary_instance, tmux_name_for,

@@ -2,7 +2,7 @@
 
 use crate::app::{
     App, AttachReady, SharedApp, attach_workspace, ensure_instance_session,
-    ensure_workspace_session,
+    ensure_workspace_session, refuse_without_worktree,
 };
 use crate::error::Result;
 use crate::ui::View;
@@ -115,6 +115,11 @@ pub(super) async fn agents_panel(
             // but guard against a stale/large value so this can never panic.
             let idx = selected.min(AgentKind::ALL.len().saturating_sub(1));
             let kind = AgentKind::ALL[idx];
+            // No agent starts without the worktree: say so now, rather than
+            // add a row for one that never can.
+            if refuse_without_worktree(app, workspace_id, true).is_some() {
+                return Ok(());
+            }
             let inst = app.store.add_workspace_agent(workspace_id, kind)?;
             // Spawn it now. ensure_instance_session sets Modal::AgentMissing
             // (and returns AgentMissing) if the binary is absent — in that
@@ -124,7 +129,8 @@ pub(super) async fn agents_panel(
             // as is WorktreeMissing, which leaves its error modal up.
             match ensure_instance_session(app, inst.id, true)? {
                 AttachReady::AgentMissing | AttachReady::Refused | AttachReady::WorktreeMissing => {
-                    // Leave up whatever modal the ensure raised.
+                    // The agent didn't start, so don't keep its row.
+                    app.store.remove_workspace_agent(inst.id)?;
                 }
                 AttachReady::Ok => app.modal = None,
             }
@@ -133,9 +139,24 @@ pub(super) async fn agents_panel(
             app.refresh()?;
         }
         KeyCode::Char('a') => {
+            if refuse_without_worktree(app, workspace_id, true).is_some() {
+                return Ok(());
+            }
             for kind in AgentKind::ALL {
                 let inst = app.store.add_workspace_agent(workspace_id, kind)?;
-                let _ = ensure_instance_session(app, inst.id, true)?;
+                match ensure_instance_session(app, inst.id, true)? {
+                    AttachReady::Ok => {}
+                    // Stop at the first agent that can't start, leave its
+                    // modal up, and don't keep its row. The ones before it
+                    // did start and stay.
+                    AttachReady::AgentMissing
+                    | AttachReady::Refused
+                    | AttachReady::WorktreeMissing => {
+                        app.store.remove_workspace_agent(inst.id)?;
+                        app.refresh()?;
+                        return Ok(());
+                    }
+                }
             }
             app.modal = None;
             // Refill `agent_roster` so it reflects the four new

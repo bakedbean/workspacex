@@ -156,7 +156,7 @@ enum DbusClient {
     Gdbus,
 }
 
-/// Tried in order; the first one on `PATH` is used.
+/// Tried in order, until one loads the focus script.
 const DBUS_CLIENTS: [DbusClient; 4] = [
     DbusClient::DbusSend,
     DbusClient::Qdbus("qdbus6"),
@@ -220,12 +220,12 @@ impl DbusClient {
     }
 }
 
-/// The first of [`DBUS_CLIENTS`] with a program in one of `path`'s
-/// directories.
-fn find_dbus_client(path: Option<&std::ffi::OsStr>) -> Option<DbusClient> {
+/// [`DBUS_CLIENTS`] whose program is on `path`, in order.
+fn dbus_clients_on_path(path: Option<&std::ffi::OsStr>) -> Vec<DbusClient> {
     DBUS_CLIENTS
         .into_iter()
-        .find(|client| on_path(client.program(), path))
+        .filter(|client| on_path(client.program(), path))
+        .collect()
 }
 
 /// One call to KWin through `client`; the reply on success.
@@ -241,52 +241,84 @@ fn kwin_call(client: DbusClient, path: &str, method: &str, args: &[&str]) -> Opt
 
 /// Focus the TUI's window under KWin (Plasma), where there is no hyprctl:
 /// load [`kwin_focus_script`] over D-Bus and run it. Best-effort like the
-/// Hyprland path — the selection already happened.
+/// Hyprland path, since the selection already happened, but a reason it
+/// couldn't goes to stderr, which the Plasma applet shows.
 fn focus_kwin_window(chain: &[u32]) {
-    let Some(client) = find_dbus_client(std::env::var_os("PATH").as_deref()) else {
-        let msg = "can't raise the TUI's window: no D-Bus client to reach KWin \
-                   (install dbus-send, qdbus6, qdbus or gdbus)";
-        tracing::warn!("{msg}");
-        eprintln!("wsx: {msg}");
-        return;
-    };
+    let clients = dbus_clients_on_path(std::env::var_os("PATH").as_deref());
     let dir = crate::app::ipc::socket_dir();
-    // Clear earlier jumps' files, and unload any of their scripts that never
-    // got to unload themselves.
-    for (stale, stale_name) in stale_kwin_scripts(&dir, SystemTime::now()) {
-        let _ = std::fs::remove_file(stale);
-        let _ = kwin_call(
-            client,
-            "/Scripting",
-            "org.kde.kwin.Scripting.unloadScript",
-            &[&stale_name],
+    if let Err(why) = focus_kwin_with(chain, &dir, &clients, kwin_call) {
+        eprintln!("wsx: can't raise the TUI's window: {why}");
+    }
+}
+
+/// [`focus_kwin_window`] with the D-Bus call passed in, so tests can drive
+/// it: write the script into `dir`, load it through the first of `clients`
+/// that can, run it, then clear earlier jumps' stale files.
+fn focus_kwin_with(
+    chain: &[u32],
+    dir: &Path,
+    clients: &[DbusClient],
+    mut call: impl FnMut(DbusClient, &str, &str, &[&str]) -> Option<String>,
+) -> std::result::Result<(), String> {
+    if clients.is_empty() {
+        return Err(
+            "no D-Bus client to reach KWin (install dbus-send, qdbus6, qdbus or gdbus)".into(),
         );
     }
     let id = kwin_script_id();
     let name = format!("{KWIN_SCRIPT_PREFIX}{id}");
     let path = dir.join(format!("{KWIN_FILE_PREFIX}{id}{KWIN_FILE_SUFFIX}"));
-    if crate::desktop::install_support::write_atomic(&path, &kwin_focus_script(chain, &name))
-        .is_err()
-    {
-        return;
+    crate::desktop::install_support::write_atomic(&path, &kwin_focus_script(chain, &name))
+        .map_err(|e| format!("writing {}: {e}", path.display()))?;
+    let path_arg = path.display().to_string();
+    for &client in clients {
+        let Some(reply) = call(
+            client,
+            "/Scripting",
+            "org.kde.kwin.Scripting.loadScript",
+            &[&path_arg, &name],
+        ) else {
+            // Couldn't run, or the call failed: try the next client.
+            continue;
+        };
+        let Some(script) = client.parse_script_id(&reply) else {
+            // KWin refused it, or the reply didn't parse. Unload it by name in
+            // case it loaded anyway, so it can't linger, and try the next.
+            let _ = call(
+                client,
+                "/Scripting",
+                "org.kde.kwin.Scripting.unloadScript",
+                &[&name],
+            );
+            continue;
+        };
+        let _ = call(
+            client,
+            &format!("/Scripting/Script{script}"),
+            "org.kde.kwin.Script.run",
+            &[],
+        );
+        // After the focus, so it doesn't delay it: clear earlier jumps'
+        // files, and unload any of their scripts that never got to unload
+        // themselves.
+        for (stale, stale_name) in stale_kwin_scripts(dir, SystemTime::now()) {
+            let _ = std::fs::remove_file(stale);
+            let _ = call(
+                client,
+                "/Scripting",
+                "org.kde.kwin.Scripting.unloadScript",
+                &[&stale_name],
+            );
+        }
+        return Ok(());
     }
-    let Some(id) = kwin_call(
-        client,
-        "/Scripting",
-        "org.kde.kwin.Scripting.loadScript",
-        &[&path.display().to_string(), &name],
-    )
-    .and_then(|reply| client.parse_script_id(&reply)) else {
-        // Never loaded, so KWin won't read it.
-        let _ = std::fs::remove_file(&path);
-        return;
-    };
-    let _ = kwin_call(
-        client,
-        &format!("/Scripting/Script{id}"),
-        "org.kde.kwin.Script.run",
-        &[],
-    );
+    // Never loaded, so KWin won't read it.
+    let _ = std::fs::remove_file(&path);
+    let tried: Vec<&str> = clients.iter().map(|c| c.program()).collect();
+    Err(format!(
+        "KWin didn't load the focus script through {}",
+        tried.join(", ")
+    ))
 }
 
 #[cfg(test)]
@@ -328,9 +360,13 @@ mod focus_tests {
     }
 
     #[test]
-    fn each_jump_gets_its_own_script_id() {
-        assert_ne!(kwin_script_id(), kwin_script_id());
-        assert!(kwin_script_id().starts_with(&format!("{}-", std::process::id())));
+    fn a_script_id_starts_with_the_jumps_pid() {
+        // The pid tells concurrent jumps apart; the clock tells apart two
+        // jumps that reused one.
+        let id = kwin_script_id();
+        let (pid, nanos) = id.split_once('-').unwrap();
+        assert_eq!(pid, std::process::id().to_string());
+        assert!(nanos.parse::<u128>().is_ok(), "{id}");
     }
 
     #[test]
@@ -414,6 +450,21 @@ mod focus_tests {
             ]
         );
         assert_eq!(
+            DbusClient::Gdbus.argv("/Scripting", "org.kde.kwin.Scripting.loadScript", &args),
+            [
+                "call",
+                "--session",
+                "--dest",
+                "org.kde.KWin",
+                "--object-path",
+                "/Scripting",
+                "--method",
+                "org.kde.kwin.Scripting.loadScript",
+                "/run/w/kwin-focus-1-2.js",
+                "wsx-focus-1-2",
+            ]
+        );
+        assert_eq!(
             DbusClient::Gdbus.argv("/Scripting/Script3", "org.kde.kwin.Script.run", &[]),
             [
                 "call",
@@ -429,21 +480,146 @@ mod focus_tests {
     }
 
     #[test]
-    fn picks_the_first_dbus_client_on_path() {
+    fn lists_the_dbus_clients_on_path_in_order() {
         let a = tempfile::tempdir().unwrap();
         let b = tempfile::tempdir().unwrap();
         let path = std::env::join_paths([a.path(), b.path()]).unwrap();
-        assert_eq!(find_dbus_client(Some(&path)), None);
-        assert_eq!(find_dbus_client(None), None);
+        assert!(dbus_clients_on_path(Some(&path)).is_empty());
+        assert!(dbus_clients_on_path(None).is_empty());
         std::fs::write(b.path().join("gdbus"), "").unwrap();
-        assert_eq!(find_dbus_client(Some(&path)), Some(DbusClient::Gdbus));
         std::fs::write(a.path().join("qdbus6"), "").unwrap();
-        assert_eq!(
-            find_dbus_client(Some(&path)),
-            Some(DbusClient::Qdbus("qdbus6"))
-        );
         std::fs::write(b.path().join("dbus-send"), "").unwrap();
-        assert_eq!(find_dbus_client(Some(&path)), Some(DbusClient::DbusSend));
+        assert_eq!(
+            dbus_clients_on_path(Some(&path)),
+            [
+                DbusClient::DbusSend,
+                DbusClient::Qdbus("qdbus6"),
+                DbusClient::Gdbus
+            ]
+        );
+    }
+
+    /// One D-Bus call a [`focus_kwin_with`] test saw: client, method, args.
+    type Seen = (DbusClient, String, Vec<String>);
+
+    /// Drive [`focus_kwin_with`] with `reply` answering each call, and return
+    /// what it called and its result.
+    fn drive(
+        dir: &Path,
+        clients: &[DbusClient],
+        mut reply: impl FnMut(DbusClient, &str) -> Option<String>,
+    ) -> (Vec<Seen>, std::result::Result<(), String>) {
+        let mut seen = Vec::new();
+        let result = focus_kwin_with(&[100, 200], dir, clients, |client, _path, method, args| {
+            seen.push((
+                client,
+                method.to_string(),
+                args.iter().map(|a| a.to_string()).collect(),
+            ));
+            reply(client, method)
+        });
+        (seen, result)
+    }
+
+    fn methods(seen: &[Seen]) -> Vec<(DbusClient, &str)> {
+        seen.iter().map(|(c, m, _)| (*c, m.as_str())).collect()
+    }
+
+    const LOAD: &str = "org.kde.kwin.Scripting.loadScript";
+    const UNLOAD: &str = "org.kde.kwin.Scripting.unloadScript";
+    const RUN: &str = "org.kde.kwin.Script.run";
+
+    #[test]
+    fn focus_loads_and_runs_through_the_first_client_that_works() {
+        let dir = tempfile::tempdir().unwrap();
+        let qdbus = DbusClient::Qdbus("qdbus6");
+        // dbus-send is on PATH but broken; qdbus6 answers.
+        let (seen, result) = drive(
+            dir.path(),
+            &[DbusClient::DbusSend, qdbus],
+            |client, method| match (client, method) {
+                (DbusClient::DbusSend, _) => None,
+                (_, LOAD) => Some("7\n".into()),
+                _ => Some(String::new()),
+            },
+        );
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            methods(&seen),
+            [(DbusClient::DbusSend, LOAD), (qdbus, LOAD), (qdbus, RUN)]
+        );
+        // The script runs from its own file, which stays for KWin to read.
+        let file = std::path::PathBuf::from(&seen[1].2[0]);
+        assert!(file.starts_with(dir.path()) && file.exists(), "{file:?}");
+        assert!(seen[1].2[1].starts_with(KWIN_SCRIPT_PREFIX));
+    }
+
+    #[test]
+    fn a_load_that_answers_badly_is_unloaded_before_the_next_client() {
+        let dir = tempfile::tempdir().unwrap();
+        let (seen, result) = drive(
+            dir.path(),
+            &[DbusClient::DbusSend, DbusClient::Gdbus],
+            |client, method| match (client, method) {
+                (DbusClient::DbusSend, LOAD) => Some("method return\n   int32 -1\n".into()),
+                (DbusClient::Gdbus, LOAD) => Some("(3,)\n".into()),
+                _ => Some(String::new()),
+            },
+        );
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            methods(&seen),
+            [
+                (DbusClient::DbusSend, LOAD),
+                (DbusClient::DbusSend, UNLOAD),
+                (DbusClient::Gdbus, LOAD),
+                (DbusClient::Gdbus, RUN),
+            ]
+        );
+        // The unload names this jump's own script.
+        assert_eq!(seen[1].2, [seen[0].2[1].clone()]);
+    }
+
+    #[test]
+    fn stale_scripts_are_cleared_after_the_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let stale = dir.path().join("kwin-focus-1-100.js");
+        std::fs::write(&stale, "x").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(SystemTime::now() - KWIN_FILE_MAX_AGE - Duration::from_secs(1))
+            .unwrap();
+        let (seen, result) = drive(dir.path(), &[DbusClient::Qdbus("qdbus6")], |_, method| {
+            Some(if method == LOAD { "4" } else { "" }.into())
+        });
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            seen.iter().map(|(_, m, _)| m.as_str()).collect::<Vec<_>>(),
+            [LOAD, RUN, UNLOAD]
+        );
+        assert_eq!(seen[2].2, ["wsx-focus-1-100"]);
+        assert!(!stale.exists());
+    }
+
+    #[test]
+    fn focus_without_a_working_client_says_why_and_leaves_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (seen, result) = drive(dir.path(), &[], |_, _| None);
+        assert!(seen.is_empty());
+        assert!(result.unwrap_err().contains("no D-Bus client"));
+
+        let (_, result) = drive(
+            dir.path(),
+            &[DbusClient::DbusSend, DbusClient::Gdbus],
+            |_, _| None,
+        );
+        assert_eq!(
+            result,
+            Err("KWin didn't load the focus script through dbus-send, gdbus".into())
+        );
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
     #[test]

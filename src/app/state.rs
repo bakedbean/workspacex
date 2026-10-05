@@ -1392,6 +1392,46 @@ mod strip_instances_tests {
         assert!(app.modal.is_none());
     }
 
+    /// A refused spawn must not leave anything behind for the path it
+    /// refused. The MCP mirror ran first and wrote a `~/.claude.json` entry
+    /// for the missing worktree, and while a create was still running the
+    /// drain's retries rewrote that file every heartbeat, racing Claude
+    /// Code's own writes to it.
+    #[test]
+    fn a_refused_spawn_does_not_mirror_mcp_servers_for_the_missing_worktree() {
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let claude_json = home.path().join(".claude.json");
+        let seeded = r#"{"projects":{"/tmp/mirror-repo":{"mcpServers":{"x":{"command":"true"}}}}}"#;
+        std::fs::write(&claude_json, seeded).unwrap();
+        let mut app = test_app();
+        assert!(
+            crate::agent::mcp::enabled(&app.store),
+            "mirroring is on by default"
+        );
+        let ws = app.test_workspace("mirror");
+        app.store
+            .add_primary_agent(ws, AgentKind::Claude, 0)
+            .unwrap();
+        let peer = app
+            .store
+            .add_workspace_agent(ws, AgentKind::Claude)
+            .unwrap();
+
+        // Still being created, then settled: neither may touch the file.
+        let outcome = crate::app::ensure_workspace_session(&mut app, ws).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::Refused);
+        app.store
+            .set_workspace_state(ws, crate::data::store::WorkspaceState::Ready)
+            .unwrap();
+        let outcome = crate::app::ensure_instance_session(&mut app, peer.id, false).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::WorktreeMissing);
+
+        assert_eq!(std::fs::read_to_string(&claude_json).unwrap(), seeded);
+    }
+
     /// A quit mid-create leaves the row `Pending` with setup `Cancelled`, and
     /// nothing will finish it, so it gets the missing-worktree handling.
     #[test]

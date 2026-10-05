@@ -117,6 +117,13 @@ fn ensure_primary_session(
         return Ok(AttachReady::Ok);
     }
     if let Some((id, path, mode, repo_path, agent)) = build_spawn_info(app, ws_id) {
+        // Settle a missing worktree before anything acts on its path. The MCP
+        // mirror would otherwise rewrite `~/.claude.json` with an entry for a
+        // directory that isn't there, on every retry while a create runs.
+        // The spawn's own guard still covers a worktree that goes in between.
+        if !path.is_dir() {
+            return Ok(missing_worktree_outcome(app, ws_id, &path, surface_missing));
+        }
         maybe_mirror_mcp(app, &repo_path, &path);
         let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
         // Resolve the primary agent instance for this workspace, defensively
@@ -295,6 +302,10 @@ pub(crate) fn ensure_instance_session(
         return Ok(AttachReady::Ok);
     }
     if let Some((path, mode, repo_path)) = build_added_spawn_info(app, &instance) {
+        // As on the primary path: no mirroring for a worktree that isn't there.
+        if !path.is_dir() {
+            return Ok(missing_worktree_outcome(app, ws_id, &path, surface_missing));
+        }
         maybe_mirror_mcp(app, &repo_path, &path);
         let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
         let tmux = tmux_name_for(app, ws_id, &instance);

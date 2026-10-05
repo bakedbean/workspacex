@@ -2,8 +2,8 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::data::store::{ReportedState, Store};
-use crate::desktop::rows::{attention_rank, state_glyph};
+use crate::data::store::Store;
+use crate::desktop::status::{state_class, summarize};
 use crate::error::Result;
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -11,15 +11,6 @@ pub struct StatusPayload {
     pub text: String,
     pub class: String,
     pub tooltip: String,
-}
-
-fn class_name(state: ReportedState) -> &'static str {
-    match state {
-        ReportedState::Blocked => "blocked",
-        ReportedState::Done => "done",
-        ReportedState::Waiting => "waiting",
-        ReportedState::Working | ReportedState::Busy => "working",
-    }
 }
 
 pub(crate) fn escape_pango(s: &str) -> String {
@@ -36,48 +27,18 @@ pub(crate) fn escape_pango(s: &str) -> String {
 }
 
 pub fn status_payload(store: &Store) -> Result<StatusPayload> {
-    let repos = crate::data::repo::list(store)?;
-    if repos.is_empty() {
+    let summary = summarize(store)?;
+    if summary.repos.is_empty() {
         return Ok(StatusPayload {
             text: String::new(),
             class: "idle".into(),
             tooltip: String::new(),
         });
     }
-    let statuses = store.all_workspace_status()?;
-    let mut count = 0usize;
-    let mut best: Option<ReportedState> = None;
-    let mut lines = Vec::new();
-    for repo in &repos {
-        lines.push(escape_pango(&repo.name));
-        let workspaces = store.workspaces(repo.id)?;
-        if workspaces.is_empty() {
-            lines.push("  (no workspaces)".into());
-        }
-        for ws in &workspaces {
-            count += 1;
-            let st = statuses.get(&ws.id);
-            if let Some(st) = st {
-                if best.is_none_or(|b| attention_rank(st.state) > attention_rank(b)) {
-                    best = Some(st.state);
-                }
-            }
-            let mut line = format!(
-                "  {} {}",
-                state_glyph(st.map(|s| s.state)),
-                escape_pango(&ws.name)
-            );
-            if let Some(msg) = st.and_then(|s| s.message.as_deref()) {
-                line.push_str(" \u{2014} ");
-                line.push_str(&escape_pango(msg));
-            }
-            lines.push(line);
-        }
-    }
     Ok(StatusPayload {
-        text: format!("\u{e725} {count}"), // nf-dev-git_branch
-        class: best.map(class_name).unwrap_or("idle").to_string(),
-        tooltip: lines.join("\n"),
+        text: format!("\u{e725} {}", summary.count()), // nf-dev-git_branch
+        class: state_class(summary.most_urgent).to_string(),
+        tooltip: summary.tooltip(escape_pango),
     })
 }
 

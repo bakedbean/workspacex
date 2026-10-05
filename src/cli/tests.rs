@@ -2380,6 +2380,7 @@ fn registry_matches_dispatched_groups() {
         "recap",
         "context",
         "waybar",
+        "desktop",
         "menubar",
         "theme",
     ];
@@ -2863,6 +2864,32 @@ fn parses_setup_waybar() {
         parse(&["setup", "waybar"]),
         Ok(CliAction::SetupWaybar)
     ));
+}
+
+#[test]
+fn parses_desktop_commands() {
+    assert!(matches!(
+        parse(&["desktop", "status"]),
+        Ok(CliAction::DesktopStatus)
+    ));
+    match parse(&["desktop", "jump", "meals backend", "api-fix"]) {
+        Ok(CliAction::DesktopJump { repo, slug }) => {
+            assert_eq!(repo, "meals backend");
+            assert_eq!(slug, "api-fix");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(parse(&["desktop", "jump", "onlyrepo"]).is_err());
+    assert!(parse(&["desktop", "bogus"]).is_err());
+    assert!(parse(&["desktop"]).is_err());
+}
+
+#[test]
+fn desktop_group_help_renders() {
+    let h = render_group_help("desktop");
+    assert!(h.contains("wsx desktop —"));
+    assert!(h.contains("status"));
+    assert!(h.contains("jump <repo> <slug>"));
 }
 
 #[test]

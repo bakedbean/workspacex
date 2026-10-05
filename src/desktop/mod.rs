@@ -9,6 +9,8 @@
 //!
 //! Shared:
 //!   - [`rows`] — the platform-neutral workspace row model they render
+//!   - [`status`] — the desktop-neutral summary (count, most urgent state,
+//!     tooltip, rows) behind `wsx desktop status` and the waybar payload
 //!   - [`install_support`] — helpers for the `wsx setup` installers
 //!   - `jump` and `focus` (Linux) — select a workspace in a running TUI and
 //!     raise its window, for both the waybar module and the Plasma applet
@@ -17,6 +19,8 @@
 //! `crate::app::ipc`; this subsystem is that socket's client, never its owner.
 
 pub mod rows;
+
+pub mod status;
 
 pub(crate) mod install_support;
 

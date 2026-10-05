@@ -328,6 +328,20 @@ pub static GROUPS: &[GroupInfo] = &[
         ],
     },
     GroupInfo {
+        name: "desktop",
+        blurb: "Desktop-neutral workspace status and jump, for panel widgets",
+        commands: &[
+            CmdInfo {
+                usage: "status",
+                blurb: "Print the workspace count, most urgent status, tooltip and rows as JSON",
+            },
+            CmdInfo {
+                usage: "jump <repo> <slug>",
+                blurb: "Select the workspace in a running TUI and raise its window, or launch one",
+            },
+        ],
+    },
+    GroupInfo {
         name: "menubar",
         blurb: "macOS menubar (SwiftBar) status module and workspace jumper",
         commands: &[

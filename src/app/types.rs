@@ -22,15 +22,17 @@ pub enum SelectionTarget {
 
 /// Outcome of `ensure_workspace_session`. `AgentMissing` signals to callers
 /// that the spawn failed because the agent binary was not on PATH; the
-/// helper already set `Modal::AgentMissing`, so callers should skip the
-/// view switch and leave the modal up. `Refused` signals that the session
+/// helper already set `Modal::AgentMissing` (unless a background caller
+/// passed `surface_missing = false`), so callers should skip the view switch
+/// and leave the modal up. `Refused` signals that the session
 /// was not touched because `attach_is_blocked` refused it (a live archive
 /// is tearing the workspace down), or because the workspace's create has not
 /// made its worktree yet — callers should treat this exactly like
 /// `AgentMissing`: skip the view switch, set no session, leave things alone.
 /// `WorktreeMissing` signals that the spawn was refused because a settled
 /// workspace's worktree does not exist; the helper put up a `Modal::Error`
-/// pointing at archive, and callers treat it like `AgentMissing` too.
+/// pointing at archive, on the same terms, and callers treat it like
+/// `AgentMissing` too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttachReady {
     Ok,

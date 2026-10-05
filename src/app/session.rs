@@ -89,11 +89,22 @@ pub(crate) fn restore_attached_state(
 /// This is the single enforcement point for `attach_is_blocked`: every
 /// caller — `attach_workspace`, the inline-dispatch paths, and (via
 /// `ensure_instance_session`'s delegation) primary-instance retargeting —
-/// goes through here, so a live archive can't be raced by a respawn from
-/// any of them.
+/// goes through here or `ensure_primary_session` behind it, so a live
+/// archive can't be raced by a respawn from any of them.
 pub(crate) fn ensure_workspace_session(
     app: &mut App,
     ws_id: crate::data::store::WorkspaceId,
+) -> Result<AttachReady> {
+    ensure_primary_session(app, ws_id, true)
+}
+
+/// `ensure_workspace_session`, with `surface_missing` as on
+/// `ensure_instance_session`, which hands a primary instance here so that a
+/// background caller's `false` reaches the modals this path raises.
+fn ensure_primary_session(
+    app: &mut App,
+    ws_id: crate::data::store::WorkspaceId,
+    surface_missing: bool,
 ) -> Result<AttachReady> {
     if attach_is_blocked(app, ws_id) {
         return Ok(AttachReady::Refused);
@@ -135,18 +146,22 @@ pub(crate) fn ensure_workspace_session(
                 }
             }
             Err(crate::error::Error::AgentBinaryMissing(binary)) => {
-                app.modal = Some(crate::ui::modal::Modal::AgentMissing {
-                    ws_id,
-                    agent,
-                    binary,
-                });
+                if surface_missing {
+                    app.modal = Some(crate::ui::modal::Modal::AgentMissing {
+                        ws_id,
+                        agent,
+                        binary,
+                    });
+                }
                 return Ok(AttachReady::AgentMissing);
             }
             Err(crate::error::Error::WorktreeMissing(_)) if create_in_progress(app, ws_id) => {
                 return Ok(AttachReady::Refused);
             }
             Err(crate::error::Error::WorktreeMissing(path)) => {
-                app.modal = Some(worktree_missing_modal(app, ws_id, &path));
+                if surface_missing {
+                    app.modal = Some(worktree_missing_modal(app, ws_id, &path));
+                }
                 return Ok(AttachReady::WorktreeMissing);
             }
             Err(e) => return Err(e),
@@ -215,8 +230,9 @@ fn worktree_missing_modal(
 }
 
 /// Ensure a specific agent *instance* has a live PTY session, spawning one in
-/// place if missing. Primary instances delegate to `ensure_workspace_session`
-/// so the primary path is never duplicated. Added (non-primary) instances
+/// place if missing. Primary instances delegate to `ensure_primary_session`,
+/// the body of `ensure_workspace_session`, so the primary path is never
+/// duplicated. Added (non-primary) instances
 /// spawn `Fresh` with an injected handoff note, or resume their own recorded
 /// session once they have one (see `build_added_spawn_info`).
 /// Mirrors `ensure_workspace_session`'s return/error conventions, including the
@@ -227,10 +243,11 @@ fn worktree_missing_modal(
 /// handlers, `switch_focused_pane_to`, `restore_attached_state`) so the user
 /// sees the modal. Pass `false` for background callers (e.g. the message drain)
 /// so a missing binary doesn't pop a modal over the user's unrelated view.
-/// A missing worktree's error modal follows the same rule.
+/// A missing worktree's error modal follows the same rule, and both hold for
+/// a primary instance too, since the flag is passed on with it.
 ///
 /// Enforces `attach_is_blocked` for non-primary instances directly (they
-/// never reach `ensure_workspace_session`). Primary instances delegate
+/// never reach `ensure_primary_session`). Primary instances delegate
 /// above and get the check there instead — do not duplicate it here, or a
 /// primary would be guarded twice.
 pub(crate) fn ensure_instance_session(
@@ -244,7 +261,7 @@ pub(crate) fn ensure_instance_session(
         return Ok(AttachReady::Ok);
     };
     if instance.is_primary {
-        return ensure_workspace_session(app, instance.workspace_id);
+        return ensure_primary_session(app, instance.workspace_id, surface_missing);
     }
     let ws_id = instance.workspace_id;
     if attach_is_blocked(app, ws_id) {

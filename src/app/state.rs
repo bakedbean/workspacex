@@ -1262,6 +1262,94 @@ mod strip_instances_tests {
         assert!(app.sessions.get(peer.id).is_none());
     }
 
+    /// The message drain ensures with `surface_missing = false`, and a primary
+    /// instance is handed on to the path `ensure_workspace_session` uses,
+    /// which used to raise its modal regardless. That replaced whatever the
+    /// user had open, such as a half-typed new-workspace name.
+    #[test]
+    fn a_background_ensure_of_a_primary_leaves_the_users_modal_alone() {
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let mut app = test_app();
+        app.store.set_setting("mcp_mirror", "off").unwrap();
+        // A settled workspace whose worktree is gone.
+        let gone = app.test_workspace("primary-gone");
+        app.store
+            .set_workspace_state(gone, crate::data::store::WorkspaceState::Ready)
+            .unwrap();
+        let gone_primary = app
+            .store
+            .add_primary_agent(gone, AgentKind::Claude, 0)
+            .unwrap();
+        // One with a real worktree but no agent binary.
+        let worktree = tempfile::TempDir::new().unwrap();
+        let repo = app
+            .store
+            .add_repo(
+                std::path::Path::new("/tmp/no-binary-repo"),
+                "no-binary",
+                "wsx",
+            )
+            .unwrap();
+        let no_binary = app
+            .store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "no-binary",
+                branch: "wsx/no-binary",
+                worktree_path: worktree.path(),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        app.store
+            .set_workspace_state(no_binary, crate::data::store::WorkspaceState::Ready)
+            .unwrap();
+        let no_binary_primary = app
+            .store
+            .add_primary_agent(no_binary, AgentKind::Claude, 0)
+            .unwrap();
+        app.refresh().unwrap();
+
+        let typing = crate::ui::modal::Modal::NewWorkspace {
+            repo_id: repo,
+            name_buffer: "half-typ".to_string(),
+            yolo: false,
+            shared: false,
+            agent: AgentKind::Claude,
+            notice: None,
+        };
+        for (inst, expected) in [
+            (gone_primary.id, crate::app::AttachReady::WorktreeMissing),
+            (no_binary_primary.id, crate::app::AttachReady::AgentMissing),
+        ] {
+            app.modal = Some(typing.clone());
+            let outcome = crate::app::ensure_instance_session(&mut app, inst, false).unwrap();
+            assert_eq!(outcome, expected);
+            assert!(
+                matches!(
+                    &app.modal,
+                    Some(crate::ui::modal::Modal::NewWorkspace { name_buffer, .. })
+                        if name_buffer == "half-typ"
+                ),
+                "{expected:?}: the user's modal must survive, got {:?}",
+                app.modal
+            );
+        }
+
+        // An interactive caller still gets told.
+        app.modal = None;
+        let outcome = crate::app::ensure_instance_session(&mut app, gone_primary.id, true).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::WorktreeMissing);
+        assert!(matches!(
+            app.modal,
+            Some(crate::ui::modal::Modal::Error { .. })
+        ));
+    }
+
     /// A `Pending` row older than the startup sweep's cutoff belongs to a
     /// create that died, such as a CLI create killed mid-fetch, and nothing
     /// will move it on before the next restart. Waiting on it would refuse

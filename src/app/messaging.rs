@@ -392,10 +392,10 @@ impl crate::app::App {
                     continue;
                 }
                 Ok(crate::app::AttachReady::WorktreeMissing) => {
-                    // No worktree to start the agent in, and none is coming
-                    // back on its own. Drop like AgentMissing: a primary's
-                    // ensure raises its error modal every time, so retrying
-                    // would pop it again on every heartbeat.
+                    // A settled workspace with no worktree to start the
+                    // agent in, and none is coming back on its own. Drop
+                    // like AgentMissing, rather than retry on every
+                    // heartbeat for as long as the workspace goes unarchived.
                     let ids: Vec<i64> = msgs.iter().map(|m| m.id).collect();
                     for id in ids {
                         self.drop_message(id, DROP_WORKTREE_MISSING, now_ms);
@@ -602,8 +602,8 @@ mod tests {
 
     #[test]
     fn a_message_to_a_workspace_without_a_worktree_is_dropped() {
-        // Retrying would raise the primary's missing-worktree modal again on
-        // every heartbeat, and the worktree is not coming back on its own.
+        // The worktree is not coming back on its own, so retrying would go on
+        // every heartbeat until the workspace is archived.
         let home = tempfile::TempDir::new().unwrap();
         let mut env = crate::test_support::EnvGuard::new();
         env.set("HOME", home.path());
@@ -628,6 +628,40 @@ mod tests {
         assert_eq!(row.drop_reason.as_deref(), Some(DROP_WORKTREE_MISSING));
         assert!(app.delivering.is_empty(), "nothing may be injected");
         assert!(!app.mail_drain_due(u64::MAX), "a clean drop needs no retry");
+    }
+
+    #[test]
+    fn draining_to_a_primary_without_a_worktree_leaves_the_users_modal_alone() {
+        // The drain runs in the background. Dropping the message is right, but
+        // popping the missing-worktree error over whatever the user has open
+        // is not.
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let (mut app, ids) = app_with_queued_messages(1);
+        app.store.set_setting("mcp_mirror", "off").unwrap();
+        let ws = app.workspaces[0].1.id;
+        app.store
+            .set_workspace_state(ws, crate::data::store::WorkspaceState::Ready)
+            .unwrap();
+        app.modal = Some(crate::ui::modal::Modal::Error {
+            message: "something the user is reading".to_string(),
+        });
+
+        app.drain_agent_messages();
+
+        let row = app.store.message_by_id(ids[0]).unwrap().unwrap();
+        assert_eq!(row.drop_reason.as_deref(), Some(DROP_WORKTREE_MISSING));
+        assert!(
+            matches!(
+                &app.modal,
+                Some(crate::ui::modal::Modal::Error { message })
+                    if message == "something the user is reading"
+            ),
+            "got {:?}",
+            app.modal
+        );
     }
 
     #[test]

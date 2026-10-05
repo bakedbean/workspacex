@@ -43,7 +43,7 @@ fn client_pid_for_chain(clients_json: &str, chain: &[u32]) -> Option<u32> {
 }
 
 pub(crate) fn focus_window_of(tui_pid: u32) {
-    if use_kwin(
+    if plasma_session(
         std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some(),
         std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
     ) {
@@ -61,16 +61,17 @@ pub(crate) fn focus_window_of(tui_pid: u32) {
     }
 }
 
-/// Whether `$XDG_CURRENT_DESKTOP`, a colon-separated list, names a KDE
-/// Plasma session (Plasma sets `KDE`).
-pub(crate) fn is_kde(current_desktop: Option<&str>) -> bool {
-    current_desktop.is_some_and(|d| d.split(':').any(|d| d.eq_ignore_ascii_case("kde")))
+/// Whether this is a KDE Plasma session, so KWin is the compositor:
+/// `$XDG_CURRENT_DESKTOP`, a colon-separated list, names `KDE`, and Hyprland
+/// isn't running, since some Hyprland setups export `KDE` there too.
+pub(crate) fn plasma_session(hyprland: bool, current_desktop: Option<&str>) -> bool {
+    !hyprland
+        && current_desktop.is_some_and(|d| d.split(':').any(|d| d.eq_ignore_ascii_case("kde")))
 }
 
-/// Whether to focus through KWin rather than hyprctl: a KDE session, unless
-/// Hyprland is running, since some Hyprland setups export `KDE` too.
-fn use_kwin(hyprland: bool, current_desktop: Option<&str>) -> bool {
-    !hyprland && is_kde(current_desktop)
+/// Whether `program` is in one of `path`'s directories.
+pub(crate) fn on_path(program: &str, path: Option<&std::ffi::OsStr>) -> bool {
+    path.is_some_and(|path| std::env::split_paths(path).any(|dir| dir.join(program).is_file()))
 }
 
 /// Each jump's KWin script is named `wsx-focus-<id>` and loaded from
@@ -222,10 +223,9 @@ impl DbusClient {
 /// The first of [`DBUS_CLIENTS`] with a program in one of `path`'s
 /// directories.
 fn find_dbus_client(path: Option<&std::ffi::OsStr>) -> Option<DbusClient> {
-    let dirs: Vec<PathBuf> = std::env::split_paths(path?).collect();
     DBUS_CLIENTS
         .into_iter()
-        .find(|client| dirs.iter().any(|dir| dir.join(client.program()).is_file()))
+        .find(|client| on_path(client.program(), path))
 }
 
 /// One call to KWin through `client`; the reply on success.
@@ -447,13 +447,13 @@ mod focus_tests {
     }
 
     #[test]
-    fn kwin_only_in_kde_sessions_without_hyprland() {
-        assert!(use_kwin(false, Some("KDE")));
-        assert!(use_kwin(false, Some("ubuntu:KDE")));
-        assert!(!use_kwin(false, Some("Hyprland")));
-        assert!(!use_kwin(false, None));
+    fn plasma_session_means_kde_without_hyprland() {
+        assert!(plasma_session(false, Some("KDE")));
+        assert!(plasma_session(false, Some("ubuntu:KDE")));
+        assert!(!plasma_session(false, Some("Hyprland")));
+        assert!(!plasma_session(false, None));
         // Hyprland exporting KDE for Qt theming keeps the hyprctl path.
-        assert!(!use_kwin(true, Some("Hyprland:KDE")));
+        assert!(!plasma_session(true, Some("Hyprland:KDE")));
     }
 
     #[test]

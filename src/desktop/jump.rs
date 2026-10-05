@@ -42,13 +42,12 @@ enum Launch {
 }
 
 /// The terminal to launch, in order: a `terminal_cmd` template carrying
-/// `{cmd}` (filled with `select_cmd`), `$TERMINAL`, konsole on KDE Plasma
-/// (its default terminal, and Plasma sets neither of the others), then
-/// alacritty. An empty `$TERMINAL` counts as unset.
+/// `{cmd}` (filled with `select_cmd`), `$TERMINAL`, then `fallback`. An empty
+/// `$TERMINAL` counts as unset.
 fn pick_launch(
     terminal_cmd: Option<&str>,
     terminal_env: Option<&str>,
-    kde: bool,
+    fallback: &str,
     select_cmd: &str,
 ) -> Launch {
     if let Some(full) = resolve_terminal_template(terminal_cmd, select_cmd) {
@@ -57,7 +56,24 @@ fn pick_launch(
     if let Some(term) = terminal_env.map(str::trim).filter(|t| !t.is_empty()) {
         return Launch::Terminal(term.to_string());
     }
-    Launch::Terminal(if kde { "konsole" } else { "alacritty" }.to_string())
+    Launch::Terminal(fallback.to_string())
+}
+
+/// The terminal to fall back to: konsole in a KDE Plasma session that has
+/// it, since Plasma ships it and sets neither `terminal_cmd` nor
+/// `$TERMINAL`, and alacritty everywhere else.
+fn fallback_terminal(
+    hyprland: bool,
+    current_desktop: Option<&str>,
+    path: Option<&std::ffi::OsStr>,
+) -> &'static str {
+    if crate::desktop::focus::plasma_session(hyprland, current_desktop)
+        && crate::desktop::focus::on_path("konsole", path)
+    {
+        "konsole"
+    } else {
+        "alacritty"
+    }
 }
 
 fn spawn_tui(repo: &str, slug: &str, terminal_cmd: Option<&str>) -> Result<()> {
@@ -71,7 +87,11 @@ fn spawn_tui(repo: &str, slug: &str, terminal_cmd: Option<&str>) -> Result<()> {
     let launch = pick_launch(
         terminal_cmd,
         std::env::var("TERMINAL").ok().as_deref(),
-        crate::desktop::focus::is_kde(std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref()),
+        fallback_terminal(
+            std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some(),
+            std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
+            std::env::var_os("PATH").as_deref(),
+        ),
         &select_cmd,
     );
     let (term, mut cmd) = match launch {
@@ -114,26 +134,48 @@ mod jump_tests {
         let select = "wsx --select r/s";
         // A terminal_cmd template with {cmd} wins over everything.
         assert_eq!(
-            pick_launch(Some("kitty -- {cmd}"), Some("foot"), true, select),
+            pick_launch(Some("kitty -- {cmd}"), Some("foot"), "konsole", select),
             Launch::Shell("kitty -- wsx --select r/s".into())
         );
         // Without {cmd} it's the dashboard's [t] terminal, not a jump's.
         assert_eq!(
-            pick_launch(Some("kitty"), Some("foot"), true, select),
+            pick_launch(Some("kitty"), Some("foot"), "konsole", select),
             Launch::Terminal("foot".into())
         );
         assert_eq!(
-            pick_launch(None, Some("foot"), true, select),
+            pick_launch(None, Some("foot"), "konsole", select),
             Launch::Terminal("foot".into())
         );
-        // Plasma sets neither: konsole there, alacritty elsewhere.
+        // An empty $TERMINAL counts as unset.
         assert_eq!(
-            pick_launch(None, Some("  "), true, select),
+            pick_launch(None, Some("  "), "konsole", select),
             Launch::Terminal("konsole".into())
         );
+    }
+
+    #[test]
+    fn konsole_is_the_fallback_only_in_a_plasma_session_that_has_it() {
+        let bin = tempfile::tempdir().unwrap();
+        let path = std::env::join_paths([bin.path()]).unwrap();
+        // No konsole installed: alacritty, even on Plasma.
         assert_eq!(
-            pick_launch(None, None, false, select),
-            Launch::Terminal("alacritty".into())
+            fallback_terminal(false, Some("KDE"), Some(&path)),
+            "alacritty"
         );
+        std::fs::write(bin.path().join("konsole"), "").unwrap();
+        assert_eq!(
+            fallback_terminal(false, Some("KDE"), Some(&path)),
+            "konsole"
+        );
+        // Hyprland exporting KDE for theming isn't a Plasma session.
+        assert_eq!(
+            fallback_terminal(true, Some("Hyprland:KDE"), Some(&path)),
+            "alacritty"
+        );
+        assert_eq!(
+            fallback_terminal(false, Some("GNOME"), Some(&path)),
+            "alacritty"
+        );
+        assert_eq!(fallback_terminal(false, None, Some(&path)), "alacritty");
     }
 }

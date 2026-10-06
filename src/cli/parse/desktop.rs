@@ -1,5 +1,5 @@
-//! `wsx setup`, `wsx waybar`, `wsx menubar`, and `wsx remote` — the
-//! commands that install or drive things outside the TUI.
+//! `wsx setup`, `wsx waybar`, `wsx desktop`, `wsx menubar`, and
+//! `wsx remote` — the commands that install or drive things outside the TUI.
 
 use super::Args;
 use crate::cli::action::CliAction;
@@ -16,6 +16,7 @@ pub(in crate::cli) fn parse_setup(it: &mut Args) -> Result<CliAction> {
     match it.next().as_deref() {
         Some("install-skill") => Ok(CliAction::SetupInstallSkill),
         Some("waybar") => Ok(CliAction::SetupWaybar),
+        Some("plasma") => Ok(CliAction::SetupPlasma),
         Some("menubar") => Ok(CliAction::SetupMenubar),
         other => Err(Error::Usage {
             group: None,
@@ -54,6 +55,28 @@ pub(in crate::cli) fn parse_waybar(it: &mut Args) -> Result<CliAction> {
             msg: match other {
                 Some(cmd) => format!("unknown waybar command: {cmd}"),
                 None => "missing waybar command".into(),
+            },
+        }),
+    }
+}
+
+pub(in crate::cli) fn parse_desktop(it: &mut Args) -> Result<CliAction> {
+    match it.next().as_deref() {
+        Some("status") => Ok(CliAction::DesktopStatus),
+        Some("jump") => {
+            let (Some(repo), Some(slug)) = (it.next(), it.next()) else {
+                return Err(Error::Usage {
+                    group: None,
+                    msg: "jump needs <repo> <slug>".into(),
+                });
+            };
+            Ok(CliAction::DesktopJump { repo, slug })
+        }
+        other => Err(Error::Usage {
+            group: None,
+            msg: match other {
+                Some(cmd) => format!("unknown desktop command: {cmd}"),
+                None => "missing desktop command".into(),
             },
         }),
     }

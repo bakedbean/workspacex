@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use crate::data::store::Store;
+use crate::desktop::install_support::shell_quote;
+use crate::desktop::terminal::resolve_terminal_template;
 use crate::error::{Error, Result};
 
 pub fn jump(repo: &str, slug: &str, terminal_cmd: Option<&str>) -> Result<()> {
@@ -103,23 +105,6 @@ fn focus_app_of(tui_pid: u32) {
     }
 }
 
-fn shquote(s: &str) -> String {
-    shlex::try_quote(s)
-        .map(|c| c.into_owned())
-        .unwrap_or_else(|_| format!("'{}'", s.replace(['\'', '\0'], "")))
-}
-
-/// terminal_cmd is honored only when it carries a `{cmd}` placeholder —
-/// a bare app-open command (`open -a iTerm`) cannot run a command, and
-/// guessing an argv position would misfire.
-fn resolve_terminal_template(configured: Option<&str>, cmd: &str) -> Option<String> {
-    let t = configured?.trim();
-    if t.is_empty() || !t.contains("{cmd}") {
-        return None;
-    }
-    Some(t.replace("{cmd}", cmd))
-}
-
 fn iterm_installed() -> bool {
     std::path::Path::new("/Applications/iTerm.app").exists()
         || dirs::home_dir().is_some_and(|h| h.join("Applications/iTerm.app").exists())
@@ -132,7 +117,7 @@ fn spawn_detached(prog: &str, args: &[&str]) -> Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     // Own session so it outlives the SwiftBar action process (same
-    // pattern as waybar::jump::spawn_tui).
+    // pattern as desktop::jump::spawn_tui).
     unsafe {
         use std::os::unix::process::CommandExt;
         cmd.pre_exec(|| {
@@ -151,8 +136,8 @@ fn spawn_tui(repo: &str, slug: &str, terminal_cmd: Option<&str>) -> Result<()> {
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("wsx"));
     let cmd = format!(
         "{} --select {}",
-        shquote(&exe.display().to_string()),
-        shquote(&format!("{repo}/{slug}"))
+        shell_quote(&exe.display().to_string()),
+        shell_quote(&format!("{repo}/{slug}"))
     );
     if let Some(full) = resolve_terminal_template(terminal_cmd, &cmd) {
         return spawn_detached("/bin/sh", &["-c", &full]);
@@ -237,19 +222,6 @@ mod jump_tests {
         assert_eq!(chain.first(), Some(&std::process::id()));
         assert!(chain.len() >= 2, "expected self + parent, got {chain:?}");
         assert!(chain.len() <= 32);
-    }
-
-    #[test]
-    fn terminal_template_requires_cmd_placeholder() {
-        // With {cmd}: substituted. Without: None → caller falls through to
-        // the osascript paths (a bare `open -a iTerm` can't carry a command).
-        assert_eq!(
-            resolve_terminal_template(Some("alacritty -e {cmd}"), "wsx --select r/s"),
-            Some("alacritty -e wsx --select r/s".into())
-        );
-        assert_eq!(resolve_terminal_template(Some("open -a iTerm"), "x"), None);
-        assert_eq!(resolve_terminal_template(None, "x"), None);
-        assert_eq!(resolve_terminal_template(Some("  "), "x"), None);
     }
 
     #[test]

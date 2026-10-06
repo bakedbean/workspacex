@@ -178,6 +178,12 @@ pub enum CliAction {
     },
     WaybarMenuEntries,
     WaybarRefreshPrs,
+    SetupPlasma,
+    DesktopStatus,
+    DesktopJump {
+        repo: String,
+        slug: String,
+    },
     SetupMenubar,
     MenubarPlugin,
     MenubarJump {

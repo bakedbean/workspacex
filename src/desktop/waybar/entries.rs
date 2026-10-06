@@ -6,6 +6,7 @@ use crate::data::scm_cache::ScmCacheRow;
 use crate::data::store::ReportedState;
 use crate::data::store::ReportedStatus;
 use crate::data::store::Store;
+use crate::desktop::install_support::shell_quote;
 use crate::desktop::rows::{RowInput, collect_rows_fresh, sanitize};
 use crate::error::Result;
 use crate::git::forge::BranchLifecycle;
@@ -204,20 +205,12 @@ pub(crate) fn compose_subtext(branch: &str, status: Option<&ReportedStatus>) -> 
     }
 }
 
-fn quote(s: &str) -> String {
-    shlex::try_quote(s)
-        .map(|c| c.into_owned())
-        // Only fails on interior NUL, which cannot survive sqlite TEXT
-        // anyway; drop the offending byte rather than emit an unquoted arg.
-        .unwrap_or_else(|_| format!("'{}'", s.replace(['\'', '\0'], "")))
-}
-
 pub(crate) fn action_cmd(wsx_bin: &str, repo: &str, slug: &str) -> String {
     format!(
         "{} waybar jump {} {}",
-        quote(wsx_bin),
-        quote(repo),
-        quote(slug)
+        shell_quote(wsx_bin),
+        shell_quote(repo),
+        shell_quote(slug)
     )
 }
 

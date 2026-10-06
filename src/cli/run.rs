@@ -75,6 +75,21 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         #[cfg(not(target_os = "linux"))]
         return Err(waybar_linux_only());
     }
+    if matches!(action, CliAction::DesktopStatus) {
+        crate::desktop::status::print_status(&dirs.db_path());
+        return Ok(());
+    }
+    if matches!(action, CliAction::SetupPlasma) {
+        #[cfg(target_os = "linux")]
+        {
+            for line in crate::desktop::plasma::install::run()? {
+                println!("{line}");
+            }
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err(plasma_linux_only());
+    }
     if matches!(action, CliAction::MenubarPlugin) {
         #[cfg(target_os = "macos")]
         {
@@ -1112,7 +1127,17 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         #[cfg(target_os = "linux")]
         CliAction::WaybarMenu => crate::desktop::waybar::menu::run_menu(&store)?,
         #[cfg(target_os = "linux")]
-        CliAction::WaybarJump { repo, slug } => crate::desktop::waybar::jump::jump(&repo, &slug)?,
+        CliAction::WaybarJump { repo, slug } => {
+            let terminal_cmd = store.get_setting("terminal_cmd")?;
+            crate::desktop::jump::jump(&repo, &slug, terminal_cmd.as_deref())?
+        }
+        #[cfg(target_os = "linux")]
+        CliAction::DesktopJump { repo, slug } => {
+            let terminal_cmd = store.get_setting("terminal_cmd")?;
+            crate::desktop::jump::jump(&repo, &slug, terminal_cmd.as_deref())?
+        }
+        #[cfg(not(target_os = "linux"))]
+        CliAction::DesktopJump { .. } => return Err(desktop_jump_linux_only()),
         #[cfg(target_os = "linux")]
         CliAction::WaybarMenuEntries => {
             crate::desktop::waybar::entries::run_menu_entries(&store).await?
@@ -1146,6 +1171,8 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         CliAction::SetupInstallSkill
         | CliAction::WaybarStatus
         | CliAction::SetupWaybar
+        | CliAction::SetupPlasma
+        | CliAction::DesktopStatus
         | CliAction::MenubarPlugin
         | CliAction::SetupMenubar => {
             unreachable!("handled before store open")
@@ -1160,6 +1187,16 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
 #[cfg(not(target_os = "linux"))]
 fn waybar_linux_only() -> Error {
     Error::UserInput("wsx waybar is only available on Linux (waybar integration)".into())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn desktop_jump_linux_only() -> Error {
+    Error::UserInput("wsx desktop jump is only available on Linux".into())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn plasma_linux_only() -> Error {
+    Error::UserInput("wsx setup plasma is only available on Linux (KDE Plasma integration)".into())
 }
 
 #[cfg(not(target_os = "macos"))]

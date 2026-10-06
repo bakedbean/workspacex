@@ -230,6 +230,10 @@ pub static GROUPS: &[GroupInfo] = &[
                 blurb: "Install the waybar module into ~/.config/waybar",
             },
             CmdInfo {
+                usage: "plasma",
+                blurb: "Install the KDE Plasma 6 panel applet",
+            },
+            CmdInfo {
                 usage: "menubar",
                 blurb: "Install the SwiftBar plugin shim",
             },
@@ -320,6 +324,20 @@ pub static GROUPS: &[GroupInfo] = &[
             CmdInfo {
                 usage: "refresh-prs",
                 blurb: "Refresh the cached PR state for all workspaces",
+            },
+        ],
+    },
+    GroupInfo {
+        name: "desktop",
+        blurb: "Desktop-neutral workspace status and jump, for panel widgets",
+        commands: &[
+            CmdInfo {
+                usage: "status",
+                blurb: "Print the workspace count, most urgent status, tooltip and rows as JSON",
+            },
+            CmdInfo {
+                usage: "jump <repo> <slug>",
+                blurb: "Select the workspace in a running TUI and raise its window, or launch one",
             },
         ],
     },

@@ -85,6 +85,27 @@ pub(super) async fn new_workspace(
                     });
                     return Ok(());
                 }
+                // A name git can't use as a branch, or whose branch already
+                // exists, is refused here too, so the notice can say why,
+                // rather than closing the modal on a create that
+                // `create_with_app` would reject.
+                if let Some(repo) = app.repos.iter().find(|r| r.id == repo_id)
+                    && let Err(e) = crate::data::workspace::validate_name(&app.store, repo, n).await
+                {
+                    let notice = match e {
+                        crate::error::Error::UserInput(msg) => msg,
+                        other => other.to_string(),
+                    };
+                    app.modal = Some(Modal::NewWorkspace {
+                        repo_id,
+                        name_buffer,
+                        yolo,
+                        shared: ws_shared,
+                        agent,
+                        notice: Some(notice),
+                    });
+                    return Ok(());
+                }
             }
             // Resolve the final name here rather than letting
             // `create_with_app` auto-generate one when `name` is
@@ -270,11 +291,14 @@ pub(super) async fn confirm_share(
                 app.modal = Some(Modal::Error {
                     message: e.to_string(),
                 });
-            } else if !matches!(app.modal, Some(Modal::AgentMissing { .. })) {
+            } else if !matches!(
+                app.modal,
+                Some(Modal::AgentMissing { .. } | Modal::Error { .. })
+            ) {
                 // Only clear the modal if toggle_workspace_shared didn't
-                // leave an AgentMissing modal up for the user (mirrors the
-                // UpdatesPanel Enter handler's rule above) — otherwise
-                // we'd wipe that modal right back off.
+                // leave an AgentMissing or missing-worktree modal up for the
+                // user (mirrors the UpdatesPanel Enter handler's rule above)
+                // — otherwise we'd wipe that modal right back off.
                 app.modal = None;
             }
         }

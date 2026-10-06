@@ -203,6 +203,171 @@ pub(super) mod tests {
     }
 
     #[tokio::test]
+    async fn is_valid_branch_name_applies_gits_rule() {
+        for ok in ["wsx/fix-login", "CV-04964", "feat_x.y", "wsx/nested/name"] {
+            assert!(is_valid_branch_name(ok).await.unwrap(), "{ok:?} is valid");
+        }
+        for bad in [
+            "wsx integration",
+            "wsx/a..b",
+            "-leading-dash",
+            "wsx/a~b",
+            "wsx/a:b",
+            "wsx/a?b",
+            "wsx/a*b",
+            "wsx/a[b",
+            "wsx/a\\b",
+            "wsx/.hidden",
+            "wsx/x.lock",
+            "wsx/",
+            "HEAD",
+            "@{-1}",
+            "wsx/x@{-1}",
+        ] {
+            assert!(
+                !is_valid_branch_name(bad).await.unwrap(),
+                "{bad:?} is invalid"
+            );
+        }
+    }
+
+    /// `check-ref-format --branch` expands `@{-N}` against the repository in
+    /// the current directory, so run from one with a previous checkout it
+    /// passed `@{-1}`, and `git worktree add -b @{-1}` then failed after the
+    /// row was inserted. The check must not consult any repository.
+    #[tokio::test]
+    async fn branch_name_check_ignores_the_repository_it_runs_in() {
+        let dir = init_repo();
+        let git = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        git(&["checkout", "-q", "-b", "other"]);
+        git(&["checkout", "-q", "main"]);
+        let out = branch_name_check("@{-1}")
+            .current_dir(dir.path())
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            !out.status.success(),
+            "@{{-1}} must not resolve to the previous branch"
+        );
+    }
+
+    #[tokio::test]
+    async fn conflicting_branch_finds_exact_and_overlapping_names() {
+        let dir = init_repo();
+        for b in ["wsx/fix-login", "wsx/foo", "wsx/deep/x"] {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(dir.path())
+                    .args(["branch", b])
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        for (branch, expected) in [
+            ("wsx/fix-login", Some("wsx/fix-login")),
+            ("wsx/foo/bar", Some("wsx/foo")),
+            ("wsx/deep", Some("wsx/deep/x")),
+            // A shared string prefix is not a shared path.
+            ("wsx/fo", None),
+            ("wsx/foobar", None),
+            ("wsx/new", None),
+        ] {
+            assert_eq!(
+                conflicting_branch(dir.path(), branch)
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                expected,
+                "{branch}"
+            );
+        }
+    }
+
+    /// A repo with `core.ignorecase`, as on macOS or a casefolded Linux
+    /// filesystem, can't hold two branches that differ only in case: as loose
+    /// refs the second `git worktree add -b` fails after the row is in, and
+    /// as packed refs git creates a near-duplicate. Both the exact match and
+    /// the path overlap must ignore case there.
+    #[tokio::test]
+    async fn conflicting_branch_ignores_case_where_the_repo_does() {
+        let dir = init_repo();
+        let git = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        git(&["config", "core.ignorecase", "true"]);
+        git(&["branch", "wsx/Fix-Login"]);
+        git(&["branch", "wsx/Deep/x"]);
+        for (branch, expected) in [
+            ("wsx/fix-login", Some("wsx/Fix-Login")),
+            ("wsx/FIX-LOGIN", Some("wsx/Fix-Login")),
+            ("wsx/fix-login/more", Some("wsx/Fix-Login")),
+            ("wsx/deep", Some("wsx/Deep/x")),
+            ("wsx/fix-logout", None),
+        ] {
+            assert_eq!(
+                conflicting_branch(dir.path(), branch)
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                expected,
+                "{branch}"
+            );
+        }
+    }
+
+    /// Without `core.ignorecase`, a case-only difference is a different branch
+    /// that git creates without complaint, so it must not be refused.
+    #[tokio::test]
+    async fn conflicting_branch_keeps_case_where_the_repo_does() {
+        let dir = init_repo();
+        let git = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        // Set explicitly: `git init` turns it on where the filesystem folds
+        // case, as on the macOS CI runners.
+        git(&["config", "core.ignorecase", "false"]);
+        git(&["branch", "wsx/Fix-Login"]);
+        assert_eq!(
+            conflicting_branch(dir.path(), "wsx/fix-login")
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            conflicting_branch(dir.path(), "wsx/Fix-Login")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("wsx/Fix-Login")
+        );
+    }
+
+    #[tokio::test]
     async fn preflight_succeeds_when_git_on_path() {
         preflight().await.unwrap();
     }
@@ -467,6 +632,86 @@ pub async fn fetch_for_base(repo: &Path, base: Option<&str>) -> Result<()> {
     }
     run(repo, &["fetch", prefix, rest]).await?;
     Ok(())
+}
+
+/// Whether `branch` is syntactically valid as a new branch name, by the rule
+/// `git worktree add -b` applies, so a caller can refuse a name before doing
+/// anything it would have to undo. This is `git check-ref-format
+/// refs/heads/<branch>` plus the two rules `--branch` adds on top: no leading
+/// `-`, and not `HEAD`. `--branch` itself is not used because it expands
+/// `@{-N}` against whatever repository the current directory is in. Purely
+/// syntactic, so it needs no repository. Errors only when git itself cannot
+/// be run.
+pub async fn is_valid_branch_name(branch: &str) -> Result<bool> {
+    if branch.starts_with('-') || branch == "HEAD" {
+        return Ok(false);
+    }
+    let out = branch_name_check(branch)
+        .output()
+        .await
+        .map_err(|e| Error::Git(format!("spawn git: {e}")))?;
+    Ok(out.status.success())
+}
+
+/// The existing local branch that stops `git worktree add -b <branch>` from
+/// creating `branch`, if any: one with that exact name, or one whose path
+/// overlaps it, since a ref cannot also be a directory of refs (`wsx/foo`
+/// blocks `wsx/foo/bar`, and `wsx/foo/bar` blocks `wsx/foo`).
+///
+/// Where the repo has `core.ignorecase` set, as git does on a case-insensitive
+/// filesystem (macOS by default), names are compared without case. There
+/// `wsx/Fix-Login` blocks `wsx/fix-login`. As a loose ref, the new branch
+/// fails as already existing. As a packed ref, git creates a second branch
+/// that differs only in case.
+pub async fn conflicting_branch(repo: &Path, branch: &str) -> Result<Option<String>> {
+    let out = run(
+        repo,
+        &["for-each-ref", "--format=%(refname)", "refs/heads/"],
+    )
+    .await?;
+    let fold = ignores_case(repo).await;
+    let key = |name: &str| {
+        if fold {
+            name.to_lowercase()
+        } else {
+            name.to_string()
+        }
+    };
+    let overlaps = |longer: &str, shorter: &str| {
+        longer
+            .strip_prefix(shorter)
+            .is_some_and(|rest| rest.starts_with('/'))
+    };
+    let wanted = key(branch);
+    Ok(out
+        .lines()
+        .filter_map(|r| r.strip_prefix("refs/heads/"))
+        .find(|existing| {
+            let existing = key(existing);
+            existing == wanted || overlaps(&wanted, &existing) || overlaps(&existing, &wanted)
+        })
+        .map(str::to_string))
+}
+
+/// Whether `repo` has `core.ignorecase` set to true. Unset, as on a
+/// case-sensitive filesystem, reads as false.
+async fn ignores_case(repo: &Path) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["config", "--bool", "core.ignorecase"])
+        .output()
+        .await
+        .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true")
+}
+
+/// The `git check-ref-format` run behind `is_valid_branch_name`, kept apart
+/// so a test can run it from inside a repository whose `@{-1}` resolves.
+fn branch_name_check(branch: &str) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.arg("check-ref-format")
+        .arg(format!("refs/heads/{branch}"));
+    cmd
 }
 
 pub async fn create_worktree(

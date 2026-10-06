@@ -19,6 +19,8 @@ async fn ensure_workspace_session_sets_modal_when_binary_missing() {
     use crate::pty::session::AgentKind;
     let mut env = EnvGuard::new();
     env.set("WSX_HERMES_BIN", "/nonexistent/wsx-test-hermes");
+    // A worktree that exists, so the spawn gets as far as the binary.
+    let worktree = tempfile::TempDir::new().unwrap();
     let store = Store::open_in_memory().unwrap();
     let repo_id = store
         .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
@@ -28,7 +30,7 @@ async fn ensure_workspace_session_sets_modal_when_binary_missing() {
             repo_id,
             name: "ws",
             branch: "repo/ws",
-            worktree_path: std::path::Path::new("/tmp/wsx-test/ws"),
+            worktree_path: worktree.path(),
             yolo: false,
             agent: AgentKind::Hermes,
             shared: false,
@@ -503,7 +505,29 @@ async fn agents_panel_x_on_sole_pane_with_unspawnable_primary_shows_agent_missin
         PathBuf::from("/tmp/wsx-test"),
     )
     .unwrap();
-    let ws = app.test_workspace("peer-remove-missing");
+    // A worktree that exists, so the primary's spawn gets as far as the
+    // binary; `test_workspace`'s fixture path does not.
+    let worktree = tempfile::TempDir::new().unwrap();
+    let repo = app
+        .store
+        .add_repo(
+            std::path::Path::new("/tmp/peer-remove-missing-repo"),
+            "peer-remove-missing",
+            "wsx",
+        )
+        .unwrap();
+    let ws = app
+        .store
+        .insert_workspace(&crate::data::store::NewWorkspace {
+            repo_id: repo,
+            name: "peer-remove-missing",
+            branch: "wsx/peer-remove-missing",
+            worktree_path: worktree.path(),
+            yolo: false,
+            agent: AgentKind::Claude,
+            shared: false,
+        })
+        .unwrap();
     app.store
         .set_workspace_state(ws, crate::data::store::WorkspaceState::Ready)
         .unwrap();
@@ -581,4 +605,139 @@ async fn agents_panel_x_retargets_pane_to_primary_when_primary_not_visible() {
         "split must survive with the peer's pane handed back to the primary"
     );
     assert_eq!(state.focused_target(), Some(target(ws, primary)));
+}
+
+/// A settled workspace with a primary agent, plus the agents panel open on
+/// it. `worktree` is the workspace's worktree path, which may not exist.
+fn app_with_agents_panel(worktree: &std::path::Path) -> (App, crate::data::store::WorkspaceId) {
+    use crate::pty::session::AgentKind;
+    let mut app = App::new(
+        Store::open_in_memory().unwrap(),
+        PathBuf::from("/tmp/wsx-test"),
+    )
+    .unwrap();
+    app.store.set_setting("mcp_mirror", "off").unwrap();
+    let repo = app
+        .store
+        .add_repo(
+            std::path::Path::new("/tmp/agents-panel-repo"),
+            "panel",
+            "wsx",
+        )
+        .unwrap();
+    let ws = app
+        .store
+        .insert_workspace(&crate::data::store::NewWorkspace {
+            repo_id: repo,
+            name: "panel",
+            branch: "wsx/panel",
+            worktree_path: worktree,
+            yolo: false,
+            agent: AgentKind::Claude,
+            shared: false,
+        })
+        .unwrap();
+    app.store
+        .set_workspace_state(ws, crate::data::store::WorkspaceState::Ready)
+        .unwrap();
+    app.store
+        .add_primary_agent(ws, AgentKind::Claude, 0)
+        .unwrap();
+    app.refresh().unwrap();
+    (app, ws)
+}
+
+async fn press_in_agents_panel(
+    app: &mut App,
+    ws: crate::data::store::WorkspaceId,
+    code: crossterm::event::KeyCode,
+) {
+    use crate::ui::modal::Modal;
+    app.modal = Some(Modal::AgentsPanel {
+        workspace_id: ws,
+        selected: 0,
+    });
+    let shared = Arc::new(Mutex::new(
+        App::new(
+            Store::open_in_memory().unwrap(),
+            PathBuf::from("/tmp/wsx-test"),
+        )
+        .unwrap(),
+    ));
+    handle_key_modal(app, &shared, KeyEvent::new(code, KeyModifiers::NONE))
+        .await
+        .unwrap();
+}
+
+/// No agent can start without the worktree, so neither Enter nor `a` may
+/// add rows for agents that never will: both show the missing-worktree
+/// error and leave the roster as it was.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agents_panel_adds_no_agents_to_a_workspace_without_a_worktree() {
+    use crossterm::event::KeyCode;
+    let home = tempfile::TempDir::new().unwrap();
+    let mut env = EnvGuard::new();
+    env.set("HOME", home.path());
+    let root = tempfile::TempDir::new().unwrap();
+    let (mut app, ws) = app_with_agents_panel(&root.path().join("gone"));
+
+    for code in [KeyCode::Enter, KeyCode::Char('a')] {
+        press_in_agents_panel(&mut app, ws, code).await;
+        assert!(
+            matches!(app.modal, Some(crate::ui::modal::Modal::Error { .. })),
+            "{code:?}: expected the missing-worktree error, got {:?}",
+            app.modal
+        );
+        assert_eq!(
+            app.store.workspace_agents(ws).unwrap().len(),
+            1,
+            "{code:?}: only the primary may remain"
+        );
+    }
+}
+
+/// `a` adds one agent of every kind. The first that can't start used to have
+/// its modal cleared and its row kept, along with every row after it; now
+/// `a` stops there, leaves the modal up, and keeps no row for it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agents_panel_a_stops_at_the_first_agent_that_cannot_start() {
+    let home = tempfile::TempDir::new().unwrap();
+    let mut env = EnvGuard::new();
+    env.set("HOME", home.path());
+    // Claude comes first in `AgentKind::ALL`.
+    env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-claude");
+    let worktree = tempfile::TempDir::new().unwrap();
+    let (mut app, ws) = app_with_agents_panel(worktree.path());
+
+    press_in_agents_panel(&mut app, ws, crossterm::event::KeyCode::Char('a')).await;
+
+    assert!(
+        matches!(
+            app.modal,
+            Some(crate::ui::modal::Modal::AgentMissing { .. })
+        ),
+        "the failing agent's modal must stay up, got {:?}",
+        app.modal
+    );
+    assert_eq!(app.store.workspace_agents(ws).unwrap().len(), 1);
+}
+
+/// Enter adds the selected agent before starting it. One that doesn't start
+/// leaves its modal up and no row behind.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agents_panel_enter_keeps_no_row_for_an_agent_that_cannot_start() {
+    let home = tempfile::TempDir::new().unwrap();
+    let mut env = EnvGuard::new();
+    env.set("HOME", home.path());
+    env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-claude");
+    let worktree = tempfile::TempDir::new().unwrap();
+    let (mut app, ws) = app_with_agents_panel(worktree.path());
+
+    press_in_agents_panel(&mut app, ws, crossterm::event::KeyCode::Enter).await;
+
+    assert!(matches!(
+        app.modal,
+        Some(crate::ui::modal::Modal::AgentMissing { .. })
+    ));
+    assert_eq!(app.store.workspace_agents(ws).unwrap().len(), 1);
 }

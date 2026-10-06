@@ -89,11 +89,22 @@ pub(crate) fn restore_attached_state(
 /// This is the single enforcement point for `attach_is_blocked`: every
 /// caller — `attach_workspace`, the inline-dispatch paths, and (via
 /// `ensure_instance_session`'s delegation) primary-instance retargeting —
-/// goes through here, so a live archive can't be raced by a respawn from
-/// any of them.
+/// goes through here or `ensure_primary_session` behind it, so a live
+/// archive can't be raced by a respawn from any of them.
 pub(crate) fn ensure_workspace_session(
     app: &mut App,
     ws_id: crate::data::store::WorkspaceId,
+) -> Result<AttachReady> {
+    ensure_primary_session(app, ws_id, true)
+}
+
+/// `ensure_workspace_session`, with `surface_missing` as on
+/// `ensure_instance_session`, which hands a primary instance here so that a
+/// background caller's `false` reaches the modals this path raises.
+fn ensure_primary_session(
+    app: &mut App,
+    ws_id: crate::data::store::WorkspaceId,
+    surface_missing: bool,
 ) -> Result<AttachReady> {
     if attach_is_blocked(app, ws_id) {
         return Ok(AttachReady::Refused);
@@ -106,6 +117,13 @@ pub(crate) fn ensure_workspace_session(
         return Ok(AttachReady::Ok);
     }
     if let Some((id, path, mode, repo_path, agent)) = build_spawn_info(app, ws_id) {
+        // Settle a missing worktree before anything acts on its path. The MCP
+        // mirror would otherwise rewrite `~/.claude.json` with an entry for a
+        // directory that isn't there, on every retry while a create runs.
+        // The spawn's own guard still covers a worktree that goes in between.
+        if !path.is_dir() {
+            return Ok(missing_worktree_outcome(app, ws_id, &path, surface_missing));
+        }
         maybe_mirror_mcp(app, &repo_path, &path);
         let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
         // Resolve the primary agent instance for this workspace, defensively
@@ -135,12 +153,17 @@ pub(crate) fn ensure_workspace_session(
                 }
             }
             Err(crate::error::Error::AgentBinaryMissing(binary)) => {
-                app.modal = Some(crate::ui::modal::Modal::AgentMissing {
-                    ws_id,
-                    agent,
-                    binary,
-                });
+                if surface_missing {
+                    app.modal = Some(crate::ui::modal::Modal::AgentMissing {
+                        ws_id,
+                        agent,
+                        binary,
+                    });
+                }
                 return Ok(AttachReady::AgentMissing);
+            }
+            Err(crate::error::Error::WorktreeMissing(path)) => {
+                return Ok(missing_worktree_outcome(app, ws_id, &path, surface_missing));
             }
             Err(e) => return Err(e),
         }
@@ -148,9 +171,99 @@ pub(crate) fn ensure_workspace_session(
     Ok(AttachReady::Ok)
 }
 
+/// Whether `ws_id`'s create has yet to make its worktree, so a missing one is
+/// not gone, just not there yet. That is a create in flight here, however
+/// long it takes, or a `Pending` row younger than `STALE_PENDING_AFTER` for
+/// one in another process: a row leaves `Pending` as soon as `git worktree
+/// add` succeeds or fails, or the create is cancelled first. A row that stays
+/// `Pending` longer belongs to a create that died (killed mid-fetch, say),
+/// the same call `sweep_stale_pending` makes at the next startup. A row that
+/// a quit mid-create left `Pending` with setup `Cancelled` (see
+/// `confirm_quit`) is settled too. Read from the store rather than
+/// `App::workspaces`, which only catches up with another process's writes on
+/// its next poll. A store error counts as in progress, so it costs a retry
+/// rather than a dropped message.
+///
+/// Such a spawn is `Refused`, with no modal and a retry from the message
+/// drain, rather than treated as a worktree to archive.
+fn create_in_progress(app: &App, ws_id: crate::data::store::WorkspaceId) -> bool {
+    if app
+        .in_flight
+        .get(&ws_id)
+        .is_some_and(|f| f.kind == crate::data::in_flight::InFlightKind::Create)
+    {
+        return true;
+    }
+    let cutoff =
+        crate::data::store::now_ms() - crate::data::store::STALE_PENDING_AFTER.as_millis() as i64;
+    match app.store.workspace_by_id(ws_id) {
+        Err(_) => true,
+        Ok(row) => row.is_some_and(|w| {
+            w.state == crate::data::store::WorkspaceState::Pending
+                && w.setup_status != crate::data::store::SetupStatus::Cancelled
+                && w.created_at >= cutoff
+        }),
+    }
+}
+
+/// What an ensure answers when the spawn was refused because `path`, the
+/// worktree, does not exist: `Refused` while the create has yet to make it,
+/// otherwise `WorktreeMissing`, with its error modal when `surface_missing`.
+fn missing_worktree_outcome(
+    app: &mut App,
+    ws_id: crate::data::store::WorkspaceId,
+    path: &std::path::Path,
+    surface_missing: bool,
+) -> AttachReady {
+    if create_in_progress(app, ws_id) {
+        return AttachReady::Refused;
+    }
+    if surface_missing {
+        app.modal = Some(worktree_missing_modal(app, ws_id, path));
+    }
+    AttachReady::WorktreeMissing
+}
+
+/// The same answer before anything is added, for a caller that would
+/// otherwise insert agent rows an ensure then refuses: `Some` when `ws_id`'s
+/// worktree is missing, `None` when there is one to start agents in.
+pub(crate) fn refuse_without_worktree(
+    app: &mut App,
+    ws_id: crate::data::store::WorkspaceId,
+    surface_missing: bool,
+) -> Option<AttachReady> {
+    let path = app.workspace_path(ws_id)?;
+    (!path.is_dir()).then(|| missing_worktree_outcome(app, ws_id, &path, surface_missing))
+}
+
+/// The error shown when a spawn is refused because the workspace's worktree
+/// is gone: a create that failed before git made one, or a worktree deleted
+/// by hand. Archive is the way out, and it copes with the missing directory.
+fn worktree_missing_modal(
+    app: &App,
+    ws_id: crate::data::store::WorkspaceId,
+    path: &std::path::Path,
+) -> crate::ui::modal::Modal {
+    let name = app
+        .workspaces
+        .iter()
+        .find(|(_, w)| w.id == ws_id)
+        .map(|(_, w)| w.name.as_str())
+        .unwrap_or("this workspace");
+    crate::ui::modal::Modal::Error {
+        message: format!(
+            "The worktree for '{name}' is missing:\n{}\n\n\
+             No agent was started. Archive the workspace\n\
+             (d on the dashboard) to remove it.",
+            path.display()
+        ),
+    }
+}
+
 /// Ensure a specific agent *instance* has a live PTY session, spawning one in
-/// place if missing. Primary instances delegate to `ensure_workspace_session`
-/// so the primary path is never duplicated. Added (non-primary) instances
+/// place if missing. Primary instances delegate to `ensure_primary_session`,
+/// the body of `ensure_workspace_session`, so the primary path is never
+/// duplicated. Added (non-primary) instances
 /// spawn `Fresh` with an injected handoff note, or resume their own recorded
 /// session once they have one (see `build_added_spawn_info`).
 /// Mirrors `ensure_workspace_session`'s return/error conventions, including the
@@ -161,9 +274,11 @@ pub(crate) fn ensure_workspace_session(
 /// handlers, `switch_focused_pane_to`, `restore_attached_state`) so the user
 /// sees the modal. Pass `false` for background callers (e.g. the message drain)
 /// so a missing binary doesn't pop a modal over the user's unrelated view.
+/// A missing worktree's error modal follows the same rule, and both hold for
+/// a primary instance too, since the flag is passed on with it.
 ///
 /// Enforces `attach_is_blocked` for non-primary instances directly (they
-/// never reach `ensure_workspace_session`). Primary instances delegate
+/// never reach `ensure_primary_session`). Primary instances delegate
 /// above and get the check there instead — do not duplicate it here, or a
 /// primary would be guarded twice.
 pub(crate) fn ensure_instance_session(
@@ -177,7 +292,7 @@ pub(crate) fn ensure_instance_session(
         return Ok(AttachReady::Ok);
     };
     if instance.is_primary {
-        return ensure_workspace_session(app, instance.workspace_id);
+        return ensure_primary_session(app, instance.workspace_id, surface_missing);
     }
     let ws_id = instance.workspace_id;
     if attach_is_blocked(app, ws_id) {
@@ -187,6 +302,10 @@ pub(crate) fn ensure_instance_session(
         return Ok(AttachReady::Ok);
     }
     if let Some((path, mode, repo_path)) = build_added_spawn_info(app, &instance) {
+        // As on the primary path: no mirroring for a worktree that isn't there.
+        if !path.is_dir() {
+            return Ok(missing_worktree_outcome(app, ws_id, &path, surface_missing));
+        }
         maybe_mirror_mcp(app, &repo_path, &path);
         let remote = crate::agent::remote_control::RemoteOpts::from_store(&app.store);
         let tmux = tmux_name_for(app, ws_id, &instance);
@@ -217,6 +336,9 @@ pub(crate) fn ensure_instance_session(
                     });
                 }
                 return Ok(AttachReady::AgentMissing);
+            }
+            Err(crate::error::Error::WorktreeMissing(path)) => {
+                return Ok(missing_worktree_outcome(app, ws_id, &path, surface_missing));
             }
             Err(e) => return Err(e),
         }
@@ -371,11 +493,13 @@ pub(crate) fn attach_workspace(
     // too — see `AttachReady::Refused`.
     match ensure_workspace_session(app, ws_id)? {
         AttachReady::Ok => {}
-        // Attach didn't happen (AgentMissing modal is up, or attach was
-        // refused because an archive is tearing this workspace down) —
-        // leave the workspace's attention marker alone so a failed open
-        // doesn't silently dismiss it.
-        AttachReady::AgentMissing | AttachReady::Refused => return Ok(()),
+        // Attach didn't happen (AgentMissing or missing-worktree modal is
+        // up, or attach was refused because an archive is tearing this
+        // workspace down) — leave the workspace's attention marker alone so
+        // a failed open doesn't silently dismiss it.
+        AttachReady::AgentMissing | AttachReady::Refused | AttachReady::WorktreeMissing => {
+            return Ok(());
+        }
     }
     app.workspace_needs_attention.remove(&ws_id);
     if app
@@ -417,5 +541,31 @@ pub(crate) fn schedule_detach_refresh(app: &mut App, ids: impl IntoIterator<Item
         app.diff_last_poll_ms.remove(&id);
         app.pr_last_poll_ms.remove(&id);
         app.pending_workspace_refresh.insert(id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A store error must not read as a settled workspace: that answer drops
+    /// the workspace's queued messages for good, where a retry costs nothing.
+    #[test]
+    fn create_in_progress_assumes_one_when_the_store_errors() {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        let mut app = App::new(store, std::path::PathBuf::from("/tmp/wsx-test")).unwrap();
+        let ws = app.test_workspace("store-error");
+        app.store
+            .set_workspace_state(ws, crate::data::store::WorkspaceState::Ready)
+            .unwrap();
+        assert!(
+            !create_in_progress(&app, ws),
+            "a settled row is not in progress"
+        );
+        app.store
+            .conn()
+            .execute("ALTER TABLE workspaces RENAME TO workspaces_gone", [])
+            .unwrap();
+        assert!(create_in_progress(&app, ws));
     }
 }

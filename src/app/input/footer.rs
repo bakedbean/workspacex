@@ -68,6 +68,12 @@ pub(in crate::app::input) async fn handle_detail_bar_reply_key(
                         .writer
                         .send(crate::pty::session::WriteReq::Bytes(bytes))
                         .await;
+                } else {
+                    // No agent could take it: the create hasn't made the
+                    // worktree yet, the worktree or the agent binary is
+                    // missing, or an archive is under way. Keep the reply
+                    // rather than drop it without a word.
+                    app.dashboard.reply_draft = draft;
                 }
             }
             app.focus = crate::ui::PaneFocus::Dashboard;

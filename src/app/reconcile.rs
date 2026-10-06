@@ -67,29 +67,37 @@ pub(crate) async fn reconcile_create_result(
             // Refresh so the dashboard reflects setup_status=Cancelled.
             let _ = g.refresh();
         }
-        Err(_) => {
+        Err(e) => {
             let _ = g.refresh();
             // F5 backstop: failures AFTER the row exists are carried by the
             // row badge — deliberately silent here, same as any other
             // `Err(_)`. But `create_with_app` can also fail BEFORE the row
-            // is ever inserted (`resolve_branch_prefix`, `insert_workspace`,
-            // or `add_primary_agent` erroring in Phase 1/2, ahead of the
-            // wrapped async block) — most commonly a `UNIQUE(repo_id, name)`
-            // violation, though the Enter handler now validates that case
-            // up front. With no row there is no badge and therefore no
-            // feedback at all; the modal would just have closed. Whether a
-            // row exists is the simplest reliable signal available here (no
-            // id is returned on `Err`, so this is the only way to tell) —
-            // look it up by the exact `(repo_id, name)` this attempt used,
-            // and only pop `Modal::Error` when it's genuinely missing.
+            // is ever inserted (`resolve_branch_prefix`, the branch checks,
+            // `insert_workspace`, or `add_primary_agent` erroring in Phase
+            // 1/2, ahead of the wrapped async block) — most commonly a
+            // `UNIQUE(repo_id, name)` violation, or a generated name whose
+            // branch an earlier workspace left behind, though the Enter
+            // handler validates a typed name up front. With no row there is
+            // no badge and therefore no feedback at all; the modal would just
+            // have closed. Whether a row exists is the simplest reliable
+            // signal available here (no id is returned on `Err`, so this is
+            // the only way to tell) — look it up by the exact `(repo_id,
+            // name)` this attempt used, and only pop `Modal::Error` when it's
+            // genuinely missing.
             let row_exists = g
                 .store
                 .workspaces(repo_id)
                 .map(|rows| rows.iter().any(|w| w.name == name))
                 .unwrap_or(false);
             if !row_exists {
+                // Say why, on its own line: with no row, this modal is the only
+                // place the reason can show.
+                let reason = match e {
+                    crate::error::Error::UserInput(msg) => msg,
+                    other => other.to_string(),
+                };
                 g.modal = Some(crate::ui::modal::Modal::Error {
-                    message: format!("failed to create workspace '{name}'"),
+                    message: format!("failed to create workspace '{name}':\n{reason}"),
                 });
             }
         }
@@ -167,6 +175,34 @@ mod reconcile_create_tests {
              error modal — nothing else can carry that feedback: {:?}",
             g.modal
         );
+    }
+
+    /// With no row, the modal is the only place the reason can show, so it
+    /// must say it: an existing branch, say, refused for a generated name that
+    /// the new-workspace modal never checked.
+    #[tokio::test]
+    async fn err_with_no_matching_row_says_why() {
+        let (app, repo_id) = make_app_with_repo();
+        let shared = Arc::new(Mutex::new(app));
+        reconcile_create_result(
+            shared.clone(),
+            0,
+            repo_id,
+            "merry-birch".to_string(),
+            Err(Error::UserInput(
+                "a branch named 'wsx/merry-birch' already exists".into(),
+            )),
+        )
+        .await;
+        let g = shared.lock().await;
+        match &g.modal {
+            Some(crate::ui::modal::Modal::Error { message }) => assert_eq!(
+                message,
+                "failed to create workspace 'merry-birch':\n\
+                 a branch named 'wsx/merry-birch' already exists"
+            ),
+            other => panic!("expected an error modal, got {other:?}"),
+        }
     }
 
     /// Failures AFTER the row exists are carried by the row badge — a

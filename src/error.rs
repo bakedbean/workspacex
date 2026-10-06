@@ -12,6 +12,8 @@ pub enum Error {
     Pty(String),
     #[error("agent binary not found: {0}")]
     AgentBinaryMissing(String),
+    #[error("worktree not found: {}", .0.display())]
+    WorktreeMissing(std::path::PathBuf),
     #[error("setup: {0}")]
     Setup(String),
     #[error("io: {0}")]

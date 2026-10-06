@@ -3,7 +3,7 @@
 | `●`                    | Session is running in this wsx process                                          |
 | `↻`                    | Resumable — a prior claude session exists for this worktree; attach to continue |
 | `○`                    | No session ever started here                                                    |
-| `✕`                    | Workspace state is `Failed` (worktree creation didn't succeed)                  |
+| `✕`                    | Workspace state is `Failed` (worktree creation didn't succeed). With no worktree to start in, opening it shows an error instead of an agent; archive it with `d` |
 | `[setup-failed]` badge | Setup script exited non-zero; workspace is otherwise usable (`?` then `o` shows the log) |
 
 Activity column for running sessions:

@@ -80,6 +80,110 @@ async fn enter_with_a_taken_name_shows_inline_notice_and_does_not_spawn() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn enter_with_an_invalid_branch_name_shows_inline_notice_and_does_not_spawn() {
+    let (mut app, repo_id) = app_with_existing_workspace();
+    app.modal = Some(crate::ui::modal::Modal::NewWorkspace {
+        repo_id,
+        name_buffer: "wsx integration".to_string(),
+        yolo: false,
+        shared: false,
+        agent: crate::pty::session::AgentKind::Claude,
+        notice: None,
+    });
+    let shared = dummy_shared();
+    handle_key_modal(
+        &mut app,
+        &shared,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await
+    .unwrap();
+    match &app.modal {
+        Some(crate::ui::modal::Modal::NewWorkspace {
+            name_buffer,
+            notice,
+            ..
+        }) => {
+            assert_eq!(
+                name_buffer, "wsx integration",
+                "buffer must survive the refusal"
+            );
+            assert_eq!(
+                notice.as_deref(),
+                Some("'wsx integration' is not a valid git branch name")
+            );
+        }
+        other => panic!("expected NewWorkspace modal with a notice, got {other:?}"),
+    }
+    assert!(
+        app.in_flight.is_empty(),
+        "an invalid name must never spawn a create task"
+    );
+    assert_eq!(
+        app.store.workspaces(repo_id).unwrap().len(),
+        1,
+        "no row should be inserted for it"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn enter_with_a_name_whose_branch_exists_shows_inline_notice_and_does_not_spawn() {
+    let repo_dir = tempfile::TempDir::new().unwrap();
+    let git = |args: &[&str]| {
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(repo_dir.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&[
+        "-c",
+        "user.email=t@e",
+        "-c",
+        "user.name=t",
+        "commit",
+        "--allow-empty",
+        "-q",
+        "-m",
+        "init",
+    ]);
+    // Left behind by an earlier workspace, as archive does for an unmerged one.
+    git(&["branch", "taken"]);
+    let store = Store::open_in_memory().unwrap();
+    let repo_id = store.add_repo(repo_dir.path(), "repo", "").unwrap();
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    app.modal = Some(crate::ui::modal::Modal::NewWorkspace {
+        repo_id,
+        name_buffer: "taken".to_string(),
+        yolo: false,
+        shared: false,
+        agent: crate::pty::session::AgentKind::Claude,
+        notice: None,
+    });
+    let shared = dummy_shared();
+    handle_key_modal(
+        &mut app,
+        &shared,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await
+    .unwrap();
+    match &app.modal {
+        Some(crate::ui::modal::Modal::NewWorkspace { notice, .. }) => assert_eq!(
+            notice.as_deref(),
+            Some("a branch named 'taken' already exists")
+        ),
+        other => panic!("expected NewWorkspace modal with a notice, got {other:?}"),
+    }
+    assert!(app.in_flight.is_empty(), "no create task may be spawned");
+    assert!(app.store.workspaces(repo_id).unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn typing_after_a_duplicate_notice_clears_it() {
     let (mut app, repo_id) = app_with_existing_workspace();
     // Simulate: user already hit a duplicate once (notice set), then

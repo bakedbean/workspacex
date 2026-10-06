@@ -391,6 +391,11 @@ impl Store {
     }
 }
 
+/// How old a `Pending` row must be before it is taken to belong to a create
+/// that died: the cutoff `App::new` passes to `sweep_stale_pending`, and the
+/// point where a spawn stops waiting for the row's worktree.
+pub const STALE_PENDING_AFTER: std::time::Duration = std::time::Duration::from_secs(300);
+
 pub(crate) fn now_ms() -> i64 {
     crate::util::time::now_ms()
 }

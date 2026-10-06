@@ -68,6 +68,10 @@ pub fn workspace_ref(store: &Store, ws: crate::data::store::WorkspaceId) -> Opti
 /// `drop_reason` for a message whose target agent's binary is not installed.
 pub(crate) const DROP_AGENT_MISSING: &str = "target agent's binary is not installed";
 
+/// `drop_reason` for a message whose target workspace has no worktree to
+/// start the agent in.
+pub(crate) const DROP_WORKTREE_MISSING: &str = "target workspace's worktree is missing";
+
 /// How many times a message may fail to be injected before wsx stops retrying
 /// it. Each attempt already waits `DELIVERY_TIMEOUT_MS` for the agent to become
 /// ready, so exhausting the ceiling means the target has been unable to accept
@@ -200,14 +204,15 @@ impl crate::app::App {
     }
 
     /// Retire a message we will never deliver (the target's binary isn't
-    /// installed) by marking it delivered.
+    /// installed, or its worktree is gone) by marking it delivered with
+    /// `reason`.
     ///
     /// The write can fail, and a dropped message has no injection task to
     /// report an outcome, so a failure here would strand the row with nothing
     /// left to wake the drain — the drain clears the heartbeat before dropping.
     /// Re-arm it instead.
-    pub(crate) fn drop_message(&mut self, id: i64, now_ms: u64) {
-        if let Err(e) = self.store.mark_dropped(id, DROP_AGENT_MISSING) {
+    pub(crate) fn drop_message(&mut self, id: i64, reason: &str, now_ms: u64) {
+        if let Err(e) = self.store.mark_dropped(id, reason) {
             tracing::warn!(
                 error = %e,
                 id,
@@ -322,6 +327,11 @@ impl crate::app::App {
     /// - `Ok(Ok)` + session found  → spawn one task, mark the ids in flight.
     /// - `Ok(AgentMissing)`        → binary not installed; drop (mark
     ///   delivered) so we never retry against a never-installable agent.
+    /// - `Ok(WorktreeMissing)`     → a settled workspace has no worktree to
+    ///   start the agent in; drop the same way rather than retry against a
+    ///   workspace to archive.
+    /// - `Ok(Refused)`             → an archive is in flight, or the create
+    ///   has not made the worktree yet; leave pending and retry.
     /// - `Err(_)` (transient)      → leave pending; a later tick retries.
     ///   Do NOT mark delivered.
     /// - `Ok(Ok)` but no session   → leave pending to retry rather than
@@ -377,12 +387,24 @@ impl crate::app::App {
                     // delivered) so we don't retry forever.
                     let ids: Vec<i64> = msgs.iter().map(|m| m.id).collect();
                     for id in ids {
-                        self.drop_message(id, now_ms);
+                        self.drop_message(id, DROP_AGENT_MISSING, now_ms);
+                    }
+                    continue;
+                }
+                Ok(crate::app::AttachReady::WorktreeMissing) => {
+                    // A settled workspace with no worktree to start the
+                    // agent in, and none is coming back on its own. Drop
+                    // like AgentMissing, rather than retry on every
+                    // heartbeat for as long as the workspace goes unarchived.
+                    let ids: Vec<i64> = msgs.iter().map(|m| m.id).collect();
+                    for id in ids {
+                        self.drop_message(id, DROP_WORKTREE_MISSING, now_ms);
                     }
                     continue;
                 }
                 Ok(crate::app::AttachReady::Refused) => {
-                    // A live archive is tearing this workspace down. Unlike
+                    // A live archive is tearing this workspace down, or its
+                    // create has not made the worktree yet. Unlike
                     // AgentMissing this is expected to be temporary, so
                     // leave the messages pending rather than dropping them —
                     // same treatment as the transient-failure arm below.
@@ -557,7 +579,7 @@ mod tests {
             .execute("DROP TABLE agent_messages", [])
             .unwrap();
 
-        app.drop_message(ids[0], 10_000);
+        app.drop_message(ids[0], DROP_AGENT_MISSING, 10_000);
 
         assert!(
             app.mail_drain_due(10_000 + MAIL_RETRY_INTERVAL_MS),
@@ -570,12 +592,105 @@ mod tests {
         let (mut app, ids) = app_with_queued_messages(1);
         app.clear_mail_retry();
 
-        app.drop_message(ids[0], 10_000);
+        app.drop_message(ids[0], DROP_AGENT_MISSING, 10_000);
 
         assert!(app.store.undelivered_messages().unwrap().is_empty());
         let row = app.store.message_by_id(ids[0]).unwrap().unwrap();
         assert_eq!(row.drop_reason.as_deref(), Some(DROP_AGENT_MISSING));
         assert!(!app.mail_drain_due(u64::MAX), "a clean drop needs no retry");
+    }
+
+    #[test]
+    fn a_message_to_a_workspace_without_a_worktree_is_dropped() {
+        // The worktree is not coming back on its own, so retrying would go on
+        // every heartbeat until the workspace is archived.
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        // A spawn that got past the guard fails as AgentMissing instead of
+        // launching a real agent.
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let (mut app, ids) = app_with_queued_messages(1);
+        app.store.set_setting("mcp_mirror", "off").unwrap();
+        assert!(
+            !std::path::Path::new("/tmp/r/w").exists(),
+            "the fixture's worktree must not exist"
+        );
+        // Settled: a create that is still running is the next test's case.
+        let ws = app.workspaces[0].1.id;
+        app.store
+            .set_workspace_state(ws, crate::data::store::WorkspaceState::Ready)
+            .unwrap();
+
+        app.drain_agent_messages();
+
+        let row = app.store.message_by_id(ids[0]).unwrap().unwrap();
+        assert_eq!(row.drop_reason.as_deref(), Some(DROP_WORKTREE_MISSING));
+        assert!(app.delivering.is_empty(), "nothing may be injected");
+        assert!(!app.mail_drain_due(u64::MAX), "a clean drop needs no retry");
+    }
+
+    #[test]
+    fn draining_to_a_primary_without_a_worktree_leaves_the_users_modal_alone() {
+        // The drain runs in the background. Dropping the message is right, but
+        // popping the missing-worktree error over whatever the user has open
+        // is not.
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let (mut app, ids) = app_with_queued_messages(1);
+        app.store.set_setting("mcp_mirror", "off").unwrap();
+        let ws = app.workspaces[0].1.id;
+        app.store
+            .set_workspace_state(ws, crate::data::store::WorkspaceState::Ready)
+            .unwrap();
+        app.modal = Some(crate::ui::modal::Modal::Error {
+            message: "something the user is reading".to_string(),
+        });
+
+        app.drain_agent_messages();
+
+        let row = app.store.message_by_id(ids[0]).unwrap().unwrap();
+        assert_eq!(row.drop_reason.as_deref(), Some(DROP_WORKTREE_MISSING));
+        assert!(
+            matches!(
+                &app.modal,
+                Some(crate::ui::modal::Modal::Error { message })
+                    if message == "something the user is reading"
+            ),
+            "got {:?}",
+            app.modal
+        );
+    }
+
+    #[test]
+    fn a_message_to_a_workspace_still_being_created_waits_for_its_worktree() {
+        // The create inserts the row before `git worktree add` runs. A message
+        // queued in that window must be kept and retried, not dropped as if
+        // the worktree were gone for good.
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let (mut app, ids) = app_with_queued_messages(1);
+        app.store.set_setting("mcp_mirror", "off").unwrap();
+        assert_eq!(
+            app.workspaces[0].1.state,
+            crate::data::store::WorkspaceState::Pending
+        );
+
+        let now = crate::util::time::now_ms_u64();
+        app.drain_agent_messages();
+
+        let row = app.store.message_by_id(ids[0]).unwrap().unwrap();
+        assert!(row.delivered_at.is_none(), "the message must stay queued");
+        assert!(row.drop_reason.is_none());
+        assert!(
+            app.mail_drain_due(now + MAIL_RETRY_INTERVAL_MS + 1),
+            "the drain must come back for it"
+        );
+        assert!(app.modal.is_none());
     }
 
     #[test]

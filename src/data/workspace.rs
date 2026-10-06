@@ -36,6 +36,41 @@ fn compose_branch(prefix: &str, name: &str) -> String {
     }
 }
 
+/// Refuse a branch git will not create, before any row exists for it. The
+/// name otherwise first meets git at `git worktree add`, after the row is
+/// inserted, so a name like `wsx integration`, or one whose branch is already
+/// taken in `repo` (say by an unmerged branch that archive kept), would leave
+/// a `Failed` row behind with no worktree. The whole `<prefix>/<name>` branch
+/// is checked, since that is what `git worktree add -b` is given.
+///
+/// Anything that fails after the insert still leaves its `Failed` row, as a
+/// failed fetch does. `git worktree add -b` creates the branch before it
+/// checks the target directory, so a later failure there can leave a branch
+/// behind, and the row is what lets archive delete it.
+async fn ensure_valid_branch(repo: &Path, branch: &str) -> Result<()> {
+    if !git::is_valid_branch_name(branch).await? {
+        return Err(Error::UserInput(format!(
+            "'{branch}' is not a valid git branch name"
+        )));
+    }
+    match git::conflicting_branch(repo, branch).await? {
+        None => Ok(()),
+        Some(existing) if existing == branch => Err(Error::UserInput(format!(
+            "a branch named '{branch}' already exists"
+        ))),
+        Some(existing) => Err(Error::UserInput(format!(
+            "'{branch}' clashes with the existing branch '{existing}'"
+        ))),
+    }
+}
+
+/// Check a typed name the way `create` will, so the new-workspace modal can
+/// refuse it inline instead of closing on a create that is bound to fail.
+pub async fn validate_name(store: &Store, repo: &Repo, name: &str) -> Result<()> {
+    let prefix = crate::data::repo::resolve_branch_prefix(repo, store)?;
+    ensure_valid_branch(&repo.path, &compose_branch(&prefix, name)).await
+}
+
 /// Map a setup run's outcome to the persisted setup status.
 fn setup_status_for(result: &SetupResult) -> SetupStatus {
     match result {
@@ -72,6 +107,7 @@ pub async fn create<F: FnMut(SetupLine) + Send>(
     };
     let prefix = crate::data::repo::resolve_branch_prefix(repo, store)?;
     let branch = compose_branch(&prefix, &name);
+    ensure_valid_branch(&repo.path, &branch).await?;
     let worktree_path = worktree_base.join(&repo.name).join(&name);
 
     let base = repo
@@ -264,6 +300,9 @@ pub async fn create_with_app(
         let worktree_path = worktree_base.join(&repo.name).join(&resolved_name);
         (resolved_name, branch, worktree_path, g.log_dir.clone())
     };
+    // Outside the lock, since it runs git, but still ahead of the Phase 2
+    // insert: a branch git refuses must never get a row.
+    ensure_valid_branch(&repo.path, &branch).await?;
     let base = repo
         .base_branch
         .as_deref()
@@ -804,6 +843,126 @@ mod tests {
         );
         assert_eq!(rows[0].name, "alpha");
         assert_eq!(rows[0].state, WorkspaceState::Failed);
+    }
+
+    /// The failed-fetch row above is deliberate, but a name git refuses is
+    /// known to fail before any I/O, so it must be refused before a row
+    /// exists. Otherwise it leaves a `Failed` row with no worktree behind.
+    #[tokio::test]
+    async fn create_refuses_an_invalid_branch_name_before_inserting_a_row() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let base = TempDir::new().unwrap();
+
+        let log_dir_tmp = tempfile::TempDir::new().unwrap();
+        let err = create(
+            &store,
+            &repo,
+            Some("wsx integration"),
+            base.path(),
+            false,
+            false,
+            crate::pty::session::AgentKind::Claude,
+            log_dir_tmp.path(),
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+        match err {
+            Error::UserInput(msg) => {
+                assert_eq!(msg, "'wsx/wsx integration' is not a valid git branch name")
+            }
+            other => panic!("expected UserInput, got {other:?}"),
+        }
+        assert!(
+            store.workspaces(repo.id).unwrap().is_empty(),
+            "an invalid name must not leave a row behind"
+        );
+        assert!(!base.path().join("demo").join("wsx integration").exists());
+    }
+
+    /// Archive keeps an unmerged branch, so re-creating the same name used to
+    /// pass every check and then fail in `git worktree add -b`, after the row
+    /// was in. A branch whose path overlaps an existing one fails the same
+    /// way. Both must be refused before a row exists.
+    #[tokio::test]
+    async fn create_refuses_a_branch_that_already_exists_before_inserting_a_row() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        let id = crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        let repo = store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let log_dir_tmp = tempfile::TempDir::new().unwrap();
+        let try_create = |name: &'static str| {
+            create(
+                &store,
+                &repo,
+                Some(name),
+                base.path(),
+                false,
+                false,
+                crate::pty::session::AgentKind::Claude,
+                log_dir_tmp.path(),
+                tokio_util::sync::CancellationToken::new(),
+                |_| {},
+            )
+        };
+
+        // An unmerged `fix-login` that archive keeps.
+        let created = try_create("fix-login").await.unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(&created.workspace.worktree_path)
+                .args(["commit", "--allow-empty", "-q", "-m", "wip"])
+                .status()
+                .unwrap()
+                .success()
+        );
+        archive(
+            &store,
+            &repo,
+            &created.workspace,
+            ArchiveOpts::default(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        assert!(store.workspaces(repo.id).unwrap().is_empty());
+
+        let messages = [
+            ("fix-login", "a branch named 'wsx/fix-login' already exists"),
+            (
+                "fix-login/more",
+                "'wsx/fix-login/more' clashes with the existing branch 'wsx/fix-login'",
+            ),
+        ];
+        for (name, expected) in messages {
+            match try_create(name).await.unwrap_err() {
+                Error::UserInput(msg) => assert_eq!(msg, expected),
+                other => panic!("{name}: expected UserInput, got {other:?}"),
+            }
+            assert!(
+                store.workspaces(repo.id).unwrap().is_empty(),
+                "{name}: no row may be left behind"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1770,6 +1929,111 @@ mod tests {
             "create_with_app must remove its own in_flight entry on success"
         );
         drop(g);
+    }
+
+    /// The modal checks the name before it closes, but `create_with_app` is
+    /// the function that inserts the row, so it refuses on its own too.
+    #[tokio::test]
+    async fn create_with_app_refuses_an_invalid_branch_name_before_inserting_a_row() {
+        use crate::app::App;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, base.path().to_path_buf()).unwrap(),
+        ));
+        let repo = {
+            let g = app.lock().await;
+            g.repos[0].clone()
+        };
+        let repo_id = repo.id;
+
+        let result = create_with_app(
+            app.clone(),
+            repo,
+            Some("a..b".to_string()),
+            base.path().to_path_buf(),
+            false,
+            false,
+            crate::pty::session::AgentKind::Claude,
+            crate::data::progress::SetupProgress::shared(),
+            CancellationToken::new(),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(Error::UserInput(_))),
+            "expected UserInput, got {result:?}"
+        );
+        let g = app.lock().await;
+        assert!(
+            g.store.workspaces(repo_id).unwrap().is_empty(),
+            "an invalid name must not leave a row behind"
+        );
+        assert!(
+            g.in_flight.is_empty(),
+            "no in_flight entry may be registered"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_with_app_refuses_an_existing_branch_before_inserting_a_row() {
+        use crate::app::App;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .current_dir(repo_dir.path())
+                .args(["branch", "wsx/taken"])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let base = TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, base.path().to_path_buf()).unwrap(),
+        ));
+        let repo = {
+            let g = app.lock().await;
+            g.repos[0].clone()
+        };
+        let repo_id = repo.id;
+
+        let result = create_with_app(
+            app.clone(),
+            repo,
+            Some("taken".to_string()),
+            base.path().to_path_buf(),
+            false,
+            false,
+            crate::pty::session::AgentKind::Claude,
+            crate::data::progress::SetupProgress::shared(),
+            CancellationToken::new(),
+        )
+        .await;
+        match result {
+            Err(Error::UserInput(msg)) => {
+                assert_eq!(msg, "a branch named 'wsx/taken' already exists")
+            }
+            other => panic!("expected UserInput, got {other:?}"),
+        }
+        let g = app.lock().await;
+        assert!(g.store.workspaces(repo_id).unwrap().is_empty());
+        assert!(
+            g.in_flight.is_empty(),
+            "no in_flight entry may be registered"
+        );
     }
 
     /// F1 regression: `App.workspaces` is otherwise only repopulated by

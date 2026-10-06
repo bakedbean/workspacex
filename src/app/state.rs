@@ -132,7 +132,7 @@ impl App {
         // Sweep stale Pending rows from previous runs.
         let _ = app
             .store
-            .sweep_stale_pending(std::time::Duration::from_secs(300));
+            .sweep_stale_pending(crate::data::store::STALE_PENDING_AFTER);
         // Resolve setup rows stranded by a crashed process (see sweep_stale_running).
         let _ = app.store.sweep_stale_running();
         // Load the retained bucketed activity for the sparkline (up to
@@ -1197,5 +1197,299 @@ mod strip_instances_tests {
         );
         let outcome = crate::app::ensure_instance_session(&mut app, primary.id, false).unwrap();
         assert_eq!(outcome, crate::app::AttachReady::Refused);
+    }
+
+    /// A workspace whose worktree is gone (a create git refused, or a
+    /// worktree deleted by hand) must not start its agent anywhere else. The
+    /// spawn is refused, and the ensure turns that into an error pointing at
+    /// archive rather than an `Err`, which would end the event loop.
+    #[test]
+    fn ensure_workspace_session_refuses_a_missing_worktree() {
+        // A binary that cannot be found, so a spawn that got past the guard
+        // fails as AgentMissing instead of launching a real agent.
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let mut app = test_app();
+        app.store.set_setting("mcp_mirror", "off").unwrap();
+        let ws = app.test_workspace("vanished");
+        // Settled, as the issue's row was: a create git refused.
+        app.store
+            .set_workspace_state(ws, crate::data::store::WorkspaceState::Failed)
+            .unwrap();
+        assert!(
+            !app.workspace_path(ws).unwrap().exists(),
+            "the fixture's worktree must not exist"
+        );
+
+        let outcome = crate::app::ensure_workspace_session(&mut app, ws).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::WorktreeMissing);
+        assert!(
+            app.primary_instance(ws)
+                .and_then(|i| app.sessions.get(i))
+                .is_none(),
+            "no session may be started for a missing worktree"
+        );
+        match &app.modal {
+            Some(crate::ui::modal::Modal::Error { message }) => {
+                assert!(message.contains("'vanished'"), "{message}");
+                assert!(message.contains("Archive the workspace"), "{message}");
+            }
+            other => panic!("expected an error modal, got {other:?}"),
+        }
+    }
+
+    /// An added agent is refused the same way, and a background caller
+    /// (`surface_missing = false`) gets no modal, as with a missing binary.
+    #[test]
+    fn ensure_instance_session_refuses_a_missing_worktree_quietly() {
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let mut app = test_app();
+        app.store.set_setting("mcp_mirror", "off").unwrap();
+        let ws = app.test_workspace("vanished-peer");
+        // Settled, as after a worktree deleted by hand.
+        app.store
+            .set_workspace_state(ws, crate::data::store::WorkspaceState::Ready)
+            .unwrap();
+        let peer = app
+            .store
+            .add_workspace_agent(ws, AgentKind::Claude)
+            .unwrap();
+
+        let outcome = crate::app::ensure_instance_session(&mut app, peer.id, false).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::WorktreeMissing);
+        assert!(app.sessions.get(peer.id).is_none());
+        assert!(app.modal.is_none(), "a background ensure must stay quiet");
+    }
+
+    /// A create that has not made its worktree yet is not missing one. Enter
+    /// on its Provisioning row, or a message drained to it, is refused
+    /// quietly and retried, rather than told to archive a row that is about
+    /// to become healthy.
+    #[test]
+    fn ensure_refuses_quietly_while_the_create_has_not_made_the_worktree() {
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let mut app = test_app();
+        app.store.set_setting("mcp_mirror", "off").unwrap();
+        // Inserted `Pending`, as every create's row is until its worktree
+        // exists, whether the create runs here or in another process.
+        let ws = app.test_workspace("provisioning");
+        app.store
+            .add_primary_agent(ws, AgentKind::Claude, 0)
+            .unwrap();
+        let peer = app
+            .store
+            .add_workspace_agent(ws, AgentKind::Claude)
+            .unwrap();
+
+        let outcome = crate::app::ensure_workspace_session(&mut app, ws).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::Refused);
+        let outcome = crate::app::ensure_instance_session(&mut app, peer.id, true).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::Refused);
+        assert!(
+            app.modal.is_none(),
+            "no advice to archive a row still being created"
+        );
+        assert!(app.sessions.get(peer.id).is_none());
+    }
+
+    /// The message drain ensures with `surface_missing = false`, and a primary
+    /// instance is handed on to the path `ensure_workspace_session` uses,
+    /// which used to raise its modal regardless. That replaced whatever the
+    /// user had open, such as a half-typed new-workspace name.
+    #[test]
+    fn a_background_ensure_of_a_primary_leaves_the_users_modal_alone() {
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let mut app = test_app();
+        app.store.set_setting("mcp_mirror", "off").unwrap();
+        // A settled workspace whose worktree is gone.
+        let gone = app.test_workspace("primary-gone");
+        app.store
+            .set_workspace_state(gone, crate::data::store::WorkspaceState::Ready)
+            .unwrap();
+        let gone_primary = app
+            .store
+            .add_primary_agent(gone, AgentKind::Claude, 0)
+            .unwrap();
+        // One with a real worktree but no agent binary.
+        let worktree = tempfile::TempDir::new().unwrap();
+        let repo = app
+            .store
+            .add_repo(
+                std::path::Path::new("/tmp/no-binary-repo"),
+                "no-binary",
+                "wsx",
+            )
+            .unwrap();
+        let no_binary = app
+            .store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "no-binary",
+                branch: "wsx/no-binary",
+                worktree_path: worktree.path(),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        app.store
+            .set_workspace_state(no_binary, crate::data::store::WorkspaceState::Ready)
+            .unwrap();
+        let no_binary_primary = app
+            .store
+            .add_primary_agent(no_binary, AgentKind::Claude, 0)
+            .unwrap();
+        app.refresh().unwrap();
+
+        let typing = crate::ui::modal::Modal::NewWorkspace {
+            repo_id: repo,
+            name_buffer: "half-typ".to_string(),
+            yolo: false,
+            shared: false,
+            agent: AgentKind::Claude,
+            notice: None,
+        };
+        for (inst, expected) in [
+            (gone_primary.id, crate::app::AttachReady::WorktreeMissing),
+            (no_binary_primary.id, crate::app::AttachReady::AgentMissing),
+        ] {
+            app.modal = Some(typing.clone());
+            let outcome = crate::app::ensure_instance_session(&mut app, inst, false).unwrap();
+            assert_eq!(outcome, expected);
+            assert!(
+                matches!(
+                    &app.modal,
+                    Some(crate::ui::modal::Modal::NewWorkspace { name_buffer, .. })
+                        if name_buffer == "half-typ"
+                ),
+                "{expected:?}: the user's modal must survive, got {:?}",
+                app.modal
+            );
+        }
+
+        // An interactive caller still gets told.
+        app.modal = None;
+        let outcome = crate::app::ensure_instance_session(&mut app, gone_primary.id, true).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::WorktreeMissing);
+        assert!(matches!(
+            app.modal,
+            Some(crate::ui::modal::Modal::Error { .. })
+        ));
+    }
+
+    /// A `Pending` row older than the startup sweep's cutoff belongs to a
+    /// create that died, such as a CLI create killed mid-fetch, and nothing
+    /// will move it on before the next restart. Waiting on it would refuse
+    /// Enter silently and retry its messages every heartbeat for the whole
+    /// session. A create in flight here is still waited on, however long it
+    /// has been running.
+    #[test]
+    fn only_a_live_create_is_waited_on() {
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let mut app = test_app();
+        app.store.set_setting("mcp_mirror", "off").unwrap();
+        let ws = app.test_workspace("died-mid-create");
+        let past_cutoff = crate::data::store::now_ms()
+            - crate::data::store::STALE_PENDING_AFTER.as_millis() as i64
+            - 1_000;
+        app.store
+            .conn()
+            .execute(
+                "UPDATE workspaces SET created_at = ?1 WHERE id = ?2",
+                rusqlite::params![past_cutoff, ws.0],
+            )
+            .unwrap();
+
+        let outcome = crate::app::ensure_workspace_session(&mut app, ws).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::WorktreeMissing);
+
+        app.modal = None;
+        app.in_flight.insert(
+            ws,
+            crate::data::in_flight::InFlight::create(
+                crate::data::progress::SetupProgress::shared(),
+                tokio_util::sync::CancellationToken::new(),
+            ),
+        );
+        let outcome = crate::app::ensure_workspace_session(&mut app, ws).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::Refused);
+        assert!(app.modal.is_none());
+    }
+
+    /// A refused spawn must not leave anything behind for the path it
+    /// refused. The MCP mirror ran first and wrote a `~/.claude.json` entry
+    /// for the missing worktree, and while a create was still running the
+    /// drain's retries rewrote that file every heartbeat, racing Claude
+    /// Code's own writes to it.
+    #[test]
+    fn a_refused_spawn_does_not_mirror_mcp_servers_for_the_missing_worktree() {
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let claude_json = home.path().join(".claude.json");
+        let seeded = r#"{"projects":{"/tmp/mirror-repo":{"mcpServers":{"x":{"command":"true"}}}}}"#;
+        std::fs::write(&claude_json, seeded).unwrap();
+        let mut app = test_app();
+        assert!(
+            crate::agent::mcp::enabled(&app.store),
+            "mirroring is on by default"
+        );
+        let ws = app.test_workspace("mirror");
+        app.store
+            .add_primary_agent(ws, AgentKind::Claude, 0)
+            .unwrap();
+        let peer = app
+            .store
+            .add_workspace_agent(ws, AgentKind::Claude)
+            .unwrap();
+
+        // Still being created, then settled: neither may touch the file.
+        let outcome = crate::app::ensure_workspace_session(&mut app, ws).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::Refused);
+        app.store
+            .set_workspace_state(ws, crate::data::store::WorkspaceState::Ready)
+            .unwrap();
+        let outcome = crate::app::ensure_instance_session(&mut app, peer.id, false).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::WorktreeMissing);
+
+        assert_eq!(std::fs::read_to_string(&claude_json).unwrap(), seeded);
+    }
+
+    /// A quit mid-create leaves the row `Pending` with setup `Cancelled`, and
+    /// nothing will finish it, so it gets the missing-worktree handling.
+    #[test]
+    fn a_create_abandoned_by_quit_counts_as_settled() {
+        let home = tempfile::TempDir::new().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        env.set("HOME", home.path());
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+        let mut app = test_app();
+        app.store.set_setting("mcp_mirror", "off").unwrap();
+        let ws = app.test_workspace("abandoned");
+        app.store
+            .set_setup_status(ws, crate::data::store::SetupStatus::Cancelled)
+            .unwrap();
+
+        let outcome = crate::app::ensure_workspace_session(&mut app, ws).unwrap();
+        assert_eq!(outcome, crate::app::AttachReady::WorktreeMissing);
+        assert!(matches!(
+            app.modal,
+            Some(crate::ui::modal::Modal::Error { .. })
+        ));
     }
 }

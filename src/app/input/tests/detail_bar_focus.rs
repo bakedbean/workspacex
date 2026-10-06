@@ -129,6 +129,31 @@ async fn tab_in_detail_bar_routes_to_pm_when_visible() {
     assert!(matches!(app.focus, crate::ui::PaneFocus::ProjectManager));
 }
 
+/// A reply that no agent received stays in the draft. Here the worktree is
+/// gone, so no agent could start to take it, and the error says why.
+#[tokio::test]
+async fn enter_keeps_a_reply_no_agent_received() {
+    let home = tempfile::TempDir::new().unwrap();
+    let mut env = crate::test_support::EnvGuard::new();
+    env.set("HOME", home.path());
+    env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-test-bin-does-not-exist");
+    let mut app = make_app_with_workspace_selected();
+    app.store.set_setting("mcp_mirror", "off").unwrap();
+    assert!(!std::path::Path::new("/tmp/wsx-test/alpha").exists());
+    app.focus = crate::ui::PaneFocus::DetailBarReply;
+    app.dashboard.reply_draft = "hello".to_string();
+
+    handle_key_dashboard(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .await
+        .unwrap();
+
+    assert_eq!(app.dashboard.reply_draft, "hello");
+    assert!(matches!(
+        app.modal,
+        Some(crate::ui::modal::Modal::Error { .. })
+    ));
+}
+
 // Issue 3: Arrow navigation in Dashboard focus must clear the reply draft
 // so it cannot be sent to the wrong workspace.
 #[tokio::test]

@@ -194,12 +194,15 @@ async fn build_spawn_info_filters_self_reference() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shared_workspace_attach_records_tmux_session_ref() {
     use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+    // Probe tmux under the env lock: another test may be holding a fake
+    // `WSX_TMUX_BIN` (which answers `-V`) while it runs, and probing
+    // outside the lock would take that for a real tmux.
+    let mut env = EnvGuard::new();
     if !crate::pty::tmux::is_available() {
         eprintln!("tmux not installed; skipping");
         return;
     }
     let tmpdir = tempfile::tempdir().unwrap();
-    let mut env = EnvGuard::new();
     env.set("TMUX_TMPDIR", tmpdir.path().to_str().unwrap());
     // WSX_CLAUDE_BIN must point at a real script: `/bin/sh` would receive
     // the claude CLI args and reject them. Write a wrapper that ignores
@@ -246,12 +249,15 @@ async fn shared_workspace_attach_records_tmux_session_ref() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shared_spawn_reuses_stored_session_ref_after_rename() {
     use crate::data::store::{NewWorkspace, Store, WorkspaceState};
+    // Probe tmux under the env lock: another test may be holding a fake
+    // `WSX_TMUX_BIN` (which answers `-V`) while it runs, and probing
+    // outside the lock would take that for a real tmux.
+    let mut env = EnvGuard::new();
     if !crate::pty::tmux::is_available() {
         eprintln!("tmux not installed; skipping");
         return;
     }
     let tmpdir = tempfile::tempdir().unwrap();
-    let mut env = EnvGuard::new();
     env.set("TMUX_TMPDIR", tmpdir.path().to_str().unwrap());
     let script = tmpdir.path().join("fake-agent.sh");
     std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();

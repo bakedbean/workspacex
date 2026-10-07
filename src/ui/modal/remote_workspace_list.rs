@@ -28,7 +28,11 @@ pub fn render_remote_workspace_list(
         area,
         w,
         h,
-        format!(" shared workspaces on {} ", list.host_name),
+        if list.can_share {
+            format!(" workspaces on {} ", list.host_name)
+        } else {
+            format!(" shared workspaces on {} ", list.host_name)
+        },
         theme,
     );
 
@@ -61,7 +65,9 @@ pub fn render_remote_workspace_list(
         // rows are filtered out by `remote_rows`, which is attach-only). Say
         // which so a workspace the user knows is shared not showing up reads as
         // "session offline" rather than "wsx forgot it".
-        let msg = if list.records.is_empty() {
+        let msg = if list.records.is_empty() && list.can_share {
+            format!("no workspaces on {}", list.host_name)
+        } else if list.records.is_empty() {
             format!("no shared workspaces on {}", list.host_name)
         } else {
             format!("no live sessions on {}", list.host_name)
@@ -70,8 +76,9 @@ pub fn render_remote_workspace_list(
     } else {
         // Three aligned columns: agent | <glyph> #<num> branch | repo/workspace.
         // The branch cell keeps the dashboard's lifecycle glyph + color (dim when
-        // status is unknown / no PR) and gains the PR number when known. No
-        // liveness marker: `remote_rows` is attach-only, so every row is alive.
+        // status is unknown / no PR) and gains the PR number when known. A
+        // dormant row (no live session; Enter shares it) names its state in the
+        // agent column instead and is drawn dim throughout.
         //
         // The branch prefix (glyph + `#<num>`) is kept separate from the branch
         // name so truncation trims the *name*, never the status prefix.
@@ -93,9 +100,17 @@ pub fn render_remote_workspace_list(
         // Desired column widths derive from content (capped) so rows line up,
         // then shrink to fit the panel. Layout per row:
         // indent(1) + agent + gap(2) + branch + gap(2) + ws.
-        let agent_desired = rows
+        let agent_cells: Vec<&str> = rows
             .iter()
-            .map(|r| display_width(r.label))
+            .map(|r| match (r.attach_session(), r.shared) {
+                (Some(_), _) => r.label,
+                (None, true) => "stopped",
+                (None, false) => "not shared",
+            })
+            .collect();
+        let agent_desired = agent_cells
+            .iter()
+            .map(|l| display_width(l))
             .max()
             .unwrap_or(1)
             .clamp(1, 14);
@@ -117,18 +132,31 @@ pub fn render_remote_workspace_list(
 
         let mut lines: Vec<Line> = Vec::new();
         for (i, row) in rows.iter().enumerate() {
+            let dormant = row.attach_session().is_none();
             let branch_style = theme
                 .lifecycle_style(row.lifecycle)
+                .filter(|_| !dormant)
                 .unwrap_or_else(|| theme.dim_style());
+            let rest_style = if dormant {
+                theme.dim_style()
+            } else {
+                Style::default()
+            };
             // Truncate the branch *name* to the room left after the prefix, so the
             // glyph and `#<num>` always survive even in a narrow panel.
             let prefix_w = display_width(&prefixes[i]);
             let name = truncate(row.branch, branch_w.saturating_sub(prefix_w));
             let branch_cell = truncate_pad(&format!("{}{name}", prefixes[i]), branch_w);
             let mut spans = vec![
-                Span::raw(format!(" {}  ", truncate_pad(row.label, agent_w))),
+                Span::styled(
+                    format!(" {}  ", truncate_pad(agent_cells[i], agent_w)),
+                    rest_style,
+                ),
                 Span::styled(branch_cell, branch_style),
-                Span::raw(format!("  {}", truncate_pad(&ws_cells[i], ws_w))),
+                Span::styled(
+                    format!("  {}", truncate_pad(&ws_cells[i], ws_w)),
+                    rest_style,
+                ),
             ];
             // Selected row: tint only the background so the lifecycle color and
             // the neutral spans stay readable — the same `selected_bg_style`
@@ -150,8 +178,12 @@ pub fn render_remote_workspace_list(
     }
 
     f.render_widget(
-        Paragraph::new("[\u{2191}/\u{2193}] move   [enter] attach   [r] refresh   [esc] close")
-            .style(theme.dim_style()),
+        Paragraph::new(if list.can_share {
+            "[\u{2191}/\u{2193}] move   [enter] attach / share   [r] refresh   [esc] close"
+        } else {
+            "[\u{2191}/\u{2193}] move   [enter] attach   [r] refresh   [esc] close"
+        })
+        .style(theme.dim_style()),
         footer_area,
     );
 }
@@ -205,6 +237,7 @@ mod tests {
         RemoteList {
             host_name: "mini".into(),
             dest: "mini:".into(),
+            can_share: false,
             records: vec![SharedWorkspaceRecord {
                 repo: "r".into(),
                 workspace: "w".into(),
@@ -249,6 +282,42 @@ mod tests {
             .join("\n")
     }
 
+    #[test]
+    fn a_shareable_host_lists_dormant_workspaces_by_state() {
+        let mut list = list_with_rows();
+        list.can_share = true;
+        let dormant = |ws: &str, shared: bool| SharedWorkspaceRecord {
+            repo: "r".into(),
+            workspace: ws.into(),
+            branch: format!("r/{ws}"),
+            worktree_path: format!("/x/{ws}"),
+            shared,
+            agents: vec![SharedAgentRecord {
+                label: "claude".into(),
+                agent: "claude".into(),
+                tmux_session: None,
+                alive: false,
+            }],
+            lifecycle: None,
+            pr_number: None,
+        };
+        list.records.push(dormant("direct", false));
+        list.records.push(dormant("idle", true));
+
+        let text = render_to_string(&list, 0, None);
+
+        assert!(text.contains(" workspaces on mini "), "{text}");
+        assert!(!text.contains("shared workspaces on"), "{text}");
+        let line = |ws: &str| {
+            text.lines()
+                .find(|l| l.contains(&format!("r/{ws} ")))
+                .unwrap()
+        };
+        assert!(line("direct").contains("not shared"), "{text}");
+        assert!(line("idle").contains("stopped"), "{text}");
+        assert!(text.contains("[enter] attach / share"), "{text}");
+    }
+
     /// Render one shared workspace at `lifecycle` and return the foreground
     /// color of the first cell of its branch glyph — the picker's analog of the
     /// dashboard's branch coloring. Used to pin PR-status colors.
@@ -261,6 +330,7 @@ mod tests {
         let list = RemoteList {
             host_name: "mini".into(),
             dest: "mini:".into(),
+            can_share: false,
             records: vec![SharedWorkspaceRecord {
                 repo: "r".into(),
                 workspace: "w".into(),
@@ -327,6 +397,7 @@ mod tests {
         let list = RemoteList {
             host_name: "mini".into(),
             dest: "mini:".into(),
+            can_share: false,
             records: vec![SharedWorkspaceRecord {
                 repo: "r".into(),
                 workspace: "w".into(),
@@ -355,6 +426,7 @@ mod tests {
         let list = RemoteList {
             host_name: "mini".into(),
             dest: "mini:".into(),
+            can_share: false,
             records: vec![],
         };
         let text = render_to_string(&list, 0, None);
@@ -440,6 +512,7 @@ mod tests {
         RemoteList {
             host_name: "mini".into(),
             dest: "mini:".into(),
+            can_share: false,
             records: vec![
                 mk("short", Some(42), "alpha"),
                 mk("a-much-longer-branch-name", Some(2087), "beta"),
@@ -463,6 +536,7 @@ mod tests {
         let list = RemoteList {
             host_name: "mini".into(),
             dest: "mini:".into(),
+            can_share: false,
             records: vec![SharedWorkspaceRecord {
                 repo: "repo".into(),
                 workspace: "alpha".into(),
@@ -516,6 +590,7 @@ mod tests {
         let list = RemoteList {
             host_name: "mini".into(),
             dest: "mini:".into(),
+            can_share: false,
             records: vec![SharedWorkspaceRecord {
                 repo: "倉庫".into(),
                 workspace: "作業スペース".into(),

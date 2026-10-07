@@ -329,6 +329,7 @@ async fn remote_bottom_bar_shows_global_pinned_and_pr_chip() {
         crate::app::RemoteList {
             host_name: "mini".into(),
             dest: "eben@mini".into(),
+            can_share: false,
             records: vec![SharedWorkspaceRecord {
                 repo: "r".into(),
                 workspace: "w".into(),
@@ -609,4 +610,146 @@ async fn remote_workspace_list_esc_closes_modal_and_clears_remote_list() {
         app.remote_list.is_none(),
         "Esc should clear app.remote_list (ephemeral contract)"
     );
+}
+
+/// A host that can share, listing one direct workspace and nothing live.
+fn shareable_remote_list() -> crate::app::RemoteList {
+    use crate::commands::shared::{SharedAgentRecord, SharedWorkspaceRecord};
+    crate::app::RemoteList {
+        host_name: "mini".into(),
+        dest: "eben@mini".into(),
+        can_share: true,
+        records: vec![SharedWorkspaceRecord {
+            repo: "r".into(),
+            workspace: "w".into(),
+            branch: "b".into(),
+            worktree_path: "/x".into(),
+            shared: false,
+            agents: vec![SharedAgentRecord {
+                label: "claude".into(),
+                agent: "claude".into(),
+                tmux_session: None,
+                alive: false,
+            }],
+            lifecycle: None,
+            pr_number: None,
+        }],
+    }
+}
+
+/// An app showing `shareable_remote_list` with its one (dormant) row selected,
+/// and ssh pointed at a fake running `script`.
+fn app_on_shareable_list(
+    dir: &std::path::Path,
+    script: &str,
+) -> (Arc<Mutex<App>>, EnvGuard, tempfile::TempDir) {
+    let fake = dir.join("fake-ssh.sh");
+    std::fs::write(&fake, format!("#!/bin/sh\n{script}")).unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let mut env = EnvGuard::new();
+    env.set("WSX_SSH_BIN", fake.to_str().unwrap());
+    let tmp = tempfile::TempDir::new().unwrap();
+    let mut app = App::new(Store::open_in_memory().unwrap(), tmp.path().to_path_buf()).unwrap();
+    app.remote_list = Some(shareable_remote_list());
+    app.modal = Some(Modal::RemoteWorkspaceList {
+        selected: 0,
+        notice: None,
+    });
+    (Arc::new(Mutex::new(app)), env, tmp)
+}
+
+async fn key(app: &Arc<Mutex<App>>, code: crossterm::event::KeyCode) {
+    let mut g = app.lock().await;
+    let k = crossterm::event::KeyEvent::new(code, KeyModifiers::empty());
+    handle_event(&mut g, app, CtEvent::Key(k)).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn enter_on_dormant_row_confirms_then_shares_and_attaches() {
+    use crossterm::event::KeyCode;
+    let dir = tempfile::tempdir().unwrap();
+    // The share call prints the fresh record; the attach that follows
+    // streams like a live tmux client.
+    let (app, _env, _tmp) = app_on_shareable_list(
+        dir.path(),
+        "case \"$*\" in\n\
+         *'workspace share r w --restart --json'*) echo '{\"repo\":\"r\",\"workspace\":\"w\",\"branch\":\"b\",\"worktree_path\":\"/x\",\"shared\":true,\"agents\":[{\"label\":\"claude\",\"agent\":\"claude\",\"tmux_session\":\"wsx-r-w\",\"alive\":true}]}';;\n\
+         *) for i in $(seq 1 60); do echo remote-beat; sleep 1; done;;\n\
+         esac\n",
+    );
+
+    key(&app, KeyCode::Enter).await;
+    match &app.lock().await.modal {
+        Some(Modal::RemoteShareConfirm {
+            repo,
+            workspace,
+            shared,
+            ..
+        }) => assert!(repo == "r" && workspace == "w" && !shared),
+        other => panic!("expected the share confirmation, got {other:?}"),
+    }
+
+    key(&app, KeyCode::Char('y')).await;
+    assert!(matches!(
+        app.lock().await.modal,
+        Some(Modal::RemoteShareRunning { .. })
+    ));
+
+    wait_until(&app, "the share to finish and attach", |g| {
+        matches!(g.view, crate::ui::View::AttachedRemote)
+    })
+    .await;
+    let mut g = app.lock().await;
+    assert_eq!(g.remote_target.as_ref().unwrap().tmux, "wsx-r-w");
+    assert!(
+        g.remote_list.as_ref().unwrap().records[0].shared,
+        "the listed record is replaced by the fresh one"
+    );
+    crate::app::detach_remote(&mut g);
+}
+
+#[tokio::test]
+async fn a_failed_remote_share_returns_to_the_list_with_the_reason() {
+    use crossterm::event::KeyCode;
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _env, _tmp) = app_on_shareable_list(
+        dir.path(),
+        "echo 'error: no wsx dashboard on this host picked up the request' >&2\nexit 1\n",
+    );
+
+    key(&app, KeyCode::Enter).await;
+    key(&app, KeyCode::Char('y')).await;
+    wait_until(&app, "the failed share to reconcile", |g| {
+        g.pending_remote_gen.is_none()
+    })
+    .await;
+    match &app.lock().await.modal {
+        Some(Modal::RemoteWorkspaceList {
+            notice: Some(n), ..
+        }) => assert!(n.contains("no wsx dashboard"), "{n}"),
+        other => panic!("expected the list with the error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn esc_while_sharing_returns_to_the_list_and_ignores_the_result() {
+    use crossterm::event::KeyCode;
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _env, _tmp) = app_on_shareable_list(dir.path(), "sleep 1\necho '{}'\n");
+
+    key(&app, KeyCode::Enter).await;
+    key(&app, KeyCode::Char('y')).await;
+    key(&app, KeyCode::Esc).await;
+    {
+        let g = app.lock().await;
+        assert!(g.pending_remote_gen.is_none());
+        assert!(matches!(g.modal, Some(Modal::RemoteWorkspaceList { .. })));
+    }
+    // `n` on the confirmation backs out without sharing.
+    key(&app, KeyCode::Enter).await;
+    key(&app, KeyCode::Char('n')).await;
+    assert!(matches!(
+        app.lock().await.modal,
+        Some(Modal::RemoteWorkspaceList { notice: None, .. })
+    ));
 }

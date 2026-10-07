@@ -40,24 +40,34 @@ pub(super) async fn remote_workspace_list(
             app.modal = Some(Modal::RemoteWorkspaceList { selected, notice });
         }
         KeyCode::Enter => {
-            // Resolve the selected row's tmux session (only alive rows
-            // carry one) and the host from `remote_list`, then attach
-            // over ssh. The remote list is left intact so a later
-            // detach lands back on the same modal-less dashboard.
-            let target = app.remote_list.as_ref().and_then(|list| {
+            // A live row attaches over ssh; a dormant one (no live session)
+            // asks to share it on the host first. The remote list is left
+            // intact so a later detach lands back on the same modal-less
+            // dashboard.
+            enum Pick {
+                Attach(crate::app::RemoteTarget),
+                Share(Modal),
+            }
+            let pick = app.remote_list.as_ref().and_then(|list| {
                 let rows = crate::app::remote_rows(list);
-                rows.get(selected).and_then(|r| {
-                    r.alive.then_some(r.tmux_session).flatten().map(|tmux| {
-                        crate::app::RemoteTarget {
-                            host_name: list.host_name.clone(),
-                            dest: list.dest.clone(),
-                            tmux: tmux.to_string(),
-                        }
-                    })
+                let row = rows.get(selected)?;
+                Some(match row.attach_session() {
+                    Some(tmux) => Pick::Attach(crate::app::RemoteTarget {
+                        host_name: list.host_name.clone(),
+                        dest: list.dest.clone(),
+                        tmux: tmux.to_string(),
+                    }),
+                    None => Pick::Share(Modal::RemoteShareConfirm {
+                        selected,
+                        host_name: list.host_name.clone(),
+                        repo: row.repo.to_string(),
+                        workspace: row.workspace.to_string(),
+                        shared: row.shared,
+                    }),
                 })
             });
-            match target {
-                Some(target) => {
+            match pick {
+                Some(Pick::Attach(target)) => {
                     if let Err(e) = crate::app::attach_remote(app, target, 80, 24) {
                         app.modal = Some(Modal::RemoteWorkspaceList {
                             selected,
@@ -67,6 +77,7 @@ pub(super) async fn remote_workspace_list(
                     // On success `attach_remote` set the view + cleared
                     // the modal; nothing more to do here.
                 }
+                Some(Pick::Share(confirm)) => app.modal = Some(confirm),
                 None => {
                     app.modal = Some(Modal::RemoteWorkspaceList {
                         selected,
@@ -172,5 +183,74 @@ pub(super) async fn remote_list_loading(
         app.pending_remote_gen = None;
     }
 
+    Ok(())
+}
+
+/// `y`/Enter shares the workspace on the host in the background and swaps to
+/// `RemoteShareRunning`; `n`/Esc goes back to the list.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn remote_share_confirm(
+    app: &mut App,
+    shared: &SharedApp,
+    k: crossterm::event::KeyEvent,
+    selected: usize,
+    host_name: String,
+    repo: String,
+    workspace: String,
+    ws_shared: bool,
+) -> Result<()> {
+    match k.code {
+        KeyCode::Char('y') | KeyCode::Enter => {
+            let Some(dest) = app.remote_list.as_ref().map(|l| l.dest.clone()) else {
+                app.modal = None;
+                return Ok(());
+            };
+            let share_gen = app.alloc_remote_gen();
+            app.modal = Some(Modal::RemoteShareRunning {
+                selected,
+                host_name,
+                workspace: format!("{repo}/{workspace}"),
+            });
+            let shared_clone = shared.clone();
+            tokio::spawn(async move {
+                let result =
+                    crate::commands::shared_hosts::share_remote(&dest, &repo, &workspace).await;
+                crate::app::reconcile_remote_share(shared_clone, share_gen, selected, result).await;
+            });
+        }
+        KeyCode::Char('n') | KeyCode::Esc => {
+            app.modal = Some(Modal::RemoteWorkspaceList {
+                selected,
+                notice: None,
+            });
+        }
+        _ => {
+            app.modal = Some(Modal::RemoteShareConfirm {
+                selected,
+                host_name,
+                repo,
+                workspace,
+                shared: ws_shared,
+            });
+        }
+    }
+    Ok(())
+}
+
+pub(super) async fn remote_share_running(
+    app: &mut App,
+    k: crossterm::event::KeyEvent,
+    selected: usize,
+) -> Result<()> {
+    if k.code == KeyCode::Esc {
+        // Drop the generation so the eventual reconcile no-ops instead of
+        // yanking the user into an attach they backed out of. The host
+        // finishes the share regardless; a refresh shows it.
+        app.pending_remote_gen = None;
+        app.modal = Some(Modal::RemoteWorkspaceList {
+            selected,
+            notice: Some("the share carries on on the host; [r] refreshes".to_string()),
+        });
+    }
     Ok(())
 }

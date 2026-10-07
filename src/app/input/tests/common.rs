@@ -198,6 +198,7 @@ pub(super) fn mixed_liveness_remote_list() -> crate::app::RemoteList {
     crate::app::RemoteList {
         host_name: "mini".into(),
         dest: "eben@mini".into(),
+        can_share: false,
         records: vec![SharedWorkspaceRecord {
             repo: "r".into(),
             workspace: "w".into(),
@@ -230,6 +231,7 @@ pub(super) fn all_dead_remote_list() -> crate::app::RemoteList {
     crate::app::RemoteList {
         host_name: "mini".into(),
         dest: "eben@mini".into(),
+        can_share: false,
         records: vec![SharedWorkspaceRecord {
             repo: "r".into(),
             workspace: "w".into(),

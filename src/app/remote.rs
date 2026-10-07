@@ -11,6 +11,10 @@ pub struct RemoteList {
     pub host_name: String,
     pub dest: String,
     pub records: Vec<crate::commands::shared::SharedWorkspaceRecord>,
+    /// The host runs a wsx that lists every workspace and takes
+    /// `workspace share --restart`, so workspaces without a live session are
+    /// offered for sharing. False for an older host: only live sessions show.
+    pub can_share: bool,
 }
 
 /// A resolved remote attach target: the display name of the host, its ssh
@@ -24,11 +28,14 @@ pub struct RemoteTarget {
     pub tmux: String,
 }
 
-/// One attachable row of the remote list: workspace context + one agent
-/// session. Multiple agent instances on the same workspace flatten into
-/// separate rows here — the shared helper both `Modal::RemoteWorkspaceList`'s
-/// key handler (input.rs) and its renderer (ui/modal/remote_workspace_list.rs)
-/// build rows from, so selection indices and rendered rows always agree.
+/// One row of the remote list. A *live* row is one agent session to attach
+/// to (`alive`, with a `tmux_session`); multiple agent instances on the same
+/// workspace flatten into separate live rows. A *dormant* row stands for a
+/// whole workspace with no live session — not shared, or shared with its
+/// agents stopped — and Enter on it offers to share it and restart its agents
+/// on the host. This is the shared helper both `Modal::RemoteWorkspaceList`'s
+/// key handler and its renderer build rows from, so selection indices and
+/// rendered rows always agree.
 pub(crate) struct RemoteRow<'a> {
     pub workspace: &'a str,
     pub repo: &'a str,
@@ -36,6 +43,9 @@ pub(crate) struct RemoteRow<'a> {
     pub label: &'a str,
     pub tmux_session: Option<&'a str>,
     pub alive: bool,
+    /// Whether the workspace is tmux-shared on the host. Tells a dormant row's
+    /// "stopped" apart from "not shared".
+    pub shared: bool,
     /// The workspace's PR lifecycle as computed on the remote host (see
     /// `SharedWorkspaceRecord::lifecycle`). Per-workspace, so every agent row
     /// flattened from the same record carries the same value. `None` = unknown
@@ -48,38 +58,48 @@ pub(crate) struct RemoteRow<'a> {
     pub pr_number: Option<u32>,
 }
 
-/// Flatten `list.records` into one `RemoteRow` per *attachable* agent
-/// instance, in record/agent order. The picker is attach-only: an agent
-/// contributes a row only when it is `alive` AND carries a `tmux_session`
-/// name — the same predicate the `Enter` handler needs to build a
-/// `RemoteTarget`. Dead-but-shared workspaces (whose remote tmux session has
-/// exited or was never started) are hidden rather than listed as rows that
-/// only ever answer Enter with "no live session to attach to". Empty
-/// `records`, records with no agents, and records whose agents are all dead
-/// all contribute no rows.
+impl RemoteRow<'_> {
+    /// The tmux session Enter attaches to; `None` on a dormant row.
+    pub(crate) fn attach_session(&self) -> Option<&str> {
+        self.tmux_session.filter(|_| self.alive)
+    }
+}
+
+/// Flatten `list.records` into rows: first one live row per attachable agent
+/// (`alive` AND carrying a `tmux_session` — the predicate `Enter` needs to
+/// build a `RemoteTarget`), in record/agent order; then, when the host
+/// `can_share`, one dormant row per workspace with no live agent at all.
+/// An older host lists only shared workspaces and can't share more, so its
+/// dead sessions are hidden rather than listed as rows that could only
+/// answer Enter with "no live session to attach to".
 pub(crate) fn remote_rows(list: &RemoteList) -> Vec<RemoteRow<'_>> {
-    let mut out = Vec::new();
+    let mut live = Vec::new();
+    let mut dormant = Vec::new();
     for rec in &list.records {
+        let row = |label, tmux_session, alive| RemoteRow {
+            workspace: &rec.workspace,
+            repo: &rec.repo,
+            branch: &rec.branch,
+            label,
+            tmux_session,
+            alive,
+            shared: rec.shared,
+            lifecycle: rec.lifecycle,
+            pr_number: rec.pr_number,
+        };
+        let before = live.len();
         for agent in &rec.agents {
-            let Some(tmux_session) = agent.tmux_session.as_deref() else {
-                continue;
-            };
-            if !agent.alive {
-                continue;
+            if let (Some(tmux_session), true) = (agent.tmux_session.as_deref(), agent.alive) {
+                live.push(row(&agent.label, Some(tmux_session), true));
             }
-            out.push(RemoteRow {
-                workspace: &rec.workspace,
-                repo: &rec.repo,
-                branch: &rec.branch,
-                label: &agent.label,
-                tmux_session: Some(tmux_session),
-                alive: agent.alive,
-                lifecycle: rec.lifecycle,
-                pr_number: rec.pr_number,
-            });
+        }
+        if live.len() == before && list.can_share {
+            let label = rec.agents.first().map_or("-", |a| a.label.as_str());
+            dormant.push(row(label, None, false));
         }
     }
-    out
+    live.extend(dormant);
+    live
 }
 
 #[cfg(test)]
@@ -96,6 +116,7 @@ mod remote_rows_tests {
         let list = RemoteList {
             host_name: "mini".into(),
             dest: "d".into(),
+            can_share: false,
             records: vec![SharedWorkspaceRecord {
                 repo: "r".into(),
                 workspace: "w".into(),
@@ -133,6 +154,7 @@ mod remote_rows_tests {
         let list = RemoteList {
             host_name: "mini".into(),
             dest: "d".into(),
+            can_share: false,
             records: vec![SharedWorkspaceRecord {
                 repo: "r".into(),
                 workspace: "w".into(),
@@ -157,6 +179,7 @@ mod remote_rows_tests {
         let list = RemoteList {
             host_name: "mini".into(),
             dest: "d".into(),
+            can_share: false,
             records: vec![SharedWorkspaceRecord {
                 repo: "r".into(),
                 workspace: "w".into(),
@@ -181,9 +204,68 @@ mod remote_rows_tests {
         let list = RemoteList {
             host_name: "mini".into(),
             dest: "d".into(),
+            can_share: false,
             records: vec![],
         };
         assert!(remote_rows(&list).is_empty());
+    }
+
+    fn rec(workspace: &str, shared: bool, agents: Vec<SharedAgentRecord>) -> SharedWorkspaceRecord {
+        SharedWorkspaceRecord {
+            repo: "r".into(),
+            workspace: workspace.into(),
+            branch: "b".into(),
+            worktree_path: "/x".into(),
+            shared,
+            agents,
+            lifecycle: None,
+            pr_number: None,
+        }
+    }
+
+    fn agent(tmux_session: Option<&str>, alive: bool) -> SharedAgentRecord {
+        SharedAgentRecord {
+            label: "claude".into(),
+            agent: "claude".into(),
+            tmux_session: tmux_session.map(Into::into),
+            alive,
+        }
+    }
+
+    #[test]
+    fn remote_rows_offer_dormant_workspaces_after_live_ones_when_host_can_share() {
+        let list = RemoteList {
+            host_name: "mini".into(),
+            dest: "d".into(),
+            can_share: true,
+            records: vec![
+                rec("direct", false, vec![agent(None, false)]),
+                rec("stopped", true, vec![agent(Some("wsx-r-stopped"), false)]),
+                rec("live", true, vec![agent(Some("wsx-r-live"), true)]),
+            ],
+        };
+        let rows = remote_rows(&list);
+        let names: Vec<_> = rows.iter().map(|r| r.workspace).collect();
+        assert_eq!(names, ["live", "direct", "stopped"]);
+        assert_eq!(rows[0].attach_session(), Some("wsx-r-live"));
+        assert!(rows[1].attach_session().is_none() && !rows[1].shared);
+        // A dead session name is not something to attach to.
+        assert!(rows[2].attach_session().is_none() && rows[2].shared);
+    }
+
+    #[test]
+    fn remote_rows_one_live_agent_keeps_the_workspace_off_the_dormant_list() {
+        let list = RemoteList {
+            host_name: "mini".into(),
+            dest: "d".into(),
+            can_share: true,
+            records: vec![rec(
+                "w",
+                true,
+                vec![agent(Some("wsx-r-w"), true), agent(None, false)],
+            )],
+        };
+        assert_eq!(remote_rows(&list).len(), 1);
     }
 }
 
@@ -287,7 +369,7 @@ pub(crate) async fn reconcile_remote_list(
     my_gen: u64,
     host_name: String,
     dest: String,
-    result: Result<Vec<crate::commands::shared::SharedWorkspaceRecord>>,
+    result: Result<crate::commands::shared_hosts::SharedListing>,
 ) {
     let mut g = app.lock().await;
     if g.pending_remote_gen != Some(my_gen) {
@@ -296,11 +378,12 @@ pub(crate) async fn reconcile_remote_list(
     }
     g.pending_remote_gen = None;
     match result {
-        Ok(records) => {
+        Ok(listing) => {
             g.remote_list = Some(RemoteList {
                 host_name,
                 dest,
-                records,
+                records: listing.records,
+                can_share: listing.can_share,
             });
             g.modal = Some(crate::ui::modal::Modal::RemoteWorkspaceList {
                 selected: 0,
@@ -313,6 +396,67 @@ pub(crate) async fn reconcile_remote_list(
             });
         }
     }
+}
+
+/// Reconcile a spawned `share_remote` task started from the dormant row at
+/// `selected`. Same generation guard as `reconcile_remote_list`. On success
+/// the fresh record replaces the listed one and wsx attaches straight to its
+/// first live agent; on failure the list comes back with the error inline.
+pub(crate) async fn reconcile_remote_share(
+    app: SharedApp,
+    my_gen: u64,
+    selected: usize,
+    result: Result<crate::commands::shared::SharedWorkspaceRecord>,
+) {
+    let mut g = app.lock().await;
+    if g.pending_remote_gen != Some(my_gen) {
+        return;
+    }
+    g.pending_remote_gen = None;
+    let Some(list) = g.remote_list.as_mut() else {
+        g.modal = None;
+        return;
+    };
+    let rec = match result {
+        Ok(rec) => rec,
+        Err(e) => {
+            g.modal = Some(crate::ui::modal::Modal::RemoteWorkspaceList {
+                selected,
+                notice: Some(e.to_string()),
+            });
+            return;
+        }
+    };
+    let session = rec
+        .agents
+        .iter()
+        .find(|a| a.alive)
+        .and_then(|a| a.tmux_session.clone());
+    let target = session.map(|tmux| RemoteTarget {
+        host_name: list.host_name.clone(),
+        dest: list.dest.clone(),
+        tmux,
+    });
+    let workspace = format!("{}/{}", rec.repo, rec.workspace);
+    match list
+        .records
+        .iter_mut()
+        .find(|r| r.repo == rec.repo && r.workspace == rec.workspace)
+    {
+        Some(slot) => *slot = rec,
+        None => list.records.push(rec),
+    }
+    let notice = match target {
+        Some(target) => match attach_remote(&mut g, target, 80, 24) {
+            Ok(()) => return,
+            Err(e) => format!("shared {workspace}, but attach failed: {e}"),
+        },
+        None => format!("shared {workspace}, but the host reported no live session"),
+    };
+    g.modal = Some(crate::ui::modal::Modal::RemoteWorkspaceList {
+        selected: 0,
+        notice: Some(notice),
+    });
 }
 
 #[cfg(test)]
@@ -354,7 +498,10 @@ mod reconcile_remote_tests {
             g1,
             "mini".into(),
             "host".into(),
-            Ok(vec![rec.clone()]),
+            Ok(crate::commands::shared_hosts::SharedListing {
+                records: vec![rec.clone()],
+                can_share: true,
+            }),
         )
         .await;
         assert!(shared.lock().await.remote_list.is_none());
@@ -364,7 +511,10 @@ mod reconcile_remote_tests {
             g2,
             "mini".into(),
             "host".into(),
-            Ok(vec![rec]),
+            Ok(crate::commands::shared_hosts::SharedListing {
+                records: vec![rec],
+                can_share: true,
+            }),
         )
         .await;
         {
@@ -420,7 +570,10 @@ mod reconcile_remote_tests {
             7, // stale — does not match pending_remote_gen
             "mini".into(),
             "host".into(),
-            Ok(vec![rec]),
+            Ok(crate::commands::shared_hosts::SharedListing {
+                records: vec![rec],
+                can_share: true,
+            }),
         )
         .await;
         let g = shared.lock().await;

@@ -134,6 +134,10 @@ fn shell_safe(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | '+' | '@'))
 }
 
+/// Overall bound on one remote call: past the host's own waits for a share
+/// (`ShareWaits`, ~45s) plus slack for the connection and `gh` enrichment.
+const REMOTE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
 /// Run `ssh <dest> "sh -lc 'wsx <args>'"` and return its stdout.
 ///
 /// The remote command is ONE pre-quoted argument, not several words, because
@@ -147,7 +151,7 @@ fn shell_safe(s: &str) -> bool {
 /// `args` must therefore hold no single quotes (callers pass literals and
 /// `shell_safe` names).
 async fn run_remote_wsx(dest: &str, args: &str) -> crate::error::Result<String> {
-    let out = tokio::process::Command::new(ssh_bin())
+    let run = tokio::process::Command::new(ssh_bin())
         // `-o BatchMode=yes` keeps this background call off /dev/tty: a missing
         // key or unknown host fails fast to stderr (→ the error modal) instead
         // of blocking on a password / host-key prompt no one can answer.
@@ -162,8 +166,19 @@ async fn run_remote_wsx(dest: &str, args: &str) -> crate::error::Result<String> 
             dest,
             &format!("sh -lc 'wsx {args}'"),
         ])
-        .output()
+        // Dropped on timeout: don't leave the ssh client behind.
+        .kill_on_drop(true)
+        .output();
+    // `ConnectTimeout` only bounds the connect; a host that hangs after it
+    // would otherwise hold the loading modal forever.
+    let out = tokio::time::timeout(REMOTE_TIMEOUT, run)
         .await
+        .map_err(|_| {
+            crate::error::Error::UserInput(format!(
+                "ssh {dest}: no answer within {}s",
+                REMOTE_TIMEOUT.as_secs()
+            ))
+        })?
         .map_err(|e| crate::error::Error::UserInput(format!("ssh spawn failed: {e}")))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);

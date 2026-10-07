@@ -181,7 +181,9 @@ pub async fn share_and_restart(
             ShareRequestState::Pending | ShareRequestState::Claimed => {
                 if start.elapsed() >= waits.claim + waits.finish {
                     return Err(Error::UserInput(
-                        "the dashboard took too long to restart the workspace's agents".into(),
+                        "the dashboard took too long to restart the workspace's agents; \
+                         it may still finish — check `wsx shared list`"
+                            .into(),
                     ));
                 }
             }
@@ -541,7 +543,11 @@ mod tests {
 
         assert!(err.contains("no wsx dashboard"), "{err}");
         assert!(
-            store.claim_share_requests().unwrap().is_empty(),
+            store
+                .claim_share_requests(|_| true)
+                .unwrap()
+                .claimed
+                .is_empty(),
             "the request must be withdrawn, not left for a later dashboard"
         );
         assert!(!store.workspace_by_id(ws.id).unwrap().unwrap().shared);
@@ -556,7 +562,7 @@ mod tests {
         let fut = share_and_restart(&store, &ws, quick_waits(), |_| false);
         let finish = async {
             loop {
-                if let Some(req) = store.claim_share_requests().unwrap().pop() {
+                if let Some(req) = store.claim_share_requests(|_| true).unwrap().claimed.pop() {
                     store
                         .finish_share_request(req.id, Some("tmux missing"))
                         .unwrap();
@@ -577,7 +583,7 @@ mod tests {
         let fut = share_and_restart(&store, &ws, quick_waits(), |n| n == "wsx-r-direct");
         let dashboard = async {
             loop {
-                if let Some(req) = store.claim_share_requests().unwrap().pop() {
+                if let Some(req) = store.claim_share_requests(|_| true).unwrap().claimed.pop() {
                     store.set_workspace_shared(ws.id, true).unwrap();
                     let inst = &store.workspace_agents(ws.id).unwrap()[0];
                     store

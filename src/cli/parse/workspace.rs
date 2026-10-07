@@ -191,34 +191,45 @@ pub(in crate::cli) fn parse_workspace(it: &mut Args) -> Result<CliAction> {
                 force_delete_branch,
             })
         }
-        Some("share") => {
-            let repo = it.next().ok_or_else(|| Error::Usage {
+        Some(sub @ ("share" | "unshare")) => {
+            let shared = sub == "share";
+            let usage = if shared {
+                "workspace share <repo> <name> [--restart [--json]]"
+            } else {
+                "workspace unshare <repo> <name>"
+            };
+            let usage_err = || Error::Usage {
                 group: None,
-                msg: "workspace share <repo> <name>".into(),
-            })?;
-            let name = it.next().ok_or_else(|| Error::Usage {
-                group: None,
-                msg: "workspace share <repo> <name>".into(),
-            })?;
+                msg: usage.into(),
+            };
+            let repo = it.next().ok_or_else(usage_err)?;
+            let name = it.next().ok_or_else(usage_err)?;
+            let mut restart = false;
+            let mut json = false;
+            for arg in &mut *it {
+                match arg.as_str() {
+                    "--restart" if shared => restart = true,
+                    "--json" if shared => json = true,
+                    other => {
+                        return Err(Error::Usage {
+                            group: None,
+                            msg: format!("unknown arg: {other}"),
+                        });
+                    }
+                }
+            }
+            if json && !restart {
+                return Err(Error::Usage {
+                    group: None,
+                    msg: "--json needs --restart".into(),
+                });
+            }
             Ok(CliAction::WorkspaceShare {
                 repo,
                 name,
-                shared: true,
-            })
-        }
-        Some("unshare") => {
-            let repo = it.next().ok_or_else(|| Error::Usage {
-                group: None,
-                msg: "workspace unshare <repo> <name>".into(),
-            })?;
-            let name = it.next().ok_or_else(|| Error::Usage {
-                group: None,
-                msg: "workspace unshare <repo> <name>".into(),
-            })?;
-            Ok(CliAction::WorkspaceShare {
-                repo,
-                name,
-                shared: false,
+                shared,
+                restart,
+                json,
             })
         }
         other => Err(Error::Usage {

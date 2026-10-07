@@ -99,6 +99,129 @@ pub fn shared_list_records(
     Ok(out)
 }
 
+/// How long `wsx workspace share --restart` waits at each stage. The dashboard
+/// claims a request on its next tick, so `claim` only has to outlast a tick
+/// plus a slow refresh; `finish` covers spawning the agents; `live` covers the
+/// tmux client creating its session after the spawn returned.
+#[derive(Debug, Clone, Copy)]
+pub struct ShareWaits {
+    pub claim: std::time::Duration,
+    pub finish: std::time::Duration,
+    pub live: std::time::Duration,
+    pub poll: std::time::Duration,
+}
+
+impl Default for ShareWaits {
+    fn default() -> Self {
+        Self {
+            claim: std::time::Duration::from_secs(5),
+            finish: std::time::Duration::from_secs(30),
+            live: std::time::Duration::from_secs(10),
+            poll: std::time::Duration::from_millis(150),
+        }
+    }
+}
+
+/// The record for one workspace, as `shared list --all` would report it.
+fn workspace_record(
+    store: &Store,
+    ws: &crate::data::store::Workspace,
+    liveness: impl Fn(&str) -> bool,
+) -> Result<SharedWorkspaceRecord> {
+    shared_list_records(store, true, liveness)?
+        .into_iter()
+        .find(|r| r.worktree_path == ws.worktree_path.to_string_lossy())
+        .ok_or_else(|| crate::error::Error::UserInput(format!("workspace {} not found", ws.name)))
+}
+
+/// Every agent has a session name and that session is alive.
+fn all_live(rec: &SharedWorkspaceRecord) -> bool {
+    rec.shared && !rec.agents.is_empty() && rec.agents.iter().all(|a| a.alive)
+}
+
+/// `wsx workspace share <repo> <slug> --restart`: have the dashboard running
+/// on this host share `ws` and start its agents inside tmux, then wait until
+/// every agent's tmux session is up so a peer can attach right away. Returns
+/// the workspace's record with the live session names.
+///
+/// Only the dashboard can do this — a direct agent is its child process — so
+/// with no dashboard running the request is withdrawn and this errors rather
+/// than flipping the flag behind a dashboard that may start later. Whether a
+/// dashboard is up is learned only from the claim, never from
+/// `ipc::any_live_tui`: its socket directory follows `XDG_RUNTIME_DIR` or
+/// `TMPDIR`, which an ssh login (the usual caller) often doesn't share with
+/// the dashboard's session — on macOS especially — so it would turn a running
+/// dashboard away.
+pub async fn share_and_restart(
+    store: &Store,
+    ws: &crate::data::store::Workspace,
+    waits: ShareWaits,
+    liveness: impl Fn(&str) -> bool,
+) -> Result<SharedWorkspaceRecord> {
+    use crate::data::share_requests::ShareRequestState;
+    use crate::error::Error;
+
+    let rec = workspace_record(store, ws, &liveness)?;
+    if all_live(&rec) {
+        return Ok(rec);
+    }
+    let id = store.enqueue_share_request(ws.id)?;
+    let start = std::time::Instant::now();
+    loop {
+        match store.share_request_state(id)? {
+            ShareRequestState::Pending if start.elapsed() >= waits.claim => {
+                if store.withdraw_share_request(id)? {
+                    return Err(Error::UserInput(
+                        "no wsx dashboard on this host picked up the request; \
+                         start `wsx` here, since only the dashboard can restart its agents"
+                            .into(),
+                    ));
+                }
+            }
+            ShareRequestState::Pending | ShareRequestState::Claimed => {
+                if start.elapsed() >= waits.claim + waits.finish {
+                    return Err(Error::UserInput(
+                        "the dashboard took too long to restart the workspace's agents".into(),
+                    ));
+                }
+            }
+            ShareRequestState::Finished { error } => {
+                store.delete_share_request(id)?;
+                if let Some(e) = error {
+                    return Err(Error::UserInput(format!("sharing failed: {e}")));
+                }
+                break;
+            }
+            ShareRequestState::Gone => {
+                return Err(Error::UserInput(
+                    "the share request disappeared before it finished".into(),
+                ));
+            }
+        }
+        tokio::time::sleep(waits.poll).await;
+    }
+    let live_start = std::time::Instant::now();
+    loop {
+        let rec = workspace_record(store, ws, &liveness)?;
+        if all_live(&rec) {
+            return Ok(rec);
+        }
+        if live_start.elapsed() >= waits.live {
+            let down: Vec<&str> = rec
+                .agents
+                .iter()
+                .filter(|a| !a.alive)
+                .map(|a| a.label.as_str())
+                .collect();
+            return Err(Error::UserInput(format!(
+                "restarted, but no live tmux session for: {}",
+                down.join(", ")
+            )));
+        }
+        tokio::time::sleep(waits.poll).await;
+    }
+}
+
 /// Max `gh pr view` invocations in flight at once during enrichment. Bounds the
 /// process/network fan-out on a host sharing many workspaces instead of
 /// spawning one `gh` per workspace simultaneously.
@@ -384,6 +507,111 @@ mod tests {
             Some(crate::git::forge::BranchLifecycle::PrOpen)
         );
         assert_eq!(back[0].pr_number, Some(2087));
+    }
+
+    fn quick_waits() -> ShareWaits {
+        ShareWaits {
+            claim: std::time::Duration::from_millis(50),
+            finish: std::time::Duration::from_millis(50),
+            live: std::time::Duration::from_millis(50),
+            poll: std::time::Duration::from_millis(5),
+        }
+    }
+
+    fn direct_ws(store: &Store) -> crate::data::store::Workspace {
+        let repo = crate::data::repo::list(store).unwrap().remove(0);
+        store
+            .workspaces(repo.id)
+            .unwrap()
+            .into_iter()
+            .find(|w| w.name == "direct")
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn share_and_restart_without_a_dashboard_withdraws_and_errors() {
+        let store = Store::open_in_memory().unwrap();
+        seed(&store);
+        let ws = direct_ws(&store);
+
+        let err = share_and_restart(&store, &ws, quick_waits(), |_| false)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("no wsx dashboard"), "{err}");
+        assert!(
+            store.claim_share_requests().unwrap().is_empty(),
+            "the request must be withdrawn, not left for a later dashboard"
+        );
+        assert!(!store.workspace_by_id(ws.id).unwrap().unwrap().shared);
+    }
+
+    #[tokio::test]
+    async fn share_and_restart_reports_the_dashboards_error() {
+        let store = Store::open_in_memory().unwrap();
+        seed(&store);
+        let ws = direct_ws(&store);
+        // Stand in for the dashboard: the request it will see is the next id.
+        let fut = share_and_restart(&store, &ws, quick_waits(), |_| false);
+        let finish = async {
+            loop {
+                if let Some(req) = store.claim_share_requests().unwrap().pop() {
+                    store
+                        .finish_share_request(req.id, Some("tmux missing"))
+                        .unwrap();
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        };
+        let (res, ()) = tokio::join!(fut, finish);
+        assert!(res.unwrap_err().to_string().contains("tmux missing"));
+    }
+
+    #[tokio::test]
+    async fn share_and_restart_returns_live_sessions_once_the_dashboard_is_done() {
+        let store = Store::open_in_memory().unwrap();
+        seed(&store);
+        let ws = direct_ws(&store);
+        let fut = share_and_restart(&store, &ws, quick_waits(), |n| n == "wsx-r-direct");
+        let dashboard = async {
+            loop {
+                if let Some(req) = store.claim_share_requests().unwrap().pop() {
+                    store.set_workspace_shared(ws.id, true).unwrap();
+                    let inst = &store.workspace_agents(ws.id).unwrap()[0];
+                    store
+                        .set_instance_session_ref(inst.id, "wsx-r-direct")
+                        .unwrap();
+                    store.finish_share_request(req.id, None).unwrap();
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        };
+        let (res, ()) = tokio::join!(fut, dashboard);
+        let rec = res.unwrap();
+        assert!(rec.shared);
+        assert_eq!(rec.agents[0].tmux_session.as_deref(), Some("wsx-r-direct"));
+        assert!(rec.agents[0].alive);
+    }
+
+    #[tokio::test]
+    async fn share_and_restart_skips_the_dashboard_when_already_live() {
+        let store = Store::open_in_memory().unwrap();
+        seed(&store);
+        let repo = crate::data::repo::list(&store).unwrap().remove(0);
+        let ws = store
+            .workspaces(repo.id)
+            .unwrap()
+            .into_iter()
+            .find(|w| w.name == "w")
+            .unwrap();
+        // No dashboard at all, yet it succeeds: nothing needs restarting.
+        let rec = share_and_restart(&store, &ws, quick_waits(), |n| n == "wsx-r-w")
+            .await
+            .unwrap();
+        assert!(rec.agents[0].alive);
     }
 
     #[tokio::test]

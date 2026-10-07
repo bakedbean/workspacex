@@ -42,8 +42,8 @@ pub static GROUPS: &[GroupInfo] = &[
                 blurb: "Archive a workspace",
             },
             CmdInfo {
-                usage: "share <repo> <slug>",
-                blurb: "Convert a workspace to tmux-shared",
+                usage: "share <repo> <slug> [--restart [--json]]",
+                blurb: "Convert a workspace to tmux-shared (--restart: restart its agents now)",
             },
             CmdInfo {
                 usage: "unshare <repo> <slug>",

@@ -2166,10 +2166,16 @@ fn parses_workspace_archive_with_flags() {
 #[test]
 fn parses_workspace_share() {
     match parse(&["workspace", "share", "backend", "add-widgets"]).unwrap() {
-        CliAction::WorkspaceShare { repo, name, shared } => {
+        CliAction::WorkspaceShare {
+            repo,
+            name,
+            shared,
+            restart,
+            json,
+        } => {
             assert_eq!(repo, "backend");
             assert_eq!(name, "add-widgets");
-            assert!(shared);
+            assert!(shared && !restart && !json);
         }
         other => panic!("unexpected: {other:?}"),
     }
@@ -2178,13 +2184,37 @@ fn parses_workspace_share() {
 #[test]
 fn parses_workspace_unshare() {
     match parse(&["workspace", "unshare", "backend", "add-widgets"]).unwrap() {
-        CliAction::WorkspaceShare { repo, name, shared } => {
+        CliAction::WorkspaceShare {
+            repo, name, shared, ..
+        } => {
             assert_eq!(repo, "backend");
             assert_eq!(name, "add-widgets");
             assert!(!shared);
         }
         other => panic!("unexpected: {other:?}"),
     }
+}
+
+#[test]
+fn parses_workspace_share_restart_json() {
+    match parse(&["workspace", "share", "r", "w", "--restart", "--json"]).unwrap() {
+        CliAction::WorkspaceShare {
+            shared,
+            restart,
+            json,
+            ..
+        } => assert!(shared && restart && json),
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[test]
+fn parses_workspace_share_rejects_bad_flags() {
+    // --json alone would print nothing machine-readable.
+    assert!(parse(&["workspace", "share", "r", "w", "--json"]).is_err());
+    assert!(parse(&["workspace", "share", "r", "w", "--bogus"]).is_err());
+    // Restarting is a share-only notion.
+    assert!(parse(&["workspace", "unshare", "r", "w", "--restart"]).is_err());
 }
 
 #[test]

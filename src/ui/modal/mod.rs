@@ -150,10 +150,10 @@ pub enum Modal {
     /// (edit/term/diff/lazygit/rename/…) — the ones that act only on a
     /// selected workspace. Carries no state — dismissed without side effects.
     WorkspaceActions,
-    /// Browse the tmux-shared workspace listing fetched from a remote wsx
-    /// host (`App::remote_list`), opened by `reconcile_remote_list`. Rows are
-    /// flattened per agent instance via `crate::app::remote_rows`; `selected`
-    /// indexes into that flattened list. `notice` surfaces inline feedback
+    /// Browse the workspace listing fetched from a remote wsx host
+    /// (`App::remote_list`), opened by `reconcile_remote_list`. Rows come from
+    /// `crate::app::remote_rows` — one per live agent session, then one per
+    /// workspace Enter can share — and `selected` indexes into that list. `notice` surfaces inline feedback
     /// (e.g. "no live session to attach to") the way `ProcessList::notice`
     /// does, without needing a separate modal round-trip.
     RemoteWorkspaceList {
@@ -185,6 +185,25 @@ pub enum Modal {
     /// reopening a modal the user backed out of.
     RemoteListLoading {
         host_name: String,
+    },
+    /// Enter on a dormant row of `RemoteWorkspaceList`: confirm sharing
+    /// `repo/workspace` on `host_name`, which restarts its running agents
+    /// there. `selected` is the list row to return to.
+    RemoteShareConfirm {
+        selected: usize,
+        host_name: String,
+        repo: String,
+        workspace: String,
+        /// Already shared (agents stopped) vs. direct (agents restart).
+        shared: bool,
+    },
+    /// Shown while `share_remote` runs on the host. Esc returns to the list
+    /// and drops the pending generation, like `RemoteListLoading`; the share
+    /// itself carries on on the host.
+    RemoteShareRunning {
+        selected: usize,
+        host_name: String,
+        workspace: String,
     },
 }
 
@@ -437,6 +456,38 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
             "remote workspaces",
             format!("fetching shared workspaces from {host_name}…\n\n[esc] cancel"),
         ),
+        Modal::RemoteShareConfirm {
+            host_name,
+            repo,
+            workspace,
+            shared,
+            ..
+        } => {
+            let note = if *shared {
+                "Its agents are stopped; they start inside tmux there."
+            } else {
+                "Running agents restart inside tmux there (conversations\n\
+                 resume); stopped ones start."
+            };
+            (
+                "share remote workspace",
+                format!(
+                    "Share {repo}/{workspace} on {host_name} and attach?\n\n{note}\n\
+                     Needs wsx running on {host_name}.\n\n[y] share & attach   [n] back"
+                ),
+            )
+        }
+        Modal::RemoteShareRunning {
+            host_name,
+            workspace,
+            ..
+        } => (
+            "share remote workspace",
+            format!(
+                "sharing {workspace} on {host_name}…\n\n\
+                 waiting for its agents to come up in tmux\n\n[esc] back to the list"
+            ),
+        ),
         Modal::AgentPicker {
             selected, current, ..
         } => {
@@ -529,6 +580,20 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn remote_share_confirm_says_what_restarts_where() {
+        let text = render_to_text(&Modal::RemoteShareConfirm {
+            selected: 0,
+            host_name: "mini".into(),
+            repo: "r".into(),
+            workspace: "w".into(),
+            shared: false,
+        });
+        assert!(text.contains("Share r/w on mini and attach?"), "{text}");
+        assert!(text.contains("restart inside tmux"), "{text}");
+        assert!(text.contains("[y] share & attach"), "{text}");
     }
 
     /// Sharing eagerly starts stopped agents (see `toggle_workspace_shared`),

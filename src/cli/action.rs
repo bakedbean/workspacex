@@ -133,6 +133,8 @@ pub enum CliAction {
     },
     SharedList {
         json: bool,
+        /// Also list ready workspaces that aren't shared.
+        all: bool,
     },
     WorkspaceCreate {
         repo: String,
@@ -167,6 +169,11 @@ pub enum CliAction {
         repo: String,
         name: String,
         shared: bool,
+        /// Have the running dashboard restart the agents inside tmux, and
+        /// wait until their sessions are live.
+        restart: bool,
+        /// With `restart`: print the workspace's record as JSON.
+        json: bool,
     },
     SetupInstallSkill,
     SetupWaybar,

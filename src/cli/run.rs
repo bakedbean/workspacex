@@ -445,9 +445,10 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             // exec only returns on failure.
             return Err(Error::UserInput(format!("exec sh: {err}")));
         }
-        CliAction::SharedList { json } => {
+        CliAction::SharedList { json, all } => {
             let mut records = crate::commands::shared::shared_list_records(
                 &store,
+                all,
                 crate::pty::tmux::has_session,
             )?;
             // Colorable PR status is only useful to a remote picker consuming
@@ -459,7 +460,14 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&records)?);
             } else if records.is_empty() {
-                println!("no shared workspaces");
+                println!(
+                    "{}",
+                    if all {
+                        "no workspaces"
+                    } else {
+                        "no shared workspaces"
+                    }
+                );
             } else {
                 for rec in &records {
                     if rec.agents.is_empty() {
@@ -469,6 +477,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                     for agent in &rec.agents {
                         let session = agent.tmux_session.as_deref().unwrap_or("-");
                         let alive = match (agent.alive, &agent.tmux_session) {
+                            _ if !rec.shared => "unshared",
                             (true, _) => "alive",
                             (false, Some(_)) => "(dead)",
                             (false, None) => "-",
@@ -647,7 +656,41 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             crate::data::workspace::archive(&store, &r, &w, opts, |_| {}).await?;
             println!("archived workspace {}/{}", r.name, name);
         }
-        CliAction::WorkspaceShare { repo, name, shared } => {
+        CliAction::WorkspaceShare {
+            repo,
+            name,
+            shared,
+            restart: true,
+            json,
+        } => {
+            let r = lookup_repo(&store, &repo)?;
+            let w = lookup_workspace(&store, &r, &name)?;
+            debug_assert!(shared, "the parser only allows --restart on share");
+            let rec = crate::commands::shared::share_and_restart(
+                &store,
+                &w,
+                crate::commands::shared::ShareWaits::default(),
+                crate::pty::tmux::has_session,
+            )
+            .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&rec)?);
+            } else {
+                println!("workspace {}/{} is shared and running", r.name, name);
+                for agent in &rec.agents {
+                    if let Some(session) = &agent.tmux_session {
+                        println!("  {}: tmux attach -t '={session}'", agent.label);
+                    }
+                }
+            }
+        }
+        CliAction::WorkspaceShare {
+            repo,
+            name,
+            shared,
+            restart: false,
+            ..
+        } => {
             let r = lookup_repo(&store, &repo)?;
             let w = lookup_workspace(&store, &r, &name)?;
             if w.shared == shared {
@@ -666,6 +709,9 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                     if shared { "shared" } else { "unshared" }
                 );
                 println!("note: running sessions keep their current backend until restarted");
+                if shared {
+                    println!("(--restart has the running dashboard restart them now)");
+                }
             }
         }
         CliAction::AgentList { workspace, json } => {

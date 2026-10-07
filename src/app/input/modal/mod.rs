@@ -124,6 +124,21 @@ pub(in crate::app::input) async fn handle_key_modal(
             remote::remote_host_picker(app, shared, k, hosts, selected).await?
         }
         Modal::RemoteListLoading { .. } => remote::remote_list_loading(app, shared, k).await?,
+        Modal::RemoteShareConfirm {
+            selected,
+            host_name,
+            repo,
+            workspace,
+            shared: ws_shared,
+        } => {
+            remote::remote_share_confirm(
+                app, shared, k, selected, host_name, repo, workspace, ws_shared,
+            )
+            .await?
+        }
+        Modal::RemoteShareRunning { selected, .. } => {
+            remote::remote_share_running(app, k, selected).await?
+        }
         Modal::RenameWorkspace {
             workspace_id,
             name_buffer,

@@ -216,6 +216,10 @@ impl Store {
             }
             self.conn().execute("PRAGMA user_version = 27", [])?;
         }
+        if v < 28 {
+            self.conn().execute_batch(SCHEMA_V28_SHARE_REQUESTS)?;
+            self.conn().execute("PRAGMA user_version = 28", [])?;
+        }
         Ok(())
     }
 
@@ -346,6 +350,20 @@ CREATE TABLE IF NOT EXISTS agent_status (
     reported_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_agent_status_ws ON agent_status(workspace_id);
+";
+
+// Requests for the running dashboard to share a workspace and start its
+// agents in tmux (see `data::share_requests`). No foreign key, like
+// `agent_messages`: rows are short-lived and cleaned up explicitly.
+const SCHEMA_V28_SHARE_REQUESTS: &str = "
+CREATE TABLE IF NOT EXISTS share_requests (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace_id INTEGER NOT NULL,
+    created_at   INTEGER NOT NULL,
+    claimed_at   INTEGER,
+    finished_at  INTEGER,
+    error        TEXT
+);
 ";
 
 const SCHEMA_V17_WORKSPACE_RECAP: &str = "

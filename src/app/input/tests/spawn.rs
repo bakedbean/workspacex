@@ -970,3 +970,135 @@ async fn shared_workspace_with_instance_added_after_last_refresh_is_not_detached
          not lag a cycle behind"
     );
 }
+
+/// Seeds a ready workspace (`shared` as given) with one claude primary in a
+/// temp worktree, and points tmux at a recorder script that logs its argv
+/// and succeeds — so the "agent" is the recorder itself, no tmux needed.
+fn share_request_fixture(
+    shared: bool,
+) -> (
+    App,
+    crate::data::store::WorkspaceId,
+    crate::data::store::AgentInstanceId,
+    tempfile::TempDir,
+    EnvGuard,
+) {
+    use crate::data::store::{NewWorkspace, WorkspaceState};
+
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("tmux-calls.log");
+    let fake = dir.path().join("fake-tmux.sh");
+    std::fs::write(
+        &fake,
+        format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let mut env = EnvGuard::new();
+    env.set("WSX_TMUX_BIN", fake.to_str().unwrap());
+    env.set(
+        "WSX_CLAUDE_BIN",
+        crate::test_support::cat_ignore_args_path(),
+    );
+
+    let store = Store::open_in_memory().unwrap();
+    let repo_id = store
+        .add_repo(std::path::Path::new("/tmp/r"), "r", "")
+        .unwrap();
+    let ws_id = store
+        .insert_workspace(&NewWorkspace {
+            repo_id,
+            name: "w",
+            branch: "r/w",
+            worktree_path: dir.path(),
+            yolo: false,
+            agent: crate::pty::session::AgentKind::Claude,
+            shared,
+        })
+        .unwrap();
+    store
+        .set_workspace_state(ws_id, WorkspaceState::Ready)
+        .unwrap();
+    let primary = store
+        .add_primary_agent(ws_id, crate::pty::session::AgentKind::Claude, 0)
+        .unwrap();
+    let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    (app, ws_id, primary.id, dir, env)
+}
+
+/// `wsx workspace share --restart` on a direct workspace: the dashboard
+/// flips it shared, starts its agent inside tmux, and reports success.
+#[tokio::test]
+async fn share_request_shares_a_direct_workspace_and_starts_it_in_tmux() {
+    use crate::data::share_requests::ShareRequestState;
+
+    let (mut app, ws_id, primary, _dir, _env) = share_request_fixture(false);
+    let req = app.store.enqueue_share_request(ws_id).unwrap();
+
+    crate::app::session::drain_share_requests(&mut app);
+
+    assert_eq!(
+        app.store.share_request_state(req).unwrap(),
+        ShareRequestState::Finished { error: None }
+    );
+    assert!(app.store.workspace_by_id(ws_id).unwrap().unwrap().shared);
+    assert!(
+        app.sessions.get(primary).is_some(),
+        "the agent must be started"
+    );
+    assert_eq!(
+        app.store.workspace_agents(ws_id).unwrap()[0]
+            .session_ref
+            .as_deref(),
+        Some("wsx-r-w")
+    );
+}
+
+/// An already-shared workspace whose agent exited: the stale entry must not
+/// make the respawn a no-op, and the request still succeeds.
+#[tokio::test]
+async fn share_request_restarts_an_exited_shared_agent() {
+    use crate::data::share_requests::ShareRequestState;
+    use crate::pty::session::{AgentKind, SessionStatus};
+
+    let (mut app, ws_id, primary, _dir, _env) = share_request_fixture(true);
+    let exited = app.sessions.insert_fake_session_for(
+        primary,
+        AgentKind::Claude,
+        SessionStatus::Exited { code: 0 },
+    );
+    let req = app.store.enqueue_share_request(ws_id).unwrap();
+
+    crate::app::session::drain_share_requests(&mut app);
+
+    assert_eq!(
+        app.store.share_request_state(req).unwrap(),
+        ShareRequestState::Finished { error: None }
+    );
+    let now = app.sessions.get(primary).expect("respawned");
+    assert!(
+        !Arc::ptr_eq(&exited, &now),
+        "the exited session must be replaced"
+    );
+}
+
+/// Without tmux the request fails with a reason and nothing changes, rather
+/// than raising a modal on a screen the requester can't see.
+#[tokio::test]
+async fn share_request_without_tmux_reports_an_error() {
+    use crate::data::share_requests::ShareRequestState;
+
+    let (mut app, ws_id, primary, _dir, mut env) = share_request_fixture(false);
+    env.set("WSX_TMUX_BIN", "/nonexistent/wsx-no-tmux-here");
+    let req = app.store.enqueue_share_request(ws_id).unwrap();
+
+    crate::app::session::drain_share_requests(&mut app);
+
+    match app.store.share_request_state(req).unwrap() {
+        ShareRequestState::Finished { error: Some(e) } => assert!(e.contains("tmux"), "{e}"),
+        other => panic!("expected a failed request, got {other:?}"),
+    }
+    assert!(!app.store.workspace_by_id(ws_id).unwrap().unwrap().shared);
+    assert!(app.sessions.get(primary).is_none());
+    assert!(app.modal.is_none(), "no modal on the host's dashboard");
+}

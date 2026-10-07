@@ -1154,6 +1154,12 @@ impl SessionManager {
         }
     }
 
+    /// Drop the entry without touching its backend: a tmux session that
+    /// outlived its exited client stays alive, so a respawn reattaches to it.
+    pub fn forget(&mut self, id: crate::data::store::AgentInstanceId) {
+        self.sessions.remove(&id);
+    }
+
     /// Resize every backgrounded running session to `cols × rows` (the
     /// projected single-pane size). Sessions in `visible` are skipped: the
     /// attached render path already keeps those sized every frame, and resizing

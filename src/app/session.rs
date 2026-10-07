@@ -470,6 +470,102 @@ pub(crate) fn toggle_workspace_shared(
     Ok(())
 }
 
+/// The dashboard half of `wsx workspace share --restart`: share `ws_id` if it
+/// isn't already (restarting its running agents inside tmux, as `T` does), and
+/// make sure every agent instance is running there, so a peer on another
+/// machine can attach the moment this returns. Unlike `T`, nothing is raised
+/// on this dashboard's screen: the request came from elsewhere, so every
+/// failure is returned for the requester to report instead.
+pub(crate) fn force_share_workspace(
+    app: &mut App,
+    ws_id: crate::data::store::WorkspaceId,
+) -> Result<()> {
+    let ws = app
+        .workspaces
+        .iter()
+        .find(|(_, w)| w.id == ws_id)
+        .map(|(_, w)| w.clone())
+        .ok_or_else(|| crate::error::Error::UserInput("workspace not found".into()))?;
+    if attach_is_blocked(app, ws_id) {
+        return Err(crate::error::Error::UserInput(
+            "workspace is being archived".into(),
+        ));
+    }
+    if !crate::pty::tmux::is_available() {
+        return Err(crate::error::Error::UserInput(format!(
+            "tmux >= 3.2 ({}) is not available on this host",
+            crate::pty::tmux::tmux_bin()
+        )));
+    }
+    if !ws.shared {
+        app.harvest_session_identities();
+        app.store.set_workspace_shared(ws_id, true)?;
+        app.refresh()?; // reload app.workspaces so spawn sees the new flag
+    }
+    let instances = app.store.workspace_agents(ws_id)?;
+    let mut failed = Vec::new();
+    for inst in &instances {
+        if ws.shared && app.instance_is_running(inst.id) {
+            continue;
+        }
+        if ws.shared {
+            // An exited entry would make the ensure below a no-op. Its client
+            // is already gone, so forgetting it kills nothing — and keeps a
+            // tmux session that outlived the client alive to reattach to.
+            app.sessions.forget(inst.id);
+        } else {
+            // A direct agent can't move into tmux: kill it and resume its
+            // conversation in the respawn, exactly as `T` does.
+            app.sessions.remove(inst.id);
+        }
+        let ready = if inst.is_primary {
+            ensure_primary_session(app, ws_id, false)
+        } else {
+            ensure_instance_session(app, inst.id, false)
+        };
+        match ready {
+            Ok(AttachReady::Ok) if app.sessions.get(inst.id).is_some() => {}
+            Ok(AttachReady::WorktreeMissing) => {
+                failed.push(format!("{}: worktree missing", inst.label()))
+            }
+            Ok(AttachReady::AgentMissing) => failed.push(format!(
+                "{}: {} not installed",
+                inst.label(),
+                inst.agent.display_name()
+            )),
+            Ok(_) => failed.push(format!("{}: did not start", inst.label())),
+            Err(e) => failed.push(format!("{}: {e}", inst.label())),
+        }
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(crate::error::Error::UserInput(failed.join("; ")))
+    }
+}
+
+/// Act on every `wsx workspace share --restart` waiting for this dashboard,
+/// recording each outcome for the requesting CLI to read back.
+pub(crate) fn drain_share_requests(app: &mut App) {
+    let requests = match app.store.claim_share_requests() {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to claim share requests");
+            return;
+        }
+    };
+    for req in requests {
+        let outcome = force_share_workspace(app, req.workspace_id);
+        if let Err(e) = &outcome {
+            tracing::warn!(error = %e, ws = req.workspace_id.0, "share request failed");
+        }
+        let error = outcome.err().map(|e| e.to_string());
+        if let Err(e) = app.store.finish_share_request(req.id, error.as_deref()) {
+            tracing::warn!(error = %e, "failed to record a share request's outcome");
+        }
+    }
+}
+
 /// Whether attaching to `ws_id` must be refused. Only a live archive
 /// blocks: its first act is killing the workspace's tmux sessions so a
 /// live agent cannot dirty the worktree during teardown, and attaching

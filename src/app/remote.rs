@@ -101,6 +101,7 @@ mod remote_rows_tests {
                 workspace: "w".into(),
                 branch: "b".into(),
                 worktree_path: "/x".into(),
+                shared: true,
                 agents: vec![
                     SharedAgentRecord {
                         label: "claude".into(),
@@ -137,6 +138,7 @@ mod remote_rows_tests {
                 workspace: "w".into(),
                 branch: "b".into(),
                 worktree_path: "/x".into(),
+                shared: true,
                 agents: vec![SharedAgentRecord {
                     label: "claude".into(),
                     agent: "claude".into(),
@@ -160,6 +162,7 @@ mod remote_rows_tests {
                 workspace: "w".into(),
                 branch: "b".into(),
                 worktree_path: "/x".into(),
+                shared: true,
                 agents: vec![SharedAgentRecord {
                     label: "claude".into(),
                     agent: "claude".into(),
@@ -340,6 +343,7 @@ mod reconcile_remote_tests {
             workspace: "w".into(),
             branch: "b".into(),
             worktree_path: "/x".into(),
+            shared: true,
             agents: vec![],
             lifecycle: None,
             pr_number: None,
@@ -406,6 +410,7 @@ mod reconcile_remote_tests {
             workspace: "w".into(),
             branch: "b".into(),
             worktree_path: "/x".into(),
+            shared: true,
             agents: vec![],
             lifecycle: None,
             pr_number: None,

@@ -9,9 +9,11 @@ pub(in crate::cli) fn parse_shared(it: &mut Args) -> Result<CliAction> {
     match it.next().as_deref() {
         Some("list") => {
             let mut json = false;
+            let mut all = false;
             for arg in &mut *it {
                 match arg.as_str() {
                     "--json" => json = true,
+                    "--all" => all = true,
                     other => {
                         return Err(Error::Usage {
                             group: None,
@@ -20,7 +22,7 @@ pub(in crate::cli) fn parse_shared(it: &mut Args) -> Result<CliAction> {
                     }
                 }
             }
-            Ok(CliAction::SharedList { json })
+            Ok(CliAction::SharedList { json, all })
         }
         other => Err(Error::Usage {
             group: None,

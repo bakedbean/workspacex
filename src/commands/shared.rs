@@ -1,5 +1,5 @@
 //! `wsx shared list` — the machine-readable inventory of tmux-shared
-//! workspaces and their agent instances. This is the Phase 2 wire contract a
+//! workspaces (with `--all`, every ready workspace) and their agent instances. This is the Phase 2 wire contract a
 //! future remote-browsing phase will consume over ssh, so field names on
 //! `SharedAgentRecord`/`SharedWorkspaceRecord` are additive-only: don't
 //! rename or remove without a version bump.
@@ -21,6 +21,11 @@ pub struct SharedWorkspaceRecord {
     pub workspace: String,
     pub branch: String,
     pub worktree_path: String,
+    /// Whether the workspace is tmux-shared on its host. Only `--all` emits
+    /// `false` records; a host on an older wsx lists shared workspaces alone
+    /// and never sends the key, hence the `true` default.
+    #[serde(default = "default_shared")]
+    pub shared: bool,
     pub agents: Vec<SharedAgentRecord>,
     /// The workspace branch's PR lifecycle, computed on the host that owns the
     /// worktree (see `enrich_with_pr_status`) so the remote picker can color
@@ -40,25 +45,39 @@ pub struct SharedWorkspaceRecord {
     pub pr_number: Option<u32>,
 }
 
-/// Build records for every shared workspace. `liveness` is injected so tests
-/// don't need tmux; production passes `crate::pty::tmux::has_session`.
+fn default_shared() -> bool {
+    true
+}
+
+/// Build records for every shared workspace, plus — with `include_unshared` —
+/// every ready direct one, so a remote picker can offer to share it.
+/// `liveness` is injected so tests don't need tmux; production passes
+/// `crate::pty::tmux::has_session`.
 pub fn shared_list_records(
     store: &Store,
+    include_unshared: bool,
     liveness: impl Fn(&str) -> bool,
 ) -> Result<Vec<SharedWorkspaceRecord>> {
     let mut out = Vec::new();
     for r in crate::data::repo::list(store)? {
         for w in store.workspaces(r.id)? {
-            if !w.shared {
+            let listed = w.shared
+                || (include_unshared && w.state == crate::data::store::WorkspaceState::Ready);
+            if !listed {
                 continue;
             }
             let mut agents = Vec::new();
             for inst in store.workspace_agents(w.id)? {
-                let alive = inst.session_ref.as_deref().map(&liveness).unwrap_or(false);
+                // A direct workspace's agents run outside tmux, so a
+                // `session_ref` left over from an earlier share names nothing
+                // a peer could attach to.
+                let label = inst.label();
+                let tmux_session = inst.session_ref.filter(|_| w.shared);
+                let alive = tmux_session.as_deref().map(&liveness).unwrap_or(false);
                 agents.push(SharedAgentRecord {
-                    label: inst.label(),
+                    label,
                     agent: inst.agent.store_value().into(),
-                    tmux_session: inst.session_ref,
+                    tmux_session,
                     alive,
                 });
             }
@@ -67,6 +86,7 @@ pub fn shared_list_records(
                 workspace: w.name.clone(),
                 branch: w.branch.clone(),
                 worktree_path: w.worktree_path.to_string_lossy().into_owned(),
+                shared: w.shared,
                 agents,
                 // Pure DB pass leaves PR status unknown; `enrich_with_pr_status`
                 // fills lifecycle + number in from `gh` before the records go
@@ -197,7 +217,7 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         seed(&store);
 
-        let records = shared_list_records(&store, |n| n == "wsx-r-w").unwrap();
+        let records = shared_list_records(&store, false, |n| n == "wsx-r-w").unwrap();
 
         assert_eq!(
             records.len(),
@@ -217,12 +237,72 @@ mod tests {
     }
 
     #[test]
+    fn include_unshared_lists_ready_direct_workspaces_as_unattachable() {
+        let store = Store::open_in_memory().unwrap();
+        seed(&store);
+        // A stale `session_ref` from an earlier share must not surface on a
+        // direct workspace, even if a tmux session by that name is alive.
+        let direct = store
+            .workspace_agents(
+                store
+                    .workspaces(crate::data::repo::list(&store).unwrap()[0].id)
+                    .unwrap()
+                    .iter()
+                    .find(|w| w.name == "direct")
+                    .unwrap()
+                    .id,
+            )
+            .unwrap();
+        store
+            .set_instance_session_ref(direct[0].id, "wsx-r-direct")
+            .unwrap();
+
+        let records = shared_list_records(&store, true, |_| true).unwrap();
+
+        assert_eq!(records.len(), 2, "{records:?}");
+        let d = records.iter().find(|r| r.workspace == "direct").unwrap();
+        assert!(!d.shared);
+        assert_eq!(d.agents.len(), 1);
+        assert!(d.agents[0].tmux_session.is_none());
+        assert!(!d.agents[0].alive);
+        assert!(records.iter().find(|r| r.workspace == "w").unwrap().shared);
+    }
+
+    #[test]
+    fn include_unshared_skips_direct_workspaces_that_are_not_ready() {
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store
+            .add_repo(std::path::Path::new("/tmp/r3"), "r3", "")
+            .unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "creating",
+                branch: "r3/creating",
+                worktree_path: std::path::Path::new("/tmp/r3/creating"),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store
+            .set_workspace_state(ws, WorkspaceState::Pending)
+            .unwrap();
+
+        assert!(
+            shared_list_records(&store, true, |_| false)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn shared_list_records_marks_missing_session_as_dead() {
         let store = Store::open_in_memory().unwrap();
         seed(&store);
 
         // liveness closure always returns false: nothing is actually alive.
-        let records = shared_list_records(&store, |_| false).unwrap();
+        let records = shared_list_records(&store, false, |_| false).unwrap();
 
         assert_eq!(records.len(), 1);
         assert!(!records[0].agents[0].alive);
@@ -251,7 +331,7 @@ mod tests {
         // No session_ref set: instance never attached to tmux.
         store.add_primary_agent(ws, AgentKind::Claude, 0).unwrap();
 
-        let records = shared_list_records(&store, |_| true).unwrap();
+        let records = shared_list_records(&store, false, |_| true).unwrap();
         assert_eq!(records.len(), 1);
         let agent = &records[0].agents[0];
         assert!(agent.tmux_session.is_none());
@@ -263,7 +343,7 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         seed(&store);
 
-        let records = shared_list_records(&store, |n| n == "wsx-r-w").unwrap();
+        let records = shared_list_records(&store, false, |n| n == "wsx-r-w").unwrap();
         let json = serde_json::to_string(&records).unwrap();
         assert!(
             json.contains("\"tmux_session\":\"wsx-r-w\""),
@@ -285,6 +365,8 @@ mod tests {
         assert_eq!(recs[0].workspace, "w");
         assert_eq!(recs[0].agents[0].tmux_session.as_deref(), Some("wsx-r-w"));
         assert!(recs[0].agents[0].alive);
+        // An older host lists shared workspaces only and omits `shared`.
+        assert!(recs[0].shared);
         // A payload from an older host with no `lifecycle`/`pr_number` keys
         // decodes as `None` (unknown → uncolored, no #num), via `#[serde(default)]`.
         assert_eq!(recs[0].lifecycle, None);
@@ -315,6 +397,7 @@ mod tests {
             workspace: "w".into(),
             branch: "main".into(),
             worktree_path: tmp.path().to_string_lossy().into_owned(),
+            shared: true,
             agents: vec![],
             lifecycle: None,
             pr_number: None,

@@ -203,6 +203,7 @@ pub(super) fn mixed_liveness_remote_list() -> crate::app::RemoteList {
             workspace: "w".into(),
             branch: "b".into(),
             worktree_path: "/x".into(),
+            shared: true,
             agents: vec![
                 SharedAgentRecord {
                     label: "claude".into(),
@@ -234,6 +235,7 @@ pub(super) fn all_dead_remote_list() -> crate::app::RemoteList {
             workspace: "w".into(),
             branch: "b".into(),
             worktree_path: "/x".into(),
+            shared: true,
             agents: vec![SharedAgentRecord {
                 label: "claude".into(),
                 agent: "claude".into(),

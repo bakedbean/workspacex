@@ -133,6 +133,8 @@ pub enum CliAction {
     },
     SharedList {
         json: bool,
+        /// Also list ready workspaces that aren't shared.
+        all: bool,
     },
     WorkspaceCreate {
         repo: String,

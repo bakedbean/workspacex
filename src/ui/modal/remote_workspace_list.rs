@@ -210,6 +210,7 @@ mod tests {
                 workspace: "w".into(),
                 branch: "b".into(),
                 worktree_path: "/x".into(),
+                shared: true,
                 agents: vec![
                     SharedAgentRecord {
                         label: "claude".into(),
@@ -265,6 +266,7 @@ mod tests {
                 workspace: "w".into(),
                 branch: "feature".into(),
                 worktree_path: "/x".into(),
+                shared: true,
                 agents: vec![SharedAgentRecord {
                     label: "claude".into(),
                     agent: "claude".into(),
@@ -330,6 +332,7 @@ mod tests {
                 workspace: "w".into(),
                 branch: "b".into(),
                 worktree_path: "/x".into(),
+                shared: true,
                 agents: vec![SharedAgentRecord {
                     label: "claude".into(),
                     agent: "claude".into(),
@@ -424,6 +427,7 @@ mod tests {
             workspace: ws.into(),
             branch: branch.into(),
             worktree_path: "/x".into(),
+            shared: true,
             agents: vec![SharedAgentRecord {
                 label: "claude".into(),
                 agent: "claude".into(),
@@ -464,6 +468,7 @@ mod tests {
                 workspace: "alpha".into(),
                 branch: "feature".into(),
                 worktree_path: "/x".into(),
+                shared: true,
                 agents: vec![SharedAgentRecord {
                     label: "claude".into(),
                     agent: "claude".into(),
@@ -516,6 +521,7 @@ mod tests {
                 workspace: "作業スペース".into(),
                 branch: "機能ブランチ".into(),
                 worktree_path: "/x".into(),
+                shared: true,
                 agents: vec![SharedAgentRecord {
                     label: "エージェント".into(),
                     agent: "claude".into(),

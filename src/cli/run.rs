@@ -445,9 +445,10 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             // exec only returns on failure.
             return Err(Error::UserInput(format!("exec sh: {err}")));
         }
-        CliAction::SharedList { json } => {
+        CliAction::SharedList { json, all } => {
             let mut records = crate::commands::shared::shared_list_records(
                 &store,
+                all,
                 crate::pty::tmux::has_session,
             )?;
             // Colorable PR status is only useful to a remote picker consuming
@@ -459,7 +460,14 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&records)?);
             } else if records.is_empty() {
-                println!("no shared workspaces");
+                println!(
+                    "{}",
+                    if all {
+                        "no workspaces"
+                    } else {
+                        "no shared workspaces"
+                    }
+                );
             } else {
                 for rec in &records {
                     if rec.agents.is_empty() {
@@ -469,6 +477,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                     for agent in &rec.agents {
                         let session = agent.tmux_session.as_deref().unwrap_or("-");
                         let alive = match (agent.alive, &agent.tmux_session) {
+                            _ if !rec.shared => "unshared",
                             (true, _) => "alive",
                             (false, Some(_)) => "(dead)",
                             (false, None) => "-",

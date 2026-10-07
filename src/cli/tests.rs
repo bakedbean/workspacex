@@ -1635,7 +1635,15 @@ fn accepts_shared_hosts_setting_key() {
 #[test]
 fn parses_shared_list_json() {
     match parse(&["shared", "list", "--json"]).unwrap() {
-        CliAction::SharedList { json } => assert!(json),
+        CliAction::SharedList { json, all } => assert!(json && !all),
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[test]
+fn parses_shared_list_all() {
+    match parse(&["shared", "list", "--json", "--all"]).unwrap() {
+        CliAction::SharedList { json, all } => assert!(json && all),
         other => panic!("unexpected: {other:?}"),
     }
 }
@@ -1643,7 +1651,7 @@ fn parses_shared_list_json() {
 #[test]
 fn parses_shared_list_without_json() {
     match parse(&["shared", "list"]).unwrap() {
-        CliAction::SharedList { json } => assert!(!json),
+        CliAction::SharedList { json, all } => assert!(!json && !all),
         other => panic!("unexpected: {other:?}"),
     }
 }

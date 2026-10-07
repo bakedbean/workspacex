@@ -334,6 +334,7 @@ async fn remote_bottom_bar_shows_global_pinned_and_pr_chip() {
                 workspace: "w".into(),
                 branch: "b".into(),
                 worktree_path: "/x".into(),
+                shared: true,
                 agents: vec![SharedAgentRecord {
                     label: "claude".into(),
                     agent: "claude".into(),

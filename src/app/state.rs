@@ -106,6 +106,9 @@ impl App {
             remote_target: None,
             next_remote_gen: 0,
             pending_remote_gen: None,
+            // Look once on the first tick: a request queued before this
+            // dashboard started produces no later commit to wake the drain.
+            share_drain_pending: true,
             chip_rects: Vec::new(),
             tag_chip_rects: Vec::new(),
             tags_manager_rect: None,
@@ -575,6 +578,9 @@ pub struct App {
     /// Generation id of the currently in-flight remote-list fetch, if any.
     /// Used by the reconcile step to detect stale completions.
     pub pending_remote_gen: Option<u64>,
+    /// Share requests were left for another dashboard (or the claim failed):
+    /// drain again on the next tick rather than waiting for a sibling commit.
+    pub share_drain_pending: bool,
     pub dashboard: DashboardState,
     pub repos: Vec<Repo>,
     pub workspaces: Vec<(crate::data::store::RepoId, Workspace)>,

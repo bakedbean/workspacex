@@ -497,26 +497,27 @@ pub(crate) fn force_share_workspace(
             crate::pty::tmux::tmux_bin()
         )));
     }
+    // Respawns resume by recorded session; capture omp's current one first,
+    // as `T` does.
+    app.harvest_session_identities();
     if !ws.shared {
-        app.harvest_session_identities();
         app.store.set_workspace_shared(ws_id, true)?;
         app.refresh()?; // reload app.workspaces so spawn sees the new flag
     }
     let instances = app.store.workspace_agents(ws_id)?;
     let mut failed = Vec::new();
     for inst in &instances {
-        if ws.shared && app.instance_is_running(inst.id) {
-            continue;
-        }
-        if ws.shared {
+        // Decided per session, not by the flag: a plain `workspace share`
+        // flips the flag yet leaves running agents outside tmux.
+        match app.sessions.get(inst.id) {
+            Some(s) if app.instance_is_running(inst.id) && s.tmux_session.is_some() => continue,
+            // A direct agent can't move into tmux: kill it and resume its
+            // conversation in the respawn, exactly as `T` does.
+            Some(_) if app.instance_is_running(inst.id) => app.sessions.remove(inst.id),
             // An exited entry would make the ensure below a no-op. Its client
             // is already gone, so forgetting it kills nothing — and keeps a
             // tmux session that outlived the client alive to reattach to.
-            app.sessions.forget(inst.id);
-        } else {
-            // A direct agent can't move into tmux: kill it and resume its
-            // conversation in the respawn, exactly as `T` does.
-            app.sessions.remove(inst.id);
+            _ => app.sessions.forget(inst.id),
         }
         let ready = if inst.is_primary {
             ensure_primary_session(app, ws_id, false)
@@ -544,13 +545,38 @@ pub(crate) fn force_share_workspace(
     }
 }
 
-/// Act on every `wsx workspace share --restart` waiting for this dashboard,
-/// recording each outcome for the requesting CLI to read back.
+/// Act on every `wsx workspace share --restart` this dashboard should take
+/// (see `claim_share_requests`), recording each outcome for the requesting
+/// CLI to read back. Sets `share_drain_pending` while requests are left for
+/// another dashboard, so the tick looks again once their grace runs out.
 pub(crate) fn drain_share_requests(app: &mut App) {
-    let requests = match app.store.claim_share_requests() {
-        Ok(r) => r,
+    let claim = {
+        let (store, sessions) = (&app.store, &app.sessions);
+        // Owning = running a direct agent of the workspace: only this
+        // dashboard could kill it.
+        let owns = |ws: crate::data::store::WorkspaceId| {
+            store.workspace_agents(ws).is_ok_and(|insts| {
+                insts.iter().any(|i| {
+                    sessions.get(i.id).is_some_and(|s| {
+                        s.tmux_session.is_none()
+                            && matches!(
+                                *s.status.read().unwrap(),
+                                crate::pty::session::SessionStatus::Running { .. }
+                            )
+                    })
+                })
+            })
+        };
+        store.claim_share_requests(owns)
+    };
+    let requests = match claim {
+        Ok(c) => {
+            app.share_drain_pending = c.deferred;
+            c.claimed
+        }
         Err(e) => {
             tracing::warn!(error = %e, "failed to claim share requests");
+            app.share_drain_pending = true;
             return;
         }
     };

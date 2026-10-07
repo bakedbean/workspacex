@@ -4,6 +4,11 @@
 //! child process. The CLI enqueues a row; the dashboard claims it on its tick,
 //! acts, and records the outcome for the CLI to read back.
 //!
+//! Several dashboards can share one database, but a direct agent is the child
+//! of exactly one of them, and only that one can kill it. So a dashboard
+//! running a direct agent of the workspace claims at once, and any other
+//! waits `DEFER_MS` first, giving the owner the chance to claim it.
+//!
 //! A request the dashboard never claims is withdrawn by the CLI, and one that
 //! has sat unclaimed past `STALE_AFTER_MS` (its CLI was killed) is discarded
 //! rather than acted on, so a dashboard started later doesn't restart a
@@ -16,14 +21,27 @@ use rusqlite::OptionalExtension;
 /// An unclaimed request older than this is abandoned, not acted on.
 pub const STALE_AFTER_MS: i64 = 30_000;
 
-/// Finished rows the CLI never cleaned up (it was killed while waiting) are
-/// purged once they are this old.
+/// How long a dashboard that doesn't own any of the workspace's running
+/// agents leaves a request for one that does. Well inside the CLI's claim
+/// wait, so a lone dashboard still answers in time.
+pub const DEFER_MS: i64 = 1_500;
+
+/// Finished rows the CLI never cleaned up (it was killed while waiting), and
+/// claimed ones a crashed dashboard never finished, are purged at this age.
 const PURGE_FINISHED_AFTER_MS: i64 = 24 * 60 * 60 * 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShareRequest {
     pub id: i64,
     pub workspace_id: WorkspaceId,
+}
+
+/// What one `claim_share_requests` pass took, and whether it left fresh
+/// requests for their owner — the caller should look again shortly.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShareClaim {
+    pub claimed: Vec<ShareRequest>,
+    pub deferred: bool,
 }
 
 /// Where a request stands, as the waiting CLI sees it.
@@ -48,10 +66,12 @@ impl Store {
         Ok(conn.last_insert_rowid())
     }
 
-    /// Claim every fresh pending request, discarding stale ones and purging
-    /// old finished ones, under one IMMEDIATE transaction so two dashboards on
-    /// the same database never both act on a request.
-    pub fn claim_share_requests(&self) -> Result<Vec<ShareRequest>> {
+    /// Claim the pending requests this dashboard should act on: those for a
+    /// workspace it `owns` (runs a direct agent of) at once, any other once it
+    /// is `DEFER_MS` old. Also discards stale and purges old finished rows.
+    /// One IMMEDIATE transaction, so two dashboards on the same database
+    /// never both act on a request.
+    pub fn claim_share_requests(&self, owns: impl Fn(WorkspaceId) -> bool) -> Result<ShareClaim> {
         let now = now_ms();
         let tx = rusqlite::Transaction::new_unchecked(
             self.conn(),
@@ -61,31 +81,43 @@ impl Store {
             "DELETE FROM share_requests WHERE claimed_at IS NULL AND created_at < ?1",
             [now - STALE_AFTER_MS],
         )?;
+        // Finished rows whose CLI never collected them, and claimed rows whose
+        // dashboard died mid-share: nobody will read either again.
         tx.execute(
-            "DELETE FROM share_requests WHERE finished_at IS NOT NULL AND finished_at < ?1",
+            "DELETE FROM share_requests WHERE finished_at < ?1 \
+             OR (finished_at IS NULL AND claimed_at < ?1)",
             [now - PURGE_FINISHED_AFTER_MS],
         )?;
-        let claimed = {
+        let pending = {
             let mut stmt = tx.prepare(
-                "SELECT id, workspace_id FROM share_requests \
+                "SELECT id, workspace_id, created_at FROM share_requests \
                  WHERE claimed_at IS NULL ORDER BY id ASC",
             )?;
             stmt.query_map([], |r| {
-                Ok(ShareRequest {
-                    id: r.get(0)?,
-                    workspace_id: WorkspaceId(r.get(1)?),
-                })
+                Ok((
+                    ShareRequest {
+                        id: r.get(0)?,
+                        workspace_id: WorkspaceId(r.get(1)?),
+                    },
+                    r.get::<_, i64>(2)?,
+                ))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?
         };
-        if !claimed.is_empty() {
-            tx.execute(
-                "UPDATE share_requests SET claimed_at = ?1 WHERE claimed_at IS NULL",
-                [now],
-            )?;
+        let mut out = ShareClaim::default();
+        for (req, created_at) in pending {
+            if owns(req.workspace_id) || created_at <= now - DEFER_MS {
+                tx.execute(
+                    "UPDATE share_requests SET claimed_at = ?1 WHERE id = ?2",
+                    [now, req.id],
+                )?;
+                out.claimed.push(req);
+            } else {
+                out.deferred = true;
+            }
         }
         tx.commit()?;
-        Ok(claimed)
+        Ok(out)
     }
 
     pub fn finish_share_request(&self, id: i64, error: Option<&str>) -> Result<()> {
@@ -149,7 +181,7 @@ mod tests {
             ShareRequestState::Pending
         );
 
-        let claimed = store.claim_share_requests().unwrap();
+        let claimed = store.claim_share_requests(|_| true).unwrap().claimed;
         assert_eq!(
             claimed,
             vec![ShareRequest {
@@ -162,7 +194,13 @@ mod tests {
             ShareRequestState::Claimed
         );
         // Claimed once: a second dashboard sees nothing to do.
-        assert!(store.claim_share_requests().unwrap().is_empty());
+        assert!(
+            store
+                .claim_share_requests(|_| true)
+                .unwrap()
+                .claimed
+                .is_empty()
+        );
         // And the CLI can no longer withdraw it.
         assert!(!store.withdraw_share_request(id).unwrap());
 
@@ -185,7 +223,13 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let id = store.enqueue_share_request(WorkspaceId(1)).unwrap();
         assert!(store.withdraw_share_request(id).unwrap());
-        assert!(store.claim_share_requests().unwrap().is_empty());
+        assert!(
+            store
+                .claim_share_requests(|_| true)
+                .unwrap()
+                .claimed
+                .is_empty()
+        );
     }
 
     #[test]
@@ -199,10 +243,51 @@ mod tests {
                 rusqlite::params![now_ms() - STALE_AFTER_MS - 1, id],
             )
             .unwrap();
-        assert!(store.claim_share_requests().unwrap().is_empty());
+        assert!(
+            store
+                .claim_share_requests(|_| true)
+                .unwrap()
+                .claimed
+                .is_empty()
+        );
         assert_eq!(
             store.share_request_state(id).unwrap(),
             ShareRequestState::Gone
         );
+    }
+
+    #[test]
+    fn a_non_owner_leaves_a_fresh_request_for_the_owner() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.enqueue_share_request(WorkspaceId(3)).unwrap();
+
+        let other = store.claim_share_requests(|_| false).unwrap();
+        assert!(other.claimed.is_empty() && other.deferred);
+        assert_eq!(
+            store.share_request_state(id).unwrap(),
+            ShareRequestState::Pending
+        );
+
+        let owner = store
+            .claim_share_requests(|ws| ws == WorkspaceId(3))
+            .unwrap();
+        assert_eq!(owner.claimed.len(), 1);
+        assert!(!owner.deferred);
+    }
+
+    #[test]
+    fn a_non_owner_takes_a_request_nobody_claimed_in_time() {
+        let store = Store::open_in_memory().unwrap();
+        let id = store.enqueue_share_request(WorkspaceId(3)).unwrap();
+        store
+            .conn()
+            .execute(
+                "UPDATE share_requests SET created_at = ?1 WHERE id = ?2",
+                rusqlite::params![now_ms() - DEFER_MS, id],
+            )
+            .unwrap();
+        let claim = store.claim_share_requests(|_| false).unwrap();
+        assert_eq!(claim.claimed.len(), 1);
+        assert!(!claim.deferred);
     }
 }

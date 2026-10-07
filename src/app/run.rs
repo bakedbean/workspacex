@@ -289,7 +289,7 @@ pub async fn run<B: Backend + std::io::Write>(
                 }
                 // A `wsx workspace share --restart` from a sibling process
                 // (often a peer machine, over ssh) lands as a commit too.
-                if external {
+                if external || g.share_drain_pending {
                     crate::app::session::drain_share_requests(&mut g);
                 }
                 // Learn which session each running omp instance is in, so a

@@ -57,7 +57,7 @@ cargo-binstall, which downloads the same prebuilt binary:
 cargo binstall --git https://github.com/bakedbean/workspacex wsx
 ```
 
-From source, which needs Rust 1.85 or later:
+From source, which needs Rust 1.88 or later:
 
 ```bash
 cargo install --path .

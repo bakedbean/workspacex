@@ -102,7 +102,7 @@ The Linux binaries are built against glibc 2.35.
 
 ## From source
 
-You need Rust 1.85 or later, because wsx uses edition 2024.
+You need Rust 1.88 or later, because wsx uses `let` chains.
 
 ```bash
 git clone https://github.com/bakedbean/workspacex

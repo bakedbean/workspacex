@@ -59,6 +59,11 @@ pub async fn tail_workspace_events(
     }
 }
 
+/// How many workspaces the priming pass reads at once. The reads run on
+/// the blocking pool; the cap keeps a big fleet from parsing dozens of
+/// large transcripts at the same moment.
+const PRIME_CONCURRENCY: usize = 16;
+
 /// Read every workspace's session transcripts once, concurrently, before
 /// the first frame. The dashboard's recency sort keys on the transcript's
 /// last event, so until a workspace has been tailed it sorts as "never
@@ -66,11 +71,6 @@ pub async fn tail_workspace_events(
 /// time as it reached them. Transcripts are local files, so this is
 /// milliseconds per workspace.
 ///
-/// How many workspaces the priming pass reads at once. The reads run on
-/// the blocking pool; the cap keeps a big fleet from parsing dozens of
-/// large transcripts at the same moment.
-const PRIME_CONCURRENCY: usize = 16;
-
 /// Bounded by `budget`: whatever hasn't finished by then keeps running
 /// detached (dropping a `JoinHandle` doesn't cancel the task) and lands on
 /// a later frame. A detached tail racing the poll loop's own tail is safe —
@@ -1142,7 +1142,8 @@ where
                     // a row that waited its turn behind slow fetches is
                     // stamped with when it actually went out, so it isn't
                     // due again the moment the pass ends.
-                    let Some(started_ms) = claim_pr_poll(&mut *app.lock().await, t.id) else {
+                    let Some(started_ms) = claim_pr_poll(&mut *app.lock().await, t.id, &t.branch)
+                    else {
                         return;
                     };
                     // Ok(None) → leave any existing cached value alone;
@@ -1166,10 +1167,22 @@ fn pr_poll_due(g: &crate::app::App, id: WorkspaceId, now_ms: i64) -> bool {
         .is_none_or(|last| now_ms.saturating_sub(*last) >= PR_POLL_INTERVAL_MS)
 }
 
-/// Stamp `id`'s PR fetch as starting now, if it is still due, and return
-/// the stamp. `None` means another path fetched it since the pass took its
-/// snapshot. Branch drift clears the stamp, so a drifted row stays due.
-fn claim_pr_poll(g: &mut crate::app::App, id: WorkspaceId) -> Option<i64> {
+/// Stamp `id`'s PR fetch as starting now, if it is still due and still on
+/// `branch`, and return the stamp. `None` means another path fetched it
+/// since the pass took its snapshot, or the workspace is gone, or drift
+/// moved it off `branch` while it queued. That last case must not stamp:
+/// drift cleared the throttle so the next tick fetches the new branch at
+/// once, and a stamp here would push that back a full interval for a fetch
+/// `commit_pr_status` would only discard.
+fn claim_pr_poll(g: &mut crate::app::App, id: WorkspaceId, branch: &str) -> Option<i64> {
+    let current = g
+        .workspaces
+        .iter()
+        .find(|(_, w)| w.id == id)
+        .map(|(_, w)| w.branch.as_str());
+    if current != Some(branch) {
+        return None;
+    }
     let now_ms = crate::util::time::now_ms();
     if !pr_poll_due(g, id, now_ms) {
         return None;
@@ -1258,11 +1271,25 @@ mod pr_commit_tests {
         let mut app = crate::app::App::new(store, "/tmp/wsx-test".into()).unwrap();
         let ws = app.test_workspace("claimed");
 
-        let started = claim_pr_poll(&mut app, ws).expect("a never-polled row is due");
+        let started =
+            claim_pr_poll(&mut app, ws, "wsx/claimed").expect("a never-polled row is due");
         assert_eq!(app.pr_last_poll_ms.get(&ws), Some(&started));
-        assert!(claim_pr_poll(&mut app, ws).is_none());
+        assert!(claim_pr_poll(&mut app, ws, "wsx/claimed").is_none());
         assert!(!pr_poll_due(&app, ws, started + PR_POLL_INTERVAL_MS - 1));
         assert!(pr_poll_due(&app, ws, started + PR_POLL_INTERVAL_MS));
+    }
+
+    /// A row that drifted while it queued is not claimed for its old
+    /// branch, and is left unstamped so the new branch is fetched next tick.
+    #[tokio::test]
+    async fn a_drifted_row_is_not_claimed_or_stamped() {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        let mut app = crate::app::App::new(store, "/tmp/wsx-test".into()).unwrap();
+        let ws = app.test_workspace("drifted");
+
+        assert!(claim_pr_poll(&mut app, ws, "wsx/old-name").is_none());
+        assert!(!app.pr_last_poll_ms.contains_key(&ws));
+        assert!(claim_pr_poll(&mut app, ws, "wsx/drifted").is_some());
     }
 
     /// The PR loop runs beside the local loop, so a fetch can still be in

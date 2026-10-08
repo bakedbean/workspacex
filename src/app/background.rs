@@ -66,11 +66,17 @@ pub async fn tail_workspace_events(
 /// time as it reached them. Transcripts are local files, so this is
 /// milliseconds per workspace.
 ///
+/// How many workspaces the priming pass reads at once. The reads run on
+/// the blocking pool; the cap keeps a big fleet from parsing dozens of
+/// large transcripts at the same moment.
+const PRIME_CONCURRENCY: usize = 16;
+
 /// Bounded by `budget`: whatever hasn't finished by then keeps running
 /// detached (dropping a `JoinHandle` doesn't cancel the task) and lands on
 /// a later frame. A detached tail racing the poll loop's own tail is safe —
 /// see the concurrent-tail note on [`tail_workspace_events`].
 pub async fn prime_workspace_events(app: SharedApp, budget: std::time::Duration) {
+    use futures::StreamExt;
     let targets: Vec<_> = {
         let g = app.lock().await;
         g.workspaces
@@ -78,11 +84,21 @@ pub async fn prime_workspace_events(app: SharedApp, budget: std::time::Duration)
             .map(|(_, w)| (w.id, w.worktree_path.clone(), w.agent))
             .collect()
     };
-    let handles: Vec<_> = targets
-        .into_iter()
-        .map(|(id, path, agent)| tokio::spawn(tail_workspace_events(app.clone(), id, path, agent)))
-        .collect();
-    let _ = tokio::time::timeout(budget, futures::future::join_all(handles)).await;
+    let count = targets.len();
+    let work = tokio::spawn(async move {
+        futures::stream::iter(targets)
+            .for_each_concurrent(PRIME_CONCURRENCY, |(id, path, agent)| {
+                tail_workspace_events(app.clone(), id, path, agent)
+            })
+            .await
+    });
+    if tokio::time::timeout(budget, work).await.is_err() {
+        tracing::info!(
+            workspaces = count,
+            budget_ms = budget.as_millis() as u64,
+            "transcript priming overran its budget; finishing in the background"
+        );
+    }
 }
 
 async fn tail_instance_events(
@@ -104,24 +120,39 @@ async fn tail_instance_events(
         evt.map(|evt| (evt.file_path.clone(), evt.byte_offset))
             .unwrap_or((None, 0))
     };
-    let current_file = if !worktree_path.exists() {
-        None
-    } else if let Some(instance) = instance {
-        let same_kind_count = roster.iter().filter(|i| i.agent == agent).count();
-        crate::activity::locate_instance_session_file(instance, worktree_path, same_kind_count)
-    } else {
-        crate::activity::locate_session_file_for(agent, worktree_path)
+    // Locating and parsing are synchronous — directory walks, and a full
+    // read of the file on a first tail — so they run on the blocking pool.
+    // On a runtime worker they would stall its timers and every other task
+    // scheduled there, which on a cold start is the whole dashboard.
+    let worktree = worktree_path.to_path_buf();
+    let owned_instance = instance.cloned();
+    let same_kind_count = roster.iter().filter(|i| i.agent == agent).count();
+    let snapshot_for_read = snapshot_file.clone();
+    let read = tokio::task::spawn_blocking(move || {
+        let current_file = if !worktree.exists() {
+            None
+        } else if let Some(instance) = &owned_instance {
+            crate::activity::locate_instance_session_file(instance, &worktree, same_kind_count)
+        } else {
+            crate::activity::locate_session_file_for(agent, &worktree)
+        };
+        // The byte we actually tail from: reuse the prior offset only when
+        // the snapshot's file matches the current session file; otherwise
+        // start fresh (file rotated, first observation, etc.).
+        let tail_from = match (snapshot_for_read.as_ref(), current_file.as_ref()) {
+            (Some(p), Some(c)) if p == c => snapshot_offset,
+            _ => 0,
+        };
+        let tail_result = current_file
+            .as_ref()
+            .map(|file| crate::activity::tail_session_for(agent, file, tail_from));
+        (current_file, tail_from, tail_result)
+    })
+    .await;
+    // A panicked read leaves the cache as it was; the next tick retries.
+    let Ok((current_file, tail_from, tail_result)) = read else {
+        return;
     };
-    // The byte we actually tail from: reuse the prior offset only when
-    // the snapshot's file matches the current session file; otherwise
-    // start fresh (file rotated, first observation, etc.).
-    let tail_from = match (snapshot_file.as_ref(), current_file.as_ref()) {
-        (Some(p), Some(c)) if p == c => snapshot_offset,
-        _ => 0,
-    };
-    let tail_result = current_file
-        .as_ref()
-        .map(|file| crate::activity::tail_session_for(agent, file, tail_from));
     let mut g = app.lock().await;
     // Session hooks and roster changes can land while file I/O is running.
     // Recheck identity AND singleton eligibility before committing or clearing.
@@ -439,6 +470,24 @@ mod instance_event_tests {
         assert!(g.workspace_events_scanned.contains(&ws));
         assert!(g.workspace_events[&ws].latest.is_some());
         assert!(g.agent_events.contains_key(&peer));
+    }
+
+    /// An overrun budget returns control to the caller without cancelling
+    /// the reads: they finish detached and still initialize the workspace.
+    #[tokio::test]
+    async fn prime_past_its_budget_keeps_reading_in_the_background() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (app, ws, _, _, _, _) = setup(dir.path());
+        prime_workspace_events(app.clone(), std::time::Duration::ZERO).await;
+        let mut scanned = false;
+        for _ in 0..50 {
+            if app.lock().await.workspace_events_scanned.contains(&ws) {
+                scanned = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(scanned, "detached priming never finished");
     }
 
     #[tokio::test]

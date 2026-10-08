@@ -193,6 +193,11 @@ for width — the same "put separators inside the group" rule described under
 Grammar below. (`$version`'s lower priority means it is the first of the two
 to go on a narrow footer.)
 
+`$hosts` is also registered but not placed: one chip per configured shared
+host (`wsx config edit shared_hosts`), and clicking a chip opens that host's
+workspace list, the same as picking it under `H`. To show it, try
+`right_format = "$hosts(  $funnel)"`.
+
 `[dashboard_header]` is the dashboard's top line: the wordmark, the `group:`
 and `sort:` mode tabs, the live filter echo, and the repo/workspace counts
 flush right. Its five segments are display only — nothing on that line is
@@ -435,6 +440,7 @@ default, 100, and so never drops.
 | `status` | `$glyph $label $ago` | The workspace's dashboard status as its row shows it; `$style` includes the status colour. `$ago` is how long it has held (`12s`, `4m`, `2h`), absent when unknown. Detail header only. |
 | `attention` | `$glyph $repo $name $age` | One item per workspace needing attention. `$glyph` is the entry's dashboard status glyph in its status color; `$style` is the name's PR-lifecycle tint (open, merged, …) or the muted `path` hue. Entries that don't fit fold into `more_format` (`$count`); the first entry always renders, and if it alone would push the tail off the bar its `$name` is shortened with an ellipsis (assuming one `$name` in the format; a format without `$name`, or a very long `$repo`, has nothing to yield and simply clips). Clickable: each entry, and the tail. |
 | `pins` | `$index $label` | One chip per pinned command. Clickable. |
+| `hosts` | `$index $name $dest` | One chip per shared host, sorted by name; `$dest` is its ssh destination. Dashboard footer only. Clickable: opens that host's workspace list, as `H` then Enter does. |
 | `tags` | `$index $label` | The three most-used prompt tags as chips, then the manager chip from `more_format` (`$count` = saved tags). Attached only. Clickable: each chip, and the manager. |
 | `agents` | `$symbol $icon $label $key` | One pill per agent (2+ agents). `$style` includes the agent color. `symbol` is ignored — `$symbol` is a filled/hollow dot showing which agent is focused (its label is also bold), replaced by the dashboard's braille spinner while that agent is working. `$icon` is the pill's kind's entry in `[agent_bar.symbols]`, absent for a kind without one. Clickable. |
 | `model_tokens` | `$model $tokens` | `$style` includes `ok`, or `warn` near the context limit. |
@@ -462,8 +468,8 @@ click targets follow them between bars as well as within a bar. `version`
 and `usage` work in all three bars, not just the dashboard footer — put
 `$usage` in an attached bar and its sparkline is the same graph, clickable
 the same way. `keys` uses the attached view's leader-key hints in both
-attached bars. On the dashboard footer, only `keys`, `version`, and `usage`
-produce output; on the dashboard header, only `brand`, `group`, `sort`,
+attached bars. On the dashboard footer, only `keys`, `version`, `usage`, and
+`hosts` produce output, and `hosts` produces output nowhere else; on the dashboard header, only `brand`, `group`, `sort`,
 `filter`, and `counts`; on the dashboard detail pane's pinned-chip row, only
 `pins`; on its reply row, only `prompt`, `agent_bar`, `workspace`,
 `branch`, `pins`, and `keys`;

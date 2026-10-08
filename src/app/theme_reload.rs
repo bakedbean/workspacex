@@ -60,7 +60,7 @@ impl App {
     /// Called every tick; once a second, re-reads the `bar_theme` setting
     /// and the file fingerprint, and reloads only when either changed.
     pub fn maybe_reload_theme(&mut self, now_ms: u64) {
-        if self.tick % CHECK_EVERY_TICKS != 0 {
+        if !self.tick.is_multiple_of(CHECK_EVERY_TICKS) {
             return;
         }
         self.sync_theme(now_ms);

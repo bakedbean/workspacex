@@ -2,10 +2,11 @@
 name = "wsx"
 version = "0.1.4"
 edition = "2024"
-# Minimum supported Rust version. Edition 2024 was stabilized in 1.85, so that
-# is the hard floor; declaring it makes cargo fail with a clear message on
-# older toolchains instead of a cryptic edition error.
-rust-version = "1.85"
+# Minimum supported Rust version. The code uses `let` chains, stabilized in
+# 1.88, and dependencies pinned in Cargo.lock need 1.88 as well, so that is
+# the hard floor; declaring it makes cargo fail with a clear message on older
+# toolchains instead of a cryptic feature or dependency error.
+rust-version = "1.88"
 authors = ["Eben Goodman"]
 description = "Terminal UI for managing Claude Code sessions in git worktrees."
 license = "MIT"
@@ -71,3 +72,10 @@ tempfile = "3"
 # `test-util` (not part of tokio's `full`) gates the paused-clock helpers that
 # let the render-tick tests simulate a long stall without actually sleeping.
 tokio = { version = "1", features = ["full", "test-util"] }
+
+[lints.clippy]
+# From rust-version 1.88, collapsible_if also asks for nested `if let`s to be
+# merged into let chains. The codebase keeps nested ifs where they read
+# better, as the module-level allows in app, commands::external, git and
+# pty::session already do, so allow it everywhere.
+collapsible_if = "allow"

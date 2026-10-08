@@ -1944,7 +1944,7 @@ dependencies = [
 
 [[package]]
 name = "wsx"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "crossterm 0.29.0",
  "dirs 7.0.0",

@@ -149,11 +149,45 @@ impl App {
             app.activity_history.extend(buckets);
         }
         app.refresh()?;
+        app.seed_from_scm_cache();
         // Everything present after the initial refresh predates this
         // process — its first activity observation must not ring.
         app.startup_workspace_ids = app.workspaces.iter().map(|(_, w)| w.id).collect();
         app.last_data_version = app.store.data_version().unwrap_or(0);
         Ok(app)
+    }
+
+    /// Fill the PR and diff columns from `scm_cache` — the last values any
+    /// wsx process saw — so a cold start opens populated instead of blank
+    /// until the poll gets round to each workspace. Only the values are
+    /// seeded, never the throttle stamps, so every workspace is still
+    /// re-polled on the first pass and anything stale is replaced within
+    /// seconds.
+    pub(crate) fn seed_from_scm_cache(&mut self) {
+        let Ok(rows) = self.store.all_scm_cache() else {
+            return;
+        };
+        for (_, ws) in &self.workspaces {
+            let Some(row) = rows.get(&ws.id) else {
+                continue;
+            };
+            if let Some(l) = row.pr_lifecycle {
+                self.pr_lifecycle.insert(ws.id, l);
+            }
+            if let Some(n) = row.pr_number {
+                self.pr_number.insert(ws.id, n);
+            }
+            if let Some(d) = row.pr_review {
+                self.pr_review.insert(ws.id, d);
+            }
+            if let Some(n) = row.pr_unresolved {
+                self.pr_unresolved.insert(ws.id, n);
+            }
+            if let (Some(added), Some(removed)) = (row.additions, row.deletions) {
+                self.workspace_diff
+                    .insert(ws.id, crate::git::DiffStats { added, removed });
+            }
+        }
     }
 
     /// Detect writes committed by other processes (e.g. `wsx workspace
@@ -931,6 +965,58 @@ mod external_change_tests {
             Some("light"),
             "detecting the commit must also drop the stale memo"
         );
+    }
+}
+
+#[cfg(test)]
+mod scm_seed_tests {
+    use super::*;
+    use crate::git::forge::{BranchLifecycle, PrStatus, ReviewDecision};
+
+    /// A cold start opens with the PR and diff columns the last process
+    /// saw, but leaves the throttle stamps empty so the first poll pass
+    /// still refreshes every workspace.
+    #[test]
+    fn new_app_seeds_pr_and_diff_from_the_cache_without_throttling() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let ws = {
+            let mut app = App::new(
+                crate::data::store::Store::open(&path).unwrap(),
+                std::path::PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap();
+            let ws = app.test_workspace("seeded");
+            let status = PrStatus {
+                lifecycle: BranchLifecycle::PrOpen,
+                number: Some(42),
+                url: None,
+                review: Some(ReviewDecision::Approved),
+                unresolved: Some(3),
+            };
+            app.store.upsert_scm_pr(ws, &status, 1).unwrap();
+            app.store.upsert_scm_git(ws, true, 10, 4, 1).unwrap();
+            ws
+        };
+
+        let app = App::new(
+            crate::data::store::Store::open(&path).unwrap(),
+            std::path::PathBuf::from("/tmp/wsx-test"),
+        )
+        .unwrap();
+        assert_eq!(app.pr_lifecycle.get(&ws), Some(&BranchLifecycle::PrOpen));
+        assert_eq!(app.pr_number.get(&ws), Some(&42));
+        assert_eq!(app.pr_review.get(&ws), Some(&ReviewDecision::Approved));
+        assert_eq!(app.pr_unresolved.get(&ws), Some(&3));
+        assert_eq!(
+            app.workspace_diff.get(&ws),
+            Some(&crate::git::DiffStats {
+                added: 10,
+                removed: 4
+            })
+        );
+        assert!(app.pr_last_poll_ms.is_empty());
+        assert!(app.diff_last_poll_ms.is_empty());
     }
 }
 

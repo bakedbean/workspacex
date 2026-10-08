@@ -197,6 +197,8 @@ pub struct Session {
     /// only the client (agent survives — the shared-workspace persistence
     /// contract); `kill_backend()` also kills the server session.
     pub tmux_session: Option<String>,
+    /// Writes `write_when_booted` is holding until the agent boots, in order.
+    held_writes: tokio::sync::Mutex<std::collections::VecDeque<Vec<u8>>>,
     /// Test-only: treat this session as booted, for `cat` stand-ins that never
     /// draw a composer.
     #[cfg(test)]
@@ -396,8 +398,8 @@ impl Session {
         ready && self.spawned_at.elapsed() >= std::time::Duration::from_millis(SPAWN_SETTLE_MS)
     }
 
-    /// Wait until the agent accepts input and its output has been quiet for
-    /// `quiet_ms`. False when `timeout_ms` elapses first.
+    /// Wait until the agent has produced output, accepts input, and has been
+    /// quiet for `quiet_ms`. False when `timeout_ms` elapses first.
     pub async fn wait_until_settled(&self, quiet_ms: u64, timeout_ms: u64) -> bool {
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_millis(timeout_ms);
@@ -423,25 +425,41 @@ impl Session {
         }
     }
 
-    /// Write `bytes` now if the agent accepts input, else from a detached task
-    /// once it has booted, so a write to a cold-spawned session isn't eaten by
-    /// its startup screen clear.
+    /// Write `bytes` now if the agent accepts input and nothing is held, else
+    /// hold them (in order) until it does, so a write to a cold-spawned session
+    /// isn't eaten by its startup screen clear. Also holds for a live agent
+    /// whose composer is hidden (a modal). Returns before a held write lands;
+    /// held writes are retried until the agent exits, then dropped.
     pub async fn write_when_booted(
         self: &Arc<Self>,
         bytes: Vec<u8>,
         quiet_ms: u64,
         timeout_ms: u64,
     ) {
-        if self.accepts_input_now() {
+        let mut held = self.held_writes.lock().await;
+        if held.is_empty() && self.accepts_input_now() {
             let _ = self.writer.send(WriteReq::Bytes(bytes)).await;
             return;
         }
+        held.push_back(bytes);
+        if held.len() > 1 {
+            return; // a drainer is already waiting
+        }
+        drop(held);
         let session = Arc::clone(self);
         tokio::spawn(async move {
-            if session.wait_until_settled(quiet_ms, timeout_ms).await {
+            while !session.wait_until_settled(quiet_ms, timeout_ms).await {
+                if session.writer.is_closed() {
+                    tracing::warn!("write_when_booted: agent exited before it was ready");
+                    session.held_writes.lock().await.clear();
+                    return;
+                }
+                tracing::warn!("write_when_booted: agent still not ready; holding writes");
+            }
+            // Held across the sends so a later write can't overtake the queue.
+            let mut held = session.held_writes.lock().await;
+            while let Some(bytes) = held.pop_front() {
                 let _ = session.writer.send(WriteReq::Bytes(bytes)).await;
-            } else {
-                tracing::warn!("write_when_booted: agent never became ready; not written");
             }
         });
     }
@@ -729,6 +747,7 @@ impl Session {
             killer: Mutex::new(Box::new(NoopKiller)),
             prompt: Arc::new(Mutex::new(PromptCapture::default())),
             tmux_session: None,
+            held_writes: Default::default(),
             assume_booted: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -1097,6 +1116,7 @@ pub fn spawn_command_session(
         killer: Mutex::new(killer),
         prompt,
         tmux_session: tmux.map(str::to_string),
+        held_writes: Default::default(),
         #[cfg(test)]
         assume_booted: std::sync::atomic::AtomicBool::new(false),
     })
@@ -1420,6 +1440,65 @@ mod tests {
             "child did not receive the whole payload"
         );
         assert_eq!(got, expected, "payload corrupted in transit");
+    }
+
+    /// Spawn a `cat` stand-in that boots like Claude, recording its input.
+    fn spawn_probe_session(out: &std::path::Path) -> Arc<Session> {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.arg("-c");
+        cmd.arg("stty raw -echo; printf '\\033[?1049h'; cat > \"$WSX_PROBE_OUT\"");
+        cmd.env("WSX_PROBE_OUT", out);
+        cmd.cwd(std::env::current_dir().unwrap());
+        Arc::new(
+            spawn_command_session(cmd, 80, 24, AgentKind::Claude, "claude".to_string(), None)
+                .unwrap(),
+        )
+    }
+
+    async fn await_probe(out: &std::path::Path, want: &[u8], secs: u64) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        loop {
+            let got = std::fs::read(out).unwrap_or_default();
+            if got == want {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "got {got:?}, want {want:?}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    /// A write made once the agent is ready must not overtake one still held
+    /// for its boot.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn write_when_booted_keeps_fifo_across_the_boot_edge() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("probe.bin");
+        let s = spawn_probe_session(&out);
+        // A quiet window longer than the spawn floor keeps the first write
+        // held after the agent starts accepting input.
+        s.write_when_booted(b"first".to_vec(), 3_000, 6_000).await;
+        while !s.accepts_input_now() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        s.write_when_booted(b"second".to_vec(), 3_000, 6_000).await;
+        await_probe(&out, b"firstsecond", 8).await;
+        s.kill();
+    }
+
+    /// A held write outlives a wait round that times out while the agent is
+    /// still alive.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn write_when_booted_survives_a_timed_out_wait_round() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("probe.bin");
+        let s = spawn_probe_session(&out);
+        // Each round ends well inside the spawn floor.
+        s.write_when_booted(b"late".to_vec(), 100, 200).await;
+        await_probe(&out, b"late", 5).await;
+        s.kill();
     }
 
     /// A dashboard write to a cold-spawned agent must wait for it to boot:

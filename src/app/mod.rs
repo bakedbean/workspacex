@@ -41,7 +41,7 @@ pub mod session_harvest;
 pub mod theme_reload;
 pub use crate::app::activity::{ActivityState, classify_activity, classify_activity_with_events};
 pub use crate::app::background::{
-    branch_drift_poll, branch_drift_poll_with, tail_workspace_events,
+    branch_drift_poll, branch_drift_poll_with, prime_workspace_events, tail_workspace_events,
 };
 pub use crate::app::bell::{BellPattern, alert_decision, fire_bell};
 pub use crate::app::render::draw_for_test;

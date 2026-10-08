@@ -1041,14 +1041,6 @@ async fn refresh_local(app: SharedApp, t: PollTarget) {
             if let Some(diff) = crate::git::workspace_diff_stats(&path, base).await {
                 let mut g = app.lock().await;
                 g.workspace_diff.insert(id, diff);
-                // Write-through so the next cold start opens with
-                // this diff (see `App::seed_from_scm_cache`).
-                if let Some(st) = g.workspace_status.get(&id) {
-                    let dirty = st.modified > 0 || st.untracked > 0;
-                    let _ =
-                        g.store
-                            .upsert_scm_git(id, dirty, diff.added, diff.removed, now_ms / 1000);
-                }
             }
             if let Some(per_file) = crate::git::workspace_diff_per_file(&path, base).await {
                 let mut g = app.lock().await;

@@ -157,12 +157,20 @@ impl App {
         Ok(app)
     }
 
-    /// Fill the PR and diff columns from `scm_cache` — the last values any
-    /// wsx process saw — so a cold start opens populated instead of blank
-    /// until the poll gets round to each workspace. Only the values are
+    /// Fill the PR columns from `scm_cache` — the last PR state any wsx
+    /// process saw — so a cold start opens populated instead of blank until
+    /// the network poll gets round to each workspace. Only the values are
     /// seeded, never the throttle stamps, so every workspace is still
-    /// re-polled on the first pass and anything stale is replaced within
-    /// seconds.
+    /// re-polled on the first PR pass.
+    ///
+    /// The cached diff counts are deliberately not seeded: the desktop
+    /// writer diffs against `origin/HEAD`, the dashboard against the repo's
+    /// configured `base_branch` (and not at all when it is unset), so the
+    /// cached number can mean something else here. The local poll computes
+    /// the real one within its first pass anyway.
+    ///
+    /// Workspaces whose worktree is gone are skipped: no poll will ever
+    /// replace their values, so seeding them would pin a stale verdict.
     pub(crate) fn seed_from_scm_cache(&mut self) {
         let Ok(rows) = self.store.all_scm_cache() else {
             return;
@@ -171,6 +179,9 @@ impl App {
             let Some(row) = rows.get(&ws.id) else {
                 continue;
             };
+            if !ws.worktree_path.exists() {
+                continue;
+            }
             if let Some(l) = row.pr_lifecycle {
                 self.pr_lifecycle.insert(ws.id, l);
             }
@@ -182,10 +193,6 @@ impl App {
             }
             if let Some(n) = row.pr_unresolved {
                 self.pr_unresolved.insert(ws.id, n);
-            }
-            if let (Some(added), Some(removed)) = (row.additions, row.deletions) {
-                self.workspace_diff
-                    .insert(ws.id, crate::git::DiffStats { added, removed });
             }
         }
     }
@@ -971,52 +978,61 @@ mod external_change_tests {
 #[cfg(test)]
 mod scm_seed_tests {
     use super::*;
+    use crate::data::store::{NewWorkspace, Store, WorkspaceId};
     use crate::git::forge::{BranchLifecycle, PrStatus, ReviewDecision};
 
-    /// A cold start opens with the PR and diff columns the last process
-    /// saw, but leaves the throttle stamps empty so the first poll pass
-    /// still refreshes every workspace.
-    #[test]
-    fn new_app_seeds_pr_and_diff_from_the_cache_without_throttling() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("state.db");
-        let ws = {
-            let mut app = App::new(
-                crate::data::store::Store::open(&path).unwrap(),
-                std::path::PathBuf::from("/tmp/wsx-test"),
+    fn insert(store: &Store, name: &str, worktree: &std::path::Path) -> WorkspaceId {
+        let repo = store
+            .add_repo(
+                &std::path::PathBuf::from(format!("/tmp/{name}-repo")),
+                name,
+                "wsx",
             )
             .unwrap();
-            let ws = app.test_workspace("seeded");
-            let status = PrStatus {
-                lifecycle: BranchLifecycle::PrOpen,
-                number: Some(42),
-                url: None,
-                review: Some(ReviewDecision::Approved),
-                unresolved: Some(3),
-            };
-            app.store.upsert_scm_pr(ws, &status, 1).unwrap();
-            app.store.upsert_scm_git(ws, true, 10, 4, 1).unwrap();
-            ws
-        };
-
-        let app = App::new(
-            crate::data::store::Store::open(&path).unwrap(),
-            std::path::PathBuf::from("/tmp/wsx-test"),
-        )
-        .unwrap();
-        assert_eq!(app.pr_lifecycle.get(&ws), Some(&BranchLifecycle::PrOpen));
-        assert_eq!(app.pr_number.get(&ws), Some(&42));
-        assert_eq!(app.pr_review.get(&ws), Some(&ReviewDecision::Approved));
-        assert_eq!(app.pr_unresolved.get(&ws), Some(&3));
-        assert_eq!(
-            app.workspace_diff.get(&ws),
-            Some(&crate::git::DiffStats {
-                added: 10,
-                removed: 4
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name,
+                branch: &format!("wsx/{name}"),
+                worktree_path: worktree,
+                yolo: false,
+                agent: crate::pty::session::AgentKind::Claude,
+                shared: false,
             })
-        );
+            .unwrap();
+        let status = PrStatus {
+            lifecycle: BranchLifecycle::PrOpen,
+            number: Some(42),
+            url: None,
+            review: Some(ReviewDecision::Approved),
+            unresolved: Some(3),
+        };
+        store.upsert_scm_pr(ws, &status, 1).unwrap();
+        store.upsert_scm_git(ws, true, 10, 4, 1).unwrap();
+        ws
+    }
+
+    /// A cold start opens with the PR columns the last process saw, but
+    /// leaves the throttle stamps empty so the first poll pass still
+    /// refreshes every workspace. The cached diff is not seeded: its base
+    /// branch may not be the one the dashboard diffs against.
+    #[test]
+    fn new_app_seeds_pr_columns_from_the_cache_without_throttling() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let live = insert(&store, "live", dir.path());
+        let gone = insert(&store, "gone", &dir.path().join("missing"));
+
+        let app = App::new(store, std::path::PathBuf::from("/tmp/wsx-test")).unwrap();
+        assert_eq!(app.pr_lifecycle.get(&live), Some(&BranchLifecycle::PrOpen));
+        assert_eq!(app.pr_number.get(&live), Some(&42));
+        assert_eq!(app.pr_review.get(&live), Some(&ReviewDecision::Approved));
+        assert_eq!(app.pr_unresolved.get(&live), Some(&3));
+        assert!(app.workspace_diff.is_empty());
         assert!(app.pr_last_poll_ms.is_empty());
-        assert!(app.diff_last_poll_ms.is_empty());
+        // No poll will ever refresh a missing worktree, so it gets no
+        // verdict to keep forever.
+        assert!(!app.pr_lifecycle.contains_key(&gone));
     }
 }
 

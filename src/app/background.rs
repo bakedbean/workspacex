@@ -845,6 +845,15 @@ pub async fn branch_drift_poll(app: SharedApp) {
     .await
 }
 
+/// How many workspaces the local loop refreshes at once. Each one costs a
+/// handful of git subprocesses plus a transcript read, so an unbounded
+/// fan-out would spike the process count on a large fleet.
+const LOCAL_POLL_CONCURRENCY: usize = 8;
+
+/// How many PR fetches run at once. Each is several `gh` network round
+/// trips; more than a few in flight risks GitHub's secondary rate limit.
+const PR_POLL_CONCURRENCY: usize = 4;
+
 /// [`branch_drift_poll`] with the PR fetch injected, so tests can drive the
 /// loop without a remote and without `gh`. Modelled on the liveness
 /// injection in `commands::shared::shared_list_records`: production passes
@@ -853,211 +862,70 @@ pub async fn branch_drift_poll(app: SharedApp) {
 ///
 /// The closure takes owned `(worktree, branch)` rather than references so
 /// the returned future doesn't have to borrow from the loop body.
+///
+/// Two loops run side by side: [`local_poll`] for everything answered from
+/// disk (branch drift, git status, diff, transcripts, processes), and
+/// [`pr_poll`] for the `gh` calls. Kept apart so a slow network round trip
+/// for one workspace never holds up the local refresh of the rest — before
+/// the split, a cold start with N workspaces took N × the `gh` latency to
+/// reach the last one.
 pub async fn branch_drift_poll_with<F, Fut>(app: SharedApp, fetch_pr: F)
 where
     F: Fn(std::path::PathBuf, String) -> Fut,
     Fut: std::future::Future<Output = crate::error::Result<Option<crate::git::forge::PrStatus>>>,
 {
+    tokio::join!(local_poll(app.clone()), pr_poll(app, fetch_pr));
+}
+
+/// One workspace as both poll loops see it, snapshotted under a brief lock.
+struct PollTarget {
+    id: WorkspaceId,
+    path: std::path::PathBuf,
+    branch: String,
+    prefix: String,
+    base_branch: Option<String>,
+    agent: crate::pty::session::AgentKind,
+}
+
+fn poll_targets(g: &crate::app::App) -> Vec<PollTarget> {
+    g.workspaces
+        .iter()
+        .filter_map(|(_, w)| {
+            let repo = g.repos.iter().find(|r| r.id == w.repo_id)?;
+            let prefix =
+                crate::data::repo::resolve_branch_prefix(repo, &g.store).unwrap_or_default();
+            Some(PollTarget {
+                id: w.id,
+                path: w.worktree_path.clone(),
+                branch: w.branch.clone(),
+                prefix,
+                base_branch: repo.base_branch.clone(),
+                agent: w.agent,
+            })
+        })
+        .collect()
+}
+
+/// A 2s ticker that waits a full period after a slow pass instead of
+/// firing the missed ticks back to back.
+fn poll_interval() -> tokio::time::Interval {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    interval
+}
+
+async fn local_poll(app: SharedApp) {
+    use futures::StreamExt;
+    let mut interval = poll_interval();
     loop {
         interval.tick().await;
-        let snapshot: Vec<(
-            WorkspaceId,
-            std::path::PathBuf,
-            String,
-            String,
-            Option<String>,
-            crate::pty::session::AgentKind,
-        )> = {
-            let g = app.lock().await;
-            g.workspaces
-                .iter()
-                .filter_map(|(_, w)| {
-                    let repo = g.repos.iter().find(|r| r.id == w.repo_id)?;
-                    let prefix = crate::data::repo::resolve_branch_prefix(repo, &g.store)
-                        .unwrap_or_default();
-                    Some((
-                        w.id,
-                        w.worktree_path.clone(),
-                        w.branch.clone(),
-                        prefix,
-                        repo.base_branch.clone(),
-                        w.agent,
-                    ))
-                })
-                .collect()
-        };
+        let targets = poll_targets(&*app.lock().await);
+        futures::stream::iter(targets)
+            .for_each_concurrent(LOCAL_POLL_CONCURRENCY, |t| refresh_local(app.clone(), t))
+            .await;
 
-        for (id, path, db_branch, prefix, base_branch, ws_agent) in snapshot {
-            if !path.exists() {
-                continue;
-            }
-
-            // 1) Branch drift (existing logic).
-            if let Ok(current) = crate::git::current_branch(&path).await {
-                if current != db_branch && current != "HEAD" {
-                    let new_name = if prefix.is_empty() {
-                        current.clone()
-                    } else {
-                        let strip = format!("{}/", prefix.trim_end_matches('/'));
-                        current.strip_prefix(&strip).unwrap_or(&current).to_string()
-                    };
-                    let mut g = app.lock().await;
-                    let _ = g.store.rename_workspace(id, &new_name);
-                    let _ = g.store.set_workspace_branch(id, &current);
-                    let _ = g.refresh();
-                    // Invalidate cached PR state — the new branch may have a
-                    // different (or no) PR. Clearing the throttle stamp
-                    // makes the next tick poll immediately.
-                    g.pr_lifecycle.remove(&id);
-                    g.pr_number.remove(&id);
-                    g.pr_review.remove(&id);
-                    g.pr_unresolved.remove(&id);
-                    g.pr_last_poll_ms.remove(&id);
-                    // The persisted row too, not just these in-memory maps:
-                    // `wsx waybar menu-entries` and `wsx menubar plugin` are
-                    // separate short-lived processes that render from
-                    // scm_cache alone, so a verdict left behind there keeps
-                    // claiming the OLD branch's PR is approved — under the
-                    // new branch's name — until a later poll happens to
-                    // overwrite it.
-                    let _ = g.store.clear_scm_pr(id);
-                    // New branch → different ancestry from `base_branch`,
-                    // so the cached diff and its throttle stamp are
-                    // stale. Drop them to force a fresh poll.
-                    g.workspace_diff.remove(&id);
-                    g.workspace_diff_per_file.remove(&id);
-                    g.diff_last_poll_ms.remove(&id);
-                    // Everything below works from `snapshot`, taken before
-                    // the rename — `db_branch` now names the branch we just
-                    // superseded. Polling PR status with it would re-file
-                    // the old branch's PR under the new branch's name and
-                    // undo the invalidation we just did, in the same pass.
-                    // Skip the rest of this workspace's iteration; the
-                    // throttle stamps were cleared above, so the next tick
-                    // (2s) re-snapshots and refreshes everything for real.
-                    continue;
-                }
-            }
-
-            // 2) Workspace status — refresh the cache for this workspace.
-            if let Ok(status) = crate::git::workspace_status(&path).await {
-                let mut g = app.lock().await;
-                g.workspace_status.insert(id, status);
-            }
-
-            // 2b) Diff stats vs. base branch (for dashboard +N/-M column).
-            //     Throttled to once per 10s per workspace: running
-            //     `git diff --shortstat <base>...HEAD` on every 2s tick
-            //     is wasteful on large repos and the column doesn't need
-            //     sub-10s freshness.
-            if let Some(base) = base_branch.as_deref() {
-                let now_ms = crate::util::time::now_ms();
-                let should_poll = {
-                    let g = app.lock().await;
-                    g.diff_last_poll_ms
-                        .get(&id)
-                        .map(|t| now_ms.saturating_sub(*t) >= 10_000)
-                        .unwrap_or(true)
-                };
-                if should_poll {
-                    {
-                        let mut g = app.lock().await;
-                        g.diff_last_poll_ms.insert(id, now_ms);
-                    }
-                    if let Some(diff) = crate::git::workspace_diff_stats(&path, base).await {
-                        let mut g = app.lock().await;
-                        g.workspace_diff.insert(id, diff);
-                        // Write-through so the next cold start opens with
-                        // this diff (see `App::seed_from_scm_cache`).
-                        if let Some(st) = g.workspace_status.get(&id) {
-                            let dirty = st.modified > 0 || st.untracked > 0;
-                            let _ = g.store.upsert_scm_git(
-                                id,
-                                dirty,
-                                diff.added,
-                                diff.removed,
-                                now_ms / 1000,
-                            );
-                        }
-                    }
-                    if let Some(per_file) = crate::git::workspace_diff_per_file(&path, base).await {
-                        let mut g = app.lock().await;
-                        g.workspace_diff_per_file.insert(id, per_file);
-                    }
-                }
-            }
-
-            // 3) PR lifecycle — throttled to once per 30s per workspace.
-            //    gh is a network call, so we don't run it every tick.
-            let now_ms = crate::util::time::now_ms();
-            let should_poll_pr = {
-                let g = app.lock().await;
-                g.pr_last_poll_ms
-                    .get(&id)
-                    .map(|t| now_ms.saturating_sub(*t) >= 30_000)
-                    .unwrap_or(true)
-            };
-            if should_poll_pr {
-                // Mark the attempt before awaiting the fetch, so concurrent
-                // ticks don't queue up multiple gh processes.
-                {
-                    let mut g = app.lock().await;
-                    g.pr_last_poll_ms.insert(id, now_ms);
-                }
-                if let Ok(Some(status)) = fetch_pr(path.clone(), db_branch).await {
-                    let mut g = app.lock().await;
-                    g.pr_lifecycle.insert(id, status.lifecycle);
-                    match status.number {
-                        Some(n) => {
-                            g.pr_number.insert(id, n);
-                        }
-                        None => {
-                            g.pr_number.remove(&id);
-                        }
-                    }
-                    // Removed, not left alone, when the verdict is gone: a
-                    // new commit on a protected branch dismisses an
-                    // approval, and a stale tick would claim the PR is
-                    // still ready to merge.
-                    match status.review {
-                        Some(d) => {
-                            g.pr_review.insert(id, d);
-                        }
-                        None => {
-                            g.pr_review.remove(&id);
-                        }
-                    }
-                    // Same removal rule as the verdict: a probe that
-                    // couldn't answer must not leave a stale count behind.
-                    match status.unresolved {
-                        Some(n) => {
-                            g.pr_unresolved.insert(id, n);
-                        }
-                        None => {
-                            g.pr_unresolved.remove(&id);
-                        }
-                    }
-                    // Write-through so `wsx waybar menu-entries` (a separate
-                    // short-lived process) sees PR state without calling gh.
-                    let _ = g.store.upsert_scm_pr(id, &status, now_ms / 1000);
-                }
-                // Ok(None) → leave any existing cached value alone; better
-                // than clobbering a previously-known state on a transient
-                // network error.
-            }
-
-            // 4) Tail agent session JSONL for events.
-            //    Extracted into `tail_workspace_events` so detach handlers
-            //    can trigger an immediate refresh on return-to-dashboard
-            //    without waiting for the next poll tick. Path/agent are
-            //    passed from the snapshot above so the helper doesn't
-            //    re-walk `App::workspaces` (would make this loop O(n²)).
-            tail_workspace_events(app.clone(), id, path.clone(), ws_agent).await;
-        }
-
-        // 5) Per-workspace process scan. Throttled to once per 10 s globally —
-        //    lsof returns everything in a single call, so we don't pay per-workspace.
+        // Per-workspace process scan. Throttled to once per 10 s globally —
+        // lsof returns everything in a single call, so we don't pay per-workspace.
         let should_scan = {
             let g = app.lock().await;
             let now_ms = crate::util::time::now_ms();
@@ -1082,6 +950,259 @@ where
             g.workspace_processes = bucketed;
             g.last_proc_scan_ms = now_ms;
         }
+    }
+}
+
+/// One workspace's local refresh: branch drift, git status, diff stats and
+/// the transcript tail. No network.
+async fn refresh_local(app: SharedApp, t: PollTarget) {
+    let PollTarget {
+        id,
+        path,
+        branch: db_branch,
+        prefix,
+        base_branch,
+        agent: ws_agent,
+    } = t;
+    if !path.exists() {
+        return;
+    }
+
+    // 1) Branch drift.
+    if let Ok(current) = crate::git::current_branch(&path).await {
+        if current != db_branch && current != "HEAD" {
+            let new_name = if prefix.is_empty() {
+                current.clone()
+            } else {
+                let strip = format!("{}/", prefix.trim_end_matches('/'));
+                current.strip_prefix(&strip).unwrap_or(&current).to_string()
+            };
+            let mut g = app.lock().await;
+            let _ = g.store.rename_workspace(id, &new_name);
+            let _ = g.store.set_workspace_branch(id, &current);
+            let _ = g.refresh();
+            // Invalidate cached PR state — the new branch may have a
+            // different (or no) PR. Clearing the throttle stamp makes the
+            // PR loop's next tick poll immediately. A fetch for the old
+            // branch already in flight is discarded on landing — see
+            // `pr_poll`.
+            g.pr_lifecycle.remove(&id);
+            g.pr_number.remove(&id);
+            g.pr_review.remove(&id);
+            g.pr_unresolved.remove(&id);
+            g.pr_last_poll_ms.remove(&id);
+            // The persisted row too, not just these in-memory maps:
+            // `wsx waybar menu-entries` and `wsx menubar plugin` are
+            // separate short-lived processes that render from
+            // scm_cache alone, so a verdict left behind there keeps
+            // claiming the OLD branch's PR is approved — under the
+            // new branch's name — until a later poll happens to
+            // overwrite it.
+            let _ = g.store.clear_scm_pr(id);
+            // New branch → different ancestry from `base_branch`,
+            // so the cached diff and its throttle stamp are
+            // stale. Drop them to force a fresh poll.
+            g.workspace_diff.remove(&id);
+            g.workspace_diff_per_file.remove(&id);
+            g.diff_last_poll_ms.remove(&id);
+            // Everything below works from the snapshot taken before the
+            // rename. Skip the rest; the throttle stamps were cleared
+            // above, so the next tick (2s) re-snapshots and refreshes
+            // everything for real.
+            return;
+        }
+    }
+
+    // 2) Workspace status — refresh the cache for this workspace.
+    if let Ok(status) = crate::git::workspace_status(&path).await {
+        let mut g = app.lock().await;
+        g.workspace_status.insert(id, status);
+    }
+
+    // 2b) Diff stats vs. base branch (for dashboard +N/-M column).
+    //     Throttled to once per 10s per workspace: running
+    //     `git diff --shortstat <base>...HEAD` on every 2s tick
+    //     is wasteful on large repos and the column doesn't need
+    //     sub-10s freshness.
+    if let Some(base) = base_branch.as_deref() {
+        let now_ms = crate::util::time::now_ms();
+        let should_poll = {
+            let g = app.lock().await;
+            g.diff_last_poll_ms
+                .get(&id)
+                .map(|t| now_ms.saturating_sub(*t) >= 10_000)
+                .unwrap_or(true)
+        };
+        if should_poll {
+            {
+                let mut g = app.lock().await;
+                g.diff_last_poll_ms.insert(id, now_ms);
+            }
+            if let Some(diff) = crate::git::workspace_diff_stats(&path, base).await {
+                let mut g = app.lock().await;
+                g.workspace_diff.insert(id, diff);
+                // Write-through so the next cold start opens with
+                // this diff (see `App::seed_from_scm_cache`).
+                if let Some(st) = g.workspace_status.get(&id) {
+                    let dirty = st.modified > 0 || st.untracked > 0;
+                    let _ =
+                        g.store
+                            .upsert_scm_git(id, dirty, diff.added, diff.removed, now_ms / 1000);
+                }
+            }
+            if let Some(per_file) = crate::git::workspace_diff_per_file(&path, base).await {
+                let mut g = app.lock().await;
+                g.workspace_diff_per_file.insert(id, per_file);
+            }
+        }
+    }
+
+    // 3) Tail agent session JSONL for events.
+    //    Extracted into `tail_workspace_events` so detach handlers
+    //    can trigger an immediate refresh on return-to-dashboard
+    //    without waiting for the next poll tick. Path/agent are
+    //    passed from the snapshot above so the helper doesn't
+    //    re-walk `App::workspaces` (would make this loop O(n²)).
+    tail_workspace_events(app, id, path, ws_agent).await;
+}
+
+/// PR lifecycle for every workspace, throttled to once per 30s each — `gh`
+/// is a network call, so it doesn't run every tick. The selected workspace
+/// goes first so the row you're looking at fills in soonest.
+async fn pr_poll<F, Fut>(app: SharedApp, fetch_pr: F)
+where
+    F: Fn(std::path::PathBuf, String) -> Fut,
+    Fut: std::future::Future<Output = crate::error::Result<Option<crate::git::forge::PrStatus>>>,
+{
+    use futures::StreamExt;
+    let mut interval = poll_interval();
+    loop {
+        interval.tick().await;
+        let now_ms = crate::util::time::now_ms();
+        let due: Vec<PollTarget> = {
+            let mut g = app.lock().await;
+            let selected = g.selected_target();
+            let mut due: Vec<PollTarget> = poll_targets(&g)
+                .into_iter()
+                .filter(|t| t.path.exists())
+                .filter(|t| {
+                    g.pr_last_poll_ms
+                        .get(&t.id)
+                        .is_none_or(|last| now_ms.saturating_sub(*last) >= 30_000)
+                })
+                .collect();
+            // Mark the attempt before awaiting the fetch, so a pass that
+            // outlives the tick doesn't queue a second gh for the same row.
+            for t in &due {
+                g.pr_last_poll_ms.insert(t.id, now_ms);
+            }
+            due.sort_by_key(|t| selected != Some(crate::app::SelectionTarget::Workspace(t.id)));
+            due
+        };
+        futures::stream::iter(due)
+            .for_each_concurrent(PR_POLL_CONCURRENCY, |t| {
+                let fetch = fetch_pr(t.path.clone(), t.branch.clone());
+                let app = app.clone();
+                async move {
+                    // Ok(None) → leave any existing cached value alone;
+                    // better than clobbering a previously-known state on a
+                    // transient network error.
+                    if let Ok(Some(status)) = fetch.await {
+                        commit_pr_status(&app, t.id, &t.branch, status, now_ms).await;
+                    }
+                }
+            })
+            .await;
+    }
+}
+
+async fn commit_pr_status(
+    app: &SharedApp,
+    id: WorkspaceId,
+    fetched_branch: &str,
+    status: crate::git::forge::PrStatus,
+    now_ms: i64,
+) {
+    let mut g = app.lock().await;
+    // The local loop may have renamed the branch while this fetch was in
+    // flight. Committing it would file the old branch's PR under the new
+    // name and undo the drift invalidation — drop it; the cleared throttle
+    // stamp has the next tick fetch for the new branch.
+    let current = g
+        .workspaces
+        .iter()
+        .find(|(_, w)| w.id == id)
+        .map(|(_, w)| w.branch.as_str());
+    if current != Some(fetched_branch) {
+        return;
+    }
+    g.pr_lifecycle.insert(id, status.lifecycle);
+    match status.number {
+        Some(n) => {
+            g.pr_number.insert(id, n);
+        }
+        None => {
+            g.pr_number.remove(&id);
+        }
+    }
+    // Removed, not left alone, when the verdict is gone: a new commit on a
+    // protected branch dismisses an approval, and a stale tick would claim
+    // the PR is still ready to merge.
+    match status.review {
+        Some(d) => {
+            g.pr_review.insert(id, d);
+        }
+        None => {
+            g.pr_review.remove(&id);
+        }
+    }
+    // Same removal rule as the verdict: a probe that couldn't answer must
+    // not leave a stale count behind.
+    match status.unresolved {
+        Some(n) => {
+            g.pr_unresolved.insert(id, n);
+        }
+        None => {
+            g.pr_unresolved.remove(&id);
+        }
+    }
+    // Write-through so `wsx waybar menu-entries` (a separate short-lived
+    // process) sees PR state without calling gh.
+    let _ = g.store.upsert_scm_pr(id, &status, now_ms / 1000);
+}
+
+#[cfg(test)]
+mod pr_commit_tests {
+    use super::*;
+    use crate::git::forge::{BranchLifecycle, PrStatus};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    fn open_pr(number: u32) -> PrStatus {
+        PrStatus {
+            lifecycle: BranchLifecycle::PrOpen,
+            number: Some(number),
+            url: None,
+            review: None,
+            unresolved: None,
+        }
+    }
+
+    /// The PR loop runs beside the local loop, so a fetch can still be in
+    /// flight when drift renames the branch. Landing it would file the old
+    /// branch's PR under the new name; it must be dropped instead.
+    #[tokio::test]
+    async fn a_fetch_for_a_superseded_branch_is_dropped() {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        let mut app = crate::app::App::new(store, "/tmp/wsx-test".into()).unwrap();
+        let ws = app.test_workspace("drifted");
+        let app = Arc::new(Mutex::new(app));
+
+        commit_pr_status(&app, ws, "wsx/old-name", open_pr(7), 0).await;
+        assert!(!app.lock().await.pr_number.contains_key(&ws));
+
+        commit_pr_status(&app, ws, "wsx/drifted", open_pr(8), 0).await;
+        assert_eq!(app.lock().await.pr_number.get(&ws), Some(&8));
     }
 }
 

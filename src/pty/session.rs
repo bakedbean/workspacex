@@ -378,6 +378,39 @@ impl Session {
         }
     }
 
+    /// Whether the agent has drawn a composer that will keep typed input and
+    /// is past the spawn floor. False for a cold-spawned session still booting.
+    pub fn accepts_input_now(&self) -> bool {
+        let ready = {
+            let parser = self.parser.lock().unwrap();
+            ready_for_input(self.agent, parser.screen())
+        };
+        ready && self.spawned_at.elapsed() >= std::time::Duration::from_millis(SPAWN_SETTLE_MS)
+    }
+
+    /// Wait until the agent accepts input and its output has been quiet for
+    /// `quiet_ms`. False when `timeout_ms` elapses first.
+    pub async fn wait_until_settled(&self, quiet_ms: u64, timeout_ms: u64) -> bool {
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_millis(timeout_ms);
+        loop {
+            if start.elapsed() >= timeout {
+                return false;
+            }
+            let last = self.activity_ms.load(Ordering::Relaxed);
+            // A quiet window alone only means "no bytes moved recently", which
+            // during a fresh agent boot is also true in the pauses *before* the
+            // agent can accept input. `ready_for_input` adds the missing
+            // "the composer exists" half of the condition, and the spawn floor
+            // covers the case where the composer is there and about to be
+            // replaced by a modal (see `Session::spawned_at`).
+            if last > 0 && self.accepts_input_now() && now_ms().saturating_sub(last) >= quiet_ms {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
     /// Write `text` (with a trailing `\r`) to the PTY after the activity
     /// stream has been quiet for `quiet_ms` milliseconds following some
     /// output. If the overall window of `timeout_ms` elapses without ever
@@ -389,85 +422,60 @@ impl Session {
     #[must_use = "a false return means nothing was written; the caller must not \
                   treat the message as delivered"]
     pub async fn send_text_when_settled(&self, text: &str, quiet_ms: u64, timeout_ms: u64) -> bool {
-        use std::sync::atomic::Ordering;
-        let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_millis(timeout_ms);
-        loop {
-            if start.elapsed() >= timeout {
-                tracing::warn!(
-                    text = %text,
-                    "send_text_when_settled: timed out waiting for PTY to settle"
-                );
-                return false;
-            }
-            let last = self.activity_ms.load(Ordering::Relaxed);
-            // A quiet window alone only means "no bytes moved recently", which
-            // during a fresh agent boot is also true in the pauses *before* the
-            // agent can accept input. `ready_for_input` adds the missing
-            // "the composer exists" half of the condition, and the spawn floor
-            // covers the case where the composer is there and about to be
-            // replaced by a modal (see `Session::spawned_at`).
-            let ready = {
-                let parser = self.parser.lock().unwrap();
-                ready_for_input(self.agent, parser.screen())
-            };
-            let settled_since_spawn =
-                self.spawned_at.elapsed() >= std::time::Duration::from_millis(SPAWN_SETTLE_MS);
-            if last > 0 && ready && settled_since_spawn {
-                let now_ms = now_ms();
-                let since_last = now_ms.saturating_sub(last);
-                if since_last >= quiet_ms {
-                    // Inject the text and the submitting CR as two writes (see
-                    // `submit_writes` for the per-agent byte shapes). The CR is
-                    // a separate write so the agent's TUI sees it as a distinct
-                    // Enter rather than part of the typed/pasted text.
-                    //
-                    // A send only fails when the writer task has dropped the
-                    // receiver, which it does as soon as a PTY write errors —
-                    // i.e. the agent is gone. Report that as "not written" so
-                    // the message stays queued rather than being acked into a
-                    // dead terminal. A failed `body` also means the CR is
-                    // pointless, so give up on the pair together.
-                    let (body, enter) = submit_writes(self.agent, text);
-                    if self.writer.send(WriteReq::Bytes(body)).await.is_err() {
-                        tracing::warn!(
-                            text = %text,
-                            "send_text_when_settled: PTY writer is gone; not written"
-                        );
-                        return false;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-                    // Only the CR is acked. The channel is FIFO with a single
-                    // consumer that stops on the first write failure, so the CR
-                    // having been written proves the body ahead of it was too —
-                    // one one-shot per injection rather than two.
-                    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-                    if self
-                        .writer
-                        .send(WriteReq::Acked(enter, ack_tx))
-                        .await
-                        .is_err()
-                    {
-                        tracing::warn!(
-                            text = %text,
-                            "send_text_when_settled: PTY writer died before the \
-                             submitting CR; not written"
-                        );
-                        return false;
-                    }
-                    if !await_ack(ack_rx, WRITE_ACK_TIMEOUT_MS).await {
-                        tracing::warn!(
-                            text = %text,
-                            "send_text_when_settled: queued bytes never reached the \
-                             terminal; not written"
-                        );
-                        return false;
-                    }
-                    return true;
-                }
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        if !self.wait_until_settled(quiet_ms, timeout_ms).await {
+            tracing::warn!(
+                text = %text,
+                "send_text_when_settled: timed out waiting for PTY to settle"
+            );
+            return false;
         }
+        // Inject the text and the submitting CR as two writes (see
+        // `submit_writes` for the per-agent byte shapes). The CR is
+        // a separate write so the agent's TUI sees it as a distinct
+        // Enter rather than part of the typed/pasted text.
+        //
+        // A send only fails when the writer task has dropped the
+        // receiver, which it does as soon as a PTY write errors —
+        // i.e. the agent is gone. Report that as "not written" so
+        // the message stays queued rather than being acked into a
+        // dead terminal. A failed `body` also means the CR is
+        // pointless, so give up on the pair together.
+        let (body, enter) = submit_writes(self.agent, text);
+        if self.writer.send(WriteReq::Bytes(body)).await.is_err() {
+            tracing::warn!(
+                text = %text,
+                "send_text_when_settled: PTY writer is gone; not written"
+            );
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        // Only the CR is acked. The channel is FIFO with a single
+        // consumer that stops on the first write failure, so the CR
+        // having been written proves the body ahead of it was too —
+        // one one-shot per injection rather than two.
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        if self
+            .writer
+            .send(WriteReq::Acked(enter, ack_tx))
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                text = %text,
+                "send_text_when_settled: PTY writer died before the \
+                 submitting CR; not written"
+            );
+            return false;
+        }
+        if !await_ack(ack_rx, WRITE_ACK_TIMEOUT_MS).await {
+            tracing::warn!(
+                text = %text,
+                "send_text_when_settled: queued bytes never reached the \
+                 terminal; not written"
+            );
+            return false;
+        }
+        true
     }
 }
 

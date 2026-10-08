@@ -97,6 +97,11 @@ async fn main() -> Result<()> {
         app.lock().await.open_workspace_by_name(repo, slug);
     }
 
+    // Tail every transcript before the first frame so rows open in their
+    // real recency order instead of climbing into place as the poll reaches
+    // them.
+    app::prime_workspace_events(app.clone(), std::time::Duration::from_secs(2)).await;
+
     // Watch for git branch renames performed by claude (or the user)
     // and propagate to the wsx store. Aborts when the runtime drops.
     tokio::spawn(app::branch_drift_poll(app.clone()));

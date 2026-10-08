@@ -59,6 +59,32 @@ pub async fn tail_workspace_events(
     }
 }
 
+/// Read every workspace's session transcripts once, concurrently, before
+/// the first frame. The dashboard's recency sort keys on the transcript's
+/// last event, so until a workspace has been tailed it sorts as "never
+/// active" — left to the poll loop, rows would climb into place one at a
+/// time as it reached them. Transcripts are local files, so this is
+/// milliseconds per workspace.
+///
+/// Bounded by `budget`: whatever hasn't finished by then keeps running
+/// detached (dropping a `JoinHandle` doesn't cancel the task) and lands on
+/// a later frame. A detached tail racing the poll loop's own tail is safe —
+/// see the concurrent-tail note on [`tail_workspace_events`].
+pub async fn prime_workspace_events(app: SharedApp, budget: std::time::Duration) {
+    let targets: Vec<_> = {
+        let g = app.lock().await;
+        g.workspaces
+            .iter()
+            .map(|(_, w)| (w.id, w.worktree_path.clone(), w.agent))
+            .collect()
+    };
+    let handles: Vec<_> = targets
+        .into_iter()
+        .map(|(id, path, agent)| tokio::spawn(tail_workspace_events(app.clone(), id, path, agent)))
+        .collect();
+    let _ = tokio::time::timeout(budget, futures::future::join_all(handles)).await;
+}
+
 async fn tail_instance_events(
     app: &SharedApp,
     id: WorkspaceId,
@@ -400,6 +426,19 @@ mod instance_event_tests {
         terminal
             .draw(|frame| crate::app::render::draw_for_test(frame, app))
             .unwrap();
+    }
+
+    /// The priming pass must leave every workspace scanned with its last
+    /// event in hand, so the first frame can sort by real recency.
+    #[tokio::test]
+    async fn prime_scans_every_workspace_before_returning() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (app, ws, _, peer, _, _) = setup(dir.path());
+        prime_workspace_events(app.clone(), std::time::Duration::from_secs(5)).await;
+        let g = app.lock().await;
+        assert!(g.workspace_events_scanned.contains(&ws));
+        assert!(g.workspace_events[&ws].latest.is_some());
+        assert!(g.agent_events.contains_key(&peer));
     }
 
     #[tokio::test]

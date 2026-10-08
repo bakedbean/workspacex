@@ -197,6 +197,10 @@ pub struct Session {
     /// only the client (agent survives — the shared-workspace persistence
     /// contract); `kill_backend()` also kills the server session.
     pub tmux_session: Option<String>,
+    /// Test-only: treat this session as booted, for `cat` stand-ins that never
+    /// draw a composer.
+    #[cfg(test)]
+    pub(crate) assume_booted: std::sync::atomic::AtomicBool,
 }
 
 impl Session {
@@ -381,6 +385,10 @@ impl Session {
     /// Whether the agent has drawn a composer that will keep typed input and
     /// is past the spawn floor. False for a cold-spawned session still booting.
     pub fn accepts_input_now(&self) -> bool {
+        #[cfg(test)]
+        if self.assume_booted.load(Ordering::Relaxed) {
+            return true;
+        }
         let ready = {
             let parser = self.parser.lock().unwrap();
             ready_for_input(self.agent, parser.screen())
@@ -397,6 +405,10 @@ impl Session {
             if start.elapsed() >= timeout {
                 return false;
             }
+            #[cfg(test)]
+            if self.assume_booted.load(Ordering::Relaxed) {
+                return true;
+            }
             let last = self.activity_ms.load(Ordering::Relaxed);
             // A quiet window alone only means "no bytes moved recently", which
             // during a fresh agent boot is also true in the pauses *before* the
@@ -409,6 +421,29 @@ impl Session {
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
+    }
+
+    /// Write `bytes` now if the agent accepts input, else from a detached task
+    /// once it has booted, so a write to a cold-spawned session isn't eaten by
+    /// its startup screen clear.
+    pub async fn write_when_booted(
+        self: &Arc<Self>,
+        bytes: Vec<u8>,
+        quiet_ms: u64,
+        timeout_ms: u64,
+    ) {
+        if self.accepts_input_now() {
+            let _ = self.writer.send(WriteReq::Bytes(bytes)).await;
+            return;
+        }
+        let session = Arc::clone(self);
+        tokio::spawn(async move {
+            if session.wait_until_settled(quiet_ms, timeout_ms).await {
+                let _ = session.writer.send(WriteReq::Bytes(bytes)).await;
+            } else {
+                tracing::warn!("write_when_booted: agent never became ready; not written");
+            }
+        });
     }
 
     /// Write `text` (with a trailing `\r`) to the PTY after the activity
@@ -694,6 +729,7 @@ impl Session {
             killer: Mutex::new(Box::new(NoopKiller)),
             prompt: Arc::new(Mutex::new(PromptCapture::default())),
             tmux_session: None,
+            assume_booted: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -1061,6 +1097,8 @@ pub fn spawn_command_session(
         killer: Mutex::new(killer),
         prompt,
         tmux_session: tmux.map(str::to_string),
+        #[cfg(test)]
+        assume_booted: std::sync::atomic::AtomicBool::new(false),
     })
 }
 
@@ -1382,6 +1420,44 @@ mod tests {
             "child did not receive the whole payload"
         );
         assert_eq!(got, expected, "payload corrupted in transit");
+    }
+
+    /// A dashboard write to a cold-spawned agent must wait for it to boot:
+    /// Claude clears its screen on startup and eats anything typed earlier.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn write_when_booted_holds_bytes_until_a_cold_agent_is_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("probe.bin");
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.arg("-c");
+        cmd.arg("stty raw -echo; printf '\\033[?1049h'; cat > \"$WSX_PROBE_OUT\"");
+        cmd.env("WSX_PROBE_OUT", &out);
+        cmd.cwd(std::env::current_dir().unwrap());
+        let s = Arc::new(
+            spawn_command_session(cmd, 80, 24, AgentKind::Claude, "claude".to_string(), None)
+                .unwrap(),
+        );
+        assert!(!s.accepts_input_now(), "a fresh spawn is inside the floor");
+
+        s.write_when_booted(b"hello\r".to_vec(), 200, 6_000).await;
+        tokio::time::sleep(std::time::Duration::from_millis(SPAWN_SETTLE_MS / 2)).await;
+        let early = std::fs::read(&out).unwrap_or_default();
+        assert!(early.is_empty(), "written while booting: {early:?}");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let got = std::fs::read(&out).unwrap_or_default();
+            if got == b"hello\r" {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "never written: {got:?}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(s.accepts_input_now());
+        s.kill();
     }
 
     /// The regression behind "a long `wsx agent send` arrives as its tail with

@@ -85,12 +85,12 @@ pub(crate) const MAX_DELIVERY_ATTEMPTS: u32 = 5;
 /// 50ms) and the common reasons for not being ready — a cold agent still
 /// booting, or a live agent midway through a turn — resolve on their own. The
 /// old 5s budget turned both into dropped messages.
-const DELIVERY_TIMEOUT_MS: u64 = 120_000;
+pub(crate) const DELIVERY_TIMEOUT_MS: u64 = 120_000;
 
 /// Quiet window the target's PTY must show before injecting, on top of
 /// `ready_for_input`. Keeps a message from landing in the middle of a burst of
 /// the agent's own output.
-const DELIVERY_QUIET_MS: u64 = 400;
+pub(crate) const DELIVERY_QUIET_MS: u64 = 400;
 
 /// What one detached injection task reports back to the App loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

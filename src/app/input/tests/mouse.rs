@@ -780,18 +780,32 @@ async fn click_chip_auto_spawns_session_when_missing() {
         "fire_chip must auto-spawn a session for the selected workspace"
     );
 
-    // And the command must have reached the new session's PTY.
+    // The command is held while the cold agent boots, then reaches its PTY.
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let session = app
         .sessions
         .get(test_primary_instance(&app, ws_id))
         .unwrap();
-    let parser = session.parser.lock().unwrap();
-    let screen_text = parser.screen().contents();
+    let held = session.parser.lock().unwrap().screen().contents();
     assert!(
-        screen_text.contains("/pull-request"),
-        "chip command must dispatch to the auto-spawned session; got: {screen_text:?}"
+        !held.contains("/pull-request"),
+        "chip command must wait for the cold agent to boot; got: {held:?}"
     );
+    session
+        .assume_booted
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let screen_text = session.parser.lock().unwrap().screen().contents();
+        if screen_text.contains("/pull-request") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "chip command must dispatch to the auto-spawned session; got: {screen_text:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 }
 
 /// A chip click in the attached view dispatches the command but must

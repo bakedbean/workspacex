@@ -157,7 +157,9 @@ pub(super) fn spawn_attached_workspace(app: &mut App) -> crate::data::store::Wor
             crate::pty::session::AgentKind::Codex,
             None,
         )
-        .unwrap();
+        .unwrap()
+        .assume_booted
+        .store(true, std::sync::atomic::Ordering::Relaxed);
     app.view = crate::ui::View::Attached(AttachedState::single(test_target(app, ws_id)));
     ws_id
 }

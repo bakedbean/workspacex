@@ -246,7 +246,9 @@ async fn ctrl_x_digit_works_while_reply_focused() {
             crate::pty::session::AgentKind::Claude,
             None,
         )
-        .unwrap();
+        .unwrap()
+        .assume_booted
+        .store(true, std::sync::atomic::Ordering::Relaxed);
 
     app.view = crate::ui::View::Dashboard;
     app.selectable = vec![crate::app::SelectionTarget::Workspace(ws_id)];

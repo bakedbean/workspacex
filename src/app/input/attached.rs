@@ -116,9 +116,12 @@ pub(in crate::app::input) async fn fire_chip(app: &mut App, idx: usize) {
     let command_text = cmd.command_for(session.agent);
     let bytes = cmd.pty_bytes(session.agent);
     session.scroll_to_live();
-    let _ = session
-        .writer
-        .send(crate::pty::session::WriteReq::Bytes(bytes))
+    session
+        .write_when_booted(
+            bytes,
+            crate::app::messaging::DELIVERY_QUIET_MS,
+            crate::app::messaging::DELIVERY_TIMEOUT_MS,
+        )
         .await;
     if matches!(app.view, View::Dashboard) {
         // Echo the dispatched command into the reply input so the user

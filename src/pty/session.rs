@@ -197,6 +197,12 @@ pub struct Session {
     /// only the client (agent survives — the shared-workspace persistence
     /// contract); `kill_backend()` also kills the server session.
     pub tmux_session: Option<String>,
+    /// Writes `write_when_booted` is holding until the agent boots, in order.
+    held_writes: tokio::sync::Mutex<std::collections::VecDeque<Vec<u8>>>,
+    /// Test-only: treat this session as booted, for `cat` stand-ins that never
+    /// draw a composer.
+    #[cfg(test)]
+    pub(crate) assume_booted: std::sync::atomic::AtomicBool,
 }
 
 impl Session {
@@ -378,6 +384,92 @@ impl Session {
         }
     }
 
+    /// Whether the agent has drawn a composer that will keep typed input and
+    /// is past the spawn floor. False for a cold-spawned session still booting.
+    pub fn accepts_input_now(&self) -> bool {
+        #[cfg(test)]
+        if self.assume_booted.load(Ordering::Relaxed) {
+            return true;
+        }
+        let ready = {
+            let parser = self.parser.lock().unwrap();
+            ready_for_input(self.agent, parser.screen())
+        };
+        ready && self.spawned_at.elapsed() >= std::time::Duration::from_millis(SPAWN_SETTLE_MS)
+    }
+
+    /// Whether the agent process has exited.
+    pub fn has_exited(&self) -> bool {
+        matches!(*self.status.read().unwrap(), SessionStatus::Exited { .. })
+    }
+
+    /// Wait until the agent has produced output, accepts input, and has been
+    /// quiet for `quiet_ms`. False when `timeout_ms` elapses or the agent exits
+    /// first.
+    pub async fn wait_until_settled(&self, quiet_ms: u64, timeout_ms: u64) -> bool {
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_millis(timeout_ms);
+        loop {
+            if start.elapsed() >= timeout || self.has_exited() {
+                return false;
+            }
+            #[cfg(test)]
+            if self.assume_booted.load(Ordering::Relaxed) {
+                return true;
+            }
+            let last = self.activity_ms.load(Ordering::Relaxed);
+            // A quiet window alone only means "no bytes moved recently", which
+            // during a fresh agent boot is also true in the pauses *before* the
+            // agent can accept input. `ready_for_input` adds the missing
+            // "the composer exists" half of the condition, and the spawn floor
+            // covers the case where the composer is there and about to be
+            // replaced by a modal (see `Session::spawned_at`).
+            if last > 0 && self.accepts_input_now() && now_ms().saturating_sub(last) >= quiet_ms {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Write `bytes` now if the agent accepts input and nothing is held, else
+    /// hold them (in order) until it does, so a write to a cold-spawned session
+    /// isn't eaten by its startup screen clear. Also holds for a live agent
+    /// whose composer is hidden (a modal). Returns before a held write lands;
+    /// held writes are retried until the agent exits, then dropped.
+    pub async fn write_when_booted(
+        self: &Arc<Self>,
+        bytes: Vec<u8>,
+        quiet_ms: u64,
+        timeout_ms: u64,
+    ) {
+        let mut held = self.held_writes.lock().await;
+        if held.is_empty() && self.accepts_input_now() {
+            let _ = self.writer.send(WriteReq::Bytes(bytes)).await;
+            return;
+        }
+        held.push_back(bytes);
+        if held.len() > 1 {
+            return; // a drainer is already waiting
+        }
+        drop(held);
+        let session = Arc::clone(self);
+        tokio::spawn(async move {
+            while !session.wait_until_settled(quiet_ms, timeout_ms).await {
+                if session.has_exited() || session.writer.is_closed() {
+                    tracing::warn!("write_when_booted: agent exited before it was ready");
+                    session.held_writes.lock().await.clear();
+                    return;
+                }
+                tracing::warn!("write_when_booted: agent still not ready; holding writes");
+            }
+            // Held across the sends so a later write can't overtake the queue.
+            let mut held = session.held_writes.lock().await;
+            while let Some(bytes) = held.pop_front() {
+                let _ = session.writer.send(WriteReq::Bytes(bytes)).await;
+            }
+        });
+    }
+
     /// Write `text` (with a trailing `\r`) to the PTY after the activity
     /// stream has been quiet for `quiet_ms` milliseconds following some
     /// output. If the overall window of `timeout_ms` elapses without ever
@@ -389,85 +481,60 @@ impl Session {
     #[must_use = "a false return means nothing was written; the caller must not \
                   treat the message as delivered"]
     pub async fn send_text_when_settled(&self, text: &str, quiet_ms: u64, timeout_ms: u64) -> bool {
-        use std::sync::atomic::Ordering;
-        let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_millis(timeout_ms);
-        loop {
-            if start.elapsed() >= timeout {
-                tracing::warn!(
-                    text = %text,
-                    "send_text_when_settled: timed out waiting for PTY to settle"
-                );
-                return false;
-            }
-            let last = self.activity_ms.load(Ordering::Relaxed);
-            // A quiet window alone only means "no bytes moved recently", which
-            // during a fresh agent boot is also true in the pauses *before* the
-            // agent can accept input. `ready_for_input` adds the missing
-            // "the composer exists" half of the condition, and the spawn floor
-            // covers the case where the composer is there and about to be
-            // replaced by a modal (see `Session::spawned_at`).
-            let ready = {
-                let parser = self.parser.lock().unwrap();
-                ready_for_input(self.agent, parser.screen())
-            };
-            let settled_since_spawn =
-                self.spawned_at.elapsed() >= std::time::Duration::from_millis(SPAWN_SETTLE_MS);
-            if last > 0 && ready && settled_since_spawn {
-                let now_ms = now_ms();
-                let since_last = now_ms.saturating_sub(last);
-                if since_last >= quiet_ms {
-                    // Inject the text and the submitting CR as two writes (see
-                    // `submit_writes` for the per-agent byte shapes). The CR is
-                    // a separate write so the agent's TUI sees it as a distinct
-                    // Enter rather than part of the typed/pasted text.
-                    //
-                    // A send only fails when the writer task has dropped the
-                    // receiver, which it does as soon as a PTY write errors —
-                    // i.e. the agent is gone. Report that as "not written" so
-                    // the message stays queued rather than being acked into a
-                    // dead terminal. A failed `body` also means the CR is
-                    // pointless, so give up on the pair together.
-                    let (body, enter) = submit_writes(self.agent, text);
-                    if self.writer.send(WriteReq::Bytes(body)).await.is_err() {
-                        tracing::warn!(
-                            text = %text,
-                            "send_text_when_settled: PTY writer is gone; not written"
-                        );
-                        return false;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-                    // Only the CR is acked. The channel is FIFO with a single
-                    // consumer that stops on the first write failure, so the CR
-                    // having been written proves the body ahead of it was too —
-                    // one one-shot per injection rather than two.
-                    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
-                    if self
-                        .writer
-                        .send(WriteReq::Acked(enter, ack_tx))
-                        .await
-                        .is_err()
-                    {
-                        tracing::warn!(
-                            text = %text,
-                            "send_text_when_settled: PTY writer died before the \
-                             submitting CR; not written"
-                        );
-                        return false;
-                    }
-                    if !await_ack(ack_rx, WRITE_ACK_TIMEOUT_MS).await {
-                        tracing::warn!(
-                            text = %text,
-                            "send_text_when_settled: queued bytes never reached the \
-                             terminal; not written"
-                        );
-                        return false;
-                    }
-                    return true;
-                }
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        if !self.wait_until_settled(quiet_ms, timeout_ms).await {
+            tracing::warn!(
+                text = %text,
+                "send_text_when_settled: timed out waiting for PTY to settle"
+            );
+            return false;
         }
+        // Inject the text and the submitting CR as two writes (see
+        // `submit_writes` for the per-agent byte shapes). The CR is
+        // a separate write so the agent's TUI sees it as a distinct
+        // Enter rather than part of the typed/pasted text.
+        //
+        // A send only fails when the writer task has dropped the
+        // receiver, which it does as soon as a PTY write errors —
+        // i.e. the agent is gone. Report that as "not written" so
+        // the message stays queued rather than being acked into a
+        // dead terminal. A failed `body` also means the CR is
+        // pointless, so give up on the pair together.
+        let (body, enter) = submit_writes(self.agent, text);
+        if self.writer.send(WriteReq::Bytes(body)).await.is_err() {
+            tracing::warn!(
+                text = %text,
+                "send_text_when_settled: PTY writer is gone; not written"
+            );
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        // Only the CR is acked. The channel is FIFO with a single
+        // consumer that stops on the first write failure, so the CR
+        // having been written proves the body ahead of it was too —
+        // one one-shot per injection rather than two.
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        if self
+            .writer
+            .send(WriteReq::Acked(enter, ack_tx))
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                text = %text,
+                "send_text_when_settled: PTY writer died before the \
+                 submitting CR; not written"
+            );
+            return false;
+        }
+        if !await_ack(ack_rx, WRITE_ACK_TIMEOUT_MS).await {
+            tracing::warn!(
+                text = %text,
+                "send_text_when_settled: queued bytes never reached the \
+                 terminal; not written"
+            );
+            return false;
+        }
+        true
     }
 }
 
@@ -686,6 +753,8 @@ impl Session {
             killer: Mutex::new(Box::new(NoopKiller)),
             prompt: Arc::new(Mutex::new(PromptCapture::default())),
             tmux_session: None,
+            held_writes: Default::default(),
+            assume_booted: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -1053,6 +1122,9 @@ pub fn spawn_command_session(
         killer: Mutex::new(killer),
         prompt,
         tmux_session: tmux.map(str::to_string),
+        held_writes: Default::default(),
+        #[cfg(test)]
+        assume_booted: std::sync::atomic::AtomicBool::new(false),
     })
 }
 
@@ -1374,6 +1446,129 @@ mod tests {
             "child did not receive the whole payload"
         );
         assert_eq!(got, expected, "payload corrupted in transit");
+    }
+
+    /// Spawn a `cat` stand-in that boots like Claude, recording its input.
+    fn spawn_probe_session(out: &std::path::Path) -> Arc<Session> {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.arg("-c");
+        cmd.arg("stty raw -echo; printf '\\033[?1049h'; cat > \"$WSX_PROBE_OUT\"");
+        cmd.env("WSX_PROBE_OUT", out);
+        cmd.cwd(std::env::current_dir().unwrap());
+        Arc::new(
+            spawn_command_session(cmd, 80, 24, AgentKind::Claude, "claude".to_string(), None)
+                .unwrap(),
+        )
+    }
+
+    async fn await_probe(out: &std::path::Path, want: &[u8], secs: u64) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        loop {
+            let got = std::fs::read(out).unwrap_or_default();
+            if got == want {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "got {got:?}, want {want:?}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    /// A write made once the agent is ready must not overtake one still held
+    /// for its boot.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn write_when_booted_keeps_fifo_across_the_boot_edge() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("probe.bin");
+        let s = spawn_probe_session(&out);
+        // A quiet window longer than the spawn floor keeps the first write
+        // held after the agent starts accepting input.
+        s.write_when_booted(b"first".to_vec(), 3_000, 6_000).await;
+        while !s.accepts_input_now() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        s.write_when_booted(b"second".to_vec(), 3_000, 6_000).await;
+        await_probe(&out, b"firstsecond", 8).await;
+        s.kill();
+    }
+
+    /// A held write outlives a wait round that times out while the agent is
+    /// still alive.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn write_when_booted_survives_a_timed_out_wait_round() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("probe.bin");
+        let s = spawn_probe_session(&out);
+        // Each round ends well inside the spawn floor.
+        s.write_when_booted(b"late".to_vec(), 100, 200).await;
+        await_probe(&out, b"late", 5).await;
+        s.kill();
+    }
+
+    /// An agent that exits before it is ready must release its held writes and
+    /// the session, rather than keep a drainer polling it forever.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn write_when_booted_releases_an_agent_that_exits_unready() {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.arg("-c");
+        cmd.arg("exit 3");
+        cmd.cwd(std::env::current_dir().unwrap());
+        let s = Arc::new(
+            spawn_command_session(cmd, 80, 24, AgentKind::Claude, "claude".to_string(), None)
+                .unwrap(),
+        );
+        // A wait round far longer than the test, so only exit detection ends it.
+        s.write_when_booted(b"orphan".to_vec(), 100, 60_000).await;
+        let weak = Arc::downgrade(&s);
+        drop(s);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while weak.upgrade().is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "drainer still holds a session whose agent exited"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    /// A dashboard write to a cold-spawned agent must wait for it to boot:
+    /// Claude clears its screen on startup and eats anything typed earlier.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn write_when_booted_holds_bytes_until_a_cold_agent_is_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("probe.bin");
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.arg("-c");
+        cmd.arg("stty raw -echo; printf '\\033[?1049h'; cat > \"$WSX_PROBE_OUT\"");
+        cmd.env("WSX_PROBE_OUT", &out);
+        cmd.cwd(std::env::current_dir().unwrap());
+        let s = Arc::new(
+            spawn_command_session(cmd, 80, 24, AgentKind::Claude, "claude".to_string(), None)
+                .unwrap(),
+        );
+        assert!(!s.accepts_input_now(), "a fresh spawn is inside the floor");
+
+        s.write_when_booted(b"hello\r".to_vec(), 200, 6_000).await;
+        tokio::time::sleep(std::time::Duration::from_millis(SPAWN_SETTLE_MS / 2)).await;
+        let early = std::fs::read(&out).unwrap_or_default();
+        assert!(early.is_empty(), "written while booting: {early:?}");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let got = std::fs::read(&out).unwrap_or_default();
+            if got == b"hello\r" {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "never written: {got:?}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(s.accepts_input_now());
+        s.kill();
     }
 
     /// The regression behind "a long `wsx agent send` arrives as its tail with

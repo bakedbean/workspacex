@@ -64,9 +64,12 @@ pub(in crate::app::input) async fn handle_detail_bar_reply_key(
                     let mut bytes = draft.into_bytes();
                     bytes.push(b'\r');
                     session.scroll_to_live();
-                    let _ = session
-                        .writer
-                        .send(crate::pty::session::WriteReq::Bytes(bytes))
+                    session
+                        .write_when_booted(
+                            bytes,
+                            crate::app::messaging::DELIVERY_QUIET_MS,
+                            crate::app::messaging::DELIVERY_TIMEOUT_MS,
+                        )
                         .await;
                 } else {
                     // No agent could take it: the create hasn't made the

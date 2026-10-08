@@ -398,13 +398,19 @@ impl Session {
         ready && self.spawned_at.elapsed() >= std::time::Duration::from_millis(SPAWN_SETTLE_MS)
     }
 
+    /// Whether the agent process has exited.
+    pub fn has_exited(&self) -> bool {
+        matches!(*self.status.read().unwrap(), SessionStatus::Exited { .. })
+    }
+
     /// Wait until the agent has produced output, accepts input, and has been
-    /// quiet for `quiet_ms`. False when `timeout_ms` elapses first.
+    /// quiet for `quiet_ms`. False when `timeout_ms` elapses or the agent exits
+    /// first.
     pub async fn wait_until_settled(&self, quiet_ms: u64, timeout_ms: u64) -> bool {
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_millis(timeout_ms);
         loop {
-            if start.elapsed() >= timeout {
+            if start.elapsed() >= timeout || self.has_exited() {
                 return false;
             }
             #[cfg(test)]
@@ -449,7 +455,7 @@ impl Session {
         let session = Arc::clone(self);
         tokio::spawn(async move {
             while !session.wait_until_settled(quiet_ms, timeout_ms).await {
-                if session.writer.is_closed() {
+                if session.has_exited() || session.writer.is_closed() {
                     tracing::warn!("write_when_booted: agent exited before it was ready");
                     session.held_writes.lock().await.clear();
                     return;
@@ -1499,6 +1505,32 @@ mod tests {
         s.write_when_booted(b"late".to_vec(), 100, 200).await;
         await_probe(&out, b"late", 5).await;
         s.kill();
+    }
+
+    /// An agent that exits before it is ready must release its held writes and
+    /// the session, rather than keep a drainer polling it forever.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn write_when_booted_releases_an_agent_that_exits_unready() {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.arg("-c");
+        cmd.arg("exit 3");
+        cmd.cwd(std::env::current_dir().unwrap());
+        let s = Arc::new(
+            spawn_command_session(cmd, 80, 24, AgentKind::Claude, "claude".to_string(), None)
+                .unwrap(),
+        );
+        // A wait round far longer than the test, so only exit detection ends it.
+        s.write_when_booted(b"orphan".to_vec(), 100, 60_000).await;
+        let weak = Arc::downgrade(&s);
+        drop(s);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while weak.upgrade().is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "drainer still holds a session whose agent exited"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
     }
 
     /// A dashboard write to a cold-spawned agent must wait for it to boot:

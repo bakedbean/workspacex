@@ -906,8 +906,9 @@ fn poll_targets(g: &crate::app::App) -> Vec<PollTarget> {
         .collect()
 }
 
-/// A 2s ticker that waits a full period after a slow pass instead of
-/// firing the missed ticks back to back.
+/// A 2s ticker that never fires missed ticks back to back: after a slow
+/// pass the overdue tick fires once, and the next one is due a full period
+/// after that.
 fn poll_interval() -> tokio::time::Interval {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1071,41 +1072,61 @@ where
     loop {
         interval.tick().await;
         let now_ms = crate::util::time::now_ms();
-        let due: Vec<PollTarget> = {
-            let mut g = app.lock().await;
+        let mut due: Vec<PollTarget> = {
+            let g = app.lock().await;
             let selected = g.selected_target();
             let mut due: Vec<PollTarget> = poll_targets(&g)
                 .into_iter()
-                .filter(|t| t.path.exists())
-                .filter(|t| {
-                    g.pr_last_poll_ms
-                        .get(&t.id)
-                        .is_none_or(|last| now_ms.saturating_sub(*last) >= 30_000)
-                })
+                .filter(|t| pr_poll_due(&g, t.id, now_ms))
                 .collect();
-            // Mark the attempt before awaiting the fetch, so a pass that
-            // outlives the tick doesn't queue a second gh for the same row.
-            for t in &due {
-                g.pr_last_poll_ms.insert(t.id, now_ms);
-            }
             due.sort_by_key(|t| selected != Some(crate::app::SelectionTarget::Workspace(t.id)));
             due
         };
+        // Filesystem checks stay outside the lock the render loop needs.
+        due.retain(|t| t.path.exists());
         futures::stream::iter(due)
             .for_each_concurrent(PR_POLL_CONCURRENCY, |t| {
-                let fetch = fetch_pr(t.path.clone(), t.branch.clone());
                 let app = app.clone();
+                let fetch_pr = &fetch_pr;
                 async move {
+                    // Claimed when the slot opens, not when the pass began:
+                    // a row that waited its turn behind slow fetches is
+                    // stamped with when it actually went out, so it isn't
+                    // due again the moment the pass ends.
+                    let Some(started_ms) = claim_pr_poll(&mut *app.lock().await, t.id) else {
+                        return;
+                    };
                     // Ok(None) → leave any existing cached value alone;
                     // better than clobbering a previously-known state on a
                     // transient network error.
-                    if let Ok(Some(status)) = fetch.await {
-                        commit_pr_status(&app, t.id, &t.branch, status, now_ms).await;
+                    if let Ok(Some(status)) = fetch_pr(t.path.clone(), t.branch.clone()).await {
+                        commit_pr_status(&app, t.id, &t.branch, status, started_ms).await;
                     }
                 }
             })
             .await;
     }
+}
+
+/// How long a workspace's PR state is trusted before it is fetched again.
+const PR_POLL_INTERVAL_MS: i64 = 30_000;
+
+fn pr_poll_due(g: &crate::app::App, id: WorkspaceId, now_ms: i64) -> bool {
+    g.pr_last_poll_ms
+        .get(&id)
+        .is_none_or(|last| now_ms.saturating_sub(*last) >= PR_POLL_INTERVAL_MS)
+}
+
+/// Stamp `id`'s PR fetch as starting now, if it is still due, and return
+/// the stamp. `None` means another path fetched it since the pass took its
+/// snapshot. Branch drift clears the stamp, so a drifted row stays due.
+fn claim_pr_poll(g: &mut crate::app::App, id: WorkspaceId) -> Option<i64> {
+    let now_ms = crate::util::time::now_ms();
+    if !pr_poll_due(g, id, now_ms) {
+        return None;
+    }
+    g.pr_last_poll_ms.insert(id, now_ms);
+    Some(now_ms)
 }
 
 async fn commit_pr_status(
@@ -1178,6 +1199,21 @@ mod pr_commit_tests {
             review: None,
             unresolved: None,
         }
+    }
+
+    /// A row is stamped when its fetch goes out, and is not due again for
+    /// the full interval — even when its pass started long before.
+    #[tokio::test]
+    async fn a_claim_stamps_the_row_and_holds_it_for_the_interval() {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        let mut app = crate::app::App::new(store, "/tmp/wsx-test".into()).unwrap();
+        let ws = app.test_workspace("claimed");
+
+        let started = claim_pr_poll(&mut app, ws).expect("a never-polled row is due");
+        assert_eq!(app.pr_last_poll_ms.get(&ws), Some(&started));
+        assert!(claim_pr_poll(&mut app, ws).is_none());
+        assert!(!pr_poll_due(&app, ws, started + PR_POLL_INTERVAL_MS - 1));
+        assert!(pr_poll_due(&app, ws, started + PR_POLL_INTERVAL_MS));
     }
 
     /// The PR loop runs beside the local loop, so a fetch can still be in

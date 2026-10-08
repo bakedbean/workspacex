@@ -55,10 +55,57 @@ pub(crate) fn focus_window_of(tui_pid: u32) {
     };
     let chain = ancestor_pids(tui_pid);
     if let Some(pid) = client_pid_for_chain(&String::from_utf8_lossy(&out.stdout), &chain) {
-        let _ = Command::new("hyprctl")
-            .args(["dispatch", "focuswindow", &format!("pid:{pid}")])
-            .status();
+        focus_hyprland_window(pid);
     }
+}
+
+/// `hyprctl` arguments that focus `pid`'s window, in the order to try them:
+/// the classic dispatcher, then the Lua one that Hyprland takes instead when
+/// its config is `hyprland.lua` (0.55 on). Each config rejects the other's.
+fn hyprland_focus_argvs(pid: u32) -> [Vec<String>; 2] {
+    let window = format!("pid:{pid}");
+    [
+        vec!["dispatch".into(), "focuswindow".into(), window.clone()],
+        vec![
+            "dispatch".into(),
+            format!(r#"hl.dsp.focus({{ window = "{window}" }})"#),
+        ],
+    ]
+}
+
+/// Focus `pid`'s window under Hyprland. Best-effort, and a reason it
+/// couldn't goes to stderr, as on Plasma.
+fn focus_hyprland_window(pid: u32) {
+    let hyprctl = |argv: &[String]| match Command::new("hyprctl").args(argv).output() {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).into_owned(),
+        Err(e) => e.to_string(),
+    };
+    if let Err(why) = focus_hyprland_with(pid, hyprctl) {
+        eprintln!("wsx: can't raise the TUI's window: {why}");
+    }
+}
+
+/// [`focus_hyprland_window`] with hyprctl passed in (argv → its stdout), so
+/// tests can drive it: run each of [`hyprland_focus_argvs`] until Hyprland
+/// answers `ok`. The answer is the only signal: under a `hyprland.conf`,
+/// hyprctl exits 0 even for `Invalid dispatcher`.
+fn focus_hyprland_with(
+    pid: u32,
+    mut hyprctl: impl FnMut(&[String]) -> String,
+) -> std::result::Result<(), String> {
+    let mut answers = Vec::new();
+    for argv in hyprland_focus_argvs(pid) {
+        let answer = hyprctl(&argv);
+        if answer.trim() == "ok" {
+            return Ok(());
+        }
+        // A Lua error runs on for lines; its first says what went wrong.
+        answers.push(format!(
+            "{:?}",
+            answer.trim().lines().next().unwrap_or_default()
+        ));
+    }
+    Err(format!("hyprctl answered {}", answers.join(", then ")))
 }
 
 /// Whether this is a KDE Plasma session, so KWin is the compositor:
@@ -620,6 +667,74 @@ mod focus_tests {
             Err("KWin didn't load the focus script through dbus-send, gdbus".into())
         );
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn hyprland_focus_tries_the_classic_dispatcher_then_the_lua_one() {
+        assert_eq!(
+            hyprland_focus_argvs(635),
+            [
+                vec!["dispatch", "focuswindow", "pid:635"],
+                vec!["dispatch", r#"hl.dsp.focus({ window = "pid:635" })"#],
+            ]
+        );
+    }
+
+    /// Drive [`focus_hyprland_with`] with `answer` standing in for hyprctl,
+    /// and return the argvs it ran and its result.
+    fn drive_hyprctl(
+        answer: impl Fn(&[String]) -> &'static str,
+    ) -> (Vec<Vec<String>>, std::result::Result<(), String>) {
+        let mut seen = Vec::new();
+        let result = focus_hyprland_with(635, |argv| {
+            seen.push(argv.to_vec());
+            answer(argv).to_string()
+        });
+        (seen, result)
+    }
+
+    /// What Hyprland 0.56 answers the classic dispatcher under `hyprland.lua`.
+    const LUA_SYNTAX_ERROR: &str = "error: [string \"return hl.dispatch(focuswindow pid:635)\"]:1: \
+        ')' expected near 'pid'\n\n → Note: dispatch in lua is a shorthand for \
+        hl.dispatch(...), your syntax might need to be updated.\n";
+
+    #[test]
+    fn a_hyprland_conf_session_focuses_with_the_classic_dispatcher_alone() {
+        let (seen, result) = drive_hyprctl(|argv| match argv[1].as_str() {
+            "focuswindow" => "ok\n",
+            _ => "Invalid dispatcher",
+        });
+        assert_eq!(result, Ok(()));
+        assert_eq!(seen, [hyprland_focus_argvs(635)[0].clone()]);
+    }
+
+    #[test]
+    fn a_hyprland_lua_session_falls_back_to_the_lua_dispatcher() {
+        let (seen, result) = drive_hyprctl(|argv| match argv[1].as_str() {
+            "focuswindow" => LUA_SYNTAX_ERROR,
+            _ => "ok",
+        });
+        assert_eq!(result, Ok(()));
+        assert_eq!(seen, hyprland_focus_argvs(635));
+    }
+
+    #[test]
+    fn hyprland_focus_that_never_answers_ok_says_why() {
+        // The window closed before the dispatch, under `hyprland.lua`.
+        let (seen, result) = drive_hyprctl(|argv| match argv[1].as_str() {
+            "focuswindow" => LUA_SYNTAX_ERROR,
+            _ => "warning: =[C]:-1: hl.focus: window not found",
+        });
+        assert_eq!(seen.len(), 2);
+        let why = result.unwrap_err();
+        assert!(
+            why.starts_with(r#"hyprctl answered "error: [string"#),
+            "{why}"
+        );
+        assert!(
+            why.ends_with(r#"near 'pid'", then "warning: =[C]:-1: hl.focus: window not found""#),
+            "{why}"
+        );
     }
 
     #[test]

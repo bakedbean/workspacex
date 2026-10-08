@@ -83,7 +83,6 @@ fn gather_local(app: &App, focused: crate::ui::split::AttachTarget) -> AttachedD
         .iter()
         .find(|(_, w)| w.id == focused_id)
         .map(|(_, w)| w);
-    let agent = workspace.map(|w| w.agent);
 
     // Pinned commands resolve against the FOCUSED pane's workspace.
     let global_pinned = app.store.get_setting("pinned_commands").ok().flatten();
@@ -128,6 +127,13 @@ fn gather_local(app: &App, focused: crate::ui::split::AttachTarget) -> AttachedD
         .unwrap_or(0);
 
     let instances = app.store.workspace_agents(focused_id).unwrap_or_default();
+    // The identity bar wears the FOCUSED agent's kind, not the workspace's
+    // primary one — a peer of another kind gets its own glyph and color.
+    let agent = instances
+        .iter()
+        .find(|instance| instance.id == focused.instance)
+        .map(|instance| instance.agent)
+        .or_else(|| workspace.map(|w| w.agent));
     // Usage belongs to the focused agent, not its workspace. Only the primary
     // shares the dashboard's event cache; an untracked peer must not borrow it.
     let focused_events = if instances
@@ -627,5 +633,37 @@ mod tests {
         assert!(codex_footer.contains("gpt-5-codex"), "{codex_footer}");
         assert!(codex_footer.contains("77k"), "{codex_footer}");
         assert!(!codex_footer.contains("90k/200k"), "{codex_footer}");
+    }
+
+    #[test]
+    fn agent_bar_follows_the_focused_agents_kind() {
+        let mut app = App::new(
+            Store::open_in_memory().unwrap(),
+            std::path::PathBuf::from("/tmp/wsx-test"),
+        )
+        .unwrap();
+        let workspace_id = app.test_workspace("agent-bar-kind");
+        let primary = app
+            .store
+            .add_primary_agent(workspace_id, AgentKind::Claude, 1)
+            .unwrap()
+            .id;
+        let codex = app
+            .store
+            .add_workspace_agent(workspace_id, AgentKind::Codex)
+            .unwrap()
+            .id;
+        let target = |instance| AttachTarget {
+            workspace_id,
+            instance,
+        };
+        assert_eq!(
+            gather_local(&app, target(primary)).agent,
+            Some(AgentKind::Claude)
+        );
+        assert_eq!(
+            gather_local(&app, target(codex)).agent,
+            Some(AgentKind::Codex)
+        );
     }
 }

@@ -153,20 +153,30 @@ pub(super) async fn remote_host_picker(
             // (it opens Modal::Error instead) — so indexing here can't
             // panic.
             let (name, dest) = hosts[selected].clone();
-            let fetch_gen = app.alloc_remote_gen();
-            app.modal = Some(Modal::RemoteListLoading {
-                host_name: name.clone(),
-            });
-            let shared_clone = shared.clone();
-            tokio::spawn(async move {
-                let result = crate::commands::shared_hosts::fetch_shared_list(&dest).await;
-                crate::app::reconcile_remote_list(shared_clone, fetch_gen, name, dest, result)
-                    .await;
-            });
+            open_remote_host(app, shared, name, dest);
         }
         _ => {}
     };
     Ok(())
+}
+
+/// Fetch `dest`'s shared-workspace list and show it, behind a loading
+/// modal: Enter in the `H` picker, and a click on a `$hosts` chip.
+pub(in crate::app::input) fn open_remote_host(
+    app: &mut App,
+    shared: &SharedApp,
+    name: String,
+    dest: String,
+) {
+    let fetch_gen = app.alloc_remote_gen();
+    app.modal = Some(Modal::RemoteListLoading {
+        host_name: name.clone(),
+    });
+    let shared_clone = shared.clone();
+    tokio::spawn(async move {
+        let result = crate::commands::shared_hosts::fetch_shared_list(&dest).await;
+        crate::app::reconcile_remote_list(shared_clone, fetch_gen, name, dest, result).await;
+    });
 }
 
 pub(super) async fn remote_list_loading(

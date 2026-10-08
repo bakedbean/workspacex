@@ -1003,9 +1003,13 @@ mod tests {
     /// burn the grace period — there is nothing to wait for.
     #[tokio::test]
     async fn terminate_pids_reports_unsignallable_pid_without_waiting() {
-        // SAFETY: getuid has no side effects.
-        if unsafe { libc::getuid() } == 0 {
-            eprintln!("skipping: root can signal pid 1");
+        // Root can signal pid 1, and so can anyone in a pid namespace whose
+        // init runs as their own uid (Nix's build sandbox, a container),
+        // where the TERM would land on that init and take the run down.
+        // SAFETY: `kill` with signal 0 has no side effects; it only checks
+        // whether the pid may be signalled.
+        if unsafe { libc::kill(1, 0) } == 0 {
+            eprintln!("skipping: this process can signal pid 1");
             return;
         }
         let started = std::time::Instant::now();

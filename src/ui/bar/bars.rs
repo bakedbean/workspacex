@@ -80,6 +80,18 @@ pub fn dashboard_footer(
     )
 }
 
+/// Whether the dashboard footer would draw segment `name`: it is placed
+/// in `format` or `right_format` and not disabled. Lets the caller skip
+/// gathering inputs nothing will show, like `$hosts`' settings read.
+pub fn dashboard_footer_shows(specs: &BarSpecs, name: &str) -> bool {
+    let spec = &specs.dashboard_footer;
+    !cfg(specs, name).disabled
+        && format::vars(&spec.format)
+            .into_iter()
+            .chain(format::vars(&spec.right_format))
+            .any(|v| v == name)
+}
+
 /// Build the dashboard footer's segments. `pub(super)` for the drift test,
 /// like `attached_segments`.
 pub(super) fn dashboard_footer_segments(

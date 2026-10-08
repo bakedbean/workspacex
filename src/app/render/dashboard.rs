@@ -193,8 +193,13 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
         .theme_notice(crate::util::time::now_ms_u64())
         .map(str::to_string);
     // Read each frame, like the pinned commands above, so an edit to
-    // `shared_hosts` shows without a restart.
-    let hosts = crate::commands::shared_hosts::list(&app.store).unwrap_or_default();
+    // `shared_hosts` shows without a restart — but only when the theme
+    // places `$hosts`, which the bundled one doesn't.
+    let hosts = if crate::ui::bar::dashboard_footer_shows(&app.bar_specs, "hosts") {
+        crate::commands::shared_hosts::list(&app.store).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let footer = dashboard::render_footer(
         f,
         footer_area,

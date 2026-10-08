@@ -489,6 +489,31 @@ mod footer_tests {
         );
     }
 
+    /// The caller reads `shared_hosts` only when the footer would draw
+    /// `$hosts`: placed on either side, and not disabled.
+    #[test]
+    fn dashboard_footer_shows_tracks_placement_and_disabled() {
+        let theme = Theme::wsx();
+        let specs = |src: &str| {
+            crate::config::theme_file::resolve(
+                crate::config::theme_file::ThemeFile::parse(src).unwrap(),
+                &theme,
+            )
+            .unwrap()
+        };
+        let shows = |src: &str| crate::ui::bar::dashboard_footer_shows(&specs(src), "hosts");
+        assert!(!shows(""));
+        assert!(shows(
+            "[dashboard_footer]\nright_format = \"($hosts  )$funnel\"\n"
+        ));
+        assert!(shows(
+            "[dashboard_footer]\nformat = \"$keys [$hosts](fg:dim)\"\n"
+        ));
+        assert!(!shows(
+            "[dashboard_footer]\nright_format = \"$hosts\"\n[hosts]\ndisabled = true\n"
+        ));
+    }
+
     /// With no hosts configured the segment renders empty, so a group
     /// around it drops its separator.
     #[test]

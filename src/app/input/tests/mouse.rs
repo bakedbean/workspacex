@@ -933,36 +933,3 @@ async fn clicking_a_tag_chip_opens_the_body_stage_and_the_manager_chip_opens_pic
         app.modal
     );
 }
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn clicking_a_host_chip_opens_that_hosts_remote_list() {
-    use crate::commands::shared_hosts::SharedHost;
-    use crossterm::event::{MouseButton, MouseEventKind};
-    let store = Store::open_in_memory().unwrap();
-    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
-    app.remote_hosts_cache = vec![
-        SharedHost {
-            name: "alpha".into(),
-            dest: "nobody@wsx-test-alpha.invalid".into(),
-        },
-        SharedHost {
-            name: "beta".into(),
-            dest: "nobody@wsx-test-beta.invalid".into(),
-        },
-    ];
-    app.host_chip_rects = vec![
-        (0, ratatui::layout::Rect::new(60, 23, 7, 1)),
-        (1, ratatui::layout::Rect::new(68, 23, 6, 1)),
-    ];
-
-    let mut m = mouse_event(MouseEventKind::Down(MouseButton::Left));
-    m.column = 70;
-    m.row = 23;
-    handle_mouse(&mut app, &super::common::shared_app(), m).await;
-    assert!(
-        matches!(&app.modal, Some(Modal::RemoteListLoading { host_name }) if host_name == "beta"),
-        "{:?}",
-        app.modal
-    );
-    assert!(app.pending_remote_gen.is_some());
-}

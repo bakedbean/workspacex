@@ -196,7 +196,11 @@ to go on a narrow footer.)
 `$hosts` is also registered but not placed: one chip per configured shared
 host (`wsx config edit shared_hosts`), and clicking a chip opens that host's
 workspace list, the same as picking it under `H`. To show it, try
-`right_format = "$hosts(  $funnel)"`.
+`right_format = "$hosts(  $funnel)"`. `$name` is truncated to 14 columns
+(use `$dest` to tell similar names apart), and on a narrow footer the
+segment drops whole at its priority (45), never leaving some of its chips
+behind. `hosts` is now a built-in name, so a theme that defined its own
+`[module.hosts]` must rename that module.
 
 `[dashboard_header]` is the dashboard's top line: the wordmark, the `group:`
 and `sort:` mode tabs, the live filter echo, and the repo/workspace counts

@@ -173,6 +173,7 @@ pub fn render(
         matches!(state.selection, Some(SelectionTarget::Workspace(_))),
         false,
         None,
+        &[],
         inputs.fleet,
     );
 }
@@ -327,9 +328,19 @@ pub fn render_without_footer(
     }
 }
 
+/// The dashboard footer's click targets, in screen coordinates.
+#[derive(Debug, Default)]
+pub struct FooterRects {
+    /// The usage graph, when the `usage` segment is present.
+    pub graph: Option<Rect>,
+    /// Each clickable key hint.
+    pub hints: Vec<(Rect, crate::ui::footer::FooterHintAction)>,
+    /// Each `$hosts` chip, by index into the `hosts` it was drawn from.
+    pub hosts: Vec<(usize, Rect)>,
+}
+
 /// Render only the footer line into `area` (exactly 1 row tall) through the
-/// bar engine. Returns the on-screen rect of the usage graph (when the
-/// `usage` segment is present) and each clickable key hint.
+/// bar engine, returning its click targets.
 #[allow(clippy::too_many_arguments)]
 pub fn render_footer(
     f: &mut Frame,
@@ -341,18 +352,16 @@ pub fn render_footer(
     workspace_selected: bool,
     setup_log_available: bool,
     notice: Option<&str>,
+    hosts: &[crate::commands::shared_hosts::SharedHost],
     fleet: &crate::ui::bar::segment::SegmentMap,
-) -> (
-    Option<Rect>,
-    Vec<(Rect, crate::ui::footer::FooterHintAction)>,
-) {
+) -> FooterRects {
     use crate::ui::bar::segment::Hit;
     if let Some(msg) = notice {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(msg.to_string(), theme.err_style()))),
             area,
         );
-        return (None, Vec::new());
+        return FooterRects::default();
     }
     let rendered = crate::ui::bar::dashboard_footer(
         specs,
@@ -363,24 +372,25 @@ pub fn render_footer(
             window_label,
             workspace_selected,
             setup_log_available,
+            hosts,
             fleet,
         },
         area.width,
     );
     f.render_widget(Paragraph::new(rendered.line), area);
-    let mut graph = None;
-    let mut hints = Vec::new();
+    let mut out = FooterRects::default();
     for (rect, hit) in crate::ui::bar::render::hit_rects(area, &rendered.hits) {
         match hit {
-            Hit::UsageGraph => graph = Some(rect),
+            Hit::UsageGraph => out.graph = Some(rect),
+            Hit::RemoteHost(i) => out.hosts.push((i, rect)),
             _ => {
                 if let Some(action) = hit.footer_action() {
-                    hints.push((rect, action));
+                    out.hints.push((rect, action));
                 }
             }
         }
     }
-    (graph, hints)
+    out
 }
 
 /// Return the sequence of selectable targets in *visible order*, matching

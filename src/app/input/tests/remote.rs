@@ -115,6 +115,67 @@ async fn enter_in_host_picker_fetches_and_populates_remote_list() {
     );
 }
 
+#[tokio::test]
+async fn clicking_a_host_chip_fetches_that_hosts_remote_list() {
+    // The `$hosts` chip skips the picker: a click on the second chip
+    // fetches from the second host's destination, end to end through a
+    // fake ssh that logs its argv.
+    let mut env = EnvGuard::new();
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("ssh-args.log");
+    let script = dir.path().join("fake-ssh-ok.sh");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\necho '[{{\"repo\":\"r\",\"workspace\":\"w\",\"branch\":\"b\",\"worktree_path\":\"/x\",\"agents\":[]}}]'\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    env.set("WSX_SSH_BIN", script.to_str().unwrap());
+
+    let store = Store::open_in_memory().unwrap();
+    let tmp = tempfile::TempDir::new().unwrap();
+    let app = Arc::new(Mutex::new(
+        App::new(store, tmp.path().to_path_buf()).unwrap(),
+    ));
+    {
+        let mut g = app.lock().await;
+        g.remote_hosts_cache = crate::commands::shared_hosts::parse("alpha=me@alpha\nbeta=me@beta");
+        g.host_chip_rects = vec![
+            (0, ratatui::layout::Rect::new(60, 23, 7, 1)),
+            (1, ratatui::layout::Rect::new(68, 23, 6, 1)),
+        ];
+        let click = crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: 70,
+            row: 23,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        };
+        handle_event(&mut g, &app, CtEvent::Mouse(click))
+            .await
+            .unwrap();
+        assert!(
+            matches!(&g.modal, Some(Modal::RemoteListLoading { host_name }) if host_name == "beta"),
+            "{:?}",
+            g.modal
+        );
+    }
+    wait_until(&app, "remote fetch to finish (list populated)", |g| {
+        g.remote_list.is_some() && g.pending_remote_gen.is_none()
+    })
+    .await;
+    let g = app.lock().await;
+    let list = g.remote_list.as_ref().expect("remote_list populated");
+    assert_eq!(list.host_name, "beta");
+    assert_eq!(list.dest, "me@beta");
+    assert!(matches!(g.modal, Some(Modal::RemoteWorkspaceList { .. })));
+    let argv = std::fs::read_to_string(&log).unwrap();
+    assert!(argv.lines().any(|l| l == "me@beta"), "{argv:?}");
+    assert!(!argv.contains("me@alpha"), "{argv:?}");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn attach_remote_spawns_ssh_and_detach_severs_client_only() {
     let dir = tempfile::tempdir().unwrap();

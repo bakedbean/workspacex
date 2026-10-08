@@ -38,7 +38,12 @@ async fn wheel_over_container_scrolls_that_container() {
         None,
         None,
     ];
-    handle_mouse(&mut app, mouse_at(MouseEventKind::ScrollDown, 25, 22)).await;
+    handle_mouse(
+        &mut app,
+        &super::common::shared_app(),
+        mouse_at(MouseEventKind::ScrollDown, 25, 22),
+    )
+    .await;
     assert_eq!(app.detail_scroll_offsets[1], 3);
     assert_eq!(app.detail_scroll_offsets[0], 0);
 }
@@ -59,7 +64,12 @@ async fn wheel_outside_containers_does_not_touch_detail_offsets() {
         None,
         None,
     ];
-    handle_mouse(&mut app, mouse_at(MouseEventKind::ScrollDown, 50, 5)).await;
+    handle_mouse(
+        &mut app,
+        &super::common::shared_app(),
+        mouse_at(MouseEventKind::ScrollDown, 50, 5),
+    )
+    .await;
     assert_eq!(app.detail_scroll_offsets, [0; 4]);
 }
 
@@ -86,7 +96,12 @@ async fn wheel_in_attached_view_does_not_touch_detail_offsets() {
         None,
         None,
     ];
-    handle_mouse(&mut app, mouse_at(MouseEventKind::ScrollDown, 5, 22)).await;
+    handle_mouse(
+        &mut app,
+        &super::common::shared_app(),
+        mouse_at(MouseEventKind::ScrollDown, 5, 22),
+    )
+    .await;
     assert_eq!(app.detail_scroll_offsets, [0; 4]);
 }
 
@@ -107,6 +122,11 @@ async fn wheel_up_scrolls_back_with_saturating_sub() {
         None,
     ];
     app.detail_scroll_offsets[0] = 2;
-    handle_mouse(&mut app, mouse_at(MouseEventKind::ScrollUp, 5, 22)).await;
+    handle_mouse(
+        &mut app,
+        &super::common::shared_app(),
+        mouse_at(MouseEventKind::ScrollUp, 5, 22),
+    )
+    .await;
     assert_eq!(app.detail_scroll_offsets[0], 0);
 }

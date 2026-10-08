@@ -92,6 +92,7 @@ async fn plain_wheel_forwards_when_mouse_mode_on() {
     arm_mouse_mode_and_pane(&mut app, ws_id);
     handle_mouse(
         &mut app,
+        &super::common::shared_app(),
         mouse_at_mod(MouseEventKind::ScrollUp, 10, 10, KeyModifiers::NONE),
     )
     .await;
@@ -115,6 +116,7 @@ async fn shift_wheel_is_escape_hatch_to_scrollback() {
     arm_mouse_mode_and_pane(&mut app, ws_id);
     handle_mouse(
         &mut app,
+        &super::common::shared_app(),
         mouse_at_mod(MouseEventKind::ScrollUp, 10, 10, KeyModifiers::SHIFT),
     )
     .await;
@@ -151,6 +153,7 @@ async fn plain_wheel_scrolls_when_mouse_mode_off() {
     )];
     handle_mouse(
         &mut app,
+        &super::common::shared_app(),
         mouse_at_mod(MouseEventKind::ScrollUp, 10, 10, KeyModifiers::NONE),
     )
     .await;
@@ -179,6 +182,7 @@ async fn plain_wheel_down_forwards_when_mouse_mode_on() {
         .scroll_up(5);
     handle_mouse(
         &mut app,
+        &super::common::shared_app(),
         mouse_at_mod(MouseEventKind::ScrollDown, 10, 10, KeyModifiers::NONE),
     )
     .await;
@@ -203,6 +207,7 @@ async fn plain_wheel_over_chrome_falls_through_to_scrollback() {
     // mouse mode is on.
     handle_mouse(
         &mut app,
+        &super::common::shared_app(),
         mouse_at_mod(MouseEventKind::ScrollUp, 10, 30, KeyModifiers::NONE),
     )
     .await;

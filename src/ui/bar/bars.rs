@@ -55,6 +55,9 @@ pub struct DashboardFooterInputs<'a> {
     /// setup log (`LifecycleBadge::offers_setup_log`). The badge itself is
     /// two cells with no room to say so, so the footer carries the hint.
     pub setup_log_available: bool,
+    /// `$hosts`' chips: the configured shared hosts, sorted by name
+    /// (`shared_hosts::list`), so chip `i` is the `H` picker's row `i`.
+    pub hosts: &'a [crate::commands::shared_hosts::SharedHost],
     /// Fleet variables for `[module.*]` segments — `fleet::FleetStats::to_vars()`.
     pub fleet: &'a SegmentMap,
 }
@@ -67,6 +70,35 @@ pub fn dashboard_footer(
     width: u16,
 ) -> Rendered {
     let resolver = specs.resolver(theme);
+    let segments = dashboard_footer_segments(specs, inputs, &resolver);
+    render_bar(
+        &specs.dashboard_footer,
+        &segments,
+        &specs.segments,
+        width,
+        &resolver,
+    )
+}
+
+/// Whether the dashboard footer would draw segment `name`: it is placed
+/// in `format` or `right_format` and not disabled. Lets the caller skip
+/// gathering inputs nothing will show, like `$hosts`' settings read.
+pub fn dashboard_footer_shows(specs: &BarSpecs, name: &str) -> bool {
+    let spec = &specs.dashboard_footer;
+    !cfg(specs, name).disabled
+        && format::vars(&spec.format)
+            .into_iter()
+            .chain(format::vars(&spec.right_format))
+            .any(|v| v == name)
+}
+
+/// Build the dashboard footer's segments. `pub(super)` for the drift test,
+/// like `attached_segments`.
+pub(super) fn dashboard_footer_segments(
+    specs: &BarSpecs,
+    inputs: &DashboardFooterInputs<'_>,
+    resolver: &style::Resolver<'_>,
+) -> SegmentMap {
     let mut keys: Vec<(&str, &str)> = vec![
         ("↑↓", "nav"),
         ("↵", "open"),
@@ -95,26 +127,25 @@ pub fn dashboard_footer(
     put(
         &mut segments,
         "keys",
-        providers::keys(cfg(specs, "keys"), &items, &resolver),
+        providers::keys(cfg(specs, "keys"), &items, resolver),
     );
     put(
         &mut segments,
         "version",
-        providers::version(cfg(specs, "version"), inputs.version, &resolver),
+        providers::version(cfg(specs, "version"), inputs.version, resolver),
     );
     put(
         &mut segments,
         "usage",
-        providers::usage(cfg(specs, "usage"), inputs.window_label, &spark, &resolver),
+        providers::usage(cfg(specs, "usage"), inputs.window_label, &spark, resolver),
     );
-    put_modules(&mut segments, specs, inputs.fleet, &resolver);
-    render_bar(
-        &specs.dashboard_footer,
-        &segments,
-        &specs.segments,
-        width,
-        &resolver,
-    )
+    put(
+        &mut segments,
+        "hosts",
+        providers::hosts(cfg(specs, "hosts"), inputs.hosts, resolver),
+    );
+    put_modules(&mut segments, specs, inputs.fleet, resolver);
+    segments
 }
 
 pub struct DashboardHeaderInputs<'a> {

@@ -1,8 +1,9 @@
 //! Mouse events: clicks, wheel, and the hit-testing that maps a cell
 //! back to the pane, container, or row under the cursor.
 
+use super::modal::remote::open_remote_host;
 use super::*;
-use crate::app::{App, attach_workspace};
+use crate::app::{App, SharedApp, attach_workspace};
 use crate::ui::modal::Modal;
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
@@ -85,7 +86,7 @@ pub(in crate::app::input) fn adjust_detail_scroll(
     };
 }
 
-pub(in crate::app::input) async fn handle_mouse(app: &mut App, m: MouseEvent) {
+pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedApp, m: MouseEvent) {
     // Detail-bar container scroll: consume wheel events on the Dashboard
     // view when the cursor is over a container rect. Fall through for
     // wheel events elsewhere (existing scroll_active routing).
@@ -297,6 +298,17 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, m: MouseEvent) {
                     input: None,
                     notice: None,
                 });
+            } else if let Some((idx, _)) = app.host_chip_rects.iter().copied().find(|(_, r)| {
+                m.column >= r.x
+                    && m.column < r.x.saturating_add(r.width)
+                    && m.row >= r.y
+                    && m.row < r.y.saturating_add(r.height)
+            }) {
+                // Clicking a `$hosts` chip opens that host's workspace list,
+                // identical to picking it under `H`.
+                if let Some(host) = app.remote_hosts_cache.get(idx).cloned() {
+                    open_remote_host(app, shared, host.name, host.dest);
+                }
             } else if app.usage_graph_rect.is_some_and(|r| {
                 m.column >= r.x
                     && m.column < r.x.saturating_add(r.width)

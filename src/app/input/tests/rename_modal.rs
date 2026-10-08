@@ -413,6 +413,7 @@ async fn clicking_a_swatch_applies_that_color() {
 
     handle_mouse(
         &mut app,
+        &super::common::shared_app(),
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: rect.x,
@@ -437,6 +438,7 @@ async fn clicking_outside_the_grid_dismisses_without_applying() {
 
     handle_mouse(
         &mut app,
+        &super::common::shared_app(),
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 0,

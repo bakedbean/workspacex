@@ -17,7 +17,12 @@ async fn wheel_up_scrolls_attached_workspace() {
     let store = Store::open_in_memory().unwrap();
     let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
     let ws_id = spawn_attached_workspace(&mut app);
-    handle_mouse(&mut app, mouse_event(MouseEventKind::ScrollUp)).await;
+    handle_mouse(
+        &mut app,
+        &super::common::shared_app(),
+        mouse_event(MouseEventKind::ScrollUp),
+    )
+    .await;
     assert_eq!(
         app.sessions
             .get(test_primary_instance(&app, ws_id))
@@ -38,7 +43,12 @@ async fn wheel_down_decreases_offset_saturating() {
         .get(test_primary_instance(&app, ws_id))
         .unwrap()
         .scroll_up(5);
-    handle_mouse(&mut app, mouse_event(MouseEventKind::ScrollDown)).await;
+    handle_mouse(
+        &mut app,
+        &super::common::shared_app(),
+        mouse_event(MouseEventKind::ScrollDown),
+    )
+    .await;
     assert_eq!(
         app.sessions
             .get(test_primary_instance(&app, ws_id))
@@ -59,7 +69,12 @@ async fn wheel_noop_when_dashboard_focused_no_target() {
     let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
     // No PM, no attached workspace; view is Dashboard.
     // Just verify the call doesn't panic.
-    handle_mouse(&mut app, mouse_event(MouseEventKind::ScrollUp)).await;
+    handle_mouse(
+        &mut app,
+        &super::common::shared_app(),
+        mouse_event(MouseEventKind::ScrollUp),
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -91,7 +106,7 @@ async fn click_in_chip_rect_fires_pinned_command() {
         row: 30,
         modifiers: KeyModifiers::NONE,
     };
-    handle_mouse(&mut app, click).await;
+    handle_mouse(&mut app, &super::common::shared_app(), click).await;
 
     // wait for PTY cat echo
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -132,7 +147,7 @@ async fn click_outside_chip_rect_does_nothing() {
         row: 10,    // outside chip
         modifiers: KeyModifiers::NONE,
     };
-    handle_mouse(&mut app, click).await;
+    handle_mouse(&mut app, &super::common::shared_app(), click).await;
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let session = active_session(&app).unwrap();
@@ -202,6 +217,7 @@ async fn click_agent_pill_switches_focused_pane() {
 
     handle_mouse(
         &mut app,
+        &super::common::shared_app(),
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: rect.x + 1,
@@ -245,7 +261,7 @@ async fn click_procs_count_opens_process_list() {
         row: 30,
         modifiers: KeyModifiers::NONE,
     };
-    handle_mouse(&mut app, click).await;
+    handle_mouse(&mut app, &super::common::shared_app(), click).await;
 
     assert!(
         matches!(app.modal, Some(Modal::ProcessList { workspace_id, .. }) if workspace_id == ws_id),
@@ -278,7 +294,7 @@ async fn click_outside_procs_count_does_not_open_process_list() {
         row: 10,
         modifiers: KeyModifiers::NONE,
     };
-    handle_mouse(&mut app, click).await;
+    handle_mouse(&mut app, &super::common::shared_app(), click).await;
 
     assert!(
         !matches!(app.modal, Some(Modal::ProcessList { .. })),
@@ -315,7 +331,7 @@ async fn click_attention_row_while_modal_open_does_not_attach() {
         row: 10,
         modifiers: KeyModifiers::NONE,
     };
-    handle_mouse(&mut app, click).await;
+    handle_mouse(&mut app, &super::common::shared_app(), click).await;
 
     assert!(
         matches!(app.view, crate::ui::View::Dashboard),
@@ -360,7 +376,7 @@ async fn click_procs_count_while_modal_open_is_swallowed() {
         row: 30,
         modifiers: KeyModifiers::NONE,
     };
-    handle_mouse(&mut app, click).await;
+    handle_mouse(&mut app, &super::common::shared_app(), click).await;
 
     assert!(
         matches!(app.modal, Some(Modal::Error { .. })),
@@ -395,7 +411,7 @@ async fn click_dashboard_footer_hint_fires_key() {
         row: 40,
         modifiers: KeyModifiers::NONE,
     };
-    handle_mouse(&mut app, click).await;
+    handle_mouse(&mut app, &super::common::shared_app(), click).await;
 
     assert!(
         app.dashboard.filter.is_some(),
@@ -429,7 +445,7 @@ async fn click_attached_footer_leader_pill_arms_leader() {
         row: 40,
         modifiers: KeyModifiers::NONE,
     };
-    handle_mouse(&mut app, click).await;
+    handle_mouse(&mut app, &super::common::shared_app(), click).await;
 
     assert!(
         app.leader_pending,
@@ -465,10 +481,10 @@ async fn double_click_attached_leader_pill_does_not_stick_armed() {
         modifiers: KeyModifiers::NONE,
     };
 
-    handle_mouse(&mut app, click).await;
+    handle_mouse(&mut app, &super::common::shared_app(), click).await;
     assert!(app.leader_pending, "first ^x click arms the leader");
 
-    handle_mouse(&mut app, click).await;
+    handle_mouse(&mut app, &super::common::shared_app(), click).await;
     assert!(
         !app.leader_pending,
         "second ^x click must clear the leader, matching double Ctrl-x \
@@ -502,7 +518,7 @@ async fn click_attached_footer_hint_dispatches_leader_command() {
         row: 40,
         modifiers: KeyModifiers::NONE,
     };
-    handle_mouse(&mut app, click).await;
+    handle_mouse(&mut app, &super::common::shared_app(), click).await;
 
     assert!(
         matches!(app.modal, Some(crate::ui::modal::Modal::AgentsPanel { .. })),
@@ -551,7 +567,7 @@ async fn click_chip_in_dashboard_view_fires_pinned_command() {
         row: 30,
         modifiers: KeyModifiers::NONE,
     };
-    handle_mouse(&mut app, click).await;
+    handle_mouse(&mut app, &super::common::shared_app(), click).await;
 
     // Wait for PTY cat echo.
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -607,6 +623,7 @@ async fn chip_dispatch_echoes_command_into_reply_input() {
 
     handle_mouse(
         &mut app,
+        &super::common::shared_app(),
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 6,
@@ -753,7 +770,7 @@ async fn click_chip_auto_spawns_session_when_missing() {
         row: 30,
         modifiers: KeyModifiers::NONE,
     };
-    handle_mouse(&mut app, click).await;
+    handle_mouse(&mut app, &super::common::shared_app(), click).await;
 
     // The session must have been auto-spawned by fire_chip.
     assert!(
@@ -815,7 +832,7 @@ async fn attached_chip_click_preserves_dashboard_draft_and_focus() {
         row: 30,
         modifiers: KeyModifiers::NONE,
     };
-    handle_mouse(&mut app, click).await;
+    handle_mouse(&mut app, &super::common::shared_app(), click).await;
 
     // Command still dispatched.
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -864,7 +881,7 @@ async fn click_more_tail_opens_updates_panel() {
         row: 0,
         modifiers: KeyModifiers::NONE,
     };
-    handle_mouse(&mut app, click).await;
+    handle_mouse(&mut app, &super::common::shared_app(), click).await;
 
     assert!(
         matches!(
@@ -898,7 +915,7 @@ async fn clicking_a_tag_chip_opens_the_body_stage_and_the_manager_chip_opens_pic
     let mut m = mouse_event(MouseEventKind::Down(MouseButton::Left));
     m.column = 12;
     m.row = 23;
-    handle_mouse(&mut app, m).await;
+    handle_mouse(&mut app, &super::common::shared_app(), m).await;
     assert!(
         matches!(&app.modal, Some(Modal::PromptTag(x)) if x.stage == (TagStage::Body { name: "context".into() })),
         "{:?}",
@@ -909,7 +926,7 @@ async fn clicking_a_tag_chip_opens_the_body_stage_and_the_manager_chip_opens_pic
     let mut m = mouse_event(MouseEventKind::Down(MouseButton::Left));
     m.column = 23;
     m.row = 23;
-    handle_mouse(&mut app, m).await;
+    handle_mouse(&mut app, &super::common::shared_app(), m).await;
     assert!(
         matches!(&app.modal, Some(Modal::PromptTag(x)) if x.stage == TagStage::Pick),
         "{:?}",

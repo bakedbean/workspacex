@@ -291,6 +291,7 @@ mod footer_tests {
                 window_label: label,
                 workspace_selected: selected,
                 setup_log_available,
+                hosts: &[],
                 fleet,
             },
             width,
@@ -396,6 +397,7 @@ mod footer_tests {
                 window_label: "24h",
                 workspace_selected: false,
                 setup_log_available: false,
+                hosts: &[],
                 fleet: crate::ui::bar::fleet::empty(),
             },
             120,
@@ -411,6 +413,92 @@ mod footer_tests {
             .unwrap();
         assert_eq!(usage.width, "24h".len() as u16 + 1 + 24);
         assert_eq!(usage.start_col + usage.width, 120);
+    }
+
+    fn hosts_fixture() -> Vec<crate::commands::shared_hosts::SharedHost> {
+        ["alpha", "beta"]
+            .iter()
+            .map(|n| crate::commands::shared_hosts::SharedHost {
+                name: (*n).into(),
+                dest: format!("me@{n}"),
+            })
+            .collect()
+    }
+
+    fn footer_with_hosts(
+        src: &str,
+        hosts: &[crate::commands::shared_hosts::SharedHost],
+    ) -> Rendered {
+        let theme = Theme::wsx();
+        let specs = crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse(src).unwrap(),
+            &theme,
+        )
+        .unwrap();
+        dashboard_footer(
+            &specs,
+            &theme,
+            &DashboardFooterInputs {
+                activity: &[],
+                version: "0.1.0",
+                window_label: "24h",
+                workspace_selected: false,
+                setup_log_available: false,
+                hosts,
+                fleet: crate::ui::bar::fleet::empty(),
+            },
+            120,
+        )
+    }
+
+    /// `$hosts` is defined but not placed: the stock footer is unchanged
+    /// even with hosts configured.
+    #[test]
+    fn hosts_are_not_placed_by_default() {
+        let out = footer_with_hosts("", &hosts_fixture());
+        assert!(!plain(&out.line).contains("alpha"));
+        assert!(!out.hits.iter().any(|h| matches!(h.hit, Hit::RemoteHost(_))));
+    }
+
+    /// Placed, each host is a chip carrying its own index, so a click maps
+    /// to the `H` picker's row for that host.
+    #[test]
+    fn placed_hosts_render_one_clickable_chip_each() {
+        let out = footer_with_hosts(
+            "[dashboard_footer]\nright_format = \"$hosts\"\n[hosts]\nformat = \"$index:$name@$dest\"\nseparator = \" | \"\n",
+            &hosts_fixture(),
+        );
+        let text = plain(&out.line);
+        assert!(
+            text.ends_with("1:alpha@me@alpha | 2:beta@me@beta"),
+            "{text:?}"
+        );
+        let hosts: Vec<(usize, u16, u16)> = out
+            .hits
+            .iter()
+            .filter_map(|h| match h.hit {
+                Hit::RemoteHost(i) => Some((i, h.start_col, h.width)),
+                _ => None,
+            })
+            .collect();
+        let alpha = "1:alpha@me@alpha".len() as u16;
+        let beta = "2:beta@me@beta".len() as u16;
+        assert_eq!(
+            hosts,
+            vec![(0, 120 - beta - 3 - alpha, alpha), (1, 120 - beta, beta)]
+        );
+    }
+
+    /// With no hosts configured the segment renders empty, so a group
+    /// around it drops its separator.
+    #[test]
+    fn placed_hosts_with_none_configured_render_nothing() {
+        let out = footer_with_hosts(
+            "[dashboard_footer]\nright_format = \"($hosts  )$version\"\nfill = \"-\"\n",
+            &[],
+        );
+        let text = plain(&out.line);
+        assert!(text.ends_with("- 0.1.0"), "{text:?}");
     }
 
     /// The bundled `tokens` module is defined but not placed; a theme that
@@ -449,6 +537,7 @@ mod footer_tests {
                 window_label: "24h",
                 workspace_selected: false,
                 setup_log_available: false,
+                hosts: &[],
                 fleet: &fleet,
             },
             140,
@@ -477,6 +566,7 @@ mod footer_tests {
                 window_label: "24h",
                 workspace_selected: false,
                 setup_log_available: false,
+                hosts: &[],
                 fleet: crate::ui::bar::fleet::empty(),
             },
             140,
@@ -560,6 +650,7 @@ mod footer_tests {
             window_label: "24h",
             workspace_selected: false,
             setup_log_available: false,
+            hosts: &[],
             fleet: &fleet,
         };
         let wide = plain(&dashboard_footer(&specs, &theme, &inputs, 120).line);
@@ -1229,6 +1320,7 @@ mod segment_registry_drift_tests {
             .iter()
             .map(|d| d.name)
             .filter(|name| !DASHBOARD_HEADER_ONLY.contains(name))
+            .filter(|name| !DASHBOARD_FOOTER_ONLY.contains(name))
             .filter(|name| !DETAIL_HEADER_ONLY.contains(name))
             .filter(|name| !DETAIL_REPLY_ONLY.contains(name))
             .collect();
@@ -1330,11 +1422,38 @@ mod segment_registry_drift_tests {
     /// carrying dashboard-only state, so the attached bars never build them.
     const DASHBOARD_HEADER_ONLY: [&str; 5] = ["brand", "group", "sort", "filter", "counts"];
 
-    /// The dashboard footer's three segments (`keys`, `version`, `usage`)
-    /// must all be registered names, not private to `dashboard_footer`.
+    /// The dashboard footer's segment of its own: the shared-host chips,
+    /// which open a remote list and so belong to the dashboard alone.
+    const DASHBOARD_FOOTER_ONLY: [&str; 1] = ["hosts"];
+
+    /// Every footer input present at once, so each of its segments renders,
+    /// and each is a registered name, not private to `dashboard_footer`.
     #[test]
-    fn dashboard_footer_segments_are_all_registered_names() {
-        for name in ["keys", "version", "usage"] {
+    fn dashboard_footer_segments_cover_their_registered_names() {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        let resolver = specs.resolver(&theme);
+        let hosts = vec![crate::commands::shared_hosts::SharedHost {
+            name: "box".into(),
+            dest: "me@box".into(),
+        }];
+        let inputs = crate::ui::bar::DashboardFooterInputs {
+            activity: &[1, 2, 3],
+            version: "0.1.0",
+            window_label: "24h",
+            workspace_selected: true,
+            setup_log_available: false,
+            hosts: &hosts,
+            fleet: crate::ui::bar::fleet::empty(),
+        };
+        let segments = crate::ui::bar::bars::dashboard_footer_segments(&specs, &inputs, &resolver);
+        let got: BTreeSet<&str> = segments.keys().map(String::as_str).collect();
+        let expected: BTreeSet<&str> = ["keys", "version", "usage"]
+            .into_iter()
+            .chain(DASHBOARD_FOOTER_ONLY)
+            .collect();
+        assert_eq!(got, expected);
+        for name in expected {
             assert!(
                 SEGMENTS.iter().any(|d| d.name == name),
                 "dashboard_footer's `{name}` segment must be in registry::SEGMENTS"
@@ -2442,6 +2561,7 @@ mod example_theme_tests {
                     window_label: "24h",
                     workspace_selected: true,
                     setup_log_available: false,
+                    hosts: &[],
                     fleet: crate::ui::bar::fleet::empty(),
                 },
                 120,
@@ -2639,6 +2759,7 @@ mod module_tests {
                 window_label: "24h",
                 workspace_selected: false,
                 setup_log_available: false,
+                hosts: &[],
                 fleet: &fleet(3, 0),
             },
             80,
@@ -2683,6 +2804,7 @@ mod module_tests {
                 window_label: "24h",
                 workspace_selected: false,
                 setup_log_available: false,
+                hosts: &[],
                 fleet: &fleet,
             },
             100,
@@ -2715,6 +2837,7 @@ mod module_tests {
                         window_label: "24h",
                         workspace_selected: false,
                         setup_log_available: false,
+                        hosts: &[],
                         fleet,
                     },
                     100,
@@ -2761,6 +2884,7 @@ mod module_tests {
                 window_label: "24h",
                 workspace_selected: false,
                 setup_log_available: false,
+                hosts: &[],
                 fleet: &fleet,
             },
             100,
@@ -2866,6 +2990,7 @@ mod module_tests {
                         window_label: "24h",
                         workspace_selected: false,
                         setup_log_available: false,
+                        hosts: &[],
                         fleet: &f,
                     },
                     w,

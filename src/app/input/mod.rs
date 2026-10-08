@@ -170,7 +170,7 @@ pub(crate) async fn handle_event(app: &mut App, shared: &SharedApp, evt: CtEvent
     trace_event(&evt);
     match evt {
         CtEvent::Key(k) if k.kind == KeyEventKind::Press => dispatch_key(app, shared, k).await?,
-        CtEvent::Mouse(m) => handle_mouse(app, m).await,
+        CtEvent::Mouse(m) => handle_mouse(app, shared, m).await,
         CtEvent::Paste(content) => handle_paste(app, shared, content).await?,
         CtEvent::Resize(cols, rows) => {
             // Record the new terminal size; the run loop's tick applies it to

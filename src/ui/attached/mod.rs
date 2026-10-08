@@ -95,6 +95,8 @@ fn route_hits(area: Rect, hits: &[crate::ui::bar::segment::HitSpan], out: &mut P
             Hit::Attention(id) => out.attention_rects.push((id, rect)),
             Hit::AttentionMore => out.attention_more_rect = Some(rect),
             Hit::UsageGraph => out.usage_graph_rect = Some(rect),
+            // `$hosts` carries data only on the dashboard footer.
+            Hit::RemoteHost(_) => {}
             Hit::ArmLeader | Hit::Key(_) => {
                 if let Some(action) = hit.footer_action() {
                     out.footer_hint_rects.push((rect, action));

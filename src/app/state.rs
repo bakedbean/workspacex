@@ -125,6 +125,8 @@ impl App {
             name_color_swatch_rects: Vec::new(),
             pinned_commands_cache: Vec::new(),
             prompt_tags_cache: Vec::new(),
+            host_chip_rects: Vec::new(),
+            remote_hosts_cache: Vec::new(),
             pending_bells: Vec::new(),
             startup_workspace_ids: std::collections::HashSet::new(),
             last_data_version: 0,
@@ -821,6 +823,13 @@ pub struct App {
     pub pinned_commands_cache: Vec<crate::commands::pinned::PinnedCommand>,
     /// Sorted prompt tags from the last draw tick (matches `tag_chip_rects`).
     pub prompt_tags_cache: Vec<crate::commands::tags::PromptTag>,
+    /// `(host index, rect)` per `$hosts` chip on the dashboard footer.
+    /// Mirrors the `chip_rects` draw-populates / input-reads pattern.
+    pub host_chip_rects: Vec<(usize, ratatui::layout::Rect)>,
+    /// Sorted shared hosts from the last draw tick (matches
+    /// `host_chip_rects`), so a click opens the host that was drawn even if
+    /// `shared_hosts` changed since.
+    pub remote_hosts_cache: Vec<crate::commands::shared_hosts::SharedHost>,
     /// Bells queued up by the most recent draw tick. Drained and fired
     /// AFTER `terminal.draw()` returns to avoid interleaving `\x07` writes
     /// with ratatui's escape sequences.

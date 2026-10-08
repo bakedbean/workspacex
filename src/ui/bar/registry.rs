@@ -167,6 +167,16 @@ pub const SEGMENTS: &[SegmentDef] = &[
         singleton: false,
     },
     SegmentDef {
+        name: "hosts",
+        // `$name` is the `shared_hosts` entry's name, `$dest` its ssh
+        // destination.
+        vars: &["index", "name", "dest"],
+        style_vars: STYLE,
+        more_vars: NO_TAIL,
+        items: true,
+        singleton: false,
+    },
+    SegmentDef {
         name: "tags",
         vars: &["index", "label"],
         style_vars: STYLE,

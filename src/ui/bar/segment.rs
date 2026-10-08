@@ -24,6 +24,9 @@ pub enum Hit {
     Procs,
     Agent(AgentInstanceId),
     UsageGraph,
+    /// A `$hosts` chip: index into the name-sorted shared-host list
+    /// (`App::remote_hosts_cache`), opening that host's workspace list.
+    RemoteHost(usize),
     Attention(WorkspaceId),
     AttentionMore,
 }

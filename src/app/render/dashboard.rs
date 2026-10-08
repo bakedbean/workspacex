@@ -192,7 +192,10 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     let notice = app
         .theme_notice(crate::util::time::now_ms_u64())
         .map(str::to_string);
-    let (graph_rect, footer_hint_rects) = dashboard::render_footer(
+    // Read each frame, like the pinned commands above, so an edit to
+    // `shared_hosts` shows without a restart.
+    let hosts = crate::commands::shared_hosts::list(&app.store).unwrap_or_default();
+    let footer = dashboard::render_footer(
         f,
         footer_area,
         &activity,
@@ -202,10 +205,13 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
         matches!(app.selected_target(), Some(SelectionTarget::Workspace(_))),
         selected_badge_offers_setup_log(app),
         notice.as_deref(),
+        &hosts,
         &fleet,
     );
-    app.usage_graph_rect = graph_rect;
-    app.footer_hint_rects = footer_hint_rects;
+    app.usage_graph_rect = footer.graph;
+    app.footer_hint_rects = footer.hints;
+    app.host_chip_rects = footer.hosts;
+    app.remote_hosts_cache = hosts;
 }
 
 /// Whether the selected workspace's lifecycle badge points at a setup log,

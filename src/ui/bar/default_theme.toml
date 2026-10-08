@@ -180,6 +180,17 @@ more_format = "[ … +$count more](fg:dim)"
 format    = "[ $index ](bg:bg_soft fg:dim bold)[ $label](fg:path)"
 separator = "  "
 
+# Shared hosts (`wsx config edit shared_hosts`): one chip per host, sorted
+# by name. Clicking one opens that host's workspace list, as picking it
+# under `H` does. Carries data only on the dashboard footer, and is defined
+# but not placed — add it there, e.g.
+#   right_format = "$hosts(  $funnel)"
+# Variables: $index $name $dest
+[hosts]
+format    = "[ $name ](bg:bg_soft fg:path)"
+separator = " "
+priority  = 45
+
 # Prompt tags: the three most-used tags as chips, then the manager chip
 # (`more_format`; its `$count` is how many tags are saved). Clicking a chip
 # opens the body box for that tag; the manager chip opens the picker

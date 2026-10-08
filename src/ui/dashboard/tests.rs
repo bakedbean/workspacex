@@ -1314,13 +1314,15 @@ fn footer_shows_a_theme_notice_instead_of_hints() {
             true,
             false,
             Some("theme.toml: [pr].format: col 3: unknown `$nope`"),
+            &[],
             crate::ui::bar::fleet::empty(),
         ));
     })
     .unwrap();
-    let (graph, hints) = out.unwrap();
-    assert!(graph.is_none());
-    assert!(hints.is_empty());
+    let out = out.unwrap();
+    assert!(out.graph.is_none());
+    assert!(out.hints.is_empty());
+    assert!(out.hosts.is_empty());
     let buf = term.backend().buffer();
     let row: String = (0..80).map(|x| buf[(x, 0)].symbol().to_string()).collect();
     assert!(row.starts_with("theme.toml: [pr].format"), "{row:?}");

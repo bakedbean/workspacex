@@ -8,6 +8,7 @@ use super::render::{eval, eval_with_labels};
 use super::segment::{Hit, Segment, SegmentConfig, SegmentMap};
 use super::style::Resolver;
 use crate::commands::pinned::{PinnedCommand, truncate_label};
+use crate::commands::shared_hosts::SharedHost;
 use crate::commands::tags::{CHIP_COUNT, PromptTag};
 use crate::data::store::AgentInstanceId;
 use crate::git::DiffStats;
@@ -717,6 +718,27 @@ pub fn pins(cfg: &SegmentConfig, pinned: &[PinnedCommand], resolver: &Resolver) 
                 ]),
                 Style::default(),
                 Some(Hit::PinnedChip(i)),
+            )
+        })
+        .collect();
+    eval_items(cfg, &items, resolver)
+}
+
+/// Shared-host chips: one per `shared_hosts` entry, in the name order the
+/// `H` picker uses. Clicking one opens that host's workspace list.
+pub fn hosts(cfg: &SegmentConfig, hosts: &[SharedHost], resolver: &Resolver) -> Option<Segment> {
+    let items: Vec<(SegmentMap, Style, Option<Hit>)> = hosts
+        .iter()
+        .enumerate()
+        .map(|(i, h)| {
+            (
+                vars(vec![
+                    ("index", var((i + 1).to_string())),
+                    ("name", var(truncate_label(&h.name, CHIP_LABEL_COLS))),
+                    ("dest", var(h.dest.clone())),
+                ]),
+                Style::default(),
+                Some(Hit::RemoteHost(i)),
             )
         })
         .collect();

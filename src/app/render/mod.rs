@@ -124,6 +124,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.procs_link_rect = None;
     app.usage_graph_rect = None;
     app.footer_hint_rects.clear();
+    app.host_chip_rects.clear();
+    app.remote_hosts_cache.clear();
     app.usage_window_option_rects.clear();
     app.name_color_swatch_rects.clear();
     sync_session_visibility(app);

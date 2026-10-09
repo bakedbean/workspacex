@@ -2603,6 +2603,60 @@ mod example_theme_tests {
         }
     }
 
+    /// The orange example puts the shared hosts on their own ash block,
+    /// opened by a left-pointing cap out of the bar and running flush to
+    /// the edge when the funnel is absent: no right-pointing cap closes
+    /// it, which read as chevrons on both sides of the block.
+    #[test]
+    fn orange_example_draws_hosts_on_an_ash_block_capped_on_the_left_only() {
+        use crate::commands::shared_hosts::SharedHost;
+        let theme = Theme::jellybeans();
+        let specs = load(&examples_dir().join("theme-orange.toml"), &theme).unwrap();
+        let orange = Some(Color::Rgb(0xd7, 0x5f, 0x00));
+        let ash = Some(Color::Rgb(0x1c, 0x1c, 0x1c));
+        let hosts = [
+            SharedHost {
+                name: "alpha".into(),
+                dest: "me@alpha".into(),
+            },
+            SharedHost {
+                name: "beta".into(),
+                dest: "me@beta".into(),
+            },
+        ];
+        let out = dashboard_footer(
+            &specs,
+            &theme,
+            &DashboardFooterInputs {
+                activity: &[],
+                version: "0.1.0",
+                window_label: "24h",
+                workspace_selected: false,
+                setup_log_available: false,
+                hosts: &hosts,
+                fleet: crate::ui::bar::fleet::empty(),
+            },
+            120,
+        );
+        let text = plain(&out.line);
+        assert!(text.ends_with("\u{e0b2} alpha  beta "), "{text:?}");
+        let caps: Vec<(Option<Color>, Option<Color>)> = out
+            .line
+            .spans
+            .iter()
+            .filter(|s| s.content.as_ref() == "\u{e0b2}")
+            .map(|s| (s.style.fg, s.style.bg))
+            .collect();
+        assert_eq!(caps, vec![(ash, None)]);
+        let alpha = out
+            .line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("alpha"))
+            .unwrap();
+        assert_eq!((alpha.style.fg, alpha.style.bg), (orange, ash));
+    }
+
     /// Every example leads the attached top bar with the focused agent's
     /// glyph on its own dark block, wedged (U+E0B0) into the workspace
     /// block: the glyph in the agent's colour on the block, the wedge in

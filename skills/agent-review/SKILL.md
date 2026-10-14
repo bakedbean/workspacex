@@ -1,6 +1,6 @@
 ---
 name: agent-review
-description: Use in a wsx workspace to spin up a peer review agent that code-reviews the current branch. Takes the reviewer kind (claude|pi|hermes|codex|omp; asks which when omitted); spawns the peer, hands it branch-diff-vs-main context, and has it report findings back to you.
+description: Use in a wsx workspace to spin up a peer review agent that code-reviews the current branch. Takes the reviewer kind (claude|pi|hermes|codex|omp; asks which when omitted); spawns the peer, hands it branch-diff-vs-main context (telling it to run the code-review skill when its harness has one), and has it report findings back to you.
 ---
 
 # agent-review
@@ -84,6 +84,13 @@ stop and tell the user the valid kinds. Do not guess.
    The `<brief>` must instruct the reviewer to:
    - Review the current branch against `main`. Run `git diff main...HEAD`
      itself to see the full change.
+   - **If a `code-review` skill is available in its harness** (Claude Code
+     ships one as `/code-review`), run it first on this branch's changes vs
+     `main` and build the report on its findings. Never pass `--comment`,
+     `--fix`, or `--post`: the review is read-only and findings go back
+     through wsx, not to the PR or the working tree. If the skill reports
+     findings through a UI tool rather than text, restate them in the reply.
+     Without the skill, review the diff directly.
    - Produce a **risk assessment** — security, performance, breaking changes,
      edge cases.
    - Produce a **gap analysis** — test coverage, documentation, error handling.
@@ -107,7 +114,10 @@ stop and tell the user the valid kinds. Do not guess.
 wsx agent send claude#2 - <<'EOF'
 You are a code reviewer for this wsx workspace (I am claude, the primary).
 Branch: feat/widgets (3 commits, 7 files changed). Review this branch against
-main: run `git diff main...HEAD` to see the full change. Provide (1) a risk
+main: run `git diff main...HEAD` to see the full change. If you have a
+`code-review` skill (e.g. Claude Code's `/code-review`), run it on this
+branch's changes vs main first and build on its findings; don't pass
+--comment, --fix, or --post. Provide (1) a risk
 assessment — security, performance, breaking changes, edge cases; and (2) a gap
 analysis — test coverage, documentation, error handling. When done, write your
 findings to a file and send them back with:
@@ -121,5 +131,7 @@ EOF
   `$WSX_WORKSPACE_ID` or the cwd — you do not pass repo/slug.
 - `wsx agent send` is asynchronous; the reviewer receives the brief shortly
   after you send it and works in its own pane.
+- Whether `code-review` exists depends on the reviewer's harness, not yours,
+  so the brief always states the rule conditionally and the reviewer decides.
 - The reviewer shares your worktree. Reviewing is read-only, so this is normally
   safe, but avoid large edits while the review runs.

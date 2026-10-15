@@ -140,10 +140,11 @@ fn matches_filter(w: &Workspace, repo_name: &str, status_text: &str, needle: &st
 
 /// The panel's sections, in display order: the dashboard's ordering
 /// ([`ordered_sections`] under the dashboard's live group and sort modes)
-/// applied to the rows that survive `filter`. Unlike the dashboard the
-/// panel never folds a repo or collapses quiet ones — every workspace is
-/// one keystroke from being switched to — and it omits repos left with no
-/// rows, since a bare header is noise in a panel meant to be scanned.
+/// applied to the rows that survive `filter`. Hide rules drop rows unless
+/// filtering. Unlike the dashboard the panel never folds a repo or
+/// collapses quiet ones — every workspace is one keystroke from being
+/// switched to — and it omits repos left with no rows, since a bare header
+/// is noise in a panel meant to be scanned.
 ///
 /// Used by both the renderer (to draw rows) and, flattened through
 /// [`ordered_workspaces_for_panel`], the key handler (to map the selected
@@ -155,7 +156,7 @@ pub fn panel_sections(inputs: &PanelInputs<'_>, filter: Option<&str>) -> Vec<Ord
         .iter()
         .filter(|item| {
             let Some(n) = needle else {
-                return true;
+                return crate::ui::dashboard::hidden_by(item, None).is_none();
             };
             inputs
                 .workspace(item.workspace_id)
@@ -1985,6 +1986,28 @@ mod ordering_tests {
         let mut ws = vec![fixture_ws(1, 1, "broken")];
         ws[0].1.state = WorkspaceState::Failed;
         assert_eq!(order(&repos, &ws, &Maps::default()), vec![WorkspaceId(1)]);
+    }
+
+    #[test]
+    fn hide_rules_drop_rows_unless_filtering() {
+        use crate::git::forge::BranchLifecycle;
+        let mut repo = fixture_repo(1);
+        repo.hide_rules = crate::data::hide_rules::HideRules::parse(Some("pr:merged"));
+        let repos = vec![repo];
+        let ws = vec![fixture_ws(1, 1, "kept"), fixture_ws(2, 1, "gone")];
+        let maps = Maps::default();
+        let mut pi = inputs(&repos, &ws, &maps);
+        pi.items
+            .iter_mut()
+            .find(|i| i.workspace_id == WorkspaceId(2))
+            .unwrap()
+            .row
+            .lifecycle = Some(BranchLifecycle::PrMerged);
+        assert_eq!(
+            ordered_workspaces_for_panel(&pi, None),
+            vec![WorkspaceId(1)]
+        );
+        assert!(ordered_workspaces_for_panel(&pi, Some("gone")).contains(&WorkspaceId(2)));
     }
 }
 

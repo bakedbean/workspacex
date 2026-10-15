@@ -341,8 +341,9 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
     ) {
         return;
     }
-    let rect = centered(area, 60, 14);
-    f.render_widget(Clear, rect);
+    // Room for list rows: the terminal minus borders and each list modal's
+    // fixed lines (prompt, blanks, footer, notice), so the footer stays put.
+    let list_cap = usize::from(area.height).saturating_sub(10).max(3);
     let (title, body) = match modal {
         Modal::NewWorkspace {
             name_buffer,
@@ -530,7 +531,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
             notice,
             ..
         } => {
-            let list = workspace_tags::tag_items(known, tags, input)
+            let lines: Vec<String> = workspace_tags::tag_items(known, tags, input)
                 .iter()
                 .enumerate()
                 .map(|(i, it)| {
@@ -539,8 +540,8 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                     let new = if it.new { "  (new)" } else { "" };
                     format!("{cursor} [{mark}] {}{new}", it.name)
                 })
-                .collect::<Vec<_>>()
-                .join("\n");
+                .collect();
+            let list = window_lines(&lines, *selected, list_cap).join("\n");
             let notice = notice
                 .as_deref()
                 .map(|n| format!("\n{n}"))
@@ -562,12 +563,16 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
         } => {
             use crate::data::hide_rules::HideRule;
             let mut lines = Vec::new();
+            let mut focus = 0;
             let mut section: Option<bool> = None;
             for (i, (rule, n)) in rows.iter().enumerate() {
                 let is_tag = matches!(rule, HideRule::Tag(_));
                 if section != Some(is_tag) {
                     lines.push(if is_tag { "  tagged" } else { "  PR state" }.to_string());
                     section = Some(is_tag);
+                }
+                if i == *selected {
+                    focus = lines.len();
                 }
                 let cursor = if i == *selected { ">" } else { " " };
                 let mark = if rules.contains(rule) { "x" } else { " " };
@@ -578,7 +583,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                 format!(
                     "Hide {repo_name} workspaces that are:\n\n{}\n\n\
                      \u{2191}\u{2193} move   space toggle   Esc close",
-                    lines.join("\n")
+                    window_lines(&lines, focus, list_cap).join("\n")
                 ),
             )
         }
@@ -688,6 +693,8 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
     } else {
         theme.header_style()
     };
+    let want = u16::try_from(body.lines().count() + 2).unwrap_or(u16::MAX);
+    let rect = centered(area, 60, want.clamp(14, area.height.max(14)));
     let para = Paragraph::new(body)
         .block(
             Block::default()
@@ -696,7 +703,17 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                 .title_alignment(Alignment::Left),
         )
         .style(style);
+    f.render_widget(Clear, rect);
     f.render_widget(para, rect);
+}
+
+/// At most `cap` of `lines`, scrolled so `focus` stays visible.
+fn window_lines(lines: &[String], focus: usize, cap: usize) -> &[String] {
+    if lines.len() <= cap {
+        return lines;
+    }
+    let start = focus.saturating_sub(cap / 2).min(lines.len() - cap);
+    &lines[start..start + cap]
 }
 
 /// Truncate `s` to at most `max` characters, appending '…' (which counts
@@ -759,6 +776,41 @@ mod tests {
         let pr = text.find("PR state").expect("pr header");
         assert!(tagged < tag_row && tag_row < pr, "{text}");
         assert!(text.contains("[x] #parked"), "{text}");
+    }
+
+    #[test]
+    fn long_hide_rules_picker_keeps_footer_and_cursor_visible() {
+        use crate::data::hide_rules::{HideRule, HideRules};
+        let mut rows: Vec<_> = (0..20)
+            .map(|i| (HideRule::tag(&format!("t{i:02}")), 0))
+            .collect();
+        rows.extend(HideRule::PR_RULES.map(|r| (r, 0)));
+        let selected = 19;
+        let text = render_to_text(&Modal::HideRules {
+            repo_id: crate::data::store::RepoId(1),
+            repo_name: "wsx".into(),
+            rules: HideRules::default(),
+            rows,
+            selected,
+        });
+        assert!(text.contains("Esc close"), "{text}");
+        assert!(text.contains("> [ ] #t19"), "{text}");
+    }
+
+    #[test]
+    fn long_tag_editor_keeps_footer_and_cursor_visible() {
+        let known: Vec<String> = (0..20).map(|i| format!("t{i:02}")).collect();
+        let text = render_to_text(&Modal::WorkspaceTags {
+            workspace_id: crate::data::store::WorkspaceId(1),
+            name: "ws".into(),
+            known,
+            tags: Vec::new(),
+            input: String::new(),
+            selected: 19,
+            notice: None,
+        });
+        assert!(text.contains("Esc close"), "{text}");
+        assert!(text.contains("> [ ] t19"), "{text}");
     }
 
     fn render_to_text(modal: &Modal) -> String {

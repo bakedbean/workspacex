@@ -86,8 +86,14 @@ impl App {
         };
         self.dashboard.folded.insert(repo_id.0 as u64, false);
         // A hidden workspace isn't in `selectable` until its group expands;
-        // expand it and let the next draw's reconcile resolve the index.
-        if let Some(group) = self.hidden_group_of(ws_id) {
+        // expand it and let the next draw's reconcile resolve the index. An
+        // active filter bypasses hiding, so `selectable` already answers.
+        let filtering = self
+            .dashboard
+            .filter
+            .as_deref()
+            .is_some_and(|f| !f.is_empty());
+        if let Some(group) = self.hidden_group_of(ws_id).filter(|_| !filtering) {
             self.dashboard.expanded_hidden.insert(group);
             if !self.selectable.contains(&SelectionTarget::Workspace(ws_id)) {
                 self.dashboard.selection = Some(SelectionTarget::Workspace(ws_id));

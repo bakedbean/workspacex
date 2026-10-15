@@ -117,6 +117,19 @@ async fn select_by_name_reveals_hidden_group() {
     assert!(app.selectable.contains(&SelectionTarget::Workspace(ids[0])));
 }
 
+#[tokio::test]
+async fn select_by_name_refuses_hidden_workspace_the_filter_excludes() {
+    let (mut app, _, ids) = app_with_merged_hidden();
+    app.dashboard.filter = Some("second".into());
+    draw(&mut app);
+    assert!(!app.select_workspace_by_name("repo", "first"));
+    draw(&mut app);
+    assert_ne!(
+        app.selected_target(),
+        Some(SelectionTarget::Workspace(ids[0]))
+    );
+}
+
 async fn open_picker(app: &mut App) {
     draw(app);
     let repo = app.repos[0].id;

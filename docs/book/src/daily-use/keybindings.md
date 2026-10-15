@@ -16,7 +16,7 @@
 | `s`                               | Open repo settings modal for the selected repo (or the parent repo when a workspace is selected)             |
 | `Shift + F`                       | Choose which PR states to hide for the selected row's repo (persisted per repo). See [Hiding workspaces](hiding-workspaces.md) |
 | `enter` / `l` on a hidden-group row | Show that group's workspaces inline (this session only)                                                      |
-| `h` on a hidden-group row or a row inside it | Collapse the group back to its summary row                                                                   |
+| `h` on a hidden-group row or a row inside it | Collapse the group back to its summary row (on an already-collapsed summary row, fold the repo)              |
 | `d`                               | Archive the selected workspace (no-op on repo header)                                                        |
 | `o`                               | Cycle how workspaces are ordered inside a repo: by recency (default) or by status. Persisted.                |
 | `q`                               | Quit (kills all running sessions)                                                                            |

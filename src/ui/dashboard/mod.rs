@@ -494,23 +494,7 @@ pub fn visible_targets(
                             .map(|w| SelectionTarget::Workspace(*w)),
                     );
                     for (rule, rows) in &groups {
-                        out.push(SelectionTarget::HiddenGroup {
-                            repo: repo_id,
-                            rule: *rule,
-                        });
-                        if state.expanded_hidden.contains(&(repo_id, *rule)) {
-                            let mut nav: Vec<NavRow> =
-                                rows.iter().map(|w| NavRow::from(*w)).collect();
-                            order_workspaces(
-                                &mut nav,
-                                state.sort_mode,
-                                state.blocked_pin_max_age_secs,
-                            );
-                            out.extend(
-                                nav.into_iter()
-                                    .map(|n| SelectionTarget::Workspace(n.workspace_id)),
-                            );
-                        }
+                        push_group_targets(&mut out, repo_id, *rule, rows, state);
                     }
                 }
             }
@@ -540,15 +524,7 @@ pub fn visible_targets(
                 );
             }
             for (r, rule, rows) in all_hidden_groups(inputs, filter) {
-                out.push(SelectionTarget::HiddenGroup { repo: r.id, rule });
-                if state.expanded_hidden.contains(&(r.id, rule)) {
-                    let mut nav: Vec<NavRow> = rows.iter().map(|w| NavRow::from(*w)).collect();
-                    order_workspaces(&mut nav, state.sort_mode, state.blocked_pin_max_age_secs);
-                    out.extend(
-                        nav.into_iter()
-                            .map(|n| SelectionTarget::Workspace(n.workspace_id)),
-                    );
-                }
+                push_group_targets(&mut out, r.id, rule, &rows, state);
             }
         }
     }
@@ -748,6 +724,46 @@ pub(crate) fn hidden_by(w: &WorkspaceItem<'_>, filter: Option<&str>) -> Option<H
     })
 }
 
+/// A hidden group's summary view: its rows in display order, plus whether
+/// the group is expanded.
+fn hidden_group_view(
+    repo: RepoId,
+    rule: HideRule,
+    rows: &[&WorkspaceItem<'_>],
+    state: &DashboardState,
+) -> HiddenGroupView {
+    let mut workspaces: Vec<RowInputs> = rows.iter().map(|w| w.row.clone()).collect();
+    order_workspaces(
+        &mut workspaces,
+        state.sort_mode,
+        state.blocked_pin_max_age_secs,
+    );
+    HiddenGroupView {
+        rule,
+        expanded: state.expanded_hidden.contains(&(repo, rule)),
+        workspaces,
+    }
+}
+
+/// Push a group's row target, then its ordered workspaces when expanded.
+fn push_group_targets(
+    out: &mut Vec<SelectionTarget>,
+    repo: RepoId,
+    rule: HideRule,
+    rows: &[&WorkspaceItem<'_>],
+    state: &DashboardState,
+) {
+    out.push(SelectionTarget::HiddenGroup { repo, rule });
+    if state.expanded_hidden.contains(&(repo, rule)) {
+        let mut nav: Vec<NavRow> = rows.iter().map(|w| NavRow::from(*w)).collect();
+        order_workspaces(&mut nav, state.sort_mode, state.blocked_pin_max_age_secs);
+        out.extend(
+            nav.into_iter()
+                .map(|n| SelectionTarget::Workspace(n.workspace_id)),
+        );
+    }
+}
+
 /// `repo`'s hidden rows grouped by rule, in the repo's rule order. Empty
 /// groups are omitted.
 fn hidden_groups<'w, 'a>(
@@ -856,20 +872,7 @@ fn render_by_repo<'a>(
             );
             let hidden: Vec<HiddenGroupView> = hidden_groups(r, &inputs.workspaces, filter)
                 .into_iter()
-                .map(|(rule, rows)| {
-                    let mut workspaces: Vec<RowInputs> =
-                        rows.iter().map(|w| w.row.clone()).collect();
-                    order_workspaces(
-                        &mut workspaces,
-                        state.sort_mode,
-                        state.blocked_pin_max_age_secs,
-                    );
-                    HiddenGroupView {
-                        rule,
-                        expanded: state.expanded_hidden.contains(&(r.id, rule)),
-                        workspaces,
-                    }
-                })
+                .map(|(rule, rows)| hidden_group_view(r.id, rule, &rows, state))
                 .collect();
             let counts = StatusCounts::from_iter(workspaces.iter().map(|w| w.status));
             let repo_id_u64 = r.id.0 as u64;
@@ -1034,18 +1037,11 @@ fn render_by_attention<'a>(
     data.hidden = all_hidden_groups(inputs, filter)
         .into_iter()
         .map(|(r, rule, rows)| {
-            let mut workspaces: Vec<RowInputs> = rows.iter().map(|w| w.row.clone()).collect();
-            order_workspaces(
-                &mut workspaces,
-                state.sort_mode,
-                state.blocked_pin_max_age_secs,
-            );
-            let view = HiddenGroupView {
-                rule,
-                expanded: state.expanded_hidden.contains(&(r.id, rule)),
-                workspaces,
-            };
-            (r.name.clone(), r.id, view)
+            (
+                r.name.clone(),
+                r.id,
+                hidden_group_view(r.id, rule, &rows, state),
+            )
         })
         .collect();
 

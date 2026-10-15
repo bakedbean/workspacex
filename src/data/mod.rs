@@ -16,6 +16,7 @@ pub mod setup;
 pub mod setup_log;
 pub mod share_requests;
 pub mod store;
+pub mod tags;
 pub mod workspace;
 
 // Internal `impl Store` blocks split out of store.rs by concern; no public

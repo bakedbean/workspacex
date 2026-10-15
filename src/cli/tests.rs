@@ -2049,6 +2049,7 @@ fn parent_ws(yolo: bool, agent: AgentKind) -> crate::data::store::Workspace {
         agent,
         shared: false,
         name_color: None,
+        tags: Vec::new(),
     }
 }
 

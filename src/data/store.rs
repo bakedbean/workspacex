@@ -147,6 +147,8 @@ pub struct Workspace {
     /// Custom xterm-256 palette index for this workspace's name on the
     /// dashboard row. `None` = the theme's default styling.
     pub name_color: Option<u8>,
+    /// Sorted; names satisfy `data::tags::normalize_tag`.
+    pub tags: Vec<std::sync::Arc<str>>,
 }
 
 #[derive(Debug, Clone)]
@@ -301,6 +303,31 @@ impl Store {
         Ok(())
     }
 
+    pub fn add_workspace_tag(&self, id: WorkspaceId, tag: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO workspace_tags (workspace_id, tag) VALUES (?1, ?2)",
+            rusqlite::params![id.0, tag],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_workspace_tag(&self, id: WorkspaceId, tag: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM workspace_tags WHERE workspace_id = ?1 AND tag = ?2",
+            rusqlite::params![id.0, tag],
+        )?;
+        Ok(())
+    }
+
+    /// Every tag in use, sorted, with how many workspaces carry it.
+    pub fn all_tags(&self) -> Result<Vec<(String, usize)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT tag, count(*) FROM workspace_tags GROUP BY tag ORDER BY tag")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as usize)))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     pub fn set_workspace_state(&self, id: WorkspaceId, state: WorkspaceState) -> Result<()> {
         self.conn.execute(
             "UPDATE workspaces SET state = ?1 WHERE id = ?2",
@@ -318,10 +345,9 @@ impl Store {
     }
 
     pub fn workspaces(&self, repo_id: RepoId) -> Result<Vec<Workspace>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent, shared, name_color
-             FROM workspaces WHERE repo_id = ?1 ORDER BY id",
-        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {WORKSPACE_COLS} FROM workspaces WHERE repo_id = ?1 ORDER BY id"
+        ))?;
         let rows = stmt.query_map([repo_id.0], row_to_workspace)?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
@@ -366,8 +392,7 @@ impl Store {
         let r = self
             .conn
             .query_row(
-                "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent, shared, name_color
-                 FROM workspaces WHERE id = ?1",
+                &format!("SELECT {WORKSPACE_COLS} FROM workspaces WHERE id = ?1"),
                 [id.0],
                 row_to_workspace,
             )
@@ -377,10 +402,9 @@ impl Store {
 
     /// All workspaces across every repo (used by `resolve_current_workspace`).
     pub fn all_workspaces(&self) -> Result<Vec<Workspace>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, repo_id, name, branch, worktree_path, state, setup_status, created_at, yolo, agent, shared, name_color
-             FROM workspaces ORDER BY id",
-        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {WORKSPACE_COLS} FROM workspaces ORDER BY id"
+        ))?;
         let rows = stmt.query_map([], row_to_workspace)?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
@@ -404,6 +428,11 @@ pub(crate) fn now_ms() -> i64 {
     crate::util::time::now_ms()
 }
 
+/// Column 12 is the comma-joined tag list; tags can't contain commas.
+const WORKSPACE_COLS: &str = "id, repo_id, name, branch, worktree_path, state, setup_status, \
+     created_at, yolo, agent, shared, name_color, \
+     (SELECT group_concat(tag, ',') FROM workspace_tags t WHERE t.workspace_id = workspaces.id)";
+
 fn row_to_workspace(r: &rusqlite::Row) -> rusqlite::Result<Workspace> {
     Ok(Workspace {
         id: WorkspaceId(r.get(0)?),
@@ -423,6 +452,17 @@ fn row_to_workspace(r: &rusqlite::Row) -> rusqlite::Result<Workspace> {
         name_color: r
             .get::<_, Option<i64>>(11)?
             .and_then(|v| u8::try_from(v).ok()),
+        tags: {
+            let mut v: Vec<std::sync::Arc<str>> = r
+                .get::<_, Option<String>>(12)?
+                .unwrap_or_default()
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(std::sync::Arc::from)
+                .collect();
+            v.sort();
+            v
+        },
     })
 }
 
@@ -1636,7 +1676,7 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 29);
+        assert_eq!(v, 30);
     }
 
     #[test]
@@ -1972,5 +2012,93 @@ mod tests {
             ],
             "Running becomes Cancelled; every other status is untouched"
         );
+    }
+
+    fn ws_in(store: &Store, repo: RepoId, name: &str) -> WorkspaceId {
+        let path = format!("/tmp/tags-{name}");
+        store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name,
+                branch: name,
+                worktree_path: Path::new(&path),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap()
+    }
+
+    fn tag_names(w: &Workspace) -> Vec<String> {
+        w.tags.iter().map(|t| t.to_string()).collect()
+    }
+
+    #[test]
+    fn workspace_tags_load_sorted_and_add_is_idempotent() {
+        let store = Store::open_in_memory().unwrap();
+        let r = store.add_repo(Path::new("/r"), "r", "").unwrap();
+        let w = ws_in(&store, r, "a");
+        store.add_workspace_tag(w, "spike").unwrap();
+        store.add_workspace_tag(w, "parked").unwrap();
+        store.add_workspace_tag(w, "spike").unwrap();
+        let ws = store.workspace_by_id(w).unwrap().unwrap();
+        assert_eq!(tag_names(&ws), ["parked", "spike"]);
+        assert_eq!(
+            tag_names(&store.workspaces(r).unwrap()[0]),
+            ["parked", "spike"]
+        );
+        assert_eq!(
+            tag_names(&store.all_workspaces().unwrap()[0]),
+            ["parked", "spike"]
+        );
+    }
+
+    #[test]
+    fn remove_workspace_tag_is_idempotent() {
+        let store = Store::open_in_memory().unwrap();
+        let r = store.add_repo(Path::new("/r"), "r", "").unwrap();
+        let w = ws_in(&store, r, "a");
+        store.add_workspace_tag(w, "spike").unwrap();
+        store.remove_workspace_tag(w, "spike").unwrap();
+        store.remove_workspace_tag(w, "spike").unwrap();
+        assert!(store.workspace_by_id(w).unwrap().unwrap().tags.is_empty());
+    }
+
+    #[test]
+    fn all_tags_are_distinct_sorted_and_counted() {
+        let store = Store::open_in_memory().unwrap();
+        let r1 = store.add_repo(Path::new("/r1"), "r1", "").unwrap();
+        let r2 = store.add_repo(Path::new("/r2"), "r2", "").unwrap();
+        let a = ws_in(&store, r1, "a");
+        let b = ws_in(&store, r2, "b");
+        store.add_workspace_tag(a, "spike").unwrap();
+        store.add_workspace_tag(b, "spike").unwrap();
+        store.add_workspace_tag(b, "parked").unwrap();
+        assert_eq!(
+            store.all_tags().unwrap(),
+            vec![("parked".to_string(), 1), ("spike".to_string(), 2)]
+        );
+    }
+
+    #[test]
+    fn tags_cascade_on_workspace_delete() {
+        let store = Store::open_in_memory().unwrap();
+        let r = store.add_repo(Path::new("/r"), "r", "").unwrap();
+        let w = ws_in(&store, r, "a");
+        store.add_workspace_tag(w, "spike").unwrap();
+        store.delete_workspace(w).unwrap();
+        assert!(store.all_tags().unwrap().is_empty());
+    }
+
+    #[test]
+    fn v30_migration_reruns_cleanly() {
+        let store = Store::open_in_memory().unwrap();
+        store.migrate().unwrap();
+        store.migrate().unwrap();
+        let v: i64 = store
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert!(v >= 30, "{v}");
     }
 }

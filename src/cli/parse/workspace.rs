@@ -40,7 +40,7 @@ pub(in crate::cli) fn parse_workspace(it: &mut Args) -> Result<CliAction> {
             let repo = it.next().ok_or_else(|| Error::Usage {
                 group: None,
                 msg:
-                    "workspace create <repo> [--name <slug>] [--yolo] [--shared] [--agent claude|pi|hermes|codex|omp] [--prompt <text>]"
+                    "workspace create <repo> [--name <slug>] [--yolo] [--shared] [--start [--json]] [--agent claude|pi|hermes|codex|omp] [--prompt <text>]"
                         .into(),
             })?;
             let mut name: Option<String> = None;
@@ -48,6 +48,8 @@ pub(in crate::cli) fn parse_workspace(it: &mut Args) -> Result<CliAction> {
             let mut shared = false;
             let mut agent: Option<String> = None;
             let mut prompt: Option<String> = None;
+            let mut start = false;
+            let mut json = false;
             while let Some(arg) = it.next() {
                 match arg.as_str() {
                     "--name" => {
@@ -64,6 +66,8 @@ pub(in crate::cli) fn parse_workspace(it: &mut Args) -> Result<CliAction> {
                     }
                     "--yolo" => yolo = true,
                     "--shared" => shared = true,
+                    "--start" => start = true,
+                    "--json" => json = true,
                     "--agent" => {
                         agent =
                             Some(
@@ -101,13 +105,24 @@ pub(in crate::cli) fn parse_workspace(it: &mut Args) -> Result<CliAction> {
                     msg: format!("--agent must be one of [{valid}], got '{a}'"),
                 });
             }
+            // `--start` is what a remote host's picker runs: sharing is the
+            // only way the dashboard can start a workspace for someone else
+            // to attach to, so it implies `--shared` rather than refusing.
+            if json && !start {
+                return Err(Error::Usage {
+                    group: None,
+                    msg: "--json needs --start".into(),
+                });
+            }
             Ok(CliAction::WorkspaceCreate {
                 repo,
                 name,
                 yolo,
-                shared,
+                shared: shared || start,
                 agent,
                 prompt,
+                start,
+                json,
             })
         }
         Some("list") => {

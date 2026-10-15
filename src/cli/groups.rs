@@ -22,7 +22,7 @@ pub static GROUPS: &[GroupInfo] = &[
         blurb: "Create, list, rename, and archive workspaces",
         commands: &[
             CmdInfo {
-                usage: "create <repo> [--name <slug>] [--yolo] [--shared] [--agent <kind>] [--prompt <text>]",
+                usage: "create <repo> [--name <slug>] [--yolo] [--shared] [--start [--json]] [--agent <kind>] [--prompt <text>]",
                 blurb: "Create a workspace (branch + worktree), optionally seeding its agent",
             },
             CmdInfo {

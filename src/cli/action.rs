@@ -145,6 +145,12 @@ pub enum CliAction {
         /// Seed the new workspace's primary agent with this prompt, as if
         /// `wsx agent send` had been run against it immediately after.
         prompt: Option<String>,
+        /// Have the running dashboard start the (shared) workspace's agents
+        /// inside tmux, and wait until their sessions are live — what
+        /// `workspace share --restart` does for an existing workspace.
+        start: bool,
+        /// With `start`: print the workspace's record as JSON.
+        json: bool,
     },
     WorkspaceList {
         repo: Option<String>,

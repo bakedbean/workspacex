@@ -1688,6 +1688,8 @@ fn parses_workspace_create_minimal() {
             shared,
             agent: None,
             prompt,
+            start: false,
+            json: false,
         } => {
             assert_eq!(repo, "backend");
             assert!(name.is_none());
@@ -1718,6 +1720,7 @@ fn parses_workspace_create_with_name_and_yolo() {
             shared,
             agent: None,
             prompt: None,
+            ..
         } => {
             assert_eq!(repo, "backend");
             assert_eq!(name.as_deref(), Some("add-widgets"));
@@ -1774,6 +1777,7 @@ fn parses_workspace_create_prompt_alongside_other_flags() {
             shared,
             agent,
             prompt,
+            ..
         } => {
             assert_eq!(repo, "backend");
             assert_eq!(name.as_deref(), Some("flaky-tests"));
@@ -1803,6 +1807,26 @@ fn parses_workspace_create_with_shared() {
         }
         other => panic!("wrong action: {other:?}"),
     }
+}
+
+/// `--start` is what a remote host's picker runs; it implies `--shared`,
+/// since only a shared workspace can be started for someone to attach to.
+#[test]
+fn parses_workspace_create_start_implies_shared() {
+    match parse(&["workspace", "create", "myrepo", "--start", "--json"]).unwrap() {
+        CliAction::WorkspaceCreate {
+            shared,
+            start,
+            json,
+            ..
+        } => assert!(shared && start && json),
+        other => panic!("wrong action: {other:?}"),
+    }
+}
+
+#[test]
+fn parses_workspace_create_rejects_json_without_start() {
+    assert!(parse(&["workspace", "create", "myrepo", "--shared", "--json"]).is_err());
 }
 
 #[test]
@@ -1919,6 +1943,8 @@ async fn workspace_create_with_prompt_queues_it_to_the_new_primary() {
             shared: false,
             agent: None,
             prompt: Some("fix the flaky tests".to_string()),
+            start: false,
+            json: false,
         },
         &dirs,
     )
@@ -1978,6 +2004,8 @@ async fn workspace_create_without_prompt_queues_nothing() {
             shared: false,
             agent: None,
             prompt: None,
+            start: false,
+            json: false,
         },
         &dirs,
     )

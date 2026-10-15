@@ -480,12 +480,21 @@ pub(crate) fn force_share_workspace(
     app: &mut App,
     ws_id: crate::data::store::WorkspaceId,
 ) -> Result<()> {
-    let ws = app
-        .workspaces
-        .iter()
-        .find(|(_, w)| w.id == ws_id)
-        .map(|(_, w)| w.clone())
-        .ok_or_else(|| crate::error::Error::UserInput("workspace not found".into()))?;
+    let find = |app: &App| {
+        app.workspaces
+            .iter()
+            .find(|(_, w)| w.id == ws_id)
+            .map(|(_, w)| w.clone())
+    };
+    // `workspace create --start` asks for a workspace this dashboard may not
+    // have loaded yet: reload once before giving up on it.
+    let ws = match find(app) {
+        Some(ws) => ws,
+        None => {
+            app.refresh()?;
+            find(app).ok_or_else(|| crate::error::Error::UserInput("workspace not found".into()))?
+        }
+    };
     if attach_is_blocked(app, ws_id) {
         return Err(crate::error::Error::UserInput(
             "workspace is being archived".into(),

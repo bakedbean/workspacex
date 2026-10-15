@@ -220,6 +220,10 @@ impl Store {
             self.conn().execute_batch(SCHEMA_V28_SHARE_REQUESTS)?;
             self.conn().execute("PRAGMA user_version = 28", [])?;
         }
+        if v < 29 {
+            self.add_column_if_missing("repos", "hide_rules", "hide_rules TEXT")?;
+            self.conn().execute("PRAGMA user_version = 29", [])?;
+        }
         Ok(())
     }
 

@@ -118,7 +118,7 @@ impl Store {
             "SELECT id, name, path, branch_prefix, custom_instructions, \
                     setup_script, archive_script, pinned_commands, \
                     related_repos, base_branch, detail_bar_config, \
-                    created_at, sort_order \
+                    created_at, sort_order, hide_rules \
              FROM repos ORDER BY sort_order, id",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -136,6 +136,9 @@ impl Store {
                 detail_bar_config: r.get(10)?,
                 created_at: r.get(11)?,
                 sort_order: r.get(12)?,
+                hide_rules: crate::data::hide_rules::HideRules::parse(
+                    r.get::<_, Option<String>>(13)?.as_deref(),
+                ),
             })
         })?;
         Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -321,6 +324,18 @@ impl Store {
         )?;
         Ok(())
     }
+
+    pub fn set_repo_hide_rules(
+        &self,
+        id: RepoId,
+        rules: &crate::data::hide_rules::HideRules,
+    ) -> Result<()> {
+        self.conn().execute(
+            "UPDATE repos SET hide_rules = ?1 WHERE id = ?2",
+            rusqlite::params![rules.serialize(), id.0],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -389,6 +404,7 @@ mod settings_tests {
             related_repos: None,
             base_branch: None,
             detail_bar_config: None,
+            hide_rules: Default::default(),
             created_at: 0,
             sort_order: 0,
         }

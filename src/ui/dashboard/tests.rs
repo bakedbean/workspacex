@@ -27,6 +27,7 @@ fn fake_repo(id: i64, name: &str, path: &str) -> Repo {
         related_repos: None,
         base_branch: None,
         detail_bar_config: None,
+        hide_rules: Default::default(),
         created_at: 0,
         sort_order: 0,
     }

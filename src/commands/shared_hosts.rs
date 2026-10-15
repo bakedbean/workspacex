@@ -81,13 +81,13 @@ pub struct SharedListing {
 /// resolves wsx on the host. Non-zero exit maps to a user-facing error
 /// carrying the captured stderr (spec: failure handling).
 pub async fn fetch_shared_list(dest: &str) -> crate::error::Result<SharedListing> {
-    match run_remote_wsx(dest, "shared list --json --all").await {
+    match run_remote_wsx(dest, "shared list --json --all", REMOTE_TIMEOUT).await {
         Ok(stdout) => Ok(SharedListing {
             records: parse_shared_list_output(&stdout)?,
             can_share: true,
         }),
         Err(e) if e.to_string().contains("unknown arg: --all") => {
-            let stdout = run_remote_wsx(dest, "shared list --json").await?;
+            let stdout = run_remote_wsx(dest, "shared list --json", REMOTE_TIMEOUT).await?;
             Ok(SharedListing {
                 records: parse_shared_list_output(&stdout)?,
                 can_share: false,
@@ -117,11 +117,82 @@ pub async fn share_remote(
     let stdout = run_remote_wsx(
         dest,
         &format!("workspace share {repo} {workspace} --restart --json"),
+        REMOTE_TIMEOUT,
     )
     .await?;
     serde_json::from_str(&stdout).map_err(|e| {
         crate::error::Error::UserInput(format!("bad share-result JSON from host: {e}"))
     })
+}
+
+/// Run `wsx repo list --json` on the host: the repos a workspace can be
+/// created in there, by name.
+pub async fn fetch_remote_repos(dest: &str) -> crate::error::Result<Vec<String>> {
+    #[derive(serde::Deserialize)]
+    struct RepoRecord {
+        name: String,
+    }
+    let stdout = run_remote_wsx(dest, "repo list --json", REMOTE_TIMEOUT).await?;
+    // An older host ignores `--json` and prints its plain table instead.
+    let repos: Vec<RepoRecord> = serde_json::from_str(&stdout).map_err(|_| too_old(dest))?;
+    Ok(repos.into_iter().map(|r| r.name).collect())
+}
+
+/// What to create on the host with `create_remote`. `name: None` lets the
+/// host generate a slug; `agent: None` takes the host's `coding_agent`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteCreate {
+    pub repo: String,
+    pub name: Option<String>,
+    pub agent: Option<crate::pty::session::AgentKind>,
+    pub yolo: bool,
+}
+
+/// Run `wsx workspace create <repo> … --start --json` on the host: it
+/// creates a shared workspace, its dashboard starts the agents inside tmux,
+/// and the command returns once their sessions are live. Returns the
+/// workspace's record, carrying the session names to attach to.
+pub async fn create_remote(
+    dest: &str,
+    req: &RemoteCreate,
+) -> crate::error::Result<crate::commands::shared::SharedWorkspaceRecord> {
+    for name in std::iter::once(&req.repo).chain(&req.name) {
+        if !shell_safe(name) {
+            return Err(crate::error::Error::UserInput(format!(
+                "can't create {name:?} remotely: the name has characters that \
+                 would need shell quoting"
+            )));
+        }
+    }
+    let mut args = format!("workspace create {}", req.repo);
+    if let Some(name) = &req.name {
+        args.push_str(&format!(" --name {name}"));
+    }
+    if let Some(agent) = req.agent {
+        args.push_str(&format!(" --agent {}", agent.display_name()));
+    }
+    if req.yolo {
+        args.push_str(" --yolo");
+    }
+    args.push_str(" --start --json");
+    let stdout = run_remote_wsx(dest, &args, CREATE_TIMEOUT)
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("unknown arg: --start") {
+                too_old(dest)
+            } else {
+                e
+            }
+        })?;
+    serde_json::from_str(&stdout).map_err(|e| {
+        crate::error::Error::UserInput(format!("bad create-result JSON from host: {e}"))
+    })
+}
+
+fn too_old(dest: &str) -> crate::error::Error {
+    crate::error::Error::UserInput(format!(
+        "the wsx on {dest} is too old to create workspaces remotely; upgrade it there"
+    ))
 }
 
 /// Names travel inside the nested `sh -lc '…'` quoting, so only characters
@@ -138,6 +209,10 @@ fn shell_safe(s: &str) -> bool {
 /// (`ShareWaits`, ~45s) plus slack for the connection and `gh` enrichment.
 const REMOTE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 
+/// A create also runs the repo's setup script on the host before the
+/// agents start, which can take minutes (dependency installs, builds).
+const CREATE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
 /// Run `ssh <dest> "sh -lc 'wsx <args>'"` and return its stdout.
 ///
 /// The remote command is ONE pre-quoted argument, not several words, because
@@ -150,7 +225,11 @@ const REMOTE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 /// `sh -lc 'wsx …'` as a single argument makes the quoting survive the join.
 /// `args` must therefore hold no single quotes (callers pass literals and
 /// `shell_safe` names).
-async fn run_remote_wsx(dest: &str, args: &str) -> crate::error::Result<String> {
+async fn run_remote_wsx(
+    dest: &str,
+    args: &str,
+    timeout: std::time::Duration,
+) -> crate::error::Result<String> {
     let run = tokio::process::Command::new(ssh_bin())
         // `-o BatchMode=yes` keeps this background call off /dev/tty: a missing
         // key or unknown host fails fast to stderr (→ the error modal) instead
@@ -171,12 +250,12 @@ async fn run_remote_wsx(dest: &str, args: &str) -> crate::error::Result<String> 
         .output();
     // `ConnectTimeout` only bounds the connect; a host that hangs after it
     // would otherwise hold the loading modal forever.
-    let out = tokio::time::timeout(REMOTE_TIMEOUT, run)
+    let out = tokio::time::timeout(timeout, run)
         .await
         .map_err(|_| {
             crate::error::Error::UserInput(format!(
                 "ssh {dest}: no answer within {}s",
-                REMOTE_TIMEOUT.as_secs()
+                timeout.as_secs()
             ))
         })?
         .map_err(|e| crate::error::Error::UserInput(format!("ssh spawn failed: {e}")))?;
@@ -373,6 +452,108 @@ mod tests {
             Some("sh -lc 'wsx workspace share r w --restart --json'"),
             "{argv}"
         );
+    }
+
+    #[tokio::test]
+    async fn create_remote_runs_create_start_and_parses_the_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        let log = dir.path().join("args.log");
+        let ssh = fake_ssh(
+            dir.path(),
+            "create.sh",
+            &format!(
+                "printf '%s\\n' \"$@\" > {}\n\
+                 echo '{{\"repo\":\"r\",\"workspace\":\"new\",\"branch\":\"b\",\"worktree_path\":\"/x\",\"shared\":true,\"agents\":[{{\"label\":\"claude\",\"agent\":\"claude\",\"tmux_session\":\"wsx-r-new\",\"alive\":true}}]}}'\n",
+                log.display()
+            ),
+        );
+        env.set("WSX_SSH_BIN", ssh.to_str().unwrap());
+
+        let req = RemoteCreate {
+            repo: "r".into(),
+            name: Some("new".into()),
+            agent: Some(crate::pty::session::AgentKind::Codex),
+            yolo: true,
+        };
+        let rec = create_remote("mini", &req).await.unwrap();
+
+        assert_eq!(rec.agents[0].tmux_session.as_deref(), Some("wsx-r-new"));
+        let argv = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            argv.lines().last(),
+            Some("sh -lc 'wsx workspace create r --name new --agent codex --yolo --start --json'"),
+            "{argv}"
+        );
+
+        // No name or agent: the host picks both.
+        let req = RemoteCreate {
+            repo: "r".into(),
+            name: None,
+            agent: None,
+            yolo: false,
+        };
+        create_remote("mini", &req).await.unwrap();
+        let argv = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            argv.lines().last(),
+            Some("sh -lc 'wsx workspace create r --start --json'"),
+            "{argv}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_remote_names_an_old_host_and_refuses_unsafe_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        let ssh = fake_ssh(
+            dir.path(),
+            "old.sh",
+            "echo 'error: unknown arg: --start' >&2; exit 2\n",
+        );
+        env.set("WSX_SSH_BIN", ssh.to_str().unwrap());
+        let req = RemoteCreate {
+            repo: "r".into(),
+            name: Some("w".into()),
+            agent: None,
+            yolo: false,
+        };
+        let err = create_remote("mini", &req).await.unwrap_err().to_string();
+        assert!(err.contains("too old"), "{err}");
+
+        env.set("WSX_SSH_BIN", "/nonexistent/ssh-must-not-run");
+        for (repo, name) in [("r;rm", None), ("r", Some("a b")), ("r", Some("-w"))] {
+            let req = RemoteCreate {
+                repo: repo.into(),
+                name: name.map(Into::into),
+                agent: None,
+                yolo: false,
+            };
+            let err = create_remote("mini", &req).await.unwrap_err().to_string();
+            assert!(err.contains("shell quoting"), "{repo}/{name:?}: {err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_remote_repos_reads_names_and_names_an_old_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = crate::test_support::EnvGuard::new();
+        let ssh = fake_ssh(
+            dir.path(),
+            "repos.sh",
+            "echo '[{\"name\":\"backend\",\"path\":\"/b\",\"branch_prefix\":\"\"},{\"name\":\"web\",\"path\":\"/w\",\"branch_prefix\":\"x\"}]'\n",
+        );
+        env.set("WSX_SSH_BIN", ssh.to_str().unwrap());
+        assert_eq!(
+            fetch_remote_repos("mini").await.unwrap(),
+            ["backend", "web"]
+        );
+
+        // An older host ignores `--json` and prints its table.
+        let ssh = fake_ssh(dir.path(), "old.sh", "echo 'backend              /b'\n");
+        env.set("WSX_SSH_BIN", ssh.to_str().unwrap());
+        let err = fetch_remote_repos("mini").await.unwrap_err().to_string();
+        assert!(err.contains("too old"), "{err}");
     }
 
     #[tokio::test]

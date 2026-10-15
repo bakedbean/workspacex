@@ -66,6 +66,18 @@ async fn enter_expands_and_h_collapses_a_hidden_group() {
 }
 
 #[tokio::test]
+async fn h_on_collapsed_group_row_folds_the_repo() {
+    let (mut app, repo, _) = app_with_merged_hidden();
+    draw(&mut app);
+    select(
+        &mut app,
+        SelectionTarget::HiddenGroup { repo, rule: MERGED },
+    );
+    press(&mut app, 'h', KeyModifiers::NONE).await;
+    assert_eq!(app.dashboard.folded.get(&(repo.0 as u64)), Some(&true));
+}
+
+#[tokio::test]
 async fn l_expands_a_hidden_group() {
     let (mut app, repo, _) = app_with_merged_hidden();
     draw(&mut app);

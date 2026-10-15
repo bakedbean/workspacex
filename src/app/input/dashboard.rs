@@ -387,7 +387,10 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             app.dashboard.reply_draft.clear();
         }
         (KeyCode::Char('h'), _) => match app.selected_target() {
-            Some(SelectionTarget::HiddenGroup { repo, rule }) => {
+            // A collapsed group row falls through to folding the repo.
+            Some(SelectionTarget::HiddenGroup { repo, rule })
+                if app.dashboard.expanded_hidden.contains(&(repo, rule)) =>
+            {
                 app.dashboard.expanded_hidden.remove(&(repo, rule));
             }
             Some(SelectionTarget::Workspace(id))

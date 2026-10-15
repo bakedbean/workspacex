@@ -333,6 +333,8 @@ pub fn render_updates_panel(
     if lines.is_empty() {
         let msg = if view.active_needle().is_some() {
             "(no matching workspaces)"
+        } else if !inputs.items.is_empty() {
+            "(all workspaces hidden · / to search)"
         } else {
             "(no workspaces)"
         };
@@ -2043,6 +2045,19 @@ mod render_tests {
         statuses: &HashMap<WorkspaceId, Status>,
         tick: u32,
     ) -> String {
+        draw_lifecycle(repos, ws, filter, group_mode, statuses, tick, None)
+    }
+
+    /// `draw_at_tick` with every row's PR lifecycle forced to `lifecycle`.
+    fn draw_lifecycle(
+        repos: &[Repo],
+        ws: &[(RepoId, Workspace)],
+        filter: Option<&str>,
+        group_mode: GroupMode,
+        statuses: &HashMap<WorkspaceId, Status>,
+        tick: u32,
+        lifecycle: Option<crate::git::forge::BranchLifecycle>,
+    ) -> String {
         let theme = Theme::ansi();
         let events = HashMap::new();
         let attention = HashSet::new();
@@ -2052,12 +2067,14 @@ mod render_tests {
                 .iter()
                 .map(|(rid, w)| {
                     let repo = repos.iter().find(|r| r.id == *rid).expect("repo for ws");
-                    item(
+                    let mut it = item(
                         repo,
                         w,
                         statuses.get(&w.id).copied().unwrap_or(Status::Idle),
                         None,
-                    )
+                    );
+                    it.row.lifecycle = lifecycle;
+                    it
                 })
                 .collect(),
             workspaces: ws,
@@ -2132,6 +2149,26 @@ mod render_tests {
         let ws = vec![fixture_ws(1, 1, "one")];
         assert!(draw(&repos, &ws, Some("zzz")).contains("(no matching workspaces)"));
         assert!(draw(&repos, &[], None).contains("(no workspaces)"));
+    }
+
+    /// Hiding that empties the panel reads differently from no workspaces
+    /// or a filter miss.
+    #[test]
+    fn all_rows_hidden_shows_its_own_empty_message() {
+        use crate::git::forge::BranchLifecycle;
+        let mut repo = fixture_repo_named(1, "alpha-repo");
+        repo.hide_rules = crate::data::hide_rules::HideRules::parse(Some("pr:merged"));
+        let ws = vec![fixture_ws(1, 1, "one")];
+        let out = draw_lifecycle(
+            &[repo],
+            &ws,
+            None,
+            GroupMode::Repo,
+            &HashMap::new(),
+            0,
+            Some(BranchLifecycle::PrMerged),
+        );
+        assert!(out.contains("(all workspaces hidden"), "{out}");
     }
 
     /// Attention grouping draws the dashboard's section headers in place

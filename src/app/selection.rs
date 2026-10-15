@@ -33,9 +33,6 @@ impl App {
         self.dashboard.selection = self.selectable.get(idx).copied();
     }
 
-    /// Select a workspace by repo name + workspace slug, unfolding its repo.
-    /// Returns false if the pair doesn't exist or isn't currently selectable.
-    /// Used by automation surfaces (waybar jump, `wsx --select`).
     /// The facts hide rules test for `ws`, from the app's caches.
     pub(crate) fn hide_subject(
         &self,
@@ -65,6 +62,10 @@ impl App {
             .map(|rule| (rid, rule))
     }
 
+    /// Select a workspace by repo name + workspace slug, unfolding its repo.
+    /// Returns false if the pair doesn't exist. A hidden workspace's group is
+    /// expanded and the selection resolves on the next draw.
+    /// Used by automation surfaces (waybar jump, `wsx --select`).
     pub fn select_workspace_by_name(&mut self, repo_name: &str, slug: &str) -> bool {
         let Some(repo_id) = self
             .repos

@@ -13,7 +13,7 @@ stays visible if any of these is true:
 - it has commits ahead of its base branch, or uncommitted changes;
 - an agent session is running, or its agent reports working, waiting, or
   blocked;
-- it was active in the last 3 days.
+- its agent was active in the last 3 days.
 
 The other states hide every matching workspace.
 

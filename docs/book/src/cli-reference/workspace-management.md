@@ -1,8 +1,10 @@
 ```
-wsx workspace create <repo> [--name <slug>] [--yolo] [--shared] [--agent claude|pi|hermes|codex|omp] [--prompt <text>]
+wsx workspace create <repo> [--name <slug>] [--yolo] [--shared] [--start [--json]] [--agent claude|pi|hermes|codex|omp] [--prompt <text>]
 ```
 
 Creates a workspace in `<repo>`, equivalent to the dashboard's `[n]` keybind. `<slug>` is a kebab-case workspace name; the resulting git branch is `<branch_prefix>/<slug>`. A name git won't accept in that branch (one with a space, `~ ^ : ? * [ \`, or `..`, for example) is refused before anything is created, here and in the `[n]` modal, and so is one whose branch already exists or clashes with an existing branch's path (`wsx/foo` blocks `wsx/foo/bar`). When `--name` is omitted, an adjective-noun slug like `merry-birch` is generated. `--yolo` skips the permission prompts in the spawned agent session. `--shared` runs the workspace's agents under tmux (see [Shared workspaces](../integrations/shared-workspaces.md)). `--agent` overrides the `coding_agent` setting (see [Coding agents](../configuration/coding-agents.md)) for this workspace; when omitted, the setting applies (claude unless configured otherwise).
+
+`--start` also has the dashboard running on this machine start the new workspace's agents inside tmux, then waits until their sessions are live and prints the session names to attach to. It implies `--shared`, and works like `wsx workspace share --restart` on the new workspace: without a running dashboard the command fails once the workspace exists, leaving it created but stopped. `--json` (with `--start`) prints the workspace's record instead and moves the human-readable report to stderr. This is what another machine's host picker runs to create a workspace there (see [Shared workspaces](../integrations/shared-workspaces.md#browsing-another-machine)).
 
 `--prompt` seeds the new workspace's agent with a starting task, equivalent to running [`wsx agent send`](../configuration/multi-agent-workspaces.md) against it immediately afterward. Like any queued message it is delivered by the dashboard, which spawns the agent on demand — so a workspace created with `--prompt` while no dashboard is running stays idle, and the command says so on stderr.
 

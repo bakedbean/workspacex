@@ -28,7 +28,7 @@ wsx workspace list --json      # + status, recap, agents, cached PR per workspac
 ## CLI surface
 
 ```
-wsx workspace create <repo> [--name <slug>] [--yolo] [--shared] [--agent claude|pi|hermes|codex|omp] [--prompt <text>]
+wsx workspace create <repo> [--name <slug>] [--yolo] [--shared] [--start [--json]] [--agent claude|pi|hermes|codex|omp] [--prompt <text>]
 wsx workspace path <repo> <slug>            # prints just the worktree path (script-friendly)
 wsx workspace rename <repo> <old> <new>     # renames slug AND git branch in sync;
                                             # the worktree directory does NOT move
@@ -78,7 +78,7 @@ Run `wsx --help` or `wsx <command> --help` to list commands and arguments direct
 
 When `create` runs from inside a workspace (an agent handing off, or a shell in a worktree), the new workspace inherits that workspace's yolo mode and agent kind. Don't pass `--yolo` when handing off; pass `--agent` only to deliberately pick a different agent. Creates from outside any workspace default to non-yolo and the `coding_agent` setting (claude unless configured otherwise).
 
-`--prompt <text>` queues `<text>` to the new workspace's primary agent, exactly as `wsx agent send --workspace <repo>/<slug> primary <text>` would right after the create (same sender banner, same delivery by the dashboard). `--shared` runs the workspace's agents under tmux so their sessions survive the dashboard and can be attached remotely.
+`--prompt <text>` queues `<text>` to the new workspace's primary agent, exactly as `wsx agent send --workspace <repo>/<slug> primary <text>` would right after the create (same sender banner, same delivery by the dashboard). `--shared` runs the workspace's agents under tmux so their sessions survive the dashboard and can be attached remotely; `--start` (implies `--shared`) also has the running dashboard start them in tmux and waits until they're live.
 
 `wsx workspace rename` changes the slug and branch only — the worktree stays at its original path, and the command prints it (`worktree path unchanged: <path>`). Use that path, or `wsx workspace path <repo> <new>`; don't build one from the new slug.
 

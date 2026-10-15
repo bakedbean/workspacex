@@ -1668,6 +1668,19 @@ fn parses_shared_rejects_unknown_subcommand() {
 }
 
 #[test]
+fn parses_repo_list_json() {
+    assert!(matches!(
+        parse(&["repo", "list"]).unwrap(),
+        CliAction::RepoList { json: false }
+    ));
+    assert!(matches!(
+        parse(&["repo", "list", "--json"]).unwrap(),
+        CliAction::RepoList { json: true }
+    ));
+    assert!(parse(&["repo", "list", "--bogus"]).is_err());
+}
+
+#[test]
 fn parses_repo_set_base_branch_literal() {
     match parse(&["repo", "set-base-branch", "demo", "origin/main"]).unwrap() {
         CliAction::RepoSetBaseBranch { name, value } => {

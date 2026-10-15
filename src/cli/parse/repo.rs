@@ -46,7 +46,21 @@ pub(in crate::cli) fn parse_repo(it: &mut Args) -> Result<CliAction> {
                 branch_prefix,
             })
         }
-        Some("list") => Ok(CliAction::RepoList),
+        Some("list") => {
+            let mut json = false;
+            for arg in &mut *it {
+                match arg.as_str() {
+                    "--json" => json = true,
+                    other => {
+                        return Err(Error::Usage {
+                            group: None,
+                            msg: format!("unknown arg: {other}"),
+                        });
+                    }
+                }
+            }
+            Ok(CliAction::RepoList { json })
+        }
         Some("remove") => {
             let name = it.next().ok_or_else(|| Error::Usage {
                 group: None,

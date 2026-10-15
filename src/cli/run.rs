@@ -121,7 +121,20 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             crate::data::repo::add(&store, &path, &name, &branch_prefix).await?;
             println!("added repo: {name}");
         }
-        CliAction::RepoList => {
+        CliAction::RepoList { json: true } => {
+            let records: Vec<_> = crate::data::repo::list(&store)?
+                .into_iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "name": r.name,
+                        "path": r.path,
+                        "branch_prefix": r.branch_prefix,
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&records)?);
+        }
+        CliAction::RepoList { json: false } => {
             for r in crate::data::repo::list(&store)? {
                 println!("{:<20} {}", r.name, r.path.display());
             }

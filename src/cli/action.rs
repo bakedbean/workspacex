@@ -56,7 +56,9 @@ pub enum CliAction {
         name: String,
         branch_prefix: String,
     },
-    RepoList,
+    RepoList {
+        json: bool,
+    },
     RepoRemove {
         name: String,
     },

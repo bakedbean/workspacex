@@ -100,7 +100,7 @@ pub static GROUPS: &[GroupInfo] = &[
                 blurb: "Register a repository",
             },
             CmdInfo {
-                usage: "list",
+                usage: "list [--json]",
                 blurb: "List registered repositories",
             },
             CmdInfo {

@@ -49,6 +49,14 @@ pub static GROUPS: &[GroupInfo] = &[
                 usage: "unshare <repo> <slug>",
                 blurb: "Convert a workspace to direct (not tmux)",
             },
+            CmdInfo {
+                usage: "tag add|rm <tag>... [--workspace <repo>/<slug>]",
+                blurb: "Add or remove workspace tags (current workspace by default)",
+            },
+            CmdInfo {
+                usage: "tag list [--workspace <repo>/<slug> | --all] [--json]",
+                blurb: "List a workspace's tags, or every tag in use with counts",
+            },
         ],
     },
     GroupInfo {

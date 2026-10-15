@@ -167,6 +167,15 @@ pub enum CliAction {
         name: String,
         new_name: String,
     },
+    WorkspaceTag {
+        op: TagOp,
+        tags: Vec<String>,
+        /// `<repo>/<slug>`; `None` = current workspace.
+        workspace: Option<String>,
+        /// `list --all`: every tag in use, not one workspace's.
+        all: bool,
+        json: bool,
+    },
     WorkspaceArchive {
         repo: String,
         name: String,
@@ -364,4 +373,12 @@ impl ValueSource {
                 .map_err(|e| Error::UserInput(format!("read {}: {e}", p.display()))),
         }
     }
+}
+
+/// `wsx workspace tag <op>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagOp {
+    Add,
+    Rm,
+    List,
 }

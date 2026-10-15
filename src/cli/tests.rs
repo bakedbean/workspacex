@@ -4,6 +4,7 @@
 //! ~130 tests are not interleaved in one buffer.
 
 use super::*;
+use crate::cli::action::TagOp;
 use crate::cli::parse::config::known_setting_key;
 use crate::cli::resolve::{self, *};
 use crate::error::{Error, Result};
@@ -3887,4 +3888,59 @@ fn unknown_repo_error_lists_repos_and_prefix_matches() {
     let empty = crate::data::store::Store::open_in_memory().unwrap();
     let e = lookup_repo(&empty, "x").unwrap_err().to_string();
     assert!(e.contains("registered repos: (none)"), "{e}");
+}
+
+#[test]
+fn workspace_tag_add_parses_tags_and_workspace_flag() {
+    match parse(&[
+        "workspace",
+        "tag",
+        "add",
+        "parked",
+        "spike",
+        "--workspace",
+        "r/s",
+    ])
+    .unwrap()
+    {
+        CliAction::WorkspaceTag {
+            op: TagOp::Add,
+            tags,
+            workspace,
+            ..
+        } => {
+            assert_eq!(tags, ["parked", "spike"]);
+            assert_eq!(workspace.as_deref(), Some("r/s"));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn workspace_tag_add_needs_a_tag() {
+    assert!(parse(&["workspace", "tag", "add"]).is_err());
+}
+
+#[test]
+fn workspace_tag_list_all_and_json() {
+    match parse(&["workspace", "tag", "list", "--all", "--json"]).unwrap() {
+        CliAction::WorkspaceTag {
+            op: TagOp::List,
+            all: true,
+            json: true,
+            ..
+        } => {}
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn workspace_tag_list_rejects_all_with_workspace() {
+    assert!(parse(&["workspace", "tag", "list", "--all", "--workspace", "r/s"]).is_err());
+}
+
+#[test]
+fn workspace_tag_rejects_unknown_op_and_flags() {
+    assert!(parse(&["workspace", "tag", "nope"]).is_err());
+    assert!(parse(&["workspace", "tag", "add", "x", "--json"]).is_err());
 }

@@ -6,7 +6,7 @@
 //! one check that actually keeps this file honest as commands are added.
 //! Arm bodies are short (median ~10 lines); the long ones delegate.
 
-use super::action::{CliAction, HelpTopic};
+use super::action::{CliAction, HelpTopic, TagOp};
 use super::help::{render_group_help, render_root_help};
 use super::resolve::*;
 use crate::config::Dirs;
@@ -675,6 +675,56 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             let r = lookup_repo(&store, &repo)?;
             let w = lookup_workspace(&store, &r, &name)?;
             println!("{}", w.worktree_path.display());
+        }
+        CliAction::WorkspaceTag {
+            op,
+            tags,
+            workspace,
+            all,
+            json,
+        } => {
+            if all {
+                let rows = store.all_tags()?;
+                if json {
+                    let v: Vec<_> = rows
+                        .iter()
+                        .map(|(t, n)| serde_json::json!({"tag": t, "workspaces": n}))
+                        .collect();
+                    println!("{}", serde_json::to_string_pretty(&v)?);
+                } else {
+                    for (t, n) in rows {
+                        println!("{t}\t{n}");
+                    }
+                }
+                return Ok(());
+            }
+            let ws = target_workspace(&store, workspace.as_deref())?;
+            match op {
+                TagOp::Add => {
+                    for t in crate::data::tags::normalize_all(&tags)? {
+                        store.add_workspace_tag(ws.id, &t)?;
+                    }
+                }
+                TagOp::Rm => {
+                    for t in crate::data::tags::normalize_all(&tags)? {
+                        store.remove_workspace_tag(ws.id, &t)?;
+                    }
+                }
+                TagOp::List => {}
+            }
+            // Print the resulting tags so add/rm show their outcome.
+            let now = store
+                .workspace_by_id(ws.id)?
+                .map(|w| w.tags)
+                .unwrap_or_default();
+            if json {
+                let v: Vec<&str> = now.iter().map(|t| &**t).collect();
+                println!("{}", serde_json::to_string_pretty(&v)?);
+            } else {
+                for t in now {
+                    println!("{t}");
+                }
+            }
         }
         CliAction::WorkspaceRename {
             repo,

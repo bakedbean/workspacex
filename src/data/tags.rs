@@ -13,6 +13,22 @@ pub fn normalize_tag(raw: &str) -> Option<String> {
     ok.then_some(t)
 }
 
+/// Normalize every tag or none: a CLI batch with one typo writes nothing.
+pub fn normalize_all(raw: &[String]) -> crate::error::Result<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for r in raw {
+        let t = normalize_tag(r).ok_or_else(|| {
+            crate::error::Error::UserInput(format!(
+                "invalid tag '{r}': use 1-{MAX_TAG_LEN} of a-z 0-9 - _"
+            ))
+        })?;
+        if !out.contains(&t) {
+            out.push(t);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -38,5 +54,19 @@ mod tests {
     fn enforces_max_len() {
         assert!(normalize_tag(&"a".repeat(MAX_TAG_LEN)).is_some());
         assert!(normalize_tag(&"a".repeat(MAX_TAG_LEN + 1)).is_none());
+    }
+
+    #[test]
+    fn normalize_all_rejects_whole_batch_on_one_bad_tag() {
+        let err = normalize_all(&["ok".into(), "bad tag".into()]).unwrap_err();
+        assert!(err.to_string().contains("bad tag"), "{err}");
+    }
+
+    #[test]
+    fn normalize_all_dedupes_after_normalizing() {
+        assert_eq!(
+            normalize_all(&["A".into(), "a".into(), "b".into()]).unwrap(),
+            ["a", "b"]
+        );
     }
 }

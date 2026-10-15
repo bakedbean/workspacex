@@ -198,7 +198,7 @@ fn too_old(dest: &str) -> crate::error::Error {
 /// Names travel inside the nested `sh -lc '…'` quoting, so only characters
 /// no shell layer treats specially are let through. Repo and workspace names
 /// are slugs in practice; anything else is refused rather than escaped.
-fn shell_safe(s: &str) -> bool {
+pub fn shell_safe(s: &str) -> bool {
     !s.is_empty()
         && !s.starts_with('-')
         && s.chars()

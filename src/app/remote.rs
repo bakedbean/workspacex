@@ -413,10 +413,10 @@ pub(crate) async fn reconcile_remote_share(
         return;
     }
     g.pending_remote_gen = None;
-    let Some(list) = g.remote_list.as_mut() else {
+    if g.remote_list.is_none() {
         g.modal = None;
         return;
-    };
+    }
     let rec = match result {
         Ok(rec) => rec,
         Err(e) => {
@@ -427,6 +427,25 @@ pub(crate) async fn reconcile_remote_share(
             return;
         }
     };
+    if let Some(notice) = adopt_and_attach(&mut g, rec, "shared") {
+        g.modal = Some(crate::ui::modal::Modal::RemoteWorkspaceList {
+            selected: 0,
+            notice: Some(notice),
+        });
+    }
+}
+
+/// Put `rec` — fresh from a share or create on the host — into the listing,
+/// replacing the stale record for the same workspace, and attach to its
+/// first live agent. Returns `None` once attached (or when no listing is
+/// open to show anything on), else the notice to show on the list; `did`
+/// names what the host just did, for that notice.
+fn adopt_and_attach(
+    g: &mut App,
+    rec: crate::commands::shared::SharedWorkspaceRecord,
+    did: &str,
+) -> Option<String> {
+    let list = g.remote_list.as_mut()?;
     let session = rec
         .agents
         .iter()
@@ -446,17 +465,98 @@ pub(crate) async fn reconcile_remote_share(
         Some(slot) => *slot = rec,
         None => list.records.push(rec),
     }
-    let notice = match target {
-        Some(target) => match attach_remote(&mut g, target, 80, 24) {
-            Ok(()) => return,
-            Err(e) => format!("shared {workspace}, but attach failed: {e}"),
+    Some(match target {
+        Some(target) => match attach_remote(g, target, 80, 24) {
+            Ok(()) => return None,
+            Err(e) => format!("{did} {workspace}, but attach failed: {e}"),
         },
-        None => format!("shared {workspace}, but the host reported no live session"),
+        None => format!("{did} {workspace}, but the host reported no live session"),
+    })
+}
+
+/// What the remote new-workspace form opens with once the host's repos
+/// arrive: the list row to return to, and the choices `n`/`N` made.
+#[derive(Debug, Clone)]
+pub struct RemoteFormSeed {
+    pub selected: usize,
+    pub host_name: String,
+    pub yolo: bool,
+    /// Preselected when the host has it: the repo of the row `n` was on.
+    pub repo: Option<String>,
+}
+
+/// Reconcile a spawned `fetch_remote_repos` task. Same generation guard as
+/// `reconcile_remote_list`. Opens the new-workspace form on success; a
+/// failure, or a host with no repos, returns to the list with the reason.
+pub(crate) async fn reconcile_remote_repos(
+    app: SharedApp,
+    my_gen: u64,
+    seed: RemoteFormSeed,
+    result: Result<Vec<String>>,
+) {
+    let mut g = app.lock().await;
+    if g.pending_remote_gen != Some(my_gen) {
+        return;
+    }
+    g.pending_remote_gen = None;
+    let notice = match result {
+        Ok(repos) if !repos.is_empty() => {
+            let repo = seed
+                .repo
+                .and_then(|want| repos.iter().position(|r| *r == want))
+                .unwrap_or(0);
+            g.modal = Some(crate::ui::modal::Modal::RemoteNewWorkspace(
+                crate::ui::modal::RemoteNewWorkspaceForm {
+                    selected: seed.selected,
+                    host_name: seed.host_name,
+                    repos,
+                    repo,
+                    name_buffer: String::new(),
+                    agent: None,
+                    yolo: seed.yolo,
+                    notice: None,
+                },
+            ));
+            return;
+        }
+        Ok(_) => format!("no repos are registered on {}", seed.host_name),
+        Err(e) => e.to_string(),
     };
     g.modal = Some(crate::ui::modal::Modal::RemoteWorkspaceList {
-        selected: 0,
+        selected: seed.selected,
         notice: Some(notice),
     });
+}
+
+/// Reconcile a spawned `create_remote` task. Same generation guard as
+/// `reconcile_remote_list`. On success wsx attaches straight to the new
+/// workspace's first live agent; on failure the form comes back with the
+/// host's reason, so a taken or invalid name can be fixed and resent.
+pub(crate) async fn reconcile_remote_create(
+    app: SharedApp,
+    my_gen: u64,
+    mut form: crate::ui::modal::RemoteNewWorkspaceForm,
+    result: Result<crate::commands::shared::SharedWorkspaceRecord>,
+) {
+    let mut g = app.lock().await;
+    if g.pending_remote_gen != Some(my_gen) {
+        return;
+    }
+    g.pending_remote_gen = None;
+    match result {
+        Ok(rec) => {
+            if let Some(notice) = adopt_and_attach(&mut g, rec, "created") {
+                g.modal = Some(crate::ui::modal::Modal::RemoteWorkspaceList {
+                    selected: 0,
+                    notice: Some(notice),
+                });
+            }
+        }
+        Err(e) => {
+            form.notice = Some(e.to_string());
+            g.modal = Some(crate::ui::modal::Modal::RemoteNewWorkspace(form));
+        }
+    }
 }
 
 #[cfg(test)]

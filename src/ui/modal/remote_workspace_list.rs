@@ -179,7 +179,7 @@ pub fn render_remote_workspace_list(
 
     f.render_widget(
         Paragraph::new(if list.can_share {
-            "[\u{2191}/\u{2193}] move   [enter] attach / share   [r] refresh   [esc] close"
+            "[\u{2191}/\u{2193}] move   [enter] attach / share   [n] new   [r] refresh   [esc] close"
         } else {
             "[\u{2191}/\u{2193}] move   [enter] attach   [r] refresh   [esc] close"
         })

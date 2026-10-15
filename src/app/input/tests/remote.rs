@@ -814,3 +814,164 @@ async fn esc_while_sharing_returns_to_the_list_and_ignores_the_result() {
         Some(Modal::RemoteWorkspaceList { notice: None, .. })
     ));
 }
+
+/// A fake ssh for the create flow: `repo list` answers two repos, the
+/// create logs its remote command to `log` and prints the new record, and
+/// anything else (the attach) streams like a live tmux client.
+fn create_flow_script(log: &std::path::Path) -> String {
+    format!(
+        "case \"$*\" in\n\
+         *'repo list --json'*) echo '[{{\"name\":\"a\"}},{{\"name\":\"r\"}}]';;\n\
+         *'workspace create'*) printf '%s\\n' \"$*\" > {log}; echo '{{\"repo\":\"r\",\"workspace\":\"fresh\",\"branch\":\"b\",\"worktree_path\":\"/x\",\"shared\":true,\"agents\":[{{\"label\":\"codex\",\"agent\":\"codex\",\"tmux_session\":\"wsx-r-fresh\",\"alive\":true}}]}}';;\n\
+         *) for i in $(seq 1 60); do echo remote-beat; sleep 1; done;;\n\
+         esac\n",
+        log = log.display()
+    )
+}
+
+async fn type_text(app: &Arc<Mutex<App>>, text: &str) {
+    for c in text.chars() {
+        key(app, crossterm::event::KeyCode::Char(c)).await;
+    }
+}
+
+async fn remote_form(app: &Arc<Mutex<App>>) -> crate::ui::modal::RemoteNewWorkspaceForm {
+    match &app.lock().await.modal {
+        Some(Modal::RemoteNewWorkspace(form)) => form.clone(),
+        other => panic!("expected the remote new-workspace form, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn capital_n_in_remote_list_creates_a_yolo_workspace_and_attaches() {
+    use crossterm::event::KeyCode;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("create.log");
+    let (app, _env, _tmp) = app_on_shareable_list(dir.path(), &create_flow_script(&log));
+
+    {
+        let mut g = app.lock().await;
+        let k = crossterm::event::KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT);
+        handle_event(&mut g, &app, CtEvent::Key(k)).await.unwrap();
+        assert!(matches!(
+            g.modal,
+            Some(Modal::RemoteReposLoading { yolo: true, .. })
+        ));
+    }
+    wait_until(&app, "the host's repos to load", |g| {
+        matches!(g.modal, Some(Modal::RemoteNewWorkspace(_)))
+    })
+    .await;
+    let form = remote_form(&app).await;
+    assert_eq!(form.repos, ["a", "r"]);
+    assert_eq!(form.repo, 1, "the selected row's repo is preselected");
+    assert!(form.yolo, "N opens the form in yolo mode");
+    assert_eq!(form.agent, None, "the host's default agent until Tab");
+
+    type_text(&app, "fresh").await;
+    // Tab past the host default to an explicit agent.
+    let codex = crate::pty::session::AgentKind::Codex;
+    while remote_form(&app).await.agent != Some(codex) {
+        key(&app, KeyCode::Tab).await;
+    }
+    key(&app, KeyCode::Enter).await;
+    assert!(matches!(
+        app.lock().await.modal,
+        Some(Modal::RemoteCreateRunning(_))
+    ));
+
+    wait_until(&app, "the create to finish and attach", |g| {
+        matches!(g.view, crate::ui::View::AttachedRemote)
+    })
+    .await;
+    let mut g = app.lock().await;
+    assert_eq!(g.remote_target.as_ref().unwrap().tmux, "wsx-r-fresh");
+    assert!(
+        g.remote_list
+            .as_ref()
+            .unwrap()
+            .records
+            .iter()
+            .any(|r| r.workspace == "fresh"),
+        "the new workspace joins the listing"
+    );
+    crate::app::detach_remote(&mut g);
+    let sent = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        sent.contains("wsx workspace create r --name fresh --agent codex --yolo --start --json"),
+        "{sent}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ctrl_y_toggles_yolo_and_a_failed_create_reopens_the_form() {
+    use crossterm::event::KeyCode;
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _env, _tmp) = app_on_shareable_list(
+        dir.path(),
+        "case \"$*\" in\n\
+         *'repo list --json'*) echo '[{\"name\":\"r\"}]';;\n\
+         *) echo \"error: branch 'wsx/dup' already exists\" >&2; exit 1;;\n\
+         esac\n",
+    );
+
+    key(&app, KeyCode::Char('n')).await;
+    wait_until(&app, "the host's repos to load", |g| {
+        matches!(g.modal, Some(Modal::RemoteNewWorkspace(_)))
+    })
+    .await;
+    assert!(!remote_form(&app).await.yolo);
+    {
+        let mut g = app.lock().await;
+        let k = crossterm::event::KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL);
+        handle_event(&mut g, &app, CtEvent::Key(k)).await.unwrap();
+    }
+    let form = remote_form(&app).await;
+    assert!(form.yolo, "^y turns yolo on");
+    assert_eq!(form.name_buffer, "", "^y must not type a 'y'");
+
+    // The listing already has r/w: refused before any round trip.
+    type_text(&app, "w").await;
+    key(&app, KeyCode::Enter).await;
+    let form = remote_form(&app).await;
+    assert!(
+        form.notice.as_deref().unwrap().contains("already has"),
+        "{form:?}"
+    );
+
+    key(&app, KeyCode::Backspace).await;
+    type_text(&app, "dup").await;
+    key(&app, KeyCode::Enter).await;
+    wait_until(&app, "the failed create to reconcile", |g| {
+        g.pending_remote_gen.is_none()
+    })
+    .await;
+    let form = remote_form(&app).await;
+    assert_eq!(form.name_buffer, "dup", "the form keeps what was typed");
+    assert!(form.yolo);
+    assert!(
+        form.notice.as_deref().unwrap().contains("already exists"),
+        "{form:?}"
+    );
+
+    key(&app, KeyCode::Esc).await;
+    assert!(matches!(
+        app.lock().await.modal,
+        Some(Modal::RemoteWorkspaceList { .. })
+    ));
+}
+
+#[tokio::test]
+async fn n_on_an_old_host_explains_instead_of_creating() {
+    use crossterm::event::KeyCode;
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _env, _tmp) = app_on_shareable_list(dir.path(), "exit 1\n");
+    app.lock().await.remote_list.as_mut().unwrap().can_share = false;
+    key(&app, KeyCode::Char('n')).await;
+    match &app.lock().await.modal {
+        Some(Modal::RemoteWorkspaceList {
+            notice: Some(n), ..
+        }) => assert!(n.contains("too old"), "{n}"),
+        other => panic!("expected the list with a notice, got {other:?}"),
+    }
+}

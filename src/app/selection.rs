@@ -33,21 +33,35 @@ impl App {
         self.dashboard.selection = self.selectable.get(idx).copied();
     }
 
-    /// The facts hide rules test for `ws`, from the app's caches. The sole
-    /// builder, so the rows drawn and the selection's groups can't disagree.
+    /// The facts hide rules test for `ws`, from the app's caches. Every hide
+    /// decision goes through here so rows, selection and picker counts agree.
     pub(crate) fn hide_subject(
         &self,
         ws: crate::data::store::WorkspaceId,
+    ) -> crate::data::hide_rules::HideSubject {
+        let idle_secs = crate::app::render::dashboard::workspace_age_secs(
+            self,
+            ws,
+            crate::util::time::now_ms(),
+        );
+        self.hide_subject_with_age(ws, idle_secs)
+    }
+
+    /// `hide_subject` with the age already in hand (the row builder has it).
+    pub(crate) fn hide_subject_with_age(
+        &self,
+        ws: crate::data::store::WorkspaceId,
+        idle_secs: Option<u64>,
     ) -> crate::data::hide_rules::HideSubject {
         use crate::data::store::ReportedState;
         let dirty = self
             .workspace_status
             .get(&ws)
-            .is_some_and(|s| s.modified > 0 || s.untracked > 0 || s.ahead > 0);
-        let committed = self
-            .workspace_diff
+            .is_some_and(|s| s.modified > 0 || s.untracked > 0);
+        let ahead = self
+            .workspace_ahead_of_base
             .get(&ws)
-            .is_some_and(|d| d.added > 0 || d.removed > 0);
+            .is_some_and(|n| *n > 0);
         let session_live = self.agent_roster.get(&ws).is_some_and(|instances| {
             instances.iter().any(|inst| {
                 self.sessions.get(inst.id).is_some_and(|s| {
@@ -69,13 +83,9 @@ impl App {
         );
         crate::data::hide_rules::HideSubject {
             lifecycle: self.pr_lifecycle.get(&ws).copied(),
-            work_in_progress: dirty || committed,
+            work_in_progress: dirty || ahead,
             agent_live: session_live || reported_live,
-            idle_secs: crate::app::render::dashboard::workspace_age_secs(
-                self,
-                ws,
-                crate::util::time::now_ms(),
-            ),
+            idle_secs,
         }
     }
 

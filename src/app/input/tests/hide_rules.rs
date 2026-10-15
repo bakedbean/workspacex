@@ -253,6 +253,16 @@ async fn no_pr_workspace_with_uncommitted_changes_stays_visible() {
 }
 
 #[tokio::test]
+async fn no_pr_workspace_with_commits_ahead_of_base_stays_visible() {
+    let (mut app, _, ids) = app_with_no_pr_hidden();
+    // Pushed and clean: nothing ahead of upstream, no line diff.
+    app.workspace_status.insert(ids[0], Default::default());
+    app.workspace_ahead_of_base.insert(ids[0], 1);
+    draw(&mut app);
+    assert!(app.selectable.contains(&SelectionTarget::Workspace(ids[0])));
+}
+
+#[tokio::test]
 async fn picker_counts_only_hideable_no_pr_workspaces() {
     let (mut app, _, ids) = app_with_no_pr_hidden();
     report_working(&mut app, ids[0]);

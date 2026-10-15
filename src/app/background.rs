@@ -1054,6 +1054,7 @@ async fn refresh_local(app: SharedApp, t: PollTarget) {
             // stale. Drop them to force a fresh poll.
             g.workspace_diff.remove(&id);
             g.workspace_diff_per_file.remove(&id);
+            g.workspace_ahead_of_base.remove(&id);
             g.diff_last_poll_ms.remove(&id);
             // Everything below works from the snapshot taken before the
             // rename. Skip the rest; the throttle stamps were cleared
@@ -1091,6 +1092,10 @@ async fn refresh_local(app: SharedApp, t: PollTarget) {
             if let Some(diff) = crate::git::workspace_diff_stats(&path, base).await {
                 let mut g = app.lock().await;
                 g.workspace_diff.insert(id, diff);
+            }
+            if let Some(ahead) = crate::git::commits_ahead_of(&path, base).await {
+                let mut g = app.lock().await;
+                g.workspace_ahead_of_base.insert(id, ahead);
             }
             if let Some(per_file) = crate::git::workspace_diff_per_file(&path, base).await {
                 let mut g = app.lock().await;

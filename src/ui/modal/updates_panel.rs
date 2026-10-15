@@ -2285,6 +2285,7 @@ pub(super) mod test_fixtures {
                 shared: false,
                 shared_active: false,
                 has_multi_pane_layout: false,
+                tags: Vec::new(),
                 lifecycle: None,
                 review: None,
                 unresolved: None,

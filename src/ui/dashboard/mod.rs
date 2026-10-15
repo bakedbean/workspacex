@@ -810,11 +810,17 @@ fn default_expanded(counts: StatusCounts, has_hidden: bool) -> bool {
 }
 
 /// Case-insensitive substring match against the workspace branch, owning
-/// repo name, and the row's status-adaptive column (status token, recap
-/// segments, or fallback text — whichever the column carries).
+/// repo name, tags, and the row's status-adaptive column (status token, recap
+/// segments, or fallback text — whichever the column carries). A leading `#`
+/// matches one tag exactly and nothing else.
 fn matches_filter(w: &WorkspaceItem<'_>, filter: &str) -> bool {
     let needle = filter.to_lowercase();
-    if w.row.branch.to_lowercase().contains(&needle) || w.repo.name.to_lowercase().contains(&needle)
+    if let Some(tag) = needle.strip_prefix('#') {
+        return w.row.tags.iter().any(|t| **t == *tag);
+    }
+    if w.row.branch.to_lowercase().contains(&needle)
+        || w.repo.name.to_lowercase().contains(&needle)
+        || w.row.tags.iter().any(|t| t.contains(&needle))
     {
         return true;
     }

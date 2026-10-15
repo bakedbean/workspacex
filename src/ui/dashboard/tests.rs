@@ -79,6 +79,7 @@ fn build_inputs<'a>(
                     name_color: None,
                     workspace_id: id,
                     has_multi_pane_layout: false,
+                    tags: Vec::new(),
                 },
             });
         }
@@ -837,6 +838,7 @@ fn base_row() -> row::RowInputs {
         name_color: None,
         workspace_id: WorkspaceId(1),
         has_multi_pane_layout: false,
+        tags: Vec::new(),
     }
 }
 
@@ -888,6 +890,20 @@ fn matches_filter_matches_recap_segments() {
     assert!(matches_filter(&item, "drift"));
     assert!(matches_filter(&item, "audit"));
     assert!(!matches_filter(&item, "nonexistent"));
+}
+
+#[test]
+fn matches_filter_matches_tags_by_substring_and_hash_exactly() {
+    let repo = fake_repo(1, "repo", "/tmp/repo");
+    let mut item = item_with_column(&repo, None);
+    item.row.tags = vec!["parked".into()];
+    item.row.branch = "spike-x".into();
+    assert!(matches_filter(&item, "park"));
+    assert!(matches_filter(&item, "#parked"));
+    assert!(matches_filter(&item, "#Parked"));
+    assert!(!matches_filter(&item, "#park"), "# is exact");
+    assert!(!matches_filter(&item, "#spike"), "# skips branch");
+    assert!(matches_filter(&item, "spike"), "plain still hits branch");
 }
 
 #[test]
@@ -1380,6 +1396,7 @@ mod hide_rules {
                 name_color: None,
                 workspace_id: WorkspaceId(id),
                 has_multi_pane_layout: false,
+                tags: Vec::new(),
             },
         }
     }

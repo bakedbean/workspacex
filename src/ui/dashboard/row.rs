@@ -217,6 +217,8 @@ pub struct RowInputs {
     /// via the `C` picker. `None` = the theme's default styling for the span.
     pub name_color: Option<Color>,
     pub workspace_id: crate::data::store::WorkspaceId,
+    /// Workspace tags, sorted; drawn dim after the branch name.
+    pub tags: Vec<std::sync::Arc<str>>,
 }
 
 impl crate::ui::dashboard::sort::SortRow for RowInputs {
@@ -398,6 +400,13 @@ pub fn render(
         .max(1);
     let branch_truncated = truncate(&branch_text, branch_target);
     let branch_visible_width = display_width(&branch_truncated);
+    // Tags only get the room left after the whole name; they never truncate it.
+    let tags_cell = if display_width(&branch_text) <= branch_target {
+        fit_tags(&inputs.tags, branch_target - branch_visible_width)
+    } else {
+        String::new()
+    };
+    let tags_width = display_width(&tags_cell);
     let mut name_style = Style::default().add_modifier(Modifier::BOLD);
     if inputs.yolo {
         name_style = name_style.fg(theme.warn);
@@ -429,6 +438,9 @@ pub fn render(
     if let Some(name_cell) = name_cell.filter(|n| !n.is_empty()) {
         spans.push(Span::styled(name_cell, name_style));
     }
+    if !tags_cell.is_empty() {
+        spans.push(Span::styled(tags_cell, theme.dim_style()));
+    }
     if let Some(b) = inputs.badge {
         spans.push(Span::styled(b.glyph(tick), b.style(theme)));
     }
@@ -438,6 +450,7 @@ pub fn render(
     let consumed = layout_badge_width
         + shared_badge_width
         + branch_visible_width
+        + tags_width
         + setup_badge_width
         + mail_badge_width;
     if consumed < branch_width {
@@ -646,6 +659,30 @@ pub fn pr_chip_hit_span(inputs: &RowInputs, widths: ColumnWidths) -> Option<(u16
 /// A line count for the diff cell: plain up to four digits, then
 /// thousands (`12k`) and millions (`2M`), truncated rather than rounded so
 /// `9999` never reads as `10k`.
+/// ` #a #b` within `room` cells; trailing tags that don't fit become ` +N`.
+fn fit_tags(tags: &[std::sync::Arc<str>], room: usize) -> String {
+    let mut out = String::new();
+    for (i, t) in tags.iter().enumerate() {
+        let next = format!(" #{t}");
+        let rest = tags.len() - i - 1;
+        let tail = if rest > 0 {
+            format!(" +{rest}").len()
+        } else {
+            0
+        };
+        if display_width(&out) + display_width(&next) + tail > room {
+            let more = format!(" +{}", tags.len() - i);
+            return if display_width(&out) + more.len() <= room {
+                out + &more
+            } else {
+                String::new()
+            };
+        }
+        out.push_str(&next);
+    }
+    out
+}
+
 fn compact_count(n: u32) -> String {
     match n {
         0..=9_999 => n.to_string(),
@@ -817,6 +854,7 @@ mod tests {
             shared: false,
             shared_active: false,
             has_multi_pane_layout: false,
+            tags: Vec::new(),
             lifecycle: None,
             review: None,
             unresolved: None,
@@ -828,6 +866,76 @@ mod tests {
 
     fn line_text(line: &Line<'_>) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    fn with_tags(tags: &[&str]) -> RowInputs {
+        let mut i = base();
+        i.tags = tags.iter().map(|t| std::sync::Arc::from(*t)).collect();
+        i
+    }
+
+    #[test]
+    fn fit_tags_keeps_whole_tags_and_counts_the_rest() {
+        let t: Vec<std::sync::Arc<str>> = ["a", "bb", "ccc"].iter().map(|s| (*s).into()).collect();
+        assert_eq!(fit_tags(&t, 100), " #a #bb #ccc");
+        assert_eq!(fit_tags(&t, 10), " #a #bb +1");
+        assert_eq!(fit_tags(&t, 9), " #a +2");
+        assert_eq!(fit_tags(&t, 3), " +3");
+        assert_eq!(fit_tags(&t, 2), "");
+        assert_eq!(fit_tags(&[], 100), "");
+    }
+
+    fn wide() -> ColumnWidths {
+        ColumnWidths {
+            branch: 40,
+            ..ColumnWidths::default()
+        }
+    }
+
+    #[test]
+    fn tags_render_dim_after_the_branch() {
+        let theme = Theme::wsx();
+        let line = render(&with_tags(&["parked"]), wide(), 0, &theme, 160);
+        let text = line_text(&line);
+        let b = text.find("bakedbean/repo-overview").unwrap();
+        let t = text.find("#parked").expect("tag drawn");
+        assert!(t > b, "{text:?}");
+        let span = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("#parked"))
+            .unwrap();
+        assert_eq!(span.style.fg, theme.dim_style().fg);
+    }
+
+    #[test]
+    fn tags_never_squeeze_the_branch_name() {
+        let theme = Theme::wsx();
+        let widths = ColumnWidths {
+            branch: 26,
+            ..ColumnWidths::default()
+        };
+        let text = line_text(&render(
+            &with_tags(&["parked", "spike"]),
+            widths,
+            0,
+            &theme,
+            160,
+        ));
+        assert!(text.contains("bakedbean/repo-overview"), "{text:?}");
+        assert!(!text.contains("#parked"), "no room for tags: {text:?}");
+    }
+
+    #[test]
+    fn tagged_row_keeps_column_alignment() {
+        let theme = Theme::wsx();
+        let w = wide();
+        let plain = line_text(&render(&base(), w, 0, &theme, 160));
+        let tagged = line_text(&render(&with_tags(&["a", "b"]), w, 0, &theme, 160));
+        assert!(tagged.contains("#a #b"), "{tagged:?}");
+        assert_eq!(display_width(&plain), display_width(&tagged));
+        let procs = |t: &str| t.find("2").unwrap();
+        assert_eq!(procs(&plain), procs(&tagged), "procs column must not shift");
     }
 
     #[test]

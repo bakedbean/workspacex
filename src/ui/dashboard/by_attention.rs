@@ -306,6 +306,7 @@ mod tests {
                         name_color: None,
                         workspace_id: crate::data::store::WorkspaceId(i as i64),
                         has_multi_pane_layout: false,
+                        tags: Vec::new(),
                     },
                 });
             }
@@ -487,6 +488,7 @@ mod tests {
                 name_color: None,
                 workspace_id: crate::data::store::WorkspaceId(0),
                 has_multi_pane_layout: false,
+                tags: Vec::new(),
             },
         };
         // A branch column wide enough for the repo prefix — the default 28

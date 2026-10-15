@@ -427,6 +427,7 @@ pub(super) fn build_row_inputs(
         name_color: ws.name_color.map(crate::config::name_color::color),
         workspace_id: ws.id,
         has_multi_pane_layout: app.workspaces_with_multi_pane_layouts.contains(&ws.id),
+        tags: ws.tags.clone(),
     }
 }
 

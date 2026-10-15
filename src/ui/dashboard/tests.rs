@@ -27,6 +27,7 @@ fn fake_repo(id: i64, name: &str, path: &str) -> Repo {
         related_repos: None,
         base_branch: None,
         detail_bar_config: None,
+        hide_rules: Default::default(),
         created_at: 0,
         sort_order: 0,
     }
@@ -578,6 +579,7 @@ fn visible_targets_by_repo_matches_render_order() {
             expanded: true,
             sort_order: r.sort_order,
             workspaces: Vec::new(),
+            hidden: Vec::new(),
             show_pr_link: false,
             nerd_fonts: false,
         })
@@ -794,6 +796,7 @@ fn repo_order_breaks_sort_order_ties_by_id_in_lockstep() {
             expanded: true,
             sort_order: r.sort_order,
             workspaces: Vec::new(),
+            hidden: Vec::new(),
             show_pr_link: false,
             nerd_fonts: false,
         })
@@ -1327,4 +1330,342 @@ fn footer_shows_a_theme_notice_instead_of_hints() {
     let row: String = (0..80).map(|x| buf[(x, 0)].symbol().to_string()).collect();
     assert!(row.starts_with("theme.toml: [pr].format"), "{row:?}");
     assert_eq!(buf[(0, 0)].fg, theme.err);
+}
+
+mod hide_rules {
+    use super::*;
+    use crate::data::hide_rules::{HideRule, HideRules, PrCriterion};
+    use crate::git::forge::BranchLifecycle::{self, *};
+
+    const MERGED: HideRule = HideRule::Pr(PrCriterion::Merged);
+    const NO_PR: HideRule = HideRule::Pr(PrCriterion::NoPr);
+
+    fn item<'a>(
+        repo: &'a Repo,
+        id: i64,
+        branch: &str,
+        lc: Option<BranchLifecycle>,
+    ) -> WorkspaceItem<'a> {
+        WorkspaceItem {
+            repo,
+            workspace_id: WorkspaceId(id),
+            status: Status::Idle,
+            row: row::RowInputs {
+                agent: AgentKind::Claude,
+                peers: Vec::new(),
+                status: Status::Idle,
+                branch: branch.to_string(),
+                pr_number: None,
+                procs: 0,
+                diff: None,
+                column: None,
+                ago_secs: Some(id as u64),
+                selected: false,
+                yolo: false,
+                badge: None,
+                undelivered_mail: false,
+                shared: false,
+                shared_active: false,
+                lifecycle: lc,
+                review: None,
+                unresolved: None,
+                nerd_fonts: false,
+                name_color: None,
+                workspace_id: WorkspaceId(id),
+                has_multi_pane_layout: false,
+            },
+        }
+    }
+
+    fn repo_with(rules: &str) -> Repo {
+        let mut r = fake_repo(1, "wsx", "/r/wsx");
+        r.hide_rules = HideRules::parse(Some(rules));
+        r
+    }
+
+    /// open-pr and unknown-pr visible; two merged and one no-PR hidden.
+    fn items(repo: &Repo) -> Vec<WorkspaceItem<'_>> {
+        vec![
+            item(repo, 1, "open-pr", Some(PrOpen)),
+            item(repo, 2, "merged-a", Some(PrMerged)),
+            item(repo, 3, "merged-b", Some(PrMerged)),
+            item(repo, 4, "no-pr", Some(NoPr)),
+            item(repo, 5, "unknown-pr", None),
+        ]
+    }
+
+    fn inputs<'a>(repo: &'a Repo, ws: Vec<WorkspaceItem<'a>>) -> DashboardInputs<'a> {
+        DashboardInputs {
+            repos: vec![repo],
+            workspaces: ws,
+            activity: &[],
+            column_widths: row::ColumnWidths::default(),
+            github_remotes: Box::leak(Box::default()),
+            nerd_fonts: false,
+            fleet: crate::ui::bar::fleet::empty(),
+        }
+    }
+
+    fn draw(inputs: &DashboardInputs<'_>, state: &mut DashboardState) -> String {
+        let theme = Theme::wsx();
+        let specs = crate::config::theme_file::bundled_default(&theme);
+        let mut term = Terminal::new(TestBackend::new(160, 30)).unwrap();
+        term.draw(|f| render(f, f.area(), inputs, state, 0, &theme, &specs))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn line_with<'s>(screen: &'s str, needle: &str) -> &'s str {
+        screen
+            .lines()
+            .find(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("no line with {needle:?}"))
+    }
+
+    #[test]
+    fn by_repo_hides_matching_rows_and_draws_one_summary_row_per_rule() {
+        let repo = repo_with("pr:merged,pr:none");
+        let inputs = inputs(&repo, items(&repo));
+        let screen = draw(&inputs, &mut DashboardState::default());
+        assert!(screen.contains("open-pr"));
+        assert!(
+            !screen.contains("merged-a")
+                && !screen.contains("merged-b")
+                && !screen.contains("no-pr ")
+        );
+        assert!(line_with(&screen, "merged").contains("2 hidden"));
+        assert!(line_with(&screen, "no PR").contains("1 hidden"));
+    }
+
+    #[test]
+    fn unknown_lifecycle_row_stays_visible() {
+        let repo = repo_with("pr:merged,pr:none,pr:open");
+        let inputs = inputs(&repo, items(&repo));
+        assert!(draw(&inputs, &mut DashboardState::default()).contains("unknown-pr"));
+    }
+
+    #[test]
+    fn header_counts_cover_visible_rows_only() {
+        let repo = repo_with("pr:merged,pr:none");
+        let inputs = inputs(&repo, items(&repo));
+        let screen = draw(&inputs, &mut DashboardState::default());
+        assert!(line_with(&screen, "/r/wsx").contains("2 ws"));
+    }
+
+    #[test]
+    fn visible_targets_list_group_rows_after_visible_rows() {
+        let repo = repo_with("pr:merged,pr:none");
+        let inputs = inputs(&repo, items(&repo));
+        let t = visible_targets(&inputs, &DashboardState::default());
+        let rid = RepoId(1);
+        assert_eq!(&t[0], &SelectionTarget::Repo(rid));
+        assert_eq!(t.len(), 5, "{t:?}"); // header, 2 visible, 2 groups
+        assert_eq!(
+            t[3],
+            SelectionTarget::HiddenGroup {
+                repo: rid,
+                rule: MERGED
+            }
+        );
+        assert_eq!(
+            t[4],
+            SelectionTarget::HiddenGroup {
+                repo: rid,
+                rule: NO_PR
+            }
+        );
+    }
+
+    #[test]
+    fn expanded_group_shows_its_rows_and_makes_them_selectable() {
+        let repo = repo_with("pr:merged,pr:none");
+        let inputs = inputs(&repo, items(&repo));
+        let mut state = DashboardState::default();
+        state.expanded_hidden.insert((RepoId(1), MERGED));
+        let t = visible_targets(&inputs, &state);
+        let g = t
+            .iter()
+            .position(|x| {
+                *x == SelectionTarget::HiddenGroup {
+                    repo: RepoId(1),
+                    rule: MERGED,
+                }
+            })
+            .unwrap();
+        let mut after = t[g + 1..g + 3].to_vec();
+        after.sort_by_key(|x| format!("{x:?}"));
+        assert_eq!(
+            after,
+            vec![
+                SelectionTarget::Workspace(WorkspaceId(2)),
+                SelectionTarget::Workspace(WorkspaceId(3))
+            ]
+        );
+        let screen = draw(&inputs, &mut state);
+        assert!(screen.contains("merged-a") && screen.contains("merged-b"));
+        assert!(!screen.contains("no-pr "), "other groups stay collapsed");
+    }
+
+    #[test]
+    fn active_filter_bypasses_hide_rules() {
+        let repo = repo_with("pr:merged,pr:none");
+        let inputs = inputs(&repo, items(&repo));
+        let mut state = DashboardState {
+            filter: Some("merged".into()),
+            ..Default::default()
+        };
+        let screen = draw(&inputs, &mut state);
+        assert!(screen.contains("merged-a"));
+        assert!(!screen.contains("hidden"));
+        assert!(
+            !visible_targets(&inputs, &state)
+                .iter()
+                .any(|t| matches!(t, SelectionTarget::HiddenGroup { .. }))
+        );
+    }
+
+    #[test]
+    fn all_hidden_repo_keeps_header_and_summary_rows() {
+        let repo = repo_with("pr:merged");
+        let ws = vec![item(&repo, 2, "merged-a", Some(PrMerged))];
+        let inputs = inputs(&repo, ws);
+        let t = visible_targets(&inputs, &DashboardState::default());
+        assert_eq!(
+            t,
+            vec![
+                SelectionTarget::Repo(RepoId(1)),
+                SelectionTarget::HiddenGroup {
+                    repo: RepoId(1),
+                    rule: MERGED
+                },
+            ]
+        );
+        let screen = draw(&inputs, &mut DashboardState::default());
+        assert!(
+            line_with(&screen, "/r/wsx").contains('▾'),
+            "header expanded"
+        );
+        assert!(line_with(&screen, "merged").contains("1 hidden"));
+    }
+
+    #[test]
+    fn attention_view_lists_hidden_groups_in_their_own_section() {
+        let repo = repo_with("pr:merged,pr:none");
+        let inputs = inputs(&repo, items(&repo));
+        let mut state = DashboardState {
+            group_mode: GroupMode::Attention,
+            ..Default::default()
+        };
+        let screen = draw(&inputs, &mut state);
+        assert!(screen.contains("HIDDEN"));
+        assert!(line_with(&screen, "wsx · ").contains("2 hidden"));
+        assert!(!screen.contains("merged-a"));
+        let t = visible_targets(&inputs, &state);
+        assert_eq!(
+            t.iter()
+                .filter(|x| matches!(x, SelectionTarget::HiddenGroup { .. }))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn all_hidden_repo_is_not_quiet() {
+        let repo = repo_with("pr:merged");
+        let inputs = inputs(&repo, vec![item(&repo, 2, "merged-a", Some(PrMerged))]);
+        let mut state = DashboardState {
+            group_mode: GroupMode::Attention,
+            ..Default::default()
+        };
+        let screen = draw(&inputs, &mut state);
+        assert!(!screen.contains("QUIET REPOS"), "{screen}");
+        assert!(screen.contains("HIDDEN"));
+    }
+
+    #[test]
+    fn attention_expanded_group_rows_are_selectable() {
+        let repo = repo_with("pr:merged");
+        let inputs = inputs(&repo, items(&repo));
+        let mut state = DashboardState {
+            group_mode: GroupMode::Attention,
+            ..Default::default()
+        };
+        state.expanded_hidden.insert((RepoId(1), MERGED));
+        let t = visible_targets(&inputs, &state);
+        assert!(t.contains(&SelectionTarget::Workspace(WorkspaceId(2))));
+        assert!(draw(&inputs, &mut state).contains("merged-a"));
+    }
+
+    /// Text of the lines painted with the selection highlight.
+    fn highlighted_lines(inputs: &DashboardInputs<'_>, state: &mut DashboardState) -> Vec<String> {
+        let theme = Theme::wsx();
+        let specs = crate::config::theme_file::bundled_default(&theme);
+        let mut term = Terminal::new(TestBackend::new(160, 30)).unwrap();
+        term.draw(|f| render(f, f.area(), inputs, state, 0, &theme, &specs))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        let bg = theme.selected_bg_style().bg;
+        (0..buf.area.height)
+            .filter(|&y| y > 0 && (0..buf.area.width).any(|x| buf[(x, y)].bg == bg.unwrap()))
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    /// The selection highlight must land on the row `visible_targets` names.
+    fn assert_lockstep(mode: GroupMode) {
+        let repo = repo_with("pr:merged,pr:none");
+        let inputs = inputs(&repo, items(&repo));
+        let mut state = DashboardState {
+            group_mode: mode,
+            ..Default::default()
+        };
+        state.expanded_hidden.insert((RepoId(1), MERGED));
+        for (target, needle) in [
+            (
+                SelectionTarget::HiddenGroup {
+                    repo: RepoId(1),
+                    rule: MERGED,
+                },
+                "merged  ·  2 hidden",
+            ),
+            (
+                SelectionTarget::HiddenGroup {
+                    repo: RepoId(1),
+                    rule: NO_PR,
+                },
+                "no PR  ·  1 hidden",
+            ),
+            (SelectionTarget::Workspace(WorkspaceId(2)), "merged-a"),
+            (SelectionTarget::Workspace(WorkspaceId(3)), "merged-b"),
+        ] {
+            assert!(visible_targets(&inputs, &state).contains(&target));
+            state.selection = Some(target);
+            let hl = highlighted_lines(&inputs, &mut state);
+            assert_eq!(hl.len(), 1, "{target:?}: {hl:?}");
+            assert!(hl[0].contains(needle), "{target:?}: {hl:?}");
+            assert!(state.list_state.selected().is_some());
+        }
+    }
+
+    #[test]
+    fn by_repo_selection_highlight_matches_visible_targets() {
+        assert_lockstep(GroupMode::Repo);
+    }
+
+    #[test]
+    fn attention_selection_highlight_matches_visible_targets() {
+        assert_lockstep(GroupMode::Attention);
+    }
 }

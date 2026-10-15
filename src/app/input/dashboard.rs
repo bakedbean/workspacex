@@ -46,15 +46,7 @@ pub(in crate::app::input) fn current_repo_counts(
 /// the target. Extracted from the original single-key `z` arm so the
 /// `zz` chord branch can reuse it.
 pub(in crate::app::input) fn toggle_focused_fold(app: &mut App) {
-    let target_rid = match app.selected_target() {
-        Some(SelectionTarget::Workspace(wid)) => app
-            .workspaces
-            .iter()
-            .find(|(_, w)| w.id == wid)
-            .map(|(rid, _)| *rid),
-        Some(SelectionTarget::Repo(rid)) => Some(rid),
-        None => None,
-    };
+    let target_rid = app.selected_repo();
     if let Some(rid) = target_rid {
         let id = rid.0 as u64;
         let counts = current_repo_counts(app, rid);
@@ -135,15 +127,7 @@ pub(crate) fn repo_pr_link_target(
 /// [`toggle_focused_fold`], this is idempotent: pressing `h` on an
 /// already-folded repo leaves it folded.
 pub(in crate::app::input) fn set_focused_fold(app: &mut App, fold: bool) {
-    let target_rid = match app.selected_target() {
-        Some(SelectionTarget::Workspace(wid)) => app
-            .workspaces
-            .iter()
-            .find(|(_, w)| w.id == wid)
-            .map(|(rid, _)| *rid),
-        Some(SelectionTarget::Repo(rid)) => Some(rid),
-        None => None,
-    };
+    let target_rid = app.selected_repo();
     if let Some(rid) = target_rid {
         app.dashboard.folded.insert(rid.0 as u64, fold);
     }
@@ -402,10 +386,30 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             // Clear any in-flight reply draft (same rationale as Up/k above).
             app.dashboard.reply_draft.clear();
         }
-        (KeyCode::Char('h'), _) => set_focused_fold(app, true),
+        (KeyCode::Char('h'), _) => match app.selected_target() {
+            // A collapsed group row falls through to folding the repo.
+            Some(SelectionTarget::HiddenGroup { repo, rule })
+                if app.dashboard.expanded_hidden.contains(&(repo, rule)) =>
+            {
+                app.dashboard.expanded_hidden.remove(&(repo, rule));
+            }
+            Some(SelectionTarget::Workspace(id))
+                if app
+                    .hidden_group_of(id)
+                    .is_some_and(|g| app.dashboard.expanded_hidden.contains(&g)) =>
+            {
+                let (repo, rule) = app.hidden_group_of(id).unwrap();
+                app.dashboard.expanded_hidden.remove(&(repo, rule));
+                app.dashboard.selection = Some(SelectionTarget::HiddenGroup { repo, rule });
+            }
+            _ => set_focused_fold(app, true),
+        },
         (KeyCode::Char('l'), _) => match app.selected_target() {
             Some(SelectionTarget::Workspace(id)) => attach_workspace(app, id)?,
             Some(SelectionTarget::Repo(_)) => set_focused_fold(app, false),
+            Some(SelectionTarget::HiddenGroup { repo, rule }) => {
+                app.dashboard.expanded_hidden.insert((repo, rule));
+            }
             None => {}
         },
         (KeyCode::Enter, _) | (KeyCode::Char('i'), _) => match app.selected_target() {
@@ -420,6 +424,9 @@ pub(in crate::app::input) async fn handle_key_dashboard(
                     notice: None,
                 });
             }
+            Some(SelectionTarget::HiddenGroup { repo, rule }) => {
+                app.dashboard.expanded_hidden.insert((repo, rule));
+            }
             None => {}
         },
         (KeyCode::Char('n'), _) | (KeyCode::Char('N'), _) => {
@@ -428,15 +435,9 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             // Capital N opens the modal in YOLO mode (claude launches with
             // --dangerously-skip-permissions on every attach).
             let yolo = matches!(k.code, KeyCode::Char('N'));
-            let repo_id = match app.selected_target() {
-                Some(SelectionTarget::Repo(id)) => Some(id),
-                Some(SelectionTarget::Workspace(wid)) => app
-                    .workspaces
-                    .iter()
-                    .find(|(_, w)| w.id == wid)
-                    .map(|(rid, _)| *rid),
-                None => app.repos.first().map(|r| r.id),
-            };
+            let repo_id = app
+                .selected_repo()
+                .or_else(|| app.repos.first().map(|r| r.id));
             if let Some(id) = repo_id {
                 app.modal = Some(Modal::NewWorkspace {
                     repo_id: id,
@@ -452,15 +453,9 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             // Capital S opens the modal with shared: true (tmux-shared
             // workspace, joinable by other users on the host via `tmux
             // attach`). Mirrors the n/N pattern above.
-            let repo_id = match app.selected_target() {
-                Some(SelectionTarget::Repo(id)) => Some(id),
-                Some(SelectionTarget::Workspace(wid)) => app
-                    .workspaces
-                    .iter()
-                    .find(|(_, w)| w.id == wid)
-                    .map(|(rid, _)| *rid),
-                None => app.repos.first().map(|r| r.id),
-            };
+            let repo_id = app
+                .selected_repo()
+                .or_else(|| app.repos.first().map(|r| r.id));
             if let Some(id) = repo_id {
                 app.modal = Some(Modal::NewWorkspace {
                     repo_id: id,
@@ -540,7 +535,7 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             }
             // Shift+K on a repo header moves it up one slot.
             Some(SelectionTarget::Repo(_)) => move_selected_repo(app, true)?,
-            None => {}
+            Some(SelectionTarget::HiddenGroup { .. }) | None => {}
         },
         (KeyCode::Char('J'), _) => {
             // Shift+J on a repo header moves it down one slot. On a workspace
@@ -550,15 +545,9 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             }
         }
         (KeyCode::Char('s'), _) => {
-            let repo_id = match app.selected_target() {
-                Some(SelectionTarget::Repo(id)) => Some(id),
-                Some(SelectionTarget::Workspace(wid)) => app
-                    .workspaces
-                    .iter()
-                    .find(|(_, w)| w.id == wid)
-                    .map(|(rid, _)| *rid),
-                None => app.repos.first().map(|r| r.id),
-            };
+            let repo_id = app
+                .selected_repo()
+                .or_else(|| app.repos.first().map(|r| r.id));
             if let Some(id) = repo_id {
                 app.modal = Some(Modal::RepoSettings {
                     repo_id: id,
@@ -653,6 +642,31 @@ pub(in crate::app::input) async fn handle_key_dashboard(
                     current,
                     selected: 0,
                     filter: String::new(),
+                });
+            }
+        }
+        // `F` opens the hide-rules checklist for the selected row's repo.
+        (KeyCode::Char('F'), _) => {
+            if let Some(repo_id) = app.selected_repo()
+                && let Some(repo) = app.repos.iter().find(|r| r.id == repo_id)
+            {
+                let ids: Vec<_> = app
+                    .workspaces
+                    .iter()
+                    .filter(|(rid, _)| *rid == repo_id)
+                    .map(|(_, w)| w.id)
+                    .collect();
+                let counts = crate::data::hide_rules::HideRule::ALL.map(|rule| {
+                    ids.iter()
+                        .filter(|id| rule.matches(&app.hide_subject(**id)))
+                        .count()
+                });
+                app.modal = Some(Modal::HideRules {
+                    repo_id,
+                    repo_name: repo.name.clone(),
+                    rules: repo.hide_rules.clone(),
+                    counts,
+                    selected: 0,
                 });
             }
         }

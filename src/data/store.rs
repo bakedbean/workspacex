@@ -125,6 +125,8 @@ pub struct Repo {
     pub related_repos: Option<String>,
     pub base_branch: Option<String>,
     pub detail_bar_config: Option<String>,
+    /// Dashboard hide rules, parsed from the `hide_rules` column.
+    pub hide_rules: crate::data::hide_rules::HideRules,
     pub created_at: i64,
     pub sort_order: i64,
 }
@@ -707,6 +709,44 @@ mod tests {
             .find(|r| r.id == id)
             .unwrap();
         assert!(repo.detail_bar_config.is_none());
+    }
+
+    #[test]
+    fn hide_rules_column_round_trips() {
+        use crate::data::hide_rules::{HideRule, HideRules, PrCriterion};
+        let store = Store::open_in_memory().unwrap();
+        let id = store.add_repo(Path::new("/some/repo"), "demo", "").unwrap();
+        let load = |s: &Store| s.repos().unwrap().into_iter().find(|r| r.id == id).unwrap();
+        assert!(load(&store).hide_rules.is_empty());
+
+        let rules = HideRules::parse(Some("pr:merged,pr:none"));
+        store.set_repo_hide_rules(id, &rules).unwrap();
+        assert!(
+            load(&store)
+                .hide_rules
+                .contains(HideRule::Pr(PrCriterion::Merged))
+        );
+        assert_eq!(load(&store).hide_rules, rules);
+
+        store
+            .set_repo_hide_rules(id, &HideRules::default())
+            .unwrap();
+        assert!(load(&store).hide_rules.is_empty());
+    }
+
+    #[test]
+    fn migrate_v29_repo_hide_rules_column_idempotent() {
+        let store = Store::open_in_memory().unwrap();
+        store.migrate_for_test().unwrap();
+        let n: i64 = store
+            .conn()
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('repos') WHERE name = 'hide_rules'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "hide_rules column must exist exactly once");
     }
 
     #[test]
@@ -1596,7 +1636,7 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 28);
+        assert_eq!(v, 29);
     }
 
     #[test]

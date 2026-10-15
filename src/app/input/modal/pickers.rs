@@ -107,3 +107,49 @@ pub(super) async fn usage_window_picker(
     };
     Ok(())
 }
+
+/// Space toggles the rule under the cursor and persists immediately.
+pub(super) async fn hide_rules_picker(
+    app: &mut App,
+    k: crossterm::event::KeyEvent,
+    repo_id: crate::data::store::RepoId,
+    repo_name: String,
+    mut rules: crate::data::hide_rules::HideRules,
+    counts: [usize; 6],
+    selected: usize,
+) -> Result<()> {
+    use crate::data::hide_rules::HideRule;
+    let last = HideRule::ALL.len() - 1;
+    let selected = match k.code {
+        KeyCode::Esc | KeyCode::Enter => {
+            app.modal = None;
+            return Ok(());
+        }
+        KeyCode::Up | KeyCode::Char('k') => selected.saturating_sub(1),
+        KeyCode::Down | KeyCode::Char('j') => (selected + 1).min(last),
+        KeyCode::Char(' ') => {
+            let rule = HideRule::ALL[selected];
+            rules.toggle(rule);
+            if let Err(e) = app.store.set_repo_hide_rules(repo_id, &rules) {
+                app.modal = Some(Modal::Error {
+                    message: format!("could not save hide rules: {e}"),
+                });
+                return Ok(());
+            }
+            if !rules.contains(rule) {
+                app.dashboard.expanded_hidden.remove(&(repo_id, rule));
+            }
+            app.refresh()?;
+            selected
+        }
+        _ => selected,
+    };
+    app.modal = Some(Modal::HideRules {
+        repo_id,
+        repo_name,
+        rules,
+        counts,
+        selected,
+    });
+    Ok(())
+}

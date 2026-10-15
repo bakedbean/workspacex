@@ -168,6 +168,15 @@ pub enum Modal {
         hosts: Vec<(String, String)>,
         selected: usize,
     },
+    /// The `F` checklist of hide rules for one repo. `counts[i]` is how many
+    /// of its workspaces `HideRule::ALL[i]` matches, snapshotted on open.
+    HideRules {
+        repo_id: crate::data::store::RepoId,
+        repo_name: String,
+        rules: crate::data::hide_rules::HideRules,
+        counts: [usize; 6],
+        selected: usize,
+    },
     /// The `C` name-color picker for one workspace: an xterm-256 swatch grid
     /// narrowed by a hex/name filter. `current` is a snapshot of the color the
     /// workspace already has (marked in the grid), like `AgentPicker::current`;
@@ -495,6 +504,31 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                 format!(
                     "Choose a host to browse shared workspaces:\n\n{list}\n\n\
                      \u{2191}\u{2193} move   Enter fetch   Esc cancel"
+                ),
+            )
+        }
+        Modal::HideRules {
+            repo_name,
+            rules,
+            counts,
+            selected,
+            ..
+        } => {
+            let list = crate::data::hide_rules::HideRule::ALL
+                .iter()
+                .enumerate()
+                .map(|(i, rule)| {
+                    let cursor = if i == *selected { ">" } else { " " };
+                    let mark = if rules.contains(*rule) { "x" } else { " " };
+                    format!("{cursor} [{mark}] {:<12} {:>3}", rule.label(), counts[i])
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (
+                "hide workspaces",
+                format!(
+                    "Hide {repo_name} workspaces whose PR is:\n\n{list}\n\n\
+                     \u{2191}\u{2193} move   space toggle   Esc close"
                 ),
             )
         }

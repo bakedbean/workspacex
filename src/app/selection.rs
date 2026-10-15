@@ -11,6 +11,19 @@ impl App {
         self.dashboard.selection
     }
 
+    /// The repo the selection belongs to: the header itself, a workspace's
+    /// owner, or a hidden group's repo.
+    pub(crate) fn selected_repo(&self) -> Option<crate::data::store::RepoId> {
+        match self.selected_target()? {
+            SelectionTarget::Repo(id) | SelectionTarget::HiddenGroup { repo: id, .. } => Some(id),
+            SelectionTarget::Workspace(wid) => self
+                .workspaces
+                .iter()
+                .find(|(_, w)| w.id == wid)
+                .map(|(rid, _)| *rid),
+        }
+    }
+
     /// Set the selection by index into the current `selectable`, keeping the
     /// durable `selection` target and the `selected` nav cursor in sync. Use
     /// this anywhere selection *intent* changes via an index (nav, click,
@@ -20,8 +33,39 @@ impl App {
         self.dashboard.selection = self.selectable.get(idx).copied();
     }
 
+    /// The facts hide rules test for `ws`, from the app's caches.
+    pub(crate) fn hide_subject(
+        &self,
+        ws: crate::data::store::WorkspaceId,
+    ) -> crate::data::hide_rules::HideSubject {
+        crate::data::hide_rules::HideSubject {
+            lifecycle: self.pr_lifecycle.get(&ws).copied(),
+        }
+    }
+
+    /// The group whose rule hides `ws`, ignoring any active `/` filter.
+    pub(crate) fn hidden_group_of(
+        &self,
+        ws: crate::data::store::WorkspaceId,
+    ) -> Option<(
+        crate::data::store::RepoId,
+        crate::data::hide_rules::HideRule,
+    )> {
+        let rid = self
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == ws)
+            .map(|(r, _)| *r)?;
+        let repo = self.repos.iter().find(|r| r.id == rid)?;
+        repo.hide_rules
+            .classify(&self.hide_subject(ws))
+            .map(|rule| (rid, rule))
+    }
+
     /// Select a workspace by repo name + workspace slug, unfolding its repo.
-    /// Returns false if the pair doesn't exist or isn't currently selectable.
+    /// Returns false if the pair doesn't exist or is otherwise unselectable. A
+    /// hidden workspace's group is expanded and the selection resolves on the
+    /// next draw.
     /// Used by automation surfaces (waybar jump, `wsx --select`).
     pub fn select_workspace_by_name(&mut self, repo_name: &str, slug: &str) -> bool {
         let Some(repo_id) = self
@@ -41,6 +85,21 @@ impl App {
             return false;
         };
         self.dashboard.folded.insert(repo_id.0 as u64, false);
+        // A hidden workspace isn't in `selectable` until its group expands;
+        // expand it and let the next draw's reconcile resolve the index. An
+        // active filter bypasses hiding, so `selectable` already answers.
+        let filtering = self
+            .dashboard
+            .filter
+            .as_deref()
+            .is_some_and(|f| !f.is_empty());
+        if let Some(group) = self.hidden_group_of(ws_id).filter(|_| !filtering) {
+            self.dashboard.expanded_hidden.insert(group);
+            if !self.selectable.contains(&SelectionTarget::Workspace(ws_id)) {
+                self.dashboard.selection = Some(SelectionTarget::Workspace(ws_id));
+                return true;
+            }
+        }
         match self
             .selectable
             .iter()
@@ -81,6 +140,7 @@ impl App {
         match t {
             SelectionTarget::Repo(id) => self.repos.iter().any(|r| r.id == id),
             SelectionTarget::Workspace(id) => self.workspaces.iter().any(|(_, w)| w.id == id),
+            SelectionTarget::HiddenGroup { repo, .. } => self.repos.iter().any(|r| r.id == repo),
         }
     }
 

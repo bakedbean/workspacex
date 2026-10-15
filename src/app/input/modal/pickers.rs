@@ -119,7 +119,7 @@ pub(super) async fn hide_rules_picker(
     selected: usize,
 ) -> Result<()> {
     use crate::data::hide_rules::HideRule;
-    let last = HideRule::ALL.len() - 1;
+    let last = HideRule::PR_RULES.len() - 1;
     let selected = match k.code {
         KeyCode::Esc | KeyCode::Enter => {
             app.modal = None;
@@ -128,15 +128,15 @@ pub(super) async fn hide_rules_picker(
         KeyCode::Up | KeyCode::Char('k') => selected.saturating_sub(1),
         KeyCode::Down | KeyCode::Char('j') => (selected + 1).min(last),
         KeyCode::Char(' ') => {
-            let rule = HideRule::ALL[selected];
-            rules.toggle(rule);
+            let rule = HideRule::PR_RULES[selected].clone();
+            rules.toggle(rule.clone());
             if let Err(e) = app.store.set_repo_hide_rules(repo_id, &rules) {
                 app.modal = Some(Modal::Error {
                     message: format!("could not save hide rules: {e}"),
                 });
                 return Ok(());
             }
-            if !rules.contains(rule) {
+            if !rules.contains(&rule) {
                 app.dashboard.expanded_hidden.remove(&(repo_id, rule));
             }
             app.refresh()?;

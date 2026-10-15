@@ -1,8 +1,10 @@
 //! Per-repo rules that hide dashboard workspaces. Persisted in
-//! `repos.hide_rules` as namespaced tokens (`pr:merged,pr:none`) so future
+//! `repos.hide_rules` as namespaced tokens (`tag:parked,pr:merged`) so future
 //! criteria (`idle:14d`) can't collide; unknown tokens are skipped.
 
 use crate::git::forge::BranchLifecycle;
+use std::borrow::Cow;
+use std::sync::Arc;
 
 /// A PR-lifecycle criterion. Declaration order is the canonical display order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -15,8 +17,10 @@ pub enum PrCriterion {
     Conflicted,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum HideRule {
+    /// Declared first: derived `Ord` puts tag rules ahead of PR rules.
+    Tag(Arc<str>),
     Pr(PrCriterion),
 }
 
@@ -24,7 +28,7 @@ pub enum HideRule {
 pub const NO_PR_RECENT_DAYS: u64 = 3;
 
 /// The facts a rule can test about a workspace. Grows a field per criterion family.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct HideSubject {
     pub lifecycle: Option<BranchLifecycle>,
     /// Commits ahead of the base branch, or uncommitted changes.
@@ -33,6 +37,8 @@ pub struct HideSubject {
     pub agent_live: bool,
     /// Seconds since last activity; `None` when none was ever recorded.
     pub idle_secs: Option<u64>,
+    /// The workspace's tags, sorted.
+    pub tags: Vec<Arc<str>>,
 }
 
 impl HideSubject {
@@ -47,7 +53,7 @@ impl HideSubject {
 }
 
 impl HideRule {
-    pub const ALL: [HideRule; 6] = [
+    pub const PR_RULES: [HideRule; 6] = [
         HideRule::Pr(PrCriterion::Merged),
         HideRule::Pr(PrCriterion::Closed),
         HideRule::Pr(PrCriterion::NoPr),
@@ -56,36 +62,55 @@ impl HideRule {
         HideRule::Pr(PrCriterion::Conflicted),
     ];
 
-    pub fn token(self) -> &'static str {
-        match self {
-            HideRule::Pr(PrCriterion::Merged) => "pr:merged",
-            HideRule::Pr(PrCriterion::Closed) => "pr:closed",
-            HideRule::Pr(PrCriterion::NoPr) => "pr:none",
-            HideRule::Pr(PrCriterion::Draft) => "pr:draft",
-            HideRule::Pr(PrCriterion::Open) => "pr:open",
-            HideRule::Pr(PrCriterion::Conflicted) => "pr:conflicted",
-        }
+    /// A tag rule; `name` must already be normalized.
+    pub fn tag(name: &str) -> HideRule {
+        HideRule::Tag(Arc::from(name))
+    }
+
+    pub fn token(&self) -> Cow<'static, str> {
+        let c = match self {
+            HideRule::Tag(t) => return Cow::Owned(format!("tag:{t}")),
+            HideRule::Pr(c) => c,
+        };
+        Cow::Borrowed(match c {
+            PrCriterion::Merged => "pr:merged",
+            PrCriterion::Closed => "pr:closed",
+            PrCriterion::NoPr => "pr:none",
+            PrCriterion::Draft => "pr:draft",
+            PrCriterion::Open => "pr:open",
+            PrCriterion::Conflicted => "pr:conflicted",
+        })
     }
 
     pub fn from_token(s: &str) -> Option<HideRule> {
-        HideRule::ALL.into_iter().find(|r| r.token() == s)
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            HideRule::Pr(PrCriterion::Merged) => "merged",
-            HideRule::Pr(PrCriterion::Closed) => "closed",
-            HideRule::Pr(PrCriterion::NoPr) => "no PR",
-            HideRule::Pr(PrCriterion::Draft) => "draft",
-            HideRule::Pr(PrCriterion::Open) => "open",
-            HideRule::Pr(PrCriterion::Conflicted) => "conflicted",
+        if let Some(name) = s.strip_prefix("tag:") {
+            return crate::data::tags::normalize_tag(name)
+                .filter(|n| n == name)
+                .map(|n| HideRule::tag(&n));
         }
+        HideRule::PR_RULES.into_iter().find(|r| r.token() == s)
     }
 
-    /// The lifecycle a PR rule stands for, for glyph and color. `None` for
-    /// non-PR rules once they exist.
-    pub fn lifecycle(self) -> Option<BranchLifecycle> {
-        let HideRule::Pr(c) = self;
+    pub fn label(&self) -> Cow<'static, str> {
+        let c = match self {
+            HideRule::Tag(t) => return Cow::Owned(format!("#{t}")),
+            HideRule::Pr(c) => c,
+        };
+        Cow::Borrowed(match c {
+            PrCriterion::Merged => "merged",
+            PrCriterion::Closed => "closed",
+            PrCriterion::NoPr => "no PR",
+            PrCriterion::Draft => "draft",
+            PrCriterion::Open => "open",
+            PrCriterion::Conflicted => "conflicted",
+        })
+    }
+
+    /// The lifecycle a PR rule stands for, for glyph and color; `None` for tags.
+    pub fn lifecycle(&self) -> Option<BranchLifecycle> {
+        let HideRule::Pr(c) = self else {
+            return None;
+        };
         Some(match c {
             PrCriterion::Merged => BranchLifecycle::PrMerged,
             PrCriterion::Closed => BranchLifecycle::PrClosed,
@@ -97,9 +122,11 @@ impl HideRule {
     }
 
     /// An unresolved lifecycle never matches, so rows don't blink out and
-    /// back in while PR polling warms up. `pr:none` spares in-progress work.
-    pub fn matches(self, s: &HideSubject) -> bool {
+    /// back in while PR polling warms up. `pr:none` spares in-progress work;
+    /// tag rules don't, since tagging is deliberate.
+    pub fn matches(&self, s: &HideSubject) -> bool {
         match self {
+            HideRule::Tag(t) => s.tags.contains(t),
             HideRule::Pr(PrCriterion::NoPr) => {
                 s.lifecycle == Some(BranchLifecycle::NoPr) && !s.in_progress()
             }
@@ -142,8 +169,8 @@ impl HideRules {
         self.0.is_empty()
     }
 
-    pub fn contains(&self, rule: HideRule) -> bool {
-        self.0.contains(&rule)
+    pub fn contains(&self, rule: &HideRule) -> bool {
+        self.0.contains(rule)
     }
 
     pub fn toggle(&mut self, rule: HideRule) {
@@ -155,14 +182,14 @@ impl HideRules {
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = HideRule> + '_ {
-        self.0.iter().copied()
+    pub fn iter(&self) -> impl Iterator<Item = &HideRule> {
+        self.0.iter()
     }
 
     /// The first rule hiding `s`. First-match keeps group counts disjoint
     /// once overlapping criteria exist.
     pub fn classify(&self, s: &HideSubject) -> Option<HideRule> {
-        self.iter().find(|r| r.matches(s))
+        self.iter().find(|r| r.matches(s)).cloned()
     }
 }
 
@@ -229,14 +256,73 @@ mod tests {
             work_in_progress: true,
             agent_live: true,
             idle_secs: Some(0),
+            ..Default::default()
         };
         assert!(HideRule::Pr(PrCriterion::Merged).matches(&busy));
     }
 
+    fn tagged(tags: &[&str]) -> HideSubject {
+        HideSubject {
+            lifecycle: Some(BranchLifecycle::PrMerged),
+            tags: tags.iter().map(|t| std::sync::Arc::from(*t)).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tag_token_round_trips() {
+        let r = HideRule::tag("parked");
+        assert_eq!(r.token(), "tag:parked");
+        assert_eq!(HideRule::from_token("tag:parked"), Some(r));
+    }
+
+    #[test]
+    fn invalid_tag_tokens_are_skipped() {
+        let rules = HideRules::parse(Some("tag:Bad Name,tag:,tag:ok"));
+        assert_eq!(rules.serialize().as_deref(), Some("tag:ok"));
+    }
+
+    #[test]
+    fn tag_rules_sort_before_pr_rules_alphabetically() {
+        let rules = HideRules::parse(Some("pr:merged,tag:zeta,tag:alpha"));
+        assert_eq!(
+            rules.serialize().as_deref(),
+            Some("tag:alpha,tag:zeta,pr:merged")
+        );
+    }
+
+    #[test]
+    fn tag_rule_matches_only_tagged_workspaces_and_ignores_activity() {
+        let r = HideRule::tag("parked");
+        let busy = HideSubject {
+            work_in_progress: true,
+            agent_live: true,
+            ..tagged(&["parked"])
+        };
+        assert!(r.matches(&busy));
+        assert!(!r.matches(&tagged(&["spike"])));
+    }
+
+    #[test]
+    fn classify_prefers_tag_rule_over_pr_rule() {
+        let rules = HideRules::parse(Some("pr:merged,tag:parked"));
+        assert_eq!(
+            rules.classify(&tagged(&["parked"])),
+            Some(HideRule::tag("parked"))
+        );
+    }
+
+    #[test]
+    fn tag_label_and_lifecycle() {
+        let r = HideRule::tag("parked");
+        assert_eq!(r.label(), "#parked");
+        assert_eq!(r.lifecycle(), None);
+    }
+
     #[test]
     fn tokens_round_trip() {
-        for rule in HideRule::ALL {
-            assert_eq!(HideRule::from_token(rule.token()), Some(rule));
+        for rule in HideRule::PR_RULES {
+            assert_eq!(HideRule::from_token(&rule.token()), Some(rule));
         }
     }
 
@@ -244,7 +330,7 @@ mod tests {
     fn parse_skips_unknown_dedupes_and_orders_canonically() {
         let rules = HideRules::parse(Some(" pr:none, idle:14d ,pr:merged,pr:none"));
         assert_eq!(
-            rules.iter().collect::<Vec<_>>(),
+            rules.iter().cloned().collect::<Vec<_>>(),
             vec![
                 HideRule::Pr(PrCriterion::Merged),
                 HideRule::Pr(PrCriterion::NoPr)
@@ -281,7 +367,7 @@ mod tests {
 
     #[test]
     fn none_lifecycle_never_matches() {
-        for rule in HideRule::ALL {
+        for rule in HideRule::PR_RULES {
             assert!(!rule.matches(&subject(None)), "{rule:?}");
         }
     }

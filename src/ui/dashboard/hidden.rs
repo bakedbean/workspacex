@@ -27,12 +27,15 @@ pub fn hidden_group_line(
     if let Some(name) = repo_prefix {
         spans.push(Span::styled(format!("{name} · "), theme.dim_style()));
     }
-    spans.push(Span::styled(
-        format!("{} ", crate::ui::theme::branch_glyph(lc, nerd_fonts)),
-        theme
-            .lifecycle_style(lc)
-            .unwrap_or_else(|| theme.dim_style()),
-    ));
+    // Tag rules have no lifecycle; their `#name` label stands in for the glyph.
+    if lc.is_some() {
+        spans.push(Span::styled(
+            format!("{} ", crate::ui::theme::branch_glyph(lc, nerd_fonts)),
+            theme
+                .lifecycle_style(lc)
+                .unwrap_or_else(|| theme.dim_style()),
+        ));
+    }
     spans.push(Span::styled(
         format!("{}  ·  {} hidden", g.rule.label(), g.workspaces.len()),
         theme.dim_style(),

@@ -386,24 +386,24 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             // Clear any in-flight reply draft (same rationale as Up/k above).
             app.dashboard.reply_draft.clear();
         }
-        (KeyCode::Char('h'), _) => match app.selected_target() {
-            // A collapsed group row falls through to folding the repo.
-            Some(SelectionTarget::HiddenGroup { repo, rule })
-                if app.dashboard.expanded_hidden.contains(&(repo, rule)) =>
-            {
-                app.dashboard.expanded_hidden.remove(&(repo, rule));
+        (KeyCode::Char('h'), _) => {
+            let (group, on_member_row) = match app.selected_target() {
+                Some(SelectionTarget::HiddenGroup { repo, rule }) => (Some((repo, rule)), false),
+                Some(SelectionTarget::Workspace(id)) => (app.hidden_group_of(id), true),
+                _ => (None, false),
+            };
+            match group {
+                // A collapsed group row falls through to folding the repo.
+                Some(g) if app.dashboard.expanded_hidden.contains(&g) => {
+                    app.dashboard.expanded_hidden.remove(&g);
+                    if on_member_row {
+                        let (repo, rule) = g;
+                        app.dashboard.selection = Some(SelectionTarget::HiddenGroup { repo, rule });
+                    }
+                }
+                _ => set_focused_fold(app, true),
             }
-            Some(SelectionTarget::Workspace(id))
-                if app
-                    .hidden_group_of(id)
-                    .is_some_and(|g| app.dashboard.expanded_hidden.contains(&g)) =>
-            {
-                let (repo, rule) = app.hidden_group_of(id).unwrap();
-                app.dashboard.expanded_hidden.remove(&(repo, rule));
-                app.dashboard.selection = Some(SelectionTarget::HiddenGroup { repo, rule });
-            }
-            _ => set_focused_fold(app, true),
-        },
+        }
         (KeyCode::Char('l'), _) => match app.selected_target() {
             Some(SelectionTarget::Workspace(id)) => attach_workspace(app, id)?,
             Some(SelectionTarget::Repo(_)) => set_focused_fold(app, false),
@@ -656,7 +656,7 @@ pub(in crate::app::input) async fn handle_key_dashboard(
                     .filter(|(rid, _)| *rid == repo_id)
                     .map(|(_, w)| w.id)
                     .collect();
-                let counts = crate::data::hide_rules::HideRule::ALL.map(|rule| {
+                let counts = crate::data::hide_rules::HideRule::PR_RULES.map(|rule| {
                     ids.iter()
                         .filter(|id| rule.matches(&app.hide_subject(**id)))
                         .count()

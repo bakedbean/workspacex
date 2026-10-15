@@ -14,7 +14,7 @@ pub enum AppEvent {
     Quit,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SelectionTarget {
     Repo(crate::data::store::RepoId),
     Workspace(crate::data::store::WorkspaceId),

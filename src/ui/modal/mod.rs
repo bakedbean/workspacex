@@ -514,12 +514,12 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
             selected,
             ..
         } => {
-            let list = crate::data::hide_rules::HideRule::ALL
+            let list = crate::data::hide_rules::HideRule::PR_RULES
                 .iter()
                 .enumerate()
                 .map(|(i, rule)| {
                     let cursor = if i == *selected { ">" } else { " " };
-                    let mark = if rules.contains(*rule) { "x" } else { " " };
+                    let mark = if rules.contains(rule) { "x" } else { " " };
                     format!("{cursor} [{mark}] {:<12} {:>3}", rule.label(), counts[i])
                 })
                 .collect::<Vec<_>>()

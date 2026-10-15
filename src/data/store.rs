@@ -764,7 +764,7 @@ mod tests {
         assert!(
             load(&store)
                 .hide_rules
-                .contains(HideRule::Pr(PrCriterion::Merged))
+                .contains(&HideRule::Pr(PrCriterion::Merged))
         );
         assert_eq!(load(&store).hide_rules, rules);
 

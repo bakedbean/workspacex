@@ -49,7 +49,7 @@ async fn enter_expands_and_h_collapses_a_hidden_group() {
     let (mut app, repo, ids) = app_with_merged_hidden();
     draw(&mut app);
     let group = SelectionTarget::HiddenGroup { repo, rule: MERGED };
-    select(&mut app, group);
+    select(&mut app, group.clone());
     press_key(&mut app, KeyCode::Enter).await;
     assert!(app.dashboard.expanded_hidden.contains(&(repo, MERGED)));
     draw(&mut app);
@@ -152,7 +152,7 @@ async fn f_opens_picker_for_selected_repo_with_counts() {
     };
     assert_eq!(*repo_id, repo);
     assert_eq!(counts[0], 1, "one merged workspace"); // ALL[0] is Merged
-    assert!(rules.contains(MERGED));
+    assert!(rules.contains(&MERGED));
 }
 
 #[tokio::test]
@@ -171,7 +171,7 @@ async fn space_toggles_and_persists() {
         .find(|r| r.id == repo)
         .unwrap();
     assert!(
-        !stored.hide_rules.contains(MERGED),
+        !stored.hide_rules.contains(&MERGED),
         "space on row 0 toggles merged off"
     );
     assert!(
@@ -290,4 +290,24 @@ async fn selection_follows_a_workspace_that_leaves_the_hidden_group() {
         app.selectable[app.dashboard.selected],
         SelectionTarget::Workspace(ids[0])
     );
+}
+
+#[tokio::test]
+async fn tagged_workspace_hides_under_tag_rule() {
+    let mut app = test_app_with_two_ready_workspaces();
+    app.refresh().unwrap();
+    let repo = app.repos[0].id;
+    let ids: Vec<_> = app.workspaces.iter().map(|(_, w)| w.id).collect();
+    app.store.add_workspace_tag(ids[0], "parked").unwrap();
+    app.store
+        .set_repo_hide_rules(repo, &HideRules::parse(Some("tag:parked")))
+        .unwrap();
+    app.refresh().unwrap();
+    draw(&mut app);
+    assert!(!app.selectable.contains(&SelectionTarget::Workspace(ids[0])));
+    assert_eq!(
+        app.hidden_group_of(ids[0]),
+        Some((repo, HideRule::tag("parked")))
+    );
+    assert!(app.selectable.contains(&SelectionTarget::Workspace(ids[1])));
 }

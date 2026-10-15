@@ -20,10 +20,30 @@ pub enum HideRule {
     Pr(PrCriterion),
 }
 
+/// A no-PR workspace active within this many days stays visible.
+pub const NO_PR_RECENT_DAYS: u64 = 3;
+
 /// The facts a rule can test about a workspace. Grows a field per criterion family.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HideSubject {
     pub lifecycle: Option<BranchLifecycle>,
+    /// Commits ahead of the base branch, or uncommitted changes.
+    pub work_in_progress: bool,
+    /// A running agent session, or a fresh wsx status of working/waiting/blocked.
+    pub agent_live: bool,
+    /// Seconds since last activity; `None` when none was ever recorded.
+    pub idle_secs: Option<u64>,
+}
+
+impl HideSubject {
+    /// Any sign the workspace is in use, which exempts it from `pr:none`.
+    pub fn in_progress(&self) -> bool {
+        self.work_in_progress
+            || self.agent_live
+            || self
+                .idle_secs
+                .is_some_and(|s| s < NO_PR_RECENT_DAYS * 86_400)
+    }
 }
 
 impl HideRule {
@@ -77,9 +97,12 @@ impl HideRule {
     }
 
     /// An unresolved lifecycle never matches, so rows don't blink out and
-    /// back in while PR polling warms up.
+    /// back in while PR polling warms up. `pr:none` spares in-progress work.
     pub fn matches(self, s: &HideSubject) -> bool {
         match self {
+            HideRule::Pr(PrCriterion::NoPr) => {
+                s.lifecycle == Some(BranchLifecycle::NoPr) && !s.in_progress()
+            }
             HideRule::Pr(_) => s.lifecycle.is_some() && s.lifecycle == self.lifecycle(),
         }
     }
@@ -149,7 +172,65 @@ mod tests {
     use crate::git::forge::BranchLifecycle;
 
     fn subject(lc: Option<BranchLifecycle>) -> HideSubject {
-        HideSubject { lifecycle: lc }
+        HideSubject {
+            lifecycle: lc,
+            ..Default::default()
+        }
+    }
+
+    const NO_PR: HideRule = HideRule::Pr(PrCriterion::NoPr);
+    const DAY: u64 = 86_400;
+
+    fn no_pr() -> HideSubject {
+        subject(Some(BranchLifecycle::NoPr))
+    }
+
+    #[test]
+    fn no_pr_hides_when_nothing_is_in_progress() {
+        assert!(NO_PR.matches(&no_pr()));
+        let stale = HideSubject {
+            idle_secs: Some(NO_PR_RECENT_DAYS * DAY),
+            ..no_pr()
+        };
+        assert!(NO_PR.matches(&stale));
+    }
+
+    #[test]
+    fn no_pr_spares_work_in_progress() {
+        let s = HideSubject {
+            work_in_progress: true,
+            ..no_pr()
+        };
+        assert!(!NO_PR.matches(&s));
+    }
+
+    #[test]
+    fn no_pr_spares_a_live_agent() {
+        let s = HideSubject {
+            agent_live: true,
+            ..no_pr()
+        };
+        assert!(!NO_PR.matches(&s));
+    }
+
+    #[test]
+    fn no_pr_spares_recent_activity() {
+        let s = HideSubject {
+            idle_secs: Some(NO_PR_RECENT_DAYS * DAY - 1),
+            ..no_pr()
+        };
+        assert!(!NO_PR.matches(&s));
+    }
+
+    #[test]
+    fn other_pr_rules_ignore_activity() {
+        let busy = HideSubject {
+            lifecycle: Some(BranchLifecycle::PrMerged),
+            work_in_progress: true,
+            agent_live: true,
+            idle_secs: Some(0),
+        };
+        assert!(HideRule::Pr(PrCriterion::Merged).matches(&busy));
     }
 
     #[test]

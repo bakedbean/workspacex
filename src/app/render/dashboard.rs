@@ -344,6 +344,7 @@ pub(crate) fn build_workspace_items<'a>(
                 workspace_id: ws.id,
                 status: row.status,
                 row,
+                hide: app.hide_subject(ws.id),
             });
         }
     }

@@ -33,13 +33,49 @@ impl App {
         self.dashboard.selection = self.selectable.get(idx).copied();
     }
 
-    /// The facts hide rules test for `ws`, from the app's caches.
+    /// The facts hide rules test for `ws`, from the app's caches. The sole
+    /// builder, so the rows drawn and the selection's groups can't disagree.
     pub(crate) fn hide_subject(
         &self,
         ws: crate::data::store::WorkspaceId,
     ) -> crate::data::hide_rules::HideSubject {
+        use crate::data::store::ReportedState;
+        let dirty = self
+            .workspace_status
+            .get(&ws)
+            .is_some_and(|s| s.modified > 0 || s.untracked > 0 || s.ahead > 0);
+        let committed = self
+            .workspace_diff
+            .get(&ws)
+            .is_some_and(|d| d.added > 0 || d.removed > 0);
+        let session_live = self.agent_roster.get(&ws).is_some_and(|instances| {
+            instances.iter().any(|inst| {
+                self.sessions.get(inst.id).is_some_and(|s| {
+                    matches!(
+                        *s.status.read().unwrap(),
+                        crate::pty::session::SessionStatus::Running { .. }
+                    )
+                })
+            })
+        }) || self.shared_detached.contains(&ws);
+        let reported_live = matches!(
+            self.fresh_reported_status(ws).map(|r| r.state),
+            Some(
+                ReportedState::Working
+                    | ReportedState::Waiting
+                    | ReportedState::Blocked
+                    | ReportedState::Busy
+            )
+        );
         crate::data::hide_rules::HideSubject {
             lifecycle: self.pr_lifecycle.get(&ws).copied(),
+            work_in_progress: dirty || committed,
+            agent_live: session_live || reported_live,
+            idle_secs: crate::app::render::dashboard::workspace_age_secs(
+                self,
+                ws,
+                crate::util::time::now_ms(),
+            ),
         }
     }
 

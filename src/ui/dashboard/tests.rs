@@ -45,6 +45,7 @@ fn build_inputs<'a>(
                 repo,
                 workspace_id: id,
                 status: w.status,
+                hide: Default::default(),
                 row: row::RowInputs {
                     agent: crate::pty::session::AgentKind::Claude,
                     peers: Vec::new(),
@@ -844,6 +845,7 @@ fn item_with_column<'a>(repo: &'a Repo, column: Option<RowColumn>) -> WorkspaceI
         repo,
         workspace_id: WorkspaceId(1),
         status: crate::ui::dashboard::status::Status::Idle,
+        hide: Default::default(),
         row: row::RowInputs {
             column,
             ..base_row()
@@ -1255,6 +1257,7 @@ fn ordered_sections_by_attention_emits_non_empty_sections_in_urgency_order() {
             repo,
             workspace_id: WorkspaceId(id),
             status,
+            hide: Default::default(),
             row,
         }
     };
@@ -1350,6 +1353,10 @@ mod hide_rules {
             repo,
             workspace_id: WorkspaceId(id),
             status: Status::Idle,
+            hide: HideSubject {
+                lifecycle: lc,
+                ..Default::default()
+            },
             row: row::RowInputs {
                 agent: AgentKind::Claude,
                 peers: Vec::new(),

@@ -40,6 +40,8 @@ pub struct WorkspaceItem<'a> {
     pub workspace_id: crate::data::store::WorkspaceId,
     pub status: Status,
     pub row: RowInputs,
+    /// What hide rules test; built by `App::hide_subject`.
+    pub hide: HideSubject,
 }
 
 /// What `app.rs` passes to `render()`. Replaces the old `Item` enum.
@@ -719,9 +721,7 @@ pub(crate) fn hidden_by(w: &WorkspaceItem<'_>, filter: Option<&str>) -> Option<H
     if filter.is_some() {
         return None;
     }
-    w.repo.hide_rules.classify(&HideSubject {
-        lifecycle: w.row.lifecycle,
-    })
+    w.repo.hide_rules.classify(&w.hide)
 }
 
 /// A hidden group's summary view: its rows in display order, plus whether

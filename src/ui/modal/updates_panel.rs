@@ -2003,7 +2003,7 @@ mod ordering_tests {
             .iter_mut()
             .find(|i| i.workspace_id == WorkspaceId(2))
             .unwrap()
-            .row
+            .hide
             .lifecycle = Some(BranchLifecycle::PrMerged);
         assert_eq!(
             ordered_workspaces_for_panel(&pi, None),
@@ -2074,6 +2074,7 @@ mod render_tests {
                         None,
                     );
                     it.row.lifecycle = lifecycle;
+                    it.hide.lifecycle = lifecycle;
                     it
                 })
                 .collect(),
@@ -2264,6 +2265,7 @@ pub(super) mod test_fixtures {
             repo,
             workspace_id: w.id,
             status,
+            hide: Default::default(),
             row: RowInputs {
                 agent: w.agent,
                 peers: Vec::new(),

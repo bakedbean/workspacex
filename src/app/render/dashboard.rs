@@ -343,6 +343,7 @@ pub(crate) fn build_workspace_items<'a>(
                 repo,
                 workspace_id: ws.id,
                 status: row.status,
+                hide: app.hide_subject_with_age(ws.id, row.ago_secs),
                 row,
             });
         }

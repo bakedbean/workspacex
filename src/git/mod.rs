@@ -231,6 +231,26 @@ pub(super) mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn commits_ahead_of_counts_zero_line_commits() {
+        let dir = init_repo();
+        let git = |args: &[&str]| {
+            assert!(
+                StdCmd::new("git")
+                    .current_dir(dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        git(&["checkout", "-q", "-b", "feature"]);
+        assert_eq!(commits_ahead_of(dir.path(), "main").await, Some(0));
+        git(&["commit", "--allow-empty", "-q", "-m", "empty"]);
+        assert_eq!(commits_ahead_of(dir.path(), "main").await, Some(1));
+        assert_eq!(commits_ahead_of(dir.path(), "no-such-base").await, None);
+    }
+
     /// `check-ref-format --branch` expands `@{-N}` against the repository in
     /// the current directory, so run from one with a previous checkout it
     /// passed `@{-1}`, and `git worktree add -b @{-1}` then failed after the
@@ -866,6 +886,18 @@ pub fn parse_shortstat(s: &str) -> Option<DiffStats> {
     } else {
         None
     }
+}
+
+/// Commits on HEAD not on `base`. Counts commits, not lines, so an empty
+/// or binary-only commit still registers. `None` on any git failure.
+pub async fn commits_ahead_of(worktree: &Path, base: &str) -> Option<u32> {
+    let range = format!("{base}..HEAD");
+    run(worktree, &["rev-list", "--count", &range, "--"])
+        .await
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// Compute line-count diff stats for a worktree against `base`.

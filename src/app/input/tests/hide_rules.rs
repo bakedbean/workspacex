@@ -202,3 +202,92 @@ async fn esc_closes_picker() {
         .unwrap();
     assert!(app.modal.is_none());
 }
+
+const NO_PR: HideRule = HideRule::Pr(PrCriterion::NoPr);
+
+/// One repo hiding no-PR workspaces; both start with no PR and no activity.
+fn app_with_no_pr_hidden() -> (
+    App,
+    crate::data::store::RepoId,
+    Vec<crate::data::store::WorkspaceId>,
+) {
+    let mut app = test_app_with_two_ready_workspaces();
+    app.refresh().unwrap();
+    let repo = app.repos[0].id;
+    app.store
+        .set_repo_hide_rules(repo, &HideRules::parse(Some("pr:none")))
+        .unwrap();
+    app.refresh().unwrap();
+    let ids: Vec<_> = app.workspaces.iter().map(|(_, w)| w.id).collect();
+    for id in &ids {
+        app.pr_lifecycle.insert(*id, BranchLifecycle::NoPr);
+    }
+    (app, repo, ids)
+}
+
+fn report_working(app: &mut App, ws: crate::data::store::WorkspaceId) {
+    app.pushed_status.insert(
+        ws,
+        crate::data::store::ReportedStatus {
+            state: crate::data::store::ReportedState::Working,
+            message: None,
+            source: "test".into(),
+            reported_at: crate::util::time::now_ms(),
+        },
+    );
+}
+
+#[tokio::test]
+async fn no_pr_workspace_with_uncommitted_changes_stays_visible() {
+    let (mut app, repo, ids) = app_with_no_pr_hidden();
+    app.workspace_status.insert(
+        ids[0],
+        crate::git::WorkspaceStatus {
+            modified: 1,
+            ..Default::default()
+        },
+    );
+    draw(&mut app);
+    assert!(app.selectable.contains(&SelectionTarget::Workspace(ids[0])));
+    assert_eq!(app.hidden_group_of(ids[1]), Some((repo, NO_PR)));
+}
+
+#[tokio::test]
+async fn no_pr_workspace_with_commits_ahead_of_base_stays_visible() {
+    let (mut app, _, ids) = app_with_no_pr_hidden();
+    // Pushed and clean: nothing ahead of upstream, no line diff.
+    app.workspace_status.insert(ids[0], Default::default());
+    app.workspace_ahead_of_base.insert(ids[0], 1);
+    draw(&mut app);
+    assert!(app.selectable.contains(&SelectionTarget::Workspace(ids[0])));
+}
+
+#[tokio::test]
+async fn picker_counts_only_hideable_no_pr_workspaces() {
+    let (mut app, _, ids) = app_with_no_pr_hidden();
+    report_working(&mut app, ids[0]);
+    open_picker(&mut app).await;
+    let Some(crate::ui::modal::Modal::HideRules { counts, .. }) = &app.modal else {
+        panic!("expected HideRules modal, got {:?}", app.modal);
+    };
+    assert_eq!(counts[2], 1, "the working one isn't counted"); // ALL[2] is NoPr
+}
+
+#[tokio::test]
+async fn selection_follows_a_workspace_that_leaves_the_hidden_group() {
+    let (mut app, repo, ids) = app_with_no_pr_hidden();
+    app.dashboard.expanded_hidden.insert((repo, NO_PR));
+    draw(&mut app);
+    select(&mut app, SelectionTarget::Workspace(ids[0]));
+    report_working(&mut app, ids[0]); // agent starts working
+    draw(&mut app);
+    assert_eq!(app.hidden_group_of(ids[0]), None);
+    assert_eq!(
+        app.selected_target(),
+        Some(SelectionTarget::Workspace(ids[0]))
+    );
+    assert_eq!(
+        app.selectable[app.dashboard.selected],
+        SelectionTarget::Workspace(ids[0])
+    );
+}

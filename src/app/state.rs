@@ -71,6 +71,7 @@ impl App {
             tick: 0,
             workspace_diff: std::collections::HashMap::new(),
             workspace_diff_per_file: std::collections::HashMap::new(),
+            workspace_ahead_of_base: std::collections::HashMap::new(),
             activity_history: std::collections::VecDeque::new(),
             msgs_queued: 0,
             last_proc_scan_ms: 0,
@@ -745,6 +746,9 @@ pub struct App {
     /// Populated lazily by the workspace-status poller.
     pub workspace_diff:
         std::collections::HashMap<crate::data::store::WorkspaceId, crate::git::DiffStats>,
+    /// Commits on the workspace branch not on its base. Same poller and
+    /// throttle as `workspace_diff`; feeds the `pr:none` hide exemption.
+    pub workspace_ahead_of_base: std::collections::HashMap<crate::data::store::WorkspaceId, u32>,
     /// Per-file diff stats keyed by `WorkspaceId`, then by path relative
     /// to the worktree root (as `git diff --numstat` emits them).
     /// Populated by the same poller that maintains `workspace_diff`.

@@ -84,6 +84,18 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     // so it must match what the renderer emits below or the
     // selection will appear to skip rows / jump back.
     let new_selectable = dashboard::visible_targets(&inputs, &app.dashboard);
+    // A selected row that a hide rule just swallowed lands on its group's
+    // summary row rather than parking invisibly.
+    if let Some(SelectionTarget::Workspace(id)) = app.dashboard.selection {
+        if !new_selectable.contains(&SelectionTarget::Workspace(id)) {
+            if let Some((repo, rule)) = app.hidden_group_of(id) {
+                let group = SelectionTarget::HiddenGroup { repo, rule };
+                if new_selectable.contains(&group) {
+                    app.dashboard.selection = Some(group);
+                }
+            }
+        }
+    }
     // Reconcile the durable selection against the rebuilt list every
     // frame. A temporarily-hidden target (folded repo / filter / quiet
     // repo) is PARKED on the same WorkspaceId rather than clamped onto a

@@ -36,6 +36,35 @@ impl App {
     /// Select a workspace by repo name + workspace slug, unfolding its repo.
     /// Returns false if the pair doesn't exist or isn't currently selectable.
     /// Used by automation surfaces (waybar jump, `wsx --select`).
+    /// The facts hide rules test for `ws`, from the app's caches.
+    pub(crate) fn hide_subject(
+        &self,
+        ws: crate::data::store::WorkspaceId,
+    ) -> crate::data::hide_rules::HideSubject {
+        crate::data::hide_rules::HideSubject {
+            lifecycle: self.pr_lifecycle.get(&ws).copied(),
+        }
+    }
+
+    /// The group whose rule hides `ws`, ignoring any active `/` filter.
+    pub(crate) fn hidden_group_of(
+        &self,
+        ws: crate::data::store::WorkspaceId,
+    ) -> Option<(
+        crate::data::store::RepoId,
+        crate::data::hide_rules::HideRule,
+    )> {
+        let rid = self
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == ws)
+            .map(|(r, _)| *r)?;
+        let repo = self.repos.iter().find(|r| r.id == rid)?;
+        repo.hide_rules
+            .classify(&self.hide_subject(ws))
+            .map(|rule| (rid, rule))
+    }
+
     pub fn select_workspace_by_name(&mut self, repo_name: &str, slug: &str) -> bool {
         let Some(repo_id) = self
             .repos
@@ -54,6 +83,15 @@ impl App {
             return false;
         };
         self.dashboard.folded.insert(repo_id.0 as u64, false);
+        // A hidden workspace isn't in `selectable` until its group expands;
+        // expand it and let the next draw's reconcile resolve the index.
+        if let Some(group) = self.hidden_group_of(ws_id) {
+            self.dashboard.expanded_hidden.insert(group);
+            if !self.selectable.contains(&SelectionTarget::Workspace(ws_id)) {
+                self.dashboard.selection = Some(SelectionTarget::Workspace(ws_id));
+                return true;
+            }
+        }
         match self
             .selectable
             .iter()

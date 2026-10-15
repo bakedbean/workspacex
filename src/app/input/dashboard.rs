@@ -386,11 +386,27 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             // Clear any in-flight reply draft (same rationale as Up/k above).
             app.dashboard.reply_draft.clear();
         }
-        (KeyCode::Char('h'), _) => set_focused_fold(app, true),
+        (KeyCode::Char('h'), _) => match app.selected_target() {
+            Some(SelectionTarget::HiddenGroup { repo, rule }) => {
+                app.dashboard.expanded_hidden.remove(&(repo, rule));
+            }
+            Some(SelectionTarget::Workspace(id))
+                if app
+                    .hidden_group_of(id)
+                    .is_some_and(|g| app.dashboard.expanded_hidden.contains(&g)) =>
+            {
+                let (repo, rule) = app.hidden_group_of(id).unwrap();
+                app.dashboard.expanded_hidden.remove(&(repo, rule));
+                app.dashboard.selection = Some(SelectionTarget::HiddenGroup { repo, rule });
+            }
+            _ => set_focused_fold(app, true),
+        },
         (KeyCode::Char('l'), _) => match app.selected_target() {
             Some(SelectionTarget::Workspace(id)) => attach_workspace(app, id)?,
             Some(SelectionTarget::Repo(_)) => set_focused_fold(app, false),
-            Some(SelectionTarget::HiddenGroup { .. }) => {}
+            Some(SelectionTarget::HiddenGroup { repo, rule }) => {
+                app.dashboard.expanded_hidden.insert((repo, rule));
+            }
             None => {}
         },
         (KeyCode::Enter, _) | (KeyCode::Char('i'), _) => match app.selected_target() {
@@ -405,7 +421,9 @@ pub(in crate::app::input) async fn handle_key_dashboard(
                     notice: None,
                 });
             }
-            Some(SelectionTarget::HiddenGroup { .. }) => {}
+            Some(SelectionTarget::HiddenGroup { repo, rule }) => {
+                app.dashboard.expanded_hidden.insert((repo, rule));
+            }
             None => {}
         },
         (KeyCode::Char('n'), _) | (KeyCode::Char('N'), _) => {

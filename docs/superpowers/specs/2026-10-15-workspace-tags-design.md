@@ -145,8 +145,8 @@ status/recap column keeps its width priority.
 
 ### Hidden group row
 
-A tag group reads `▸ # parked  ·  2 hidden`. `lifecycle() == None` draws a
-dim `#` glyph in place of the branch glyph.
+A tag group reads `▸ #parked  ·  2 hidden`. `lifecycle() == None` skips the
+branch glyph; the `#` in the label stands in for it.
 
 ### `/` filter
 

@@ -445,7 +445,23 @@ fn adopt_and_attach(
     rec: crate::commands::shared::SharedWorkspaceRecord,
     did: &str,
 ) -> Option<String> {
-    let list = g.remote_list.as_mut()?;
+    let workspace = format!("{}/{}", rec.repo, rec.workspace);
+    let target = adopt(g.remote_list.as_mut()?, rec);
+    Some(match target {
+        Some(target) => match attach_remote(g, target, 80, 24) {
+            Ok(()) => return None,
+            Err(e) => format!("{did} {workspace}, but attach failed: {e}"),
+        },
+        None => format!("{did} {workspace}, but the host reported no live session"),
+    })
+}
+
+/// Put `rec` into `list`, replacing the stale record for the same
+/// workspace, and return its first live agent to attach to, if any.
+fn adopt(
+    list: &mut RemoteList,
+    rec: crate::commands::shared::SharedWorkspaceRecord,
+) -> Option<RemoteTarget> {
     let session = rec
         .agents
         .iter()
@@ -456,7 +472,6 @@ fn adopt_and_attach(
         dest: list.dest.clone(),
         tmux,
     });
-    let workspace = format!("{}/{}", rec.repo, rec.workspace);
     match list
         .records
         .iter_mut()
@@ -465,13 +480,7 @@ fn adopt_and_attach(
         Some(slot) => *slot = rec,
         None => list.records.push(rec),
     }
-    Some(match target {
-        Some(target) => match attach_remote(g, target, 80, 24) {
-            Ok(()) => return None,
-            Err(e) => format!("{did} {workspace}, but attach failed: {e}"),
-        },
-        None => format!("{did} {workspace}, but the host reported no live session"),
-    })
+    target
 }
 
 /// What the remote new-workspace form opens with once the host's repos
@@ -529,14 +538,17 @@ pub(crate) async fn reconcile_remote_repos(
 }
 
 /// Reconcile a spawned `create_remote` task. Same generation guard as
-/// `reconcile_remote_list`. On success wsx attaches straight to the new
-/// workspace's first live agent; on failure the form comes back with the
-/// host's reason, so a taken or invalid name can be fixed and resent.
+/// `reconcile_remote_list`. A clean create attaches straight to the new
+/// workspace's first live agent. One that exists but whose setup failed or
+/// whose agents didn't start joins the listing unattached, selected, with
+/// the reason — Enter on its row then attaches or starts it. A failure with
+/// no workspace to show brings the form back with the host's reason, so a
+/// taken or invalid name can be fixed and resent.
 pub(crate) async fn reconcile_remote_create(
     app: SharedApp,
     my_gen: u64,
     mut form: crate::ui::modal::RemoteNewWorkspaceForm,
-    result: Result<crate::commands::shared::SharedWorkspaceRecord>,
+    result: Result<crate::commands::shared::CreatedWorkspaceRecord>,
 ) {
     let mut g = app.lock().await;
     if g.pending_remote_gen != Some(my_gen) {
@@ -544,13 +556,48 @@ pub(crate) async fn reconcile_remote_create(
     }
     g.pending_remote_gen = None;
     match result {
-        Ok(rec) => {
-            if let Some(notice) = adopt_and_attach(&mut g, rec, "created") {
+        Ok(created) if created.setup_exit_code.is_none() && created.start_error.is_none() => {
+            if let Some(notice) = adopt_and_attach(&mut g, created.record, "created") {
                 g.modal = Some(crate::ui::modal::Modal::RemoteWorkspaceList {
                     selected: 0,
                     notice: Some(notice),
                 });
             }
+        }
+        Ok(created) => {
+            let Some(list) = g.remote_list.as_mut() else {
+                g.modal = None;
+                return;
+            };
+            let (repo, workspace) = (
+                created.record.repo.clone(),
+                created.record.workspace.clone(),
+            );
+            let mut notice = format!("created {repo}/{workspace}, but");
+            if let Some(code) = created.setup_exit_code {
+                notice.push_str(&format!(" its setup script exited with code {code}"));
+                if let Some(log) = &created.setup_log {
+                    notice.push_str(&format!(" (log on the host: {log})"));
+                }
+                if created.start_error.is_some() {
+                    notice.push_str(" and");
+                }
+            }
+            match &created.start_error {
+                Some(e) => notice.push_str(&format!(
+                    " its agents didn't start: {e}. [enter] starts them"
+                )),
+                None => notice.push_str(". [enter] attaches"),
+            }
+            adopt(list, created.record);
+            let selected = remote_rows(list)
+                .iter()
+                .position(|r| r.repo == repo && r.workspace == workspace)
+                .unwrap_or(0);
+            g.modal = Some(crate::ui::modal::Modal::RemoteWorkspaceList {
+                selected,
+                notice: Some(notice),
+            });
         }
         Err(e) => {
             form.notice = Some(e.to_string());

@@ -614,14 +614,39 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             // Last of all: the starter prompt is queued before the agent
             // starts, so it is the first thing the agent sees.
             if start {
-                let rec = crate::commands::shared::share_and_restart(
+                let (rec, start_error) = crate::commands::shared::start_created(
                     &store,
                     &created.workspace,
                     crate::commands::shared::ShareWaits::default(),
                     crate::pty::tmux::has_session,
                 )
                 .await?;
-                print_shared_and_running(&rec, json)?;
+                if json {
+                    // Printed even when the start failed: the workspace exists
+                    // now, and the caller has to know that rather than offer
+                    // to create it again.
+                    let setup_exit_code = match created.setup_result {
+                        crate::data::setup::SetupResult::Failed { exit_code } => Some(exit_code),
+                        _ => None,
+                    };
+                    let out = crate::commands::shared::CreatedWorkspaceRecord {
+                        record: rec,
+                        setup_exit_code,
+                        setup_log: setup_exit_code
+                            .and(created.setup_log.as_ref())
+                            .map(|p| p.display().to_string()),
+                        start_error: start_error.as_ref().map(|e| e.to_string()),
+                    };
+                    println!("{}", serde_json::to_string_pretty(&out)?);
+                } else if start_error.is_none() {
+                    print_shared_and_running(&rec, false)?;
+                }
+                if let Some(e) = start_error {
+                    return Err(Error::UserInput(format!(
+                        "workspace {}/{} was created, but its agents didn't start: {e}",
+                        r.name, created.workspace.name
+                    )));
+                }
             }
         }
         CliAction::WorkspaceList { repo, json } => {

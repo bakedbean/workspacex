@@ -88,7 +88,13 @@ After them comes one row for each workspace on the host that has no live session
 
 Press `n` in the list to create a new workspace on that host, or `N` to create it in yolo mode (as on the dashboard). wsx fetches the host's repos with `wsx repo list --json` and opens a form preset to the repo of the row you were on. `↑`/`↓` change the repo, typing sets the name (left empty, wsx picks an adjective-noun slug), `Tab` cycles the agent starting from the host's own `coding_agent` default, and `Ctrl-y` toggles yolo. `Enter` runs `wsx workspace create <repo> --name <slug> [--agent <kind>] [--yolo] --start --json` on the host. The host creates the workspace as shared, runs the repo's setup script, and has its dashboard start the agents inside tmux. wsx then attaches to the new agent as soon as it is live.
 
-As with sharing from the picker, this needs the wsx dashboard running on the host. If the create fails there (a taken name, a failed setup, no dashboard), the form comes back with the host's reason and what you typed. `Esc` while the create runs returns to the list, and the create still finishes on the host. Names that would need shell quoting are refused before anything is sent.
+As with sharing from the picker, this needs the wsx dashboard running on the host. What happens when something goes wrong depends on whether the workspace got made:
+
+- **Not created** (a taken name, a name git refuses, an unknown repo): the form comes back with the host's reason and what you typed, ready to fix and resend.
+- **Created, but its agents didn't start** (no dashboard on the host, no tmux, an agent that won't launch): the workspace joins the list, selected, with the reason on the notice line. Once the host is fixed, `Enter` on its row starts it there, as for any stopped workspace.
+- **Created, but its setup script failed**: wsx doesn't attach. The workspace joins the list, selected, with the script's exit code and the path of its setup log on the host. `Enter` attaches to it anyway.
+
+`Esc` while the create runs returns to the list, and the create still finishes on the host. A create that hasn't answered within 15 minutes (setup scripts can take a while) is given up on. The host may still finish it, so press `r` to see whether it did before trying again. Names that would need shell quoting are refused before anything is sent.
 
 A host running an older wsx doesn't understand `--all`. wsx retries without it and shows only that host's live shared sessions, titled "shared workspaces on `<host>`", with no sharing or creating from the picker.
 

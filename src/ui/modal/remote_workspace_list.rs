@@ -39,10 +39,16 @@ pub fn render_remote_workspace_list(
     let rows = remote_rows(list);
 
     let has_notice = notice.is_some();
+    // A notice can carry a host path or a host's error: wrap it over up to
+    // three lines rather than clip the part that says what to do.
+    let notice_lines = notice.map_or(0, |n| {
+        let width = usize::from(inner.width.max(1));
+        display_width(n).div_ceil(width).clamp(1, 3) as u16
+    });
     let constraints = if has_notice {
         vec![
             Constraint::Min(1),
-            Constraint::Length(1),
+            Constraint::Length(notice_lines),
             Constraint::Length(1),
         ]
     } else {
@@ -174,12 +180,17 @@ pub fn render_remote_workspace_list(
     }
 
     if let (Some(area), Some(text)) = (notice_area, notice) {
-        f.render_widget(Paragraph::new(text).style(theme.dim_style()), area);
+        f.render_widget(
+            Paragraph::new(text)
+                .style(theme.dim_style())
+                .wrap(ratatui::widgets::Wrap { trim: true }),
+            area,
+        );
     }
 
     f.render_widget(
         Paragraph::new(if list.can_share {
-            "[\u{2191}/\u{2193}] move   [enter] attach / share   [r] refresh   [esc] close"
+            "[\u{2191}/\u{2193}] move   [enter] attach / share   [n] new   [r] refresh   [esc] close"
         } else {
             "[\u{2191}/\u{2193}] move   [enter] attach   [r] refresh   [esc] close"
         })

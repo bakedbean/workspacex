@@ -814,3 +814,370 @@ async fn esc_while_sharing_returns_to_the_list_and_ignores_the_result() {
         Some(Modal::RemoteWorkspaceList { notice: None, .. })
     ));
 }
+
+/// A fake ssh for the create flow: `repo list` answers two repos, the
+/// create logs its remote command to `log` and prints the new record, and
+/// anything else (the attach) streams like a live tmux client.
+fn create_flow_script(log: &std::path::Path) -> String {
+    format!(
+        "case \"$*\" in\n\
+         *'repo list --json'*) echo '[{{\"name\":\"a\"}},{{\"name\":\"r\"}}]';;\n\
+         *'workspace create'*) printf '%s\\n' \"$*\" > {log}; echo '{{\"repo\":\"r\",\"workspace\":\"fresh\",\"branch\":\"b\",\"worktree_path\":\"/x\",\"shared\":true,\"agents\":[{{\"label\":\"codex\",\"agent\":\"codex\",\"tmux_session\":\"wsx-r-fresh\",\"alive\":true}}]}}';;\n\
+         *) for i in $(seq 1 60); do echo remote-beat; sleep 1; done;;\n\
+         esac\n",
+        log = log.display()
+    )
+}
+
+async fn type_text(app: &Arc<Mutex<App>>, text: &str) {
+    for c in text.chars() {
+        key(app, crossterm::event::KeyCode::Char(c)).await;
+    }
+}
+
+async fn remote_form(app: &Arc<Mutex<App>>) -> crate::ui::modal::RemoteNewWorkspaceForm {
+    match &app.lock().await.modal {
+        Some(Modal::RemoteNewWorkspace(form)) => form.clone(),
+        other => panic!("expected the remote new-workspace form, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn capital_n_in_remote_list_creates_a_yolo_workspace_and_attaches() {
+    use crossterm::event::KeyCode;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("create.log");
+    let (app, _env, _tmp) = app_on_shareable_list(dir.path(), &create_flow_script(&log));
+
+    {
+        let mut g = app.lock().await;
+        let k = crossterm::event::KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT);
+        handle_event(&mut g, &app, CtEvent::Key(k)).await.unwrap();
+        assert!(matches!(
+            g.modal,
+            Some(Modal::RemoteReposLoading { yolo: true, .. })
+        ));
+    }
+    wait_until(&app, "the host's repos to load", |g| {
+        matches!(g.modal, Some(Modal::RemoteNewWorkspace(_)))
+    })
+    .await;
+    let form = remote_form(&app).await;
+    assert_eq!(form.repos, ["a", "r"]);
+    assert_eq!(form.repo, 1, "the selected row's repo is preselected");
+    assert!(form.yolo, "N opens the form in yolo mode");
+    assert_eq!(form.agent, None, "the host's default agent until Tab");
+
+    type_text(&app, "fresh").await;
+    // Tab past the host default to an explicit agent.
+    let codex = crate::pty::session::AgentKind::Codex;
+    while remote_form(&app).await.agent != Some(codex) {
+        key(&app, KeyCode::Tab).await;
+    }
+    key(&app, KeyCode::Enter).await;
+    assert!(matches!(
+        app.lock().await.modal,
+        Some(Modal::RemoteCreateRunning(_))
+    ));
+
+    wait_until(&app, "the create to finish and attach", |g| {
+        matches!(g.view, crate::ui::View::AttachedRemote)
+    })
+    .await;
+    let mut g = app.lock().await;
+    assert_eq!(g.remote_target.as_ref().unwrap().tmux, "wsx-r-fresh");
+    assert!(
+        g.remote_list
+            .as_ref()
+            .unwrap()
+            .records
+            .iter()
+            .any(|r| r.workspace == "fresh"),
+        "the new workspace joins the listing"
+    );
+    crate::app::detach_remote(&mut g);
+    let sent = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        sent.contains("wsx workspace create r --name fresh --agent codex --yolo --start --json"),
+        "{sent}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ctrl_y_toggles_yolo_and_a_failed_create_reopens_the_form() {
+    use crossterm::event::KeyCode;
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _env, _tmp) = app_on_shareable_list(
+        dir.path(),
+        "case \"$*\" in\n\
+         *'repo list --json'*) echo '[{\"name\":\"r\"}]';;\n\
+         *) echo \"error: branch 'wsx/dup' already exists\" >&2; exit 1;;\n\
+         esac\n",
+    );
+
+    key(&app, KeyCode::Char('n')).await;
+    wait_until(&app, "the host's repos to load", |g| {
+        matches!(g.modal, Some(Modal::RemoteNewWorkspace(_)))
+    })
+    .await;
+    assert!(!remote_form(&app).await.yolo);
+    {
+        let mut g = app.lock().await;
+        let k = crossterm::event::KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL);
+        handle_event(&mut g, &app, CtEvent::Key(k)).await.unwrap();
+    }
+    let form = remote_form(&app).await;
+    assert!(form.yolo, "^y turns yolo on");
+    assert_eq!(form.name_buffer, "", "^y must not type a 'y'");
+
+    // The listing already has r/w: refused before any round trip.
+    type_text(&app, "w").await;
+    key(&app, KeyCode::Enter).await;
+    let form = remote_form(&app).await;
+    assert!(
+        form.notice.as_deref().unwrap().contains("already has"),
+        "{form:?}"
+    );
+
+    key(&app, KeyCode::Backspace).await;
+    type_text(&app, "dup").await;
+    key(&app, KeyCode::Enter).await;
+    wait_until(&app, "the failed create to reconcile", |g| {
+        g.pending_remote_gen.is_none()
+    })
+    .await;
+    let form = remote_form(&app).await;
+    assert_eq!(form.name_buffer, "dup", "the form keeps what was typed");
+    assert!(form.yolo);
+    assert!(
+        form.notice.as_deref().unwrap().contains("already exists"),
+        "{form:?}"
+    );
+
+    key(&app, KeyCode::Esc).await;
+    assert!(matches!(
+        app.lock().await.modal,
+        Some(Modal::RemoteWorkspaceList { .. })
+    ));
+}
+
+#[tokio::test]
+async fn n_on_an_old_host_explains_instead_of_creating() {
+    use crossterm::event::KeyCode;
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _env, _tmp) = app_on_shareable_list(dir.path(), "exit 1\n");
+    app.lock().await.remote_list.as_mut().unwrap().can_share = false;
+    key(&app, KeyCode::Char('n')).await;
+    match &app.lock().await.modal {
+        Some(Modal::RemoteWorkspaceList {
+            notice: Some(n), ..
+        }) => assert!(n.contains("too old"), "{n}"),
+        other => panic!("expected the list with a notice, got {other:?}"),
+    }
+}
+
+/// Opens the remote new-workspace form on `app` (host answering `r`).
+async fn open_remote_form(app: &Arc<Mutex<App>>) {
+    key(app, crossterm::event::KeyCode::Char('n')).await;
+    wait_until(app, "the host's repos to load", |g| {
+        matches!(g.modal, Some(Modal::RemoteNewWorkspace(_)))
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_create_whose_agents_did_not_start_joins_the_list_ready_to_start() {
+    use crossterm::event::KeyCode;
+    let dir = tempfile::tempdir().unwrap();
+    // The host made the workspace but no dashboard started it: the record
+    // comes back on stdout with the reason, and the command exits non-zero.
+    let (app, _env, _tmp) = app_on_shareable_list(
+        dir.path(),
+        "case \"$*\" in\n\
+         *'repo list --json'*) echo '[{\"name\":\"r\"}]';;\n\
+         *) echo '{\"repo\":\"r\",\"workspace\":\"fresh\",\"branch\":\"b\",\"worktree_path\":\"/y\",\"shared\":true,\"agents\":[{\"label\":\"claude\",\"agent\":\"claude\",\"tmux_session\":\"wsx-r-fresh\",\"alive\":false}],\"start_error\":\"no wsx dashboard on this host picked up the request\"}'; exit 1;;\n\
+         esac\n",
+    );
+    open_remote_form(&app).await;
+    type_text(&app, "fresh").await;
+    key(&app, KeyCode::Enter).await;
+    wait_until(&app, "the partial create to reconcile", |g| {
+        g.pending_remote_gen.is_none()
+    })
+    .await;
+
+    let selected = {
+        let g = app.lock().await;
+        assert!(!matches!(g.view, crate::ui::View::AttachedRemote));
+        let Some(Modal::RemoteWorkspaceList {
+            selected,
+            notice: Some(n),
+        }) = &g.modal
+        else {
+            panic!("expected the list with a notice, got {:?}", g.modal);
+        };
+        assert!(n.contains("created r/fresh"), "{n}");
+        assert!(n.contains("no wsx dashboard"), "{n}");
+        let rows = crate::app::remote_rows(g.remote_list.as_ref().unwrap());
+        assert_eq!(
+            rows[*selected].workspace, "fresh",
+            "the new row is selected"
+        );
+        *selected
+    };
+    // Enter on it offers to start it, rather than creating it again.
+    key(&app, KeyCode::Enter).await;
+    match &app.lock().await.modal {
+        Some(Modal::RemoteShareConfirm {
+            selected: s,
+            workspace,
+            shared,
+            ..
+        }) => assert!(*s == selected && workspace == "fresh" && *shared),
+        other => panic!("expected the start confirmation, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_create_whose_setup_failed_says_so_instead_of_attaching() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _env, _tmp) = app_on_shareable_list(
+        dir.path(),
+        "case \"$*\" in\n\
+         *'repo list --json'*) echo '[{\"name\":\"r\"}]';;\n\
+         *) echo '{\"repo\":\"r\",\"workspace\":\"fresh\",\"branch\":\"b\",\"worktree_path\":\"/y\",\"shared\":true,\"agents\":[{\"label\":\"claude\",\"agent\":\"claude\",\"tmux_session\":\"wsx-r-fresh\",\"alive\":true}],\"setup_exit_code\":3,\"setup_log\":\"/logs/fresh.log\"}';;\n\
+         esac\n",
+    );
+    open_remote_form(&app).await;
+    type_text(&app, "fresh").await;
+    key(&app, crossterm::event::KeyCode::Enter).await;
+    wait_until(&app, "the create to reconcile", |g| {
+        g.pending_remote_gen.is_none()
+    })
+    .await;
+    let g = app.lock().await;
+    assert!(!matches!(g.view, crate::ui::View::AttachedRemote));
+    let Some(Modal::RemoteWorkspaceList {
+        selected,
+        notice: Some(n),
+    }) = &g.modal
+    else {
+        panic!("expected the list with a notice, got {:?}", g.modal);
+    };
+    assert!(n.contains("exited with code 3"), "{n}");
+    assert!(n.contains("/logs/fresh.log"), "{n}");
+    let rows = crate::app::remote_rows(g.remote_list.as_ref().unwrap());
+    assert_eq!(
+        rows[*selected].attach_session(),
+        Some("wsx-r-fresh"),
+        "the live new row is selected, one Enter from attaching"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_blank_name_is_generated_before_the_create_is_sent() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("create.log");
+    let (app, _env, _tmp) = app_on_shareable_list(dir.path(), &create_flow_script(&log));
+    open_remote_form(&app).await;
+    key(&app, crossterm::event::KeyCode::Enter).await;
+    let name = match &app.lock().await.modal {
+        Some(Modal::RemoteCreateRunning(form)) => form.name_buffer.clone(),
+        other => panic!("expected the create to run, got {other:?}"),
+    };
+    assert!(!name.is_empty());
+    wait_until(&app, "the create to attach", |g| {
+        matches!(g.view, crate::ui::View::AttachedRemote)
+    })
+    .await;
+    crate::app::detach_remote(&mut *app.lock().await);
+    let sent = std::fs::read_to_string(&log).unwrap();
+    assert!(sent.contains(&format!("--name {name} ")), "{sent}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn esc_while_loading_repos_or_creating_ignores_the_late_result() {
+    use crossterm::event::KeyCode;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("create.log");
+    // Every answer comes late, so Esc always lands first.
+    let script = format!("sleep 1\n{}", create_flow_script(&log));
+    let (app, _env, _tmp) = app_on_shareable_list(dir.path(), &script);
+
+    key(&app, KeyCode::Char('n')).await;
+    key(&app, KeyCode::Esc).await;
+    assert!(app.lock().await.pending_remote_gen.is_none());
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    assert!(
+        matches!(
+            app.lock().await.modal,
+            Some(Modal::RemoteWorkspaceList { .. })
+        ),
+        "the late repo list must not reopen the form"
+    );
+
+    open_remote_form(&app).await;
+    type_text(&app, "fresh").await;
+    key(&app, KeyCode::Enter).await;
+    key(&app, KeyCode::Esc).await;
+    match &app.lock().await.modal {
+        Some(Modal::RemoteWorkspaceList {
+            notice: Some(n), ..
+        }) => assert!(n.contains("carries on"), "{n}"),
+        other => panic!("expected the list, got {other:?}"),
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    let g = app.lock().await;
+    assert!(
+        !matches!(g.view, crate::ui::View::AttachedRemote),
+        "the late create must not attach"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_host_with_no_repos_explains_on_the_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let (app, _env, _tmp) = app_on_shareable_list(dir.path(), "echo '[]'\n");
+    key(&app, crossterm::event::KeyCode::Char('n')).await;
+    wait_until(&app, "the repo fetch to reconcile", |g| {
+        g.pending_remote_gen.is_none()
+    })
+    .await;
+    match &app.lock().await.modal {
+        Some(Modal::RemoteWorkspaceList {
+            notice: Some(n), ..
+        }) => assert!(n.contains("no repos"), "{n}"),
+        other => panic!("expected the list with a notice, got {other:?}"),
+    }
+}
+
+/// `workspace create --start` asks the dashboard to start a workspace it
+/// has never loaded; the share handler must reload rather than answer
+/// "workspace not found".
+#[tokio::test]
+async fn force_share_finds_a_workspace_created_after_the_last_refresh() {
+    use crate::data::store::{NewWorkspace, WorkspaceState};
+    let mut env = EnvGuard::new();
+    // Stop at the tmux check, past the lookup under test.
+    env.set("WSX_TMUX_BIN", "/nonexistent/tmux");
+    let (mut app, ids) = make_app_with_n_repos(1);
+    let ws = app
+        .store
+        .insert_workspace(&NewWorkspace {
+            repo_id: ids[0],
+            name: "fresh",
+            branch: "repo-0/fresh",
+            worktree_path: std::path::Path::new("/tmp/wsx-fold-test/fresh"),
+            yolo: false,
+            agent: crate::pty::session::AgentKind::Claude,
+            shared: true,
+        })
+        .unwrap();
+    app.store
+        .set_workspace_state(ws, WorkspaceState::Ready)
+        .unwrap();
+    let err = crate::app::session::force_share_workspace(&mut app, ws)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("tmux"), "{err}");
+}

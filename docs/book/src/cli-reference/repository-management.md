@@ -10,10 +10,10 @@ Registers a git repository. `<path>` must be an existing git working tree.
 Where a `set-*` command below takes a value, it accepts `@/path/to/file` to load that value from a file and `""` to clear it (clearing falls back to the global setting where one exists).
 
 ```
-wsx repo list
+wsx repo list [--json]
 ```
 
-Lists registered repos with their paths.
+Lists registered repos with their paths. `--json` prints each repo's name, path and branch prefix as structured records.
 
 ```
 wsx repo remove <name>

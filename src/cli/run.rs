@@ -121,7 +121,20 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             crate::data::repo::add(&store, &path, &name, &branch_prefix).await?;
             println!("added repo: {name}");
         }
-        CliAction::RepoList => {
+        CliAction::RepoList { json: true } => {
+            let records: Vec<_> = crate::data::repo::list(&store)?
+                .into_iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "name": r.name,
+                        "path": r.path,
+                        "branch_prefix": r.branch_prefix,
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&records)?);
+        }
+        CliAction::RepoList { json: false } => {
             for r in crate::data::repo::list(&store)? {
                 println!("{:<20} {}", r.name, r.path.display());
             }
@@ -494,7 +507,16 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             shared,
             agent,
             prompt,
+            start,
+            json,
         } => {
+            // With `--json`, stdout carries only the record, so the remote
+            // picker can parse it; the human report moves to stderr.
+            macro_rules! say {
+                ($($t:tt)*) => {
+                    if json { eprintln!($($t)*) } else { println!($($t)*) }
+                };
+            }
             let r = lookup_repo(&store, &repo)?;
             let worktree_base = dirs.app_dir().join("worktrees");
             std::fs::create_dir_all(&worktree_base)?;
@@ -518,7 +540,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 |_| {},
             )
             .await?;
-            println!(
+            say!(
                 "created workspace {}/{} at {}",
                 r.name,
                 created.workspace.name,
@@ -538,7 +560,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                         .find(|pr| pr.id == p.repo_id)
                         .map(|pr| pr.name)
                         .unwrap_or_else(|| "(unknown repo)".to_string());
-                    println!(
+                    say!(
                         "inherited {} from {}/{}",
                         inherited.join(", "),
                         parent_repo,
@@ -547,12 +569,12 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 }
             }
             if let crate::data::setup::SetupResult::Failed { exit_code } = created.setup_result {
-                println!("warning: setup script exited with code {exit_code}");
+                say!("warning: setup script exited with code {exit_code}");
                 // Only when one was really written: logging is best-effort, so
                 // an unwritable log directory must not be reported as a file to
                 // go and read.
                 if let Some(log) = &created.setup_log {
-                    println!("setup log: {}", log.display());
+                    say!("setup log: {}", log.display());
                 }
             }
             // Seed the agent LAST: `create` above already awaited the setup
@@ -576,7 +598,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                     })
                     .and_then(|target| enqueue_for_agent(&store, ws_id, target, prompt));
                 match seeded {
-                    Ok(id) => println!("queued starter prompt #{id} to primary"),
+                    Ok(id) => say!("queued starter prompt #{id} to primary"),
                     // The worktree is live and the prompt is not. Hand back a
                     // command that actually resends THIS prompt, rather than
                     // leaving a workspace that looks created but never wakes.
@@ -587,6 +609,43 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                             retry_send_hint(&r.name, &created.workspace.name, prompt)
                         );
                     }
+                }
+            }
+            // Last of all: the starter prompt is queued before the agent
+            // starts, so it is the first thing the agent sees.
+            if start {
+                let (rec, start_error) = crate::commands::shared::start_created(
+                    &store,
+                    &created.workspace,
+                    crate::commands::shared::ShareWaits::default(),
+                    crate::pty::tmux::has_session,
+                )
+                .await?;
+                if json {
+                    // Printed even when the start failed: the workspace exists
+                    // now, and the caller has to know that rather than offer
+                    // to create it again.
+                    let setup_exit_code = match created.setup_result {
+                        crate::data::setup::SetupResult::Failed { exit_code } => Some(exit_code),
+                        _ => None,
+                    };
+                    let out = crate::commands::shared::CreatedWorkspaceRecord {
+                        record: rec,
+                        setup_exit_code,
+                        setup_log: setup_exit_code
+                            .and(created.setup_log.as_ref())
+                            .map(|p| p.display().to_string()),
+                        start_error: start_error.as_ref().map(|e| e.to_string()),
+                    };
+                    println!("{}", serde_json::to_string_pretty(&out)?);
+                } else if start_error.is_none() {
+                    print_shared_and_running(&rec, false)?;
+                }
+                if let Some(e) = start_error {
+                    return Err(Error::UserInput(format!(
+                        "workspace {}/{} was created, but its agents didn't start: {e}",
+                        r.name, created.workspace.name
+                    )));
                 }
             }
         }
@@ -673,16 +732,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 crate::pty::tmux::has_session,
             )
             .await?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&rec)?);
-            } else {
-                println!("workspace {}/{} is shared and running", r.name, name);
-                for agent in &rec.agents {
-                    if let Some(session) = &agent.tmux_session {
-                        println!("  {}: tmux attach -t '={session}'", agent.label);
-                    }
-                }
-            }
+            print_shared_and_running(&rec, json)?;
         }
         CliAction::WorkspaceShare {
             repo,
@@ -1248,4 +1298,26 @@ fn plasma_linux_only() -> Error {
 #[cfg(not(target_os = "macos"))]
 fn menubar_macos_only() -> Error {
     Error::UserInput("wsx menubar is only available on macOS (SwiftBar integration)".into())
+}
+
+/// Report a workspace whose agents are live in tmux: its record as JSON (for
+/// a remote host's picker), or the sessions to attach to.
+fn print_shared_and_running(
+    rec: &crate::commands::shared::SharedWorkspaceRecord,
+    json: bool,
+) -> Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(rec)?);
+    } else {
+        println!(
+            "workspace {}/{} is shared and running",
+            rec.repo, rec.workspace
+        );
+        for agent in &rec.agents {
+            if let Some(session) = &agent.tmux_session {
+                println!("  {}: tmux attach -t '={session}'", agent.label);
+            }
+        }
+    }
+    Ok(())
 }

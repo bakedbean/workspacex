@@ -80,11 +80,23 @@ Selecting a host spawns a background fetch via `ssh <dest> "sh -lc 'wsx shared l
 agent  branch  repo/workspace
 ```
 
-After them comes one row for each workspace on the host that has no live session, drawn dim, with `not shared` or `stopped` in place of the agent name. Navigate with `j`/`k` (or `↑`/`↓`), `r` to re-fetch the list, and `Esc` to close.
+After them comes one row for each workspace on the host that has no live session, drawn dim, with `not shared` or `stopped` in place of the agent name. Navigate with `j`/`k` (or `↑`/`↓`), `r` to re-fetch the list, `n`/`N` to create a workspace there (see below), and `Esc` to close.
 
 `Enter` on a live row attaches to it. `Enter` on a `not shared` or `stopped` row asks for confirmation, then runs `wsx workspace share <repo> <slug> --restart --json` on the host (see **Convert an existing workspace** above). The host's dashboard restarts that workspace's agents inside tmux, and wsx attaches to the first one as soon as it is live, so you can pick up a workspace you forgot to share without touching the host. The restart cuts off whatever the agent was doing at that moment; its conversation resumes. This needs wsx running on the host. If it isn't (or the host has no tmux), the list comes back with the host's reason. `Esc` while the share runs returns to the list, and the share still finishes on the host. Repo and workspace names that would need shell quoting (spaces, quotes, `;`, …) can't be shared this way.
 
-A host running an older wsx doesn't understand `--all`. wsx retries without it and shows only that host's live shared sessions, titled "shared workspaces on `<host>`", with no sharing from the picker.
+**Creating a workspace on the host:**
+
+Press `n` in the list to create a new workspace on that host, or `N` to create it in yolo mode (as on the dashboard). wsx fetches the host's repos with `wsx repo list --json` and opens a form preset to the repo of the row you were on. `↑`/`↓` change the repo, typing sets the name (left empty, wsx picks an adjective-noun slug), `Tab` cycles the agent starting from the host's own `coding_agent` default, and `Ctrl-y` toggles yolo. `Enter` runs `wsx workspace create <repo> --name <slug> [--agent <kind>] [--yolo] --start --json` on the host. The host creates the workspace as shared, runs the repo's setup script, and has its dashboard start the agents inside tmux. wsx then attaches to the new agent as soon as it is live.
+
+As with sharing from the picker, this needs the wsx dashboard running on the host. What happens when something goes wrong depends on whether the workspace got made:
+
+- **Not created** (a taken name, a name git refuses, an unknown repo): the form comes back with the host's reason and what you typed, ready to fix and resend.
+- **Created, but its agents didn't start** (no dashboard on the host, no tmux, an agent that won't launch): the workspace joins the list, selected, with the reason on the notice line. Once the host is fixed, `Enter` on its row starts it there, as for any stopped workspace.
+- **Created, but its setup script failed**: wsx doesn't attach. The workspace joins the list, selected, with the script's exit code and the path of its setup log on the host. `Enter` attaches to it anyway.
+
+`Esc` while the create runs returns to the list, and the create still finishes on the host. A create that hasn't answered within 15 minutes (setup scripts can take a while) is given up on. The host may still finish it, so press `r` to see whether it did before trying again. Names that would need shell quoting are refused before anything is sent.
+
+A host running an older wsx doesn't understand `--all`. wsx retries without it and shows only that host's live shared sessions, titled "shared workspaces on `<host>`", with no sharing or creating from the picker.
 
 Attaching spawns `ssh -t <dest> -- "sh -lc \"tmux -u attach -t '=<name>'\""` as a PTY session — the remote command is one pre-quoted argument routed through a login `sh` (the same PATH rules as the list fetch; sshd otherwise hands the command to a non-login zsh that reads only `~/.zshenv`, where homebrew's tmux often isn't on PATH), the `=` target is single-quoted so zsh can't expand it as a command path, and `-u` forces UTF-8 (the ssh context has no locale, and without it tmux degrades box-drawing characters to rows of literal `q`s). You interact with the remote agent as if it were local; the exact-match `=` prefix ensures the correct agent is targeted, even if multiple agents sanitize to similar names.
 

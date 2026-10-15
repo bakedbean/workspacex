@@ -139,6 +139,13 @@ pub(in crate::app::input) async fn handle_key_modal(
         Modal::RemoteShareRunning { selected, .. } => {
             remote::remote_share_running(app, k, selected).await?
         }
+        Modal::RemoteReposLoading { selected, .. } => {
+            remote::remote_repos_loading(app, k, selected).await?
+        }
+        Modal::RemoteNewWorkspace(form) => {
+            remote::remote_new_workspace(app, shared, k, form).await?
+        }
+        Modal::RemoteCreateRunning(form) => remote::remote_create_running(app, k, form).await?,
         Modal::RenameWorkspace {
             workspace_id,
             name_buffer,

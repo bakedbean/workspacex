@@ -2,8 +2,8 @@
 
 use crate::app::{App, SharedApp};
 use crate::error::Result;
-use crate::ui::modal::Modal;
-use crossterm::event::KeyCode;
+use crate::ui::modal::{Modal, RemoteNewWorkspaceForm};
+use crossterm::event::{KeyCode, KeyModifiers};
 // Test-only imports: the moved test modules access `draw_for_test`,
 // `AttachedState`, `Arc`, and `Mutex` through `super::*` glob imports
 // that cascade from the surrounding `tests` module.
@@ -85,6 +85,53 @@ pub(super) async fn remote_workspace_list(
                     });
                 }
             }
+        }
+        // `N` opens the form in yolo mode, as on the dashboard.
+        KeyCode::Char(c @ ('n' | 'N')) => {
+            let Some(list) = &app.remote_list else {
+                app.modal = Some(Modal::RemoteWorkspaceList { selected, notice });
+                return Ok(());
+            };
+            if !list.can_share {
+                app.modal = Some(Modal::RemoteWorkspaceList {
+                    selected,
+                    notice: Some(format!(
+                        "the wsx on {} is too old to create workspaces remotely",
+                        list.host_name
+                    )),
+                });
+                return Ok(());
+            }
+            let host_name = list.host_name.clone();
+            let dest = list.dest.clone();
+            // Default to the repo of the row the cursor is on.
+            let repo = crate::app::remote_rows(list)
+                .get(selected)
+                .map(|r| r.repo.to_string());
+            let yolo = c == 'N';
+            let fetch_gen = app.alloc_remote_gen();
+            app.modal = Some(Modal::RemoteReposLoading {
+                selected,
+                host_name: host_name.clone(),
+                yolo,
+                repo: repo.clone(),
+            });
+            let shared_clone = shared.clone();
+            tokio::spawn(async move {
+                let result = crate::commands::shared_hosts::fetch_remote_repos(&dest).await;
+                crate::app::reconcile_remote_repos(
+                    shared_clone,
+                    fetch_gen,
+                    crate::app::RemoteFormSeed {
+                        selected,
+                        host_name,
+                        yolo,
+                        repo,
+                    },
+                    result,
+                )
+                .await;
+            });
         }
         KeyCode::Char('r') => {
             // Re-run the host picker's Enter flow for the same host:
@@ -260,6 +307,130 @@ pub(super) async fn remote_share_running(
         app.modal = Some(Modal::RemoteWorkspaceList {
             selected,
             notice: Some("the share carries on on the host; [r] refreshes".to_string()),
+        });
+    }
+    Ok(())
+}
+
+/// Esc while the host's repos load: back to the list, dropping the
+/// generation so the eventual reconcile no-ops.
+pub(super) async fn remote_repos_loading(
+    app: &mut App,
+    k: crossterm::event::KeyEvent,
+    selected: usize,
+) -> Result<()> {
+    if k.code == KeyCode::Esc {
+        app.pending_remote_gen = None;
+        app.modal = Some(Modal::RemoteWorkspaceList {
+            selected,
+            notice: None,
+        });
+    }
+    Ok(())
+}
+
+/// The remote new-workspace form: ↑/↓ pick the repo, Tab cycles the agent
+/// (starting from the host's default), ^y toggles yolo, and Enter creates the
+/// workspace on the host in the background and swaps to
+/// `RemoteCreateRunning`.
+pub(super) async fn remote_new_workspace(
+    app: &mut App,
+    shared: &SharedApp,
+    k: crossterm::event::KeyEvent,
+    mut form: RemoteNewWorkspaceForm,
+) -> Result<()> {
+    use crate::pty::session::AgentKind;
+    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+    match k.code {
+        KeyCode::Esc => {
+            app.modal = Some(Modal::RemoteWorkspaceList {
+                selected: form.selected,
+                notice: None,
+            });
+            return Ok(());
+        }
+        KeyCode::Up => form.repo = form.repo.checked_sub(1).unwrap_or(form.repos.len() - 1),
+        KeyCode::Down => form.repo = (form.repo + 1) % form.repos.len(),
+        KeyCode::Tab => {
+            // None (host default) → each kind in turn → back to None.
+            form.agent = match form.agent {
+                None => AgentKind::ALL.first().copied(),
+                Some(a) => AgentKind::ALL
+                    .iter()
+                    .position(|k| *k == a)
+                    .and_then(|i| AgentKind::ALL.get(i + 1).copied()),
+            };
+        }
+        KeyCode::Char('y') if ctrl => form.yolo = !form.yolo,
+        KeyCode::Backspace => {
+            form.name_buffer.pop();
+        }
+        KeyCode::Char(c) if !ctrl => form.name_buffer.push(c),
+        KeyCode::Enter => {
+            if let Some(notice) = refuse_remote_name(app, &form) {
+                form.notice = Some(notice);
+                app.modal = Some(Modal::RemoteNewWorkspace(form));
+                return Ok(());
+            }
+            // Name it here, as the local `n` does, so the running modal and
+            // any error can say which workspace it is.
+            if form.name_buffer.trim().is_empty() {
+                form.name_buffer = crate::util::names::generate();
+            }
+            let Some(dest) = app.remote_list.as_ref().map(|l| l.dest.clone()) else {
+                app.modal = None;
+                return Ok(());
+            };
+            form.notice = None;
+            let create_gen = app.alloc_remote_gen();
+            app.modal = Some(Modal::RemoteCreateRunning(form.clone()));
+            let shared_clone = shared.clone();
+            tokio::spawn(async move {
+                let result =
+                    crate::commands::shared_hosts::create_remote(&dest, &form.request()).await;
+                crate::app::reconcile_remote_create(shared_clone, create_gen, form, result).await;
+            });
+            return Ok(());
+        }
+        _ => {}
+    }
+    form.notice = None;
+    app.modal = Some(Modal::RemoteNewWorkspace(form));
+    Ok(())
+}
+
+/// Why the form's name can't be created on the host, caught before the
+/// round trip: one that wouldn't survive the ssh quoting, or one the
+/// listing already shows in that repo. The host validates the rest.
+fn refuse_remote_name(app: &App, form: &RemoteNewWorkspaceForm) -> Option<String> {
+    let name = form.name_buffer.trim();
+    if name.is_empty() {
+        return None;
+    }
+    if !crate::commands::shared_hosts::shell_safe(name) {
+        return Some("use letters, digits and - _ . / + @ only".to_string());
+    }
+    let repo = &form.repos[form.repo];
+    let taken = app.remote_list.as_ref().is_some_and(|l| {
+        l.records
+            .iter()
+            .any(|r| &r.repo == repo && r.workspace == name)
+    });
+    taken.then(|| format!("{repo} already has a workspace named '{name}'"))
+}
+
+/// Esc while the host creates the workspace: back to the list. The create
+/// carries on there; a refresh shows it.
+pub(super) async fn remote_create_running(
+    app: &mut App,
+    k: crossterm::event::KeyEvent,
+    form: RemoteNewWorkspaceForm,
+) -> Result<()> {
+    if k.code == KeyCode::Esc {
+        app.pending_remote_gen = None;
+        app.modal = Some(Modal::RemoteWorkspaceList {
+            selected: form.selected,
+            notice: Some("the create carries on on the host; [r] refreshes".to_string()),
         });
     }
     Ok(())

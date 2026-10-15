@@ -45,6 +45,40 @@ pub struct SharedWorkspaceRecord {
     pub pr_number: Option<u32>,
 }
 
+/// What `wsx workspace create --start --json` prints: the new workspace's
+/// record, plus whatever went wrong after the workspace came to exist. The
+/// workspace is there either way, so a caller adopts the record rather than
+/// offering to create it again.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CreatedWorkspaceRecord {
+    #[serde(flatten)]
+    pub record: SharedWorkspaceRecord,
+    /// The setup script's exit code, when it failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_exit_code: Option<i32>,
+    /// The setup log on the host, when the setup failed and a log was written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_log: Option<String>,
+    /// Why the agents didn't start. The command also exits non-zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_error: Option<String>,
+}
+
+/// Start a just-created workspace's agents the way `share_and_restart` does,
+/// returning its record either way: with `start_error` set when they didn't
+/// come up, alongside the error itself for the exit status.
+pub async fn start_created(
+    store: &Store,
+    ws: &crate::data::store::Workspace,
+    waits: ShareWaits,
+    liveness: impl Fn(&str) -> bool,
+) -> Result<(SharedWorkspaceRecord, Option<crate::error::Error>)> {
+    match share_and_restart(store, ws, waits, &liveness).await {
+        Ok(rec) => Ok((rec, None)),
+        Err(e) => Ok((workspace_record(store, ws, &liveness)?, Some(e))),
+    }
+}
+
 fn default_shared() -> bool {
     true
 }
@@ -551,6 +585,49 @@ mod tests {
             "the request must be withdrawn, not left for a later dashboard"
         );
         assert!(!store.workspace_by_id(ws.id).unwrap().unwrap().shared);
+    }
+
+    #[tokio::test]
+    async fn start_created_without_a_dashboard_still_returns_the_record() {
+        let store = Store::open_in_memory().unwrap();
+        seed(&store);
+        let ws = direct_ws(&store);
+
+        let (rec, err) = start_created(&store, &ws, quick_waits(), |_| false)
+            .await
+            .unwrap();
+
+        assert_eq!(rec.workspace, "direct");
+        assert!(rec.agents.iter().all(|a| !a.alive));
+        assert!(err.unwrap().to_string().contains("no wsx dashboard"));
+    }
+
+    #[test]
+    fn created_record_flattens_and_omits_what_went_right() {
+        let created = CreatedWorkspaceRecord {
+            record: SharedWorkspaceRecord {
+                repo: "r".into(),
+                workspace: "w".into(),
+                branch: "b".into(),
+                worktree_path: "/x".into(),
+                shared: true,
+                agents: vec![],
+                lifecycle: None,
+                pr_number: None,
+            },
+            setup_exit_code: None,
+            setup_log: None,
+            start_error: None,
+        };
+        let json = serde_json::to_value(&created).unwrap();
+        assert_eq!(
+            json["workspace"], "w",
+            "the record's fields sit at the top level"
+        );
+        assert!(json.get("start_error").is_none(), "{json}");
+        // A plain record (an older host's share result) still decodes.
+        let back: CreatedWorkspaceRecord = serde_json::from_value(json).unwrap();
+        assert!(back.setup_exit_code.is_none() && back.start_error.is_none());
     }
 
     #[tokio::test]

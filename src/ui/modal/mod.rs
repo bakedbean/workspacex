@@ -205,6 +205,52 @@ pub enum Modal {
         host_name: String,
         workspace: String,
     },
+    /// `n`/`N` in `RemoteWorkspaceList`: fetching the host's repos for the
+    /// new-workspace form. Esc returns to the list like `RemoteShareRunning`.
+    /// `yolo` and `repo` seed the form once the repos arrive.
+    RemoteReposLoading {
+        selected: usize,
+        host_name: String,
+        yolo: bool,
+        repo: Option<String>,
+    },
+    /// The new-workspace form for a remote host.
+    RemoteNewWorkspace(RemoteNewWorkspaceForm),
+    /// Shown while `create_remote` runs on the host. Holds the form so a
+    /// failure can reopen it with the reason; Esc returns to the list and the
+    /// create carries on on the host.
+    RemoteCreateRunning(RemoteNewWorkspaceForm),
+}
+
+/// What the remote new-workspace form has been given so far.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteNewWorkspaceForm {
+    /// The `RemoteWorkspaceList` row to return to.
+    pub selected: usize,
+    pub host_name: String,
+    /// The host's repos, from `repo list --json`; never empty.
+    pub repos: Vec<String>,
+    /// Index into `repos`.
+    pub repo: usize,
+    pub name_buffer: String,
+    /// `None` takes the host's `coding_agent` setting.
+    pub agent: Option<crate::pty::session::AgentKind>,
+    pub yolo: bool,
+    /// Inline error line, cleared on the next edit.
+    pub notice: Option<String>,
+}
+
+impl RemoteNewWorkspaceForm {
+    /// The `create_remote` request this form describes.
+    pub fn request(&self) -> crate::commands::shared_hosts::RemoteCreate {
+        let name = self.name_buffer.trim();
+        crate::commands::shared_hosts::RemoteCreate {
+            repo: self.repos[self.repo].clone(),
+            name: (!name.is_empty()).then(|| name.to_string()),
+            agent: self.agent,
+            yolo: self.yolo,
+        }
+    }
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {
@@ -488,6 +534,49 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                  waiting for its agents to come up in tmux\n\n[esc] back to the list"
             ),
         ),
+        Modal::RemoteReposLoading { host_name, .. } => (
+            "new remote workspace",
+            format!("fetching repos from {host_name}…\n\n[esc] back to the list"),
+        ),
+        Modal::RemoteNewWorkspace(form) => {
+            let repo = &form.repos[form.repo];
+            let agent = form.agent.map_or("host default", |a| a.display_name());
+            let yolo = if form.yolo { "on" } else { "off" };
+            let notice_line = form
+                .notice
+                .as_deref()
+                .map(|n| format!("{n}\n"))
+                .unwrap_or_default();
+            (
+                if form.yolo {
+                    "new remote workspace (permissive)"
+                } else {
+                    "new remote workspace"
+                },
+                format!(
+                    "host: {host}\nrepo: {repo}  [\u{2191}\u{2193}] change\n\
+                     name: {name}\u{2588}\nagent: {agent}  [tab] cycle\n\
+                     yolo: {yolo}  [^y] toggle\n\n{notice_line}\
+                     [enter] create & attach   [esc] back",
+                    host = form.host_name,
+                    name = form.name_buffer,
+                ),
+            )
+        }
+        Modal::RemoteCreateRunning(form) => {
+            let req = form.request();
+            let name = req.name.as_deref().unwrap_or("(generated name)");
+            (
+                "new remote workspace",
+                format!(
+                    "creating {repo}/{name} on {host}…\n\n\
+                     running its setup, then starting its agents in tmux\n\n\
+                     [esc] back to the list",
+                    repo = req.repo,
+                    host = form.host_name,
+                ),
+            )
+        }
         Modal::AgentPicker {
             selected, current, ..
         } => {
@@ -594,6 +683,30 @@ mod tests {
         assert!(text.contains("Share r/w on mini and attach?"), "{text}");
         assert!(text.contains("restart inside tmux"), "{text}");
         assert!(text.contains("[y] share & attach"), "{text}");
+    }
+
+    #[test]
+    fn remote_new_workspace_form_shows_host_repo_agent_and_yolo() {
+        let form = RemoteNewWorkspaceForm {
+            selected: 0,
+            host_name: "mini".into(),
+            repos: vec!["a".into(), "r".into()],
+            repo: 1,
+            name_buffer: "fresh".into(),
+            agent: None,
+            yolo: true,
+            notice: Some("taken".into()),
+        };
+        let text = render_to_text(&Modal::RemoteNewWorkspace(form.clone()));
+        assert!(text.contains("new remote workspace (permissive)"), "{text}");
+        assert!(text.contains("host: mini"), "{text}");
+        assert!(text.contains("repo: r"), "{text}");
+        assert!(text.contains("name: fresh"), "{text}");
+        assert!(text.contains("agent: host default"), "{text}");
+        assert!(text.contains("yolo: on"), "{text}");
+        assert!(text.contains("taken"), "{text}");
+        let text = render_to_text(&Modal::RemoteCreateRunning(form));
+        assert!(text.contains("creating r/fresh on mini"), "{text}");
     }
 
     /// Sharing eagerly starts stopped agents (see `toggle_workspace_shared`),

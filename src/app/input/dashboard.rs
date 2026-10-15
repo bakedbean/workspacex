@@ -642,6 +642,31 @@ pub(in crate::app::input) async fn handle_key_dashboard(
                 });
             }
         }
+        // `F` opens the hide-rules checklist for the selected row's repo.
+        (KeyCode::Char('F'), _) => {
+            if let Some(repo_id) = app.selected_repo()
+                && let Some(repo) = app.repos.iter().find(|r| r.id == repo_id)
+            {
+                let ids: Vec<_> = app
+                    .workspaces
+                    .iter()
+                    .filter(|(rid, _)| *rid == repo_id)
+                    .map(|(_, w)| w.id)
+                    .collect();
+                let counts = crate::data::hide_rules::HideRule::ALL.map(|rule| {
+                    ids.iter()
+                        .filter(|id| rule.matches(&app.hide_subject(**id)))
+                        .count()
+                });
+                app.modal = Some(Modal::HideRules {
+                    repo_id,
+                    repo_name: repo.name.clone(),
+                    rules: repo.hide_rules.clone(),
+                    counts,
+                    selected: 0,
+                });
+            }
+        }
         (KeyCode::Char('p'), _) => {
             // Closing drops the filter; opening must never inherit a
             // stale one either.

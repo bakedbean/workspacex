@@ -104,3 +104,76 @@ async fn select_by_name_reveals_hidden_group() {
     );
     assert!(app.selectable.contains(&SelectionTarget::Workspace(ids[0])));
 }
+
+async fn open_picker(app: &mut App) {
+    draw(app);
+    let repo = app.repos[0].id;
+    select(app, SelectionTarget::Repo(repo));
+    press(app, 'F', KeyModifiers::NONE).await;
+}
+
+#[tokio::test]
+async fn f_opens_picker_for_selected_repo_with_counts() {
+    let (mut app, repo, _) = app_with_merged_hidden();
+    open_picker(&mut app).await;
+    let Some(crate::ui::modal::Modal::HideRules {
+        repo_id,
+        counts,
+        rules,
+        ..
+    }) = &app.modal
+    else {
+        panic!("expected HideRules modal, got {:?}", app.modal);
+    };
+    assert_eq!(*repo_id, repo);
+    assert_eq!(counts[0], 1, "one merged workspace"); // ALL[0] is Merged
+    assert!(rules.contains(MERGED));
+}
+
+#[tokio::test]
+async fn space_toggles_and_persists() {
+    let (mut app, repo, _) = app_with_merged_hidden();
+    open_picker(&mut app).await;
+    let shared = shared_app();
+    crate::app::input::modal::handle_key_modal(&mut app, &shared, key(KeyCode::Char(' ')))
+        .await
+        .unwrap();
+    let stored = app
+        .store
+        .repos()
+        .unwrap()
+        .into_iter()
+        .find(|r| r.id == repo)
+        .unwrap();
+    assert!(
+        !stored.hide_rules.contains(MERGED),
+        "space on row 0 toggles merged off"
+    );
+    assert!(
+        matches!(app.modal, Some(crate::ui::modal::Modal::HideRules { .. })),
+        "picker stays open"
+    );
+}
+
+#[tokio::test]
+async fn toggling_rule_off_forgets_expansion() {
+    let (mut app, repo, _) = app_with_merged_hidden();
+    app.dashboard.expanded_hidden.insert((repo, MERGED));
+    open_picker(&mut app).await;
+    let shared = shared_app();
+    crate::app::input::modal::handle_key_modal(&mut app, &shared, key(KeyCode::Char(' ')))
+        .await
+        .unwrap();
+    assert!(!app.dashboard.expanded_hidden.contains(&(repo, MERGED)));
+}
+
+#[tokio::test]
+async fn esc_closes_picker() {
+    let (mut app, _, _) = app_with_merged_hidden();
+    open_picker(&mut app).await;
+    let shared = shared_app();
+    crate::app::input::modal::handle_key_modal(&mut app, &shared, key(KeyCode::Esc))
+        .await
+        .unwrap();
+    assert!(app.modal.is_none());
+}

@@ -123,6 +123,15 @@ pub(in crate::app::input) async fn handle_key_modal(
         Modal::RemoteHostPicker { hosts, selected } => {
             remote::remote_host_picker(app, shared, k, hosts, selected).await?
         }
+        Modal::HideRules {
+            repo_id,
+            repo_name,
+            rules,
+            counts,
+            selected,
+        } => {
+            pickers::hide_rules_picker(app, k, repo_id, repo_name, rules, counts, selected).await?
+        }
         Modal::RemoteListLoading { .. } => remote::remote_list_loading(app, shared, k).await?,
         Modal::RemoteShareConfirm {
             selected,

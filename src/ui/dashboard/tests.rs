@@ -1555,4 +1555,52 @@ mod hide_rules {
         );
         assert!(line_with(&screen, "merged").contains("1 hidden"));
     }
+
+    #[test]
+    fn attention_view_lists_hidden_groups_in_their_own_section() {
+        let repo = repo_with("pr:merged,pr:none");
+        let inputs = inputs(&repo, items(&repo));
+        let mut state = DashboardState {
+            group_mode: GroupMode::Attention,
+            ..Default::default()
+        };
+        let screen = draw(&inputs, &mut state);
+        assert!(screen.contains("HIDDEN"));
+        assert!(line_with(&screen, "wsx · ").contains("2 hidden"));
+        assert!(!screen.contains("merged-a"));
+        let t = visible_targets(&inputs, &state);
+        assert_eq!(
+            t.iter()
+                .filter(|x| matches!(x, SelectionTarget::HiddenGroup { .. }))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn all_hidden_repo_is_not_quiet() {
+        let repo = repo_with("pr:merged");
+        let inputs = inputs(&repo, vec![item(&repo, 2, "merged-a", Some(PrMerged))]);
+        let mut state = DashboardState {
+            group_mode: GroupMode::Attention,
+            ..Default::default()
+        };
+        let screen = draw(&inputs, &mut state);
+        assert!(!screen.contains("QUIET REPOS"), "{screen}");
+        assert!(screen.contains("HIDDEN"));
+    }
+
+    #[test]
+    fn attention_expanded_group_rows_are_selectable() {
+        let repo = repo_with("pr:merged");
+        let inputs = inputs(&repo, items(&repo));
+        let mut state = DashboardState {
+            group_mode: GroupMode::Attention,
+            ..Default::default()
+        };
+        state.expanded_hidden.insert((RepoId(1), MERGED));
+        let t = visible_targets(&inputs, &state);
+        assert!(t.contains(&SelectionTarget::Workspace(WorkspaceId(2))));
+        assert!(draw(&inputs, &mut state).contains("merged-a"));
+    }
 }

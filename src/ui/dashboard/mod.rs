@@ -539,6 +539,17 @@ pub fn visible_targets(
                         .map(|w| SelectionTarget::Workspace(*w)),
                 );
             }
+            for (r, rule, rows) in all_hidden_groups(inputs, filter) {
+                out.push(SelectionTarget::HiddenGroup { repo: r.id, rule });
+                if state.expanded_hidden.contains(&(r.id, rule)) {
+                    let mut nav: Vec<NavRow> = rows.iter().map(|w| NavRow::from(*w)).collect();
+                    order_workspaces(&mut nav, state.sort_mode, state.blocked_pin_max_age_secs);
+                    out.extend(
+                        nav.into_iter()
+                            .map(|n| SelectionTarget::Workspace(n.workspace_id)),
+                    );
+                }
+            }
         }
     }
     out
@@ -567,7 +578,8 @@ fn quiet_repo_names(
         let repo_matches_filter = filter
             .map(|f| r.name.to_lowercase().contains(&f.to_lowercase()))
             .unwrap_or(true);
-        let include_empty = count == 0 && (filter.is_none() || repo_matches_filter);
+        let has_hidden = !hidden_groups(r, &inputs.workspaces, filter).is_empty();
+        let include_empty = count == 0 && !has_hidden && (filter.is_none() || repo_matches_filter);
         if include_empty || all_idle {
             quiet_names.insert(r.name.clone());
         }
@@ -751,6 +763,23 @@ fn hidden_groups<'w, 'a>(
                 .filter(|w| w.repo.id == repo.id && hidden_by(w, filter) == Some(rule))
                 .collect();
             (!rows.is_empty()).then_some((rule, rows))
+        })
+        .collect()
+}
+
+/// Every repo's hidden groups in display order: repos by `(sort_order, id)`, then rule.
+fn all_hidden_groups<'w, 'a>(
+    inputs: &'w DashboardInputs<'a>,
+    filter: Option<&str>,
+) -> Vec<(&'w Repo, HideRule, Vec<&'w WorkspaceItem<'a>>)> {
+    let mut repos: Vec<&Repo> = inputs.repos.to_vec();
+    repos.sort_by_key(|r| (r.sort_order, r.id.0));
+    repos
+        .into_iter()
+        .flat_map(|r| {
+            hidden_groups(r, &inputs.workspaces, filter)
+                .into_iter()
+                .map(move |(rule, rows)| (r, rule, rows))
         })
         .collect()
 }
@@ -976,7 +1005,8 @@ fn render_by_attention<'a>(
             .unwrap_or(true);
         // Empty repos only show in QUIET REPOS when no filter is active
         // OR when the filter matches the repo name itself.
-        let include_empty = count == 0 && (filter.is_none() || repo_matches_filter);
+        let has_hidden = !hidden_groups(r, &inputs.workspaces, filter).is_empty();
+        let include_empty = count == 0 && !has_hidden && (filter.is_none() || repo_matches_filter);
         if include_empty || all_idle {
             quiet.push(QuietRepo {
                 name: r.name.clone(),
@@ -1001,8 +1031,25 @@ fn render_by_attention<'a>(
     // per-section ordering rules (priority-then-recency for NEEDS,
     // recency-only for WORKING / RECENT / IDLE).
     let mut data = by_attention::partition(rows, quiet);
+    data.hidden = all_hidden_groups(inputs, filter)
+        .into_iter()
+        .map(|(r, rule, rows)| {
+            let mut workspaces: Vec<RowInputs> = rows.iter().map(|w| w.row.clone()).collect();
+            order_workspaces(
+                &mut workspaces,
+                state.sort_mode,
+                state.blocked_pin_max_age_secs,
+            );
+            let view = HiddenGroupView {
+                rule,
+                expanded: state.expanded_hidden.contains(&(r.id, rule)),
+                workspaces,
+            };
+            (r.name.clone(), r.id, view)
+        })
+        .collect();
 
-    // Quiet repos render no rows, so only the four sections count.
+    // Quiet repos render no rows; expanded hidden groups do.
     let widths = inputs.column_widths.with_agent(derived_agent_width(
         [
             &data.needs_attention,
@@ -1012,7 +1059,13 @@ fn render_by_attention<'a>(
         ]
         .into_iter()
         .flat_map(|s| s.iter())
-        .map(|r| &r.row),
+        .map(|r| &r.row)
+        .chain(
+            data.hidden
+                .iter()
+                .filter(|(_, _, g)| g.expanded)
+                .flat_map(|(_, _, g)| g.workspaces.iter()),
+        ),
     ));
 
     // Walk the same item sequence that render_list will emit to determine
@@ -1042,6 +1095,33 @@ fn render_by_attention<'a>(
                 }
                 if let Some(span) = row::pr_chip_hit_span(&row.row, widths) {
                     chip_spans.push((row.row.workspace_id, flat_idx, span));
+                }
+                flat_idx += 1;
+            }
+        }
+    }
+    if !data.hidden.is_empty() {
+        flat_idx += 1; // HIDDEN header
+        for (_, repo_id, g) in &mut data.hidden {
+            if selection
+                == Some(SelectionTarget::HiddenGroup {
+                    repo: *repo_id,
+                    rule: g.rule,
+                })
+            {
+                selected_idx = Some(flat_idx);
+            }
+            flat_idx += 1;
+            if !g.expanded {
+                continue;
+            }
+            for w in &mut g.workspaces {
+                if selection == Some(SelectionTarget::Workspace(w.workspace_id)) {
+                    selected_idx = Some(flat_idx);
+                    w.selected = true;
+                }
+                if let Some(span) = row::pr_chip_hit_span(w, widths) {
+                    chip_spans.push((w.workspace_id, flat_idx, span));
                 }
                 flat_idx += 1;
             }

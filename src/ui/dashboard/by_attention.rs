@@ -32,6 +32,11 @@ pub struct AttentionData {
     pub recent: Vec<FlatRow>,
     pub idle: Vec<FlatRow>,
     pub quiet_repos: Vec<QuietRepo>,
+    pub hidden: Vec<(
+        String,
+        crate::data::store::RepoId,
+        crate::ui::dashboard::hidden::HiddenGroupView,
+    )>,
 }
 
 pub fn partition(rows: Vec<FlatRow>, quiet_repos: Vec<QuietRepo>) -> AttentionData {
@@ -66,6 +71,7 @@ pub fn partition(rows: Vec<FlatRow>, quiet_repos: Vec<QuietRepo>) -> AttentionDa
         recent,
         idle,
         quiet_repos,
+        hidden: Vec::new(),
     }
 }
 
@@ -203,6 +209,38 @@ pub fn render_list(
         )));
         for r in &data.idle {
             items.push(ListItem::new(flat_row_line(r, widths, tick, theme, width)));
+        }
+    }
+    if !data.hidden.is_empty() {
+        let total: usize = data.hidden.iter().map(|(_, _, g)| g.workspaces.len()).sum();
+        items.push(ListItem::new(section_header(
+            "  HIDDEN",
+            total,
+            None,
+            Style::default().fg(theme.path),
+            width,
+            theme,
+        )));
+        for (repo_name, _, g) in &data.hidden {
+            items.push(ListItem::new(
+                crate::ui::dashboard::hidden::hidden_group_line(
+                    g,
+                    Some(repo_name),
+                    g.workspaces.first().is_some_and(|w| w.nerd_fonts),
+                    theme,
+                ),
+            ));
+            if g.expanded {
+                for w in &g.workspaces {
+                    let flat = FlatRow {
+                        repo_name: repo_name.clone(),
+                        row: w.clone(),
+                    };
+                    items.push(ListItem::new(crate::ui::dashboard::hidden::dimmed(
+                        flat_row_line(&flat, widths, tick, theme, width),
+                    )));
+                }
+            }
         }
     }
     if !data.quiet_repos.is_empty() {

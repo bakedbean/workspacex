@@ -11,6 +11,19 @@ impl App {
         self.dashboard.selection
     }
 
+    /// The repo the selection belongs to: the header itself, a workspace's
+    /// owner, or a hidden group's repo.
+    pub(crate) fn selected_repo(&self) -> Option<crate::data::store::RepoId> {
+        match self.selected_target()? {
+            SelectionTarget::Repo(id) | SelectionTarget::HiddenGroup { repo: id, .. } => Some(id),
+            SelectionTarget::Workspace(wid) => self
+                .workspaces
+                .iter()
+                .find(|(_, w)| w.id == wid)
+                .map(|(rid, _)| *rid),
+        }
+    }
+
     /// Set the selection by index into the current `selectable`, keeping the
     /// durable `selection` target and the `selected` nav cursor in sync. Use
     /// this anywhere selection *intent* changes via an index (nav, click,
@@ -81,6 +94,7 @@ impl App {
         match t {
             SelectionTarget::Repo(id) => self.repos.iter().any(|r| r.id == id),
             SelectionTarget::Workspace(id) => self.workspaces.iter().any(|(_, w)| w.id == id),
+            SelectionTarget::HiddenGroup { repo, .. } => self.repos.iter().any(|r| r.id == repo),
         }
     }
 

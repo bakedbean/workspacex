@@ -7,6 +7,7 @@ pub mod column_content;
 pub mod detail;
 #[cfg(test)]
 pub(crate) mod fixture;
+pub mod hidden;
 pub mod layout;
 pub mod row;
 pub mod sort;
@@ -15,9 +16,11 @@ pub mod spinner;
 pub mod status;
 
 use crate::app::SelectionTarget;
-use crate::data::store::Repo;
+use crate::data::hide_rules::{HideRule, HideSubject};
+use crate::data::store::{Repo, RepoId};
 use crate::ui::dashboard::by_attention::{FlatRow, QuietRepo};
 use crate::ui::dashboard::by_repo::RepoView;
+use crate::ui::dashboard::hidden::HiddenGroupView;
 use crate::ui::dashboard::layout::GroupMode;
 use crate::ui::dashboard::row::RowInputs;
 use crate::ui::dashboard::sort::{
@@ -67,6 +70,11 @@ pub struct DashboardState {
     pub blocked_pin_max_age_secs: u64,
     /// Explicit user fold overrides; absent = use `default_fold(counts)`.
     pub folded: HashMap<u64, bool>,
+    /// Hidden groups the user expanded this session. Not persisted.
+    pub expanded_hidden: std::collections::HashSet<(
+        crate::data::store::RepoId,
+        crate::data::hide_rules::HideRule,
+    )>,
     pub filter: Option<String>,
     pub selection: Option<SelectionTarget>,
     /// Index into `App::selectable`. Owned here so that nav handlers in
@@ -137,6 +145,7 @@ impl Default for DashboardState {
             sort_mode: SortMode::default(),
             blocked_pin_max_age_secs: BLOCKED_PIN_MAX_AGE_DEFAULT_SECS,
             folded: HashMap::new(),
+            expanded_hidden: Default::default(),
             filter: None,
             selection: None,
             selected: 0,
@@ -450,6 +459,7 @@ pub fn visible_targets(
         .workspaces
         .iter()
         .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
+        .filter(|w| hidden_by(w, filter).is_none())
         .cloned()
         .collect();
     let mut out: Vec<SelectionTarget> = Vec::new();
@@ -467,9 +477,15 @@ pub fn visible_targets(
                     continue;
                 };
                 out.push(SelectionTarget::Repo(repo_id));
+                let groups = inputs
+                    .repos
+                    .iter()
+                    .find(|r| r.id == repo_id)
+                    .map(|r| hidden_groups(r, &inputs.workspaces, filter))
+                    .unwrap_or_default();
                 let expanded = match state.folded.get(&(repo_id.0 as u64)).copied() {
                     Some(explicit) => !explicit,
-                    None => !default_fold(s.counts),
+                    None => default_expanded(s.counts, !groups.is_empty()),
                 };
                 if expanded {
                     out.extend(
@@ -477,6 +493,25 @@ pub fn visible_targets(
                             .iter()
                             .map(|w| SelectionTarget::Workspace(*w)),
                     );
+                    for (rule, rows) in &groups {
+                        out.push(SelectionTarget::HiddenGroup {
+                            repo: repo_id,
+                            rule: *rule,
+                        });
+                        if state.expanded_hidden.contains(&(repo_id, *rule)) {
+                            let mut nav: Vec<NavRow> =
+                                rows.iter().map(|w| NavRow::from(*w)).collect();
+                            order_workspaces(
+                                &mut nav,
+                                state.sort_mode,
+                                state.blocked_pin_max_age_secs,
+                            );
+                            out.extend(
+                                nav.into_iter()
+                                    .map(|n| SelectionTarget::Workspace(n.workspace_id)),
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -524,6 +559,7 @@ fn quiet_repo_names(
             .iter()
             .filter(|w| w.repo.id == r.id)
             .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
+            .filter(|w| hidden_by(w, filter).is_none())
             .collect();
         let count = repo_rows.len();
         let all_idle =
@@ -689,6 +725,42 @@ pub fn reconcile_selection(
     }
 }
 
+/// The rule hiding `w`, or `None` when it shows normally. An active filter
+/// bypasses every rule so a search can find any row.
+pub(crate) fn hidden_by(w: &WorkspaceItem<'_>, filter: Option<&str>) -> Option<HideRule> {
+    if filter.is_some() {
+        return None;
+    }
+    w.repo.hide_rules.classify(&HideSubject {
+        lifecycle: w.row.lifecycle,
+    })
+}
+
+/// `repo`'s hidden rows grouped by rule, in the repo's rule order. Empty
+/// groups are omitted.
+fn hidden_groups<'w, 'a>(
+    repo: &Repo,
+    workspaces: &'w [WorkspaceItem<'a>],
+    filter: Option<&str>,
+) -> Vec<(HideRule, Vec<&'w WorkspaceItem<'a>>)> {
+    repo.hide_rules
+        .iter()
+        .filter_map(|rule| {
+            let rows: Vec<_> = workspaces
+                .iter()
+                .filter(|w| w.repo.id == repo.id && hidden_by(w, filter) == Some(rule))
+                .collect();
+            (!rows.is_empty()).then_some((rule, rows))
+        })
+        .collect()
+}
+
+/// Default fold: a repo with no rows at all starts folded; one whose rows
+/// are all hidden stays open so its summary rows show.
+fn default_expanded(counts: StatusCounts, has_hidden: bool) -> bool {
+    !default_fold(counts) || has_hidden
+}
+
 /// Case-insensitive substring match against the workspace branch, owning
 /// repo name, and the row's status-adaptive column (status token, recap
 /// segments, or fallback text — whichever the column carries).
@@ -745,6 +817,7 @@ fn render_by_repo<'a>(
                 .iter()
                 .filter(|w| w.repo.id == r.id)
                 .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
+                .filter(|w| hidden_by(w, filter).is_none())
                 .map(|w| w.row.clone())
                 .collect();
             order_workspaces(
@@ -752,11 +825,28 @@ fn render_by_repo<'a>(
                 state.sort_mode,
                 state.blocked_pin_max_age_secs,
             );
+            let hidden: Vec<HiddenGroupView> = hidden_groups(r, &inputs.workspaces, filter)
+                .into_iter()
+                .map(|(rule, rows)| {
+                    let mut workspaces: Vec<RowInputs> =
+                        rows.iter().map(|w| w.row.clone()).collect();
+                    order_workspaces(
+                        &mut workspaces,
+                        state.sort_mode,
+                        state.blocked_pin_max_age_secs,
+                    );
+                    HiddenGroupView {
+                        rule,
+                        expanded: state.expanded_hidden.contains(&(r.id, rule)),
+                        workspaces,
+                    }
+                })
+                .collect();
             let counts = StatusCounts::from_iter(workspaces.iter().map(|w| w.status));
             let repo_id_u64 = r.id.0 as u64;
             let expanded = match state.folded.get(&repo_id_u64).copied() {
                 Some(explicit) => !explicit,
-                None => !default_fold(counts),
+                None => default_expanded(counts, !hidden.is_empty()),
             };
             RepoView {
                 id: repo_id_u64,
@@ -766,6 +856,7 @@ fn render_by_repo<'a>(
                 expanded,
                 sort_order: r.sort_order,
                 workspaces,
+                hidden,
                 show_pr_link: inputs.github_remotes.is_github(r.id),
                 nerd_fonts: inputs.nerd_fonts,
             }
@@ -775,10 +866,14 @@ fn render_by_repo<'a>(
 
     // Only expanded repos render rows, so only they may widen the strip.
     let widths = inputs.column_widths.with_agent(derived_agent_width(
-        views
-            .iter()
-            .filter(|v| v.expanded)
-            .flat_map(|v| v.workspaces.iter()),
+        views.iter().filter(|v| v.expanded).flat_map(|v| {
+            v.workspaces.iter().chain(
+                v.hidden
+                    .iter()
+                    .filter(|g| g.expanded)
+                    .flat_map(|g| g.workspaces.iter()),
+            )
+        }),
     ));
 
     // Walk the same item sequence that render_list will emit to determine
@@ -813,6 +908,30 @@ fn render_by_repo<'a>(
             }
             flat_idx += 1;
         }
+        for g in &mut view.hidden {
+            if selection
+                == Some(SelectionTarget::HiddenGroup {
+                    repo: RepoId(view.id as i64),
+                    rule: g.rule,
+                })
+            {
+                selected_idx = Some(flat_idx);
+            }
+            flat_idx += 1;
+            if !g.expanded {
+                continue;
+            }
+            for w in &mut g.workspaces {
+                if selection == Some(SelectionTarget::Workspace(w.workspace_id)) {
+                    selected_idx = Some(flat_idx);
+                    w.selected = true;
+                }
+                if let Some(span) = row::pr_chip_hit_span(w, widths) {
+                    chip_spans.push((w.workspace_id, flat_idx, span));
+                }
+                flat_idx += 1;
+            }
+        }
         // Spacer item
         flat_idx += 1;
     }
@@ -834,6 +953,7 @@ fn render_by_attention<'a>(
         .workspaces
         .iter()
         .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
+        .filter(|w| hidden_by(w, filter).is_none())
         .map(|w| FlatRow {
             repo_name: w.repo.name.clone(),
             row: w.row.clone(),
@@ -846,6 +966,7 @@ fn render_by_attention<'a>(
             .iter()
             .filter(|w| w.repo.id == r.id)
             .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
+            .filter(|w| hidden_by(w, filter).is_none())
             .collect();
         let count = repo_rows.len();
         let all_idle =

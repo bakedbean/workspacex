@@ -30,6 +30,8 @@ pub struct RepoView<'a> {
     pub sort_order: i64,
     /// Already sorted by Status priority (Stalled first).
     pub workspaces: Vec<RowInputs>,
+    /// Summary rows for workspaces the repo's hide rules keep off the list.
+    pub hidden: Vec<crate::ui::dashboard::hidden::HiddenGroupView>,
     /// Whether to paint the clickable "my open PRs" link on the header.
     /// Gated on the repo having a github.com remote — a repo GitHub can't
     /// serve gets no affordance rather than one that opens a dead tab.
@@ -128,7 +130,7 @@ fn header_line(
     theme: &Theme,
 ) -> (Line<'static>, Option<PrLinkSpan>) {
     let mut spans: Vec<Span<'static>> = Vec::new();
-    let fold_glyph = if view.counts.total() == 0 {
+    let fold_glyph = if view.counts.total() == 0 && view.hidden.is_empty() {
         ' '
     } else if view.expanded {
         '▾'
@@ -284,6 +286,18 @@ pub fn render_list(
         for w in &view.workspaces {
             items.push(ListItem::new(row::render(w, widths, tick, theme, width)));
         }
+        for g in &view.hidden {
+            items.push(ListItem::new(
+                crate::ui::dashboard::hidden::hidden_group_line(g, None, view.nerd_fonts, theme),
+            ));
+            if g.expanded {
+                for w in &g.workspaces {
+                    items.push(ListItem::new(crate::ui::dashboard::hidden::dimmed(
+                        row::render(w, widths, tick, theme, width),
+                    )));
+                }
+            }
+        }
         items.push(ListItem::new(""));
     }
     (items, links)
@@ -345,6 +359,7 @@ mod tests {
             expanded,
             sort_order: id as i64,
             workspaces,
+            hidden: Vec::new(),
             show_pr_link: false,
             nerd_fonts: false,
         }

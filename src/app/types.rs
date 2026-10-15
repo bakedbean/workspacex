@@ -18,6 +18,11 @@ pub enum AppEvent {
 pub enum SelectionTarget {
     Repo(crate::data::store::RepoId),
     Workspace(crate::data::store::WorkspaceId),
+    /// A repo's summary row for workspaces hidden by `rule`.
+    HiddenGroup {
+        repo: crate::data::store::RepoId,
+        rule: crate::data::hide_rules::HideRule,
+    },
 }
 
 /// Outcome of `ensure_workspace_session`. `AgentMissing` signals to callers

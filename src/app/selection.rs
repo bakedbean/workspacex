@@ -63,8 +63,9 @@ impl App {
     }
 
     /// Select a workspace by repo name + workspace slug, unfolding its repo.
-    /// Returns false if the pair doesn't exist. A hidden workspace's group is
-    /// expanded and the selection resolves on the next draw.
+    /// Returns false if the pair doesn't exist or is otherwise unselectable. A
+    /// hidden workspace's group is expanded and the selection resolves on the
+    /// next draw.
     /// Used by automation surfaces (waybar jump, `wsx --select`).
     pub fn select_workspace_by_name(&mut self, repo_name: &str, slug: &str) -> bool {
         let Some(repo_id) = self

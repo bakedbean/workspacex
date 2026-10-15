@@ -19,6 +19,7 @@ mod setup_log;
 mod textarea;
 mod updates_panel;
 mod usage_picker;
+pub mod workspace_tags;
 
 // Panel renderers called from app::render via `crate::ui::modal::*`.
 pub use agents_panel::render_agents_panel;
@@ -167,6 +168,17 @@ pub enum Modal {
     RemoteHostPicker {
         hosts: Vec<(String, String)>,
         selected: usize,
+    },
+    /// The `#` tag editor. `known`/`tags` are snapshots refreshed after each
+    /// write; `selected` indexes `workspace_tags::tag_items(..)`.
+    WorkspaceTags {
+        workspace_id: crate::data::store::WorkspaceId,
+        name: String,
+        known: Vec<String>,
+        tags: Vec<String>,
+        input: String,
+        selected: usize,
+        notice: Option<String>,
     },
     /// The `F` checklist of hide rules for one repo. `counts[i]` is how many
     /// of its workspaces `HideRule::ALL[i]` matches, snapshotted on open.
@@ -459,7 +471,8 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
              e   edit        t   term\n  \
              v   diff        g   lazygit\n  \
              r   rename      C   name color\n  \
-             o   setup log   x   cancel setup\n\n  \
+             o   setup log   x   cancel setup\n  \
+             #   tags\n\n  \
              ?/Esc  close"
                 .to_string(),
         ),
@@ -504,6 +517,38 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                 format!(
                     "Choose a host to browse shared workspaces:\n\n{list}\n\n\
                      \u{2191}\u{2193} move   Enter fetch   Esc cancel"
+                ),
+            )
+        }
+        Modal::WorkspaceTags {
+            name,
+            known,
+            tags,
+            input,
+            selected,
+            notice,
+            ..
+        } => {
+            let list = workspace_tags::tag_items(known, tags, input)
+                .iter()
+                .enumerate()
+                .map(|(i, it)| {
+                    let cursor = if i == *selected { ">" } else { " " };
+                    let mark = if it.checked { "x" } else { " " };
+                    let new = if it.new { "  (new)" } else { "" };
+                    format!("{cursor} [{mark}] {}{new}", it.name)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let notice = notice
+                .as_deref()
+                .map(|n| format!("\n{n}"))
+                .unwrap_or_default();
+            (
+                "workspace tags",
+                format!(
+                    "{name}\n\n# {input}\u{2588}\n{list}{notice}\n\n\
+                     \u{2191}\u{2193} move   space toggle   enter add typed   Esc close"
                 ),
             )
         }

@@ -627,6 +627,17 @@ pub(in crate::app::input) async fn handle_key_dashboard(
                 app.modal = Some(Modal::WorkspaceActions);
             }
         }
+        (KeyCode::Char('#'), _) => {
+            if let Some(SelectionTarget::Workspace(ws)) = app.selected_target() {
+                crate::app::input::modal::pickers::open_workspace_tags(
+                    app,
+                    ws,
+                    String::new(),
+                    0,
+                    &[],
+                )?;
+            }
+        }
         // `C` opens the name-color picker for the
         // selected workspace. `current` is snapshotted here so the grid can
         // mark the applied color without re-reading the store each frame.

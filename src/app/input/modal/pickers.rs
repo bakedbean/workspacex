@@ -1,4 +1,5 @@
-//! Small option pickers: workspace name color and usage window.
+//! Small option pickers: workspace name color, workspace tags, usage window
+//! and hide rules.
 
 use super::*;
 use crate::app::{App, SharedApp};
@@ -151,5 +152,117 @@ pub(super) async fn hide_rules_picker(
         counts,
         selected,
     });
+    Ok(())
+}
+
+/// Open (or reopen after a write) the `#` editor for `ws` with fresh snapshots.
+/// `seen` keeps names already listed, so unchecking a tag's last use doesn't
+/// drop it from the list mid-edit.
+pub(crate) fn open_workspace_tags(
+    app: &mut App,
+    ws: crate::data::store::WorkspaceId,
+    input: String,
+    selected: usize,
+    seen: &[String],
+) -> Result<()> {
+    let Some(w) = app.store.workspace_by_id(ws)? else {
+        app.modal = None;
+        return Ok(());
+    };
+    let mut known: Vec<String> = app.store.all_tags()?.into_iter().map(|(t, _)| t).collect();
+    known.extend(seen.iter().cloned());
+    known.sort();
+    known.dedup();
+    app.modal = Some(Modal::WorkspaceTags {
+        workspace_id: ws,
+        name: w.name,
+        known,
+        tags: w.tags.iter().map(|t| t.to_string()).collect(),
+        input,
+        selected,
+        notice: None,
+    });
+    Ok(())
+}
+
+/// Every edit writes through immediately; `Esc` (or `Enter` on empty input) closes.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn workspace_tags_editor(
+    app: &mut App,
+    k: crossterm::event::KeyEvent,
+    workspace_id: crate::data::store::WorkspaceId,
+    name: String,
+    known: Vec<String>,
+    tags: Vec<String>,
+    mut input: String,
+    selected: usize,
+) -> Result<()> {
+    use crate::data::tags::{MAX_TAG_LEN, normalize_tag};
+    let items = crate::ui::modal::workspace_tags::tag_items(&known, &tags, &input);
+    let reopen = |app: &mut App, input: String, selected: usize, notice: Option<String>| {
+        app.modal = Some(Modal::WorkspaceTags {
+            workspace_id,
+            name: name.clone(),
+            known: known.clone(),
+            tags: tags.clone(),
+            input,
+            selected,
+            notice,
+        });
+    };
+    let write = |app: &mut App, tag: &str, add: bool| -> Result<bool> {
+        let r = if add {
+            app.store.add_workspace_tag(workspace_id, tag)
+        } else {
+            app.store.remove_workspace_tag(workspace_id, tag)
+        };
+        if let Err(e) = r {
+            app.modal = Some(Modal::Error {
+                message: format!("could not save tags: {e}"),
+            });
+            return Ok(false);
+        }
+        app.refresh()?;
+        Ok(true)
+    };
+    match k.code {
+        KeyCode::Esc => app.modal = None,
+        KeyCode::Enter if input.trim().is_empty() => app.modal = None,
+        KeyCode::Enter => match normalize_tag(&input) {
+            Some(t) => {
+                if write(app, &t, true)? {
+                    open_workspace_tags(app, workspace_id, String::new(), 0, &known)?;
+                }
+            }
+            None => {
+                let notice = format!("invalid tag: use 1-{MAX_TAG_LEN} of a-z 0-9 - _");
+                reopen(app, input, selected, Some(notice));
+            }
+        },
+        KeyCode::Char(' ') => {
+            if let Some(it) = items.get(selected)
+                && write(app, &it.name, !it.checked)?
+            {
+                open_workspace_tags(app, workspace_id, input, selected, &known)?;
+            }
+        }
+        KeyCode::Up => reopen(app, input, selected.saturating_sub(1), None),
+        KeyCode::Down => {
+            let last = items.len().saturating_sub(1);
+            reopen(app, input, (selected + 1).min(last), None)
+        }
+        KeyCode::Backspace => {
+            input.pop();
+            reopen(app, input, 0, None);
+        }
+        KeyCode::Char(c)
+            if !k.modifiers.contains(KeyModifiers::CONTROL)
+                && !k.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            input.push(c);
+            reopen(app, input, 0, None);
+        }
+        _ => {}
+    }
     Ok(())
 }

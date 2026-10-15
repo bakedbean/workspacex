@@ -39,3 +39,4 @@ mod sort_mode;
 mod spawn;
 mod updates_panel;
 mod workspace_lifecycle;
+mod workspace_tags;

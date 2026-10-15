@@ -10,7 +10,7 @@
 //!   [`panels`]     updates, process list, repo settings
 //!   [`agents`]     agent picker, agents panel, missing-agent notice
 //!   [`remote`]     shared-workspace browsing on another host
-//!   [`pickers`]    name color and usage window
+//!   [`pickers`]    name color, workspace tags, usage window, hide rules
 //!   [`prompt_tag`]  the XML prompt-tag picker and body box
 
 pub(super) mod agents;
@@ -122,6 +122,18 @@ pub(in crate::app::input) async fn handle_key_modal(
         }
         Modal::RemoteHostPicker { hosts, selected } => {
             remote::remote_host_picker(app, shared, k, hosts, selected).await?
+        }
+        Modal::WorkspaceTags {
+            workspace_id,
+            name,
+            known,
+            tags,
+            input,
+            selected,
+            ..
+        } => {
+            pickers::workspace_tags_editor(app, k, workspace_id, name, known, tags, input, selected)
+                .await?
         }
         Modal::HideRules {
             repo_id,

@@ -1,7 +1,8 @@
 # Hiding workspaces
 
 Long-lived workspaces can crowd a repo's section once their PRs merge or if
-they never get one. Each repo can hide workspaces by PR state.
+they never get one. Each repo can hide workspaces by PR state or by
+[tag](workspace-tags.md).
 
 Press `F` on a repo header (or any of its rows) and toggle states with
 `space`: no PR, draft, open, conflicted, merged, closed. The choice is saved
@@ -33,3 +34,15 @@ A few things stay predictable:
 - Status bar, waybar, and menubar counts still include hidden workspaces.
 - The updates panel (`Ctrl-x u`) leaves hidden workspaces out.
 - The by-attention view (`G`) lists hidden groups in a HIDDEN section.
+
+## By tag
+
+The `F` picker also lists every [workspace tag](workspace-tags.md) in use,
+above the PR states. Turning one on hides that repo's workspaces carrying
+the tag, whatever they're doing; there is no exemption for work in progress.
+
+    ▸ #parked  ·  2 hidden
+
+A workspace matching both a tag rule and a PR rule is grouped under the
+tag. A rule for a tag no workspace carries any more stays in the picker,
+with a count of 0, so you can turn it off.

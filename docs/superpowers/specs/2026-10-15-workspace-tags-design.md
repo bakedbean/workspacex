@@ -1,7 +1,7 @@
 # Workspace tags — design
 
 **Date:** 2026-10-15
-**Status:** approved
+**Status:** implemented
 
 ## Problem
 

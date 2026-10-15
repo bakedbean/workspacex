@@ -17,6 +17,7 @@
   - [Workspace detail bar](daily-use/detail-bar.md)
   - [Workspace updates panel](daily-use/updates-panel.md)
   - [Hiding workspaces](daily-use/hiding-workspaces.md)
+  - [Workspace tags](daily-use/workspace-tags.md)
   - [Split panes](daily-use/split-panes.md)
   - [Project manager digest](daily-use/project-manager-pane.md)
 - [Configuration and customization](configuration/index.md)

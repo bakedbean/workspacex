@@ -661,22 +661,13 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             if let Some(repo_id) = app.selected_repo()
                 && let Some(repo) = app.repos.iter().find(|r| r.id == repo_id)
             {
-                let ids: Vec<_> = app
-                    .workspaces
-                    .iter()
-                    .filter(|(rid, _)| *rid == repo_id)
-                    .map(|(_, w)| w.id)
-                    .collect();
-                let counts = crate::data::hide_rules::HideRule::PR_RULES.map(|rule| {
-                    ids.iter()
-                        .filter(|id| rule.matches(&app.hide_subject(**id)))
-                        .count()
-                });
+                let (repo_name, rules) = (repo.name.clone(), repo.hide_rules.clone());
+                let rows = crate::app::input::modal::pickers::hide_rule_rows(app, repo_id, &rules)?;
                 app.modal = Some(Modal::HideRules {
                     repo_id,
-                    repo_name: repo.name.clone(),
-                    rules: repo.hide_rules.clone(),
-                    counts,
+                    repo_name,
+                    rules,
+                    rows,
                     selected: 0,
                 });
             }

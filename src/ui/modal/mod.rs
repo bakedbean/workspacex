@@ -180,13 +180,14 @@ pub enum Modal {
         selected: usize,
         notice: Option<String>,
     },
-    /// The `F` checklist of hide rules for one repo. `counts[i]` is how many
-    /// of its workspaces `HideRule::ALL[i]` matches, snapshotted on open.
+    /// The `F` checklist of hide rules for one repo: tag rows (sorted) then
+    /// PR rows, each with how many of the repo's workspaces it matches,
+    /// snapshotted on open.
     HideRules {
         repo_id: crate::data::store::RepoId,
         repo_name: String,
         rules: crate::data::hide_rules::HideRules,
-        counts: [usize; 6],
+        rows: Vec<(crate::data::hide_rules::HideRule, usize)>,
         selected: usize,
     },
     /// The `C` name-color picker for one workspace: an xterm-256 swatch grid
@@ -555,25 +556,29 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
         Modal::HideRules {
             repo_name,
             rules,
-            counts,
+            rows,
             selected,
             ..
         } => {
-            let list = crate::data::hide_rules::HideRule::PR_RULES
-                .iter()
-                .enumerate()
-                .map(|(i, rule)| {
-                    let cursor = if i == *selected { ">" } else { " " };
-                    let mark = if rules.contains(rule) { "x" } else { " " };
-                    format!("{cursor} [{mark}] {:<12} {:>3}", rule.label(), counts[i])
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
+            use crate::data::hide_rules::HideRule;
+            let mut lines = Vec::new();
+            let mut section: Option<bool> = None;
+            for (i, (rule, n)) in rows.iter().enumerate() {
+                let is_tag = matches!(rule, HideRule::Tag(_));
+                if section != Some(is_tag) {
+                    lines.push(if is_tag { "  tagged" } else { "  PR state" }.to_string());
+                    section = Some(is_tag);
+                }
+                let cursor = if i == *selected { ">" } else { " " };
+                let mark = if rules.contains(rule) { "x" } else { " " };
+                lines.push(format!("{cursor} [{mark}] {:<14} {n:>3}", rule.label()));
+            }
             (
                 "hide workspaces",
                 format!(
-                    "Hide {repo_name} workspaces whose PR is:\n\n{list}\n\n\
-                     \u{2191}\u{2193} move   space toggle   Esc close"
+                    "Hide {repo_name} workspaces that are:\n\n{}\n\n\
+                     \u{2191}\u{2193} move   space toggle   Esc close",
+                    lines.join("\n")
                 ),
             )
         }
@@ -734,6 +739,27 @@ mod tests {
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn hide_rules_picker_draws_section_headers() {
+        use crate::data::hide_rules::{HideRule, HideRules, PrCriterion};
+        let m = Modal::HideRules {
+            repo_id: crate::data::store::RepoId(1),
+            repo_name: "wsx".into(),
+            rules: HideRules::parse(Some("tag:parked")),
+            rows: vec![
+                (HideRule::tag("parked"), 2),
+                (HideRule::Pr(PrCriterion::Merged), 0),
+            ],
+            selected: 0,
+        };
+        let text = render_to_text(&m);
+        let tagged = text.find("tagged").expect("tag header");
+        let tag_row = text.find("#parked").expect("tag row");
+        let pr = text.find("PR state").expect("pr header");
+        assert!(tagged < tag_row && tag_row < pr, "{text}");
+        assert!(text.contains("[x] #parked"), "{text}");
+    }
 
     fn render_to_text(modal: &Modal) -> String {
         let theme = Theme::wsx();

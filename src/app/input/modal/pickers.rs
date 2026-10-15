@@ -116,11 +116,10 @@ pub(super) async fn hide_rules_picker(
     repo_id: crate::data::store::RepoId,
     repo_name: String,
     mut rules: crate::data::hide_rules::HideRules,
-    counts: [usize; 6],
+    rows: Vec<(crate::data::hide_rules::HideRule, usize)>,
     selected: usize,
 ) -> Result<()> {
-    use crate::data::hide_rules::HideRule;
-    let last = HideRule::PR_RULES.len() - 1;
+    let last = rows.len().saturating_sub(1);
     let selected = match k.code {
         KeyCode::Esc | KeyCode::Enter => {
             app.modal = None;
@@ -129,7 +128,9 @@ pub(super) async fn hide_rules_picker(
         KeyCode::Up | KeyCode::Char('k') => selected.saturating_sub(1),
         KeyCode::Down | KeyCode::Char('j') => (selected + 1).min(last),
         KeyCode::Char(' ') => {
-            let rule = HideRule::PR_RULES[selected].clone();
+            let Some((rule, _)) = rows.get(selected).cloned() else {
+                return Ok(());
+            };
             rules.toggle(rule.clone());
             if let Err(e) = app.store.set_repo_hide_rules(repo_id, &rules) {
                 app.modal = Some(Modal::Error {
@@ -149,10 +150,51 @@ pub(super) async fn hide_rules_picker(
         repo_id,
         repo_name,
         rules,
-        counts,
+        rows,
         selected,
     });
     Ok(())
+}
+
+/// Every tag in use plus any this repo still has a rule for, then PR rules,
+/// each with how many of this repo's workspaces it matches.
+pub(crate) fn hide_rule_rows(
+    app: &App,
+    repo: crate::data::store::RepoId,
+    rules: &crate::data::hide_rules::HideRules,
+) -> Result<Vec<(crate::data::hide_rules::HideRule, usize)>> {
+    use crate::data::hide_rules::HideRule;
+    let mut tag_rules: Vec<HideRule> = app
+        .store
+        .all_tags()?
+        .iter()
+        .map(|(t, _)| HideRule::tag(t))
+        .collect();
+    tag_rules.extend(
+        rules
+            .iter()
+            .filter(|r| matches!(r, HideRule::Tag(_)))
+            .cloned(),
+    );
+    tag_rules.sort();
+    tag_rules.dedup();
+    let ids: Vec<_> = app
+        .workspaces
+        .iter()
+        .filter(|(rid, _)| *rid == repo)
+        .map(|(_, w)| w.id)
+        .collect();
+    Ok(tag_rules
+        .into_iter()
+        .chain(HideRule::PR_RULES)
+        .map(|rule| {
+            let n = ids
+                .iter()
+                .filter(|id| rule.matches(&app.hide_subject(**id)))
+                .count();
+            (rule, n)
+        })
+        .collect())
 }
 
 /// Open (or reopen after a write) the `#` editor for `ws` with fresh snapshots.

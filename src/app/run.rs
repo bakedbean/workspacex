@@ -98,7 +98,7 @@ async fn do_pending_edit<B>(
     edit: PendingEdit,
 ) -> Result<()>
 where
-    B: ratatui::backend::Backend + std::io::Write,
+    B: ratatui::backend::Backend<Error = std::io::Error> + std::io::Write,
 {
     // Read current value + extension hint under the lock.
     let (current, ext) = {
@@ -167,7 +167,7 @@ where
     Ok(())
 }
 
-pub async fn run<B: Backend + std::io::Write>(
+pub async fn run<B: Backend<Error = std::io::Error> + std::io::Write>(
     terminal: &mut Terminal<B>,
     app: SharedApp,
 ) -> Result<()> {

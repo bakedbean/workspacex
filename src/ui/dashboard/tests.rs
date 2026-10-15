@@ -1603,4 +1603,69 @@ mod hide_rules {
         assert!(t.contains(&SelectionTarget::Workspace(WorkspaceId(2))));
         assert!(draw(&inputs, &mut state).contains("merged-a"));
     }
+
+    /// Text of the lines painted with the selection highlight.
+    fn highlighted_lines(inputs: &DashboardInputs<'_>, state: &mut DashboardState) -> Vec<String> {
+        let theme = Theme::wsx();
+        let specs = crate::config::theme_file::bundled_default(&theme);
+        let mut term = Terminal::new(TestBackend::new(160, 30)).unwrap();
+        term.draw(|f| render(f, f.area(), inputs, state, 0, &theme, &specs))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        let bg = theme.selected_bg_style().bg;
+        (0..buf.area.height)
+            .filter(|&y| y > 0 && (0..buf.area.width).any(|x| buf[(x, y)].bg == bg.unwrap()))
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    /// The selection highlight must land on the row `visible_targets` names.
+    fn assert_lockstep(mode: GroupMode) {
+        let repo = repo_with("pr:merged,pr:none");
+        let inputs = inputs(&repo, items(&repo));
+        let mut state = DashboardState {
+            group_mode: mode,
+            ..Default::default()
+        };
+        state.expanded_hidden.insert((RepoId(1), MERGED));
+        for (target, needle) in [
+            (
+                SelectionTarget::HiddenGroup {
+                    repo: RepoId(1),
+                    rule: MERGED,
+                },
+                "merged  ·  2 hidden",
+            ),
+            (
+                SelectionTarget::HiddenGroup {
+                    repo: RepoId(1),
+                    rule: NO_PR,
+                },
+                "no PR  ·  1 hidden",
+            ),
+            (SelectionTarget::Workspace(WorkspaceId(2)), "merged-a"),
+            (SelectionTarget::Workspace(WorkspaceId(3)), "merged-b"),
+        ] {
+            assert!(visible_targets(&inputs, &state).contains(&target));
+            state.selection = Some(target);
+            let hl = highlighted_lines(&inputs, &mut state);
+            assert_eq!(hl.len(), 1, "{target:?}: {hl:?}");
+            assert!(hl[0].contains(needle), "{target:?}: {hl:?}");
+            assert!(state.list_state.selected().is_some());
+        }
+    }
+
+    #[test]
+    fn by_repo_selection_highlight_matches_visible_targets() {
+        assert_lockstep(GroupMode::Repo);
+    }
+
+    #[test]
+    fn attention_selection_highlight_matches_visible_targets() {
+        assert_lockstep(GroupMode::Attention);
+    }
 }

@@ -29,33 +29,35 @@ work in flight. The `/` filter can't help: it matches text only and clears on
 
 ## Rule model
 
-New module `src/data/hide_rules.rs` (rule model; glyph/style come from the dashboard via `HideRule::lifecycle()`):
+New module `src/data/hide_rules.rs`. Glyph and style come from the dashboard
+via `HideRule::lifecycle()`; the model has no theme dependency.
 
 ```rust
-pub enum HideRule {
-    Pr(PrCriterion),
-}
-
-pub enum PrCriterion { NoPr, Draft, Open, Conflicted, Merged, Closed }
+pub enum HideRule { Pr(PrCriterion) }          // Copy, Ord
+pub enum PrCriterion { Merged, Closed, NoPr, Draft, Open, Conflicted }
+pub struct HideSubject { pub lifecycle: Option<BranchLifecycle> }
 
 impl HideRule {
-    pub fn matches(&self, w: &WorkspaceItem<'_>) -> bool;
-    pub fn label(&self) -> &'static str;      // "merged", "no PR", …
-    pub fn glyph(&self, theme: &Theme) -> …;   // reuses lifecycle glyph/style
-    pub fn token(&self) -> &'static str;      // "pr:merged", "pr:none", …
-    pub fn from_token(s: &str) -> Option<Self>;
+    pub const ALL: [HideRule; 6];              // canonical order
+    pub fn token(self) -> &'static str;        // "pr:merged", "pr:none", …
+    pub fn from_token(s: &str) -> Option<HideRule>;
+    pub fn label(self) -> &'static str;        // "merged", "no PR", …
+    pub fn lifecycle(self) -> Option<BranchLifecycle>;
+    pub fn matches(self, s: &HideSubject) -> bool;
 }
 
-pub struct HideRules(Vec<HideRule>);  // ordered, deduplicated
+pub struct HideRules(Vec<HideRule>);           // sorted, deduplicated
 
 impl HideRules {
-    pub fn parse(raw: &str) -> Self;      // comma list; unknown tokens skipped
-    pub fn serialize(&self) -> String;
-    /// First rule matching `w`, or None. First-match assignment keeps counts
-    /// disjoint once overlapping criteria exist.
-    pub fn classify(&self, w: &WorkspaceItem<'_>) -> Option<&HideRule>;
+    pub fn parse(raw: Option<&str>) -> Self;   // unknown tokens skipped
+    pub fn serialize(&self) -> Option<String>; // None when empty
+    pub fn classify(&self, s: &HideSubject) -> Option<HideRule>;
 }
 ```
+
+`HideSubject` carries the facts a rule can test, so non-PR criteria add a
+field instead of changing the signatures. `classify` is first-match, which
+keeps counts disjoint once overlapping criteria exist.
 
 - `Pr(_)` matches only when the row's `lifecycle` is `Some(state)` and equals
   the criterion. `None` (PR lookup not yet resolved) never matches, so rows
@@ -64,34 +66,33 @@ impl HideRules {
   `pr:conflicted`, `pr:closed`) so a future `idle:14d` can't collide.
 - Unknown tokens are skipped on parse, so an older binary doesn't fail on a
   newer database. They are not preserved: the picker rewrites the full list.
-- Rule order is the canonical order of the picker list, not toggle order, so
-  summary rows render in a stable sequence.
+- Rule order is the canonical order (`PrCriterion` declaration order), not
+  toggle order, so the picker and summary rows render in a stable sequence.
 
 ## Storage
 
 - New nullable column `repos.hide_rules TEXT`, added in `src/data/schema.rs`
   with the existing "check column, then `ALTER TABLE`" migration pattern.
   No seed: `NULL` means no rules.
-- `Repo` gains `hide_rules: Option<String>` (raw). Parsing happens at the
-  dashboard boundary, matching how `detail_bar_config` is carried.
-- Store setter `set_repo_hide_rules(repo_id, Option<&str>)`; empty list
+- `Repo.hide_rules: HideRules`, parsed on load.
+- Store setter `set_repo_hide_rules(repo_id, &HideRules)`; an empty set
   writes `NULL`.
 
 ## Visibility
 
-A single predicate sits beside `matches_filter` in
-`src/ui/dashboard/mod.rs`:
+A single predicate in `src/ui/dashboard/mod.rs`:
 
 ```rust
-fn hidden_by(w, rules, state) -> Option<&HideRule>
+fn hidden_by(w, filter) -> Option<HideRule>
 ```
 
-It returns `None` (row visible) when either:
+It returns `None` (row visible) when a `/` filter is active and non-empty
+(searching bypasses hide rules); otherwise it classifies the row against its
+repo's rules.
 
-- a `/` filter is active and non-empty (searching bypasses hide rules), or
-- the row's group is expanded for this session (see below).
-
-Otherwise it returns `rules.classify(w)`.
+Expanded groups stay classified: their rows are still "hidden" for counting
+and grouping, and render (and are selectable) under their group row. Expansion
+state is `DashboardState.expanded_hidden: HashSet<(RepoId, HideRule)>`.
 
 Every path that calls `matches_filter` today also consults it:
 `render_by_repo`, `render_by_attention`, `visible_targets`,
@@ -127,8 +128,7 @@ mode), one dimmed row per rule with a nonzero count:
   beneath it, dimmed, and become selectable. The row's glyph flips `▸`→`▾`.
 - `h` on an expanded summary row, or on any workspace inside it, collapses
   the group.
-- Expansion lives in `DashboardState.expanded_hidden: HashSet<(RepoId,
-  token)>`. Session-only, not persisted.
+- Expansion is session-only, not persisted.
 - When a selected workspace becomes hidden (PR merges, rule toggled on), the
   selection moves to the workspace's group summary row; a `HiddenGroup`
   target whose group vanishes falls back the same way a vanished repo does.
@@ -136,9 +136,10 @@ mode), one dimmed row per rule with a nonzero count:
 ## Editing rules: the `F` picker
 
 - `F` on a repo header, a workspace, or a summary row opens
-  `Modal::HideRules { repo_id, selected }` for that repo.
-- Lists the six PR criteria with `[x]`/`[ ]` and the live count each would
-  hide.
+  `Modal::HideRules { repo_id, repo_name, rules, counts: [usize; 6], selected }`
+  for that repo.
+- Lists the six PR criteria with `[x]`/`[ ]` and the count each matches.
+  `counts` is snapshotted when the picker opens, not live.
 - `j`/`k` move, `space` toggles and saves immediately, `esc`/`enter`
   close.
 - Saving refreshes the repo row in `App` so the dashboard redraws without a
@@ -162,7 +163,7 @@ mode), one dimmed row per rule with a nonzero count:
   counts, all-hidden repo stays out of QUIET REPOS, `/` bypass, expanded
   group renders dimmed rows.
 - `visible_targets` tests: summary rows are selectable; expanded rows are
-  selectable; selection parks when a row becomes hidden.
+  selectable; selection moves to the group row when a selected row becomes hidden.
 - Input tests: `F` opens the picker for the right repo; `space` persists;
   `Enter`/`h` expand and collapse a group.
 - Updates panel test: hidden rows excluded, no summary rows.

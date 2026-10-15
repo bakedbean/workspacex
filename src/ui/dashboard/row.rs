@@ -656,9 +656,6 @@ pub fn pr_chip_hit_span(inputs: &RowInputs, widths: ColumnWidths) -> Option<(u16
     Some((x as u16, width as u16))
 }
 
-/// A line count for the diff cell: plain up to four digits, then
-/// thousands (`12k`) and millions (`2M`), truncated rather than rounded so
-/// `9999` never reads as `10k`.
 /// ` #a #b` within `room` cells; trailing tags that don't fit become ` +N`.
 fn fit_tags(tags: &[std::sync::Arc<str>], room: usize) -> String {
     let mut out = String::new();
@@ -683,6 +680,9 @@ fn fit_tags(tags: &[std::sync::Arc<str>], room: usize) -> String {
     out
 }
 
+/// A line count for the diff cell: plain up to four digits, then
+/// thousands (`12k`) and millions (`2M`), truncated rather than rounded so
+/// `9999` never reads as `10k`.
 fn compact_count(n: u32) -> String {
     match n {
         0..=9_999 => n.to_string(),

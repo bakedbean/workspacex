@@ -281,6 +281,9 @@ pub(super) async fn workspace_tags_editor(
                 reopen(app, input, selected, Some(notice));
             }
         },
+        // Tags can't contain spaces, so a space mid-typing is dropped rather
+        // than toggling whatever row the cursor happens to be on.
+        KeyCode::Char(' ') if !input.is_empty() => {}
         KeyCode::Char(' ') => {
             if let Some(it) = items.get(selected)
                 && write(app, &it.name, !it.checked)?

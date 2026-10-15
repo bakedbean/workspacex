@@ -129,3 +129,37 @@ async fn hash_on_repo_header_does_nothing() {
     press(&mut app, '#', KeyModifiers::SHIFT).await;
     assert!(app.modal.is_none());
 }
+
+#[tokio::test]
+async fn pasting_spaced_tag_types_it_without_toggling_rows() {
+    let mut app = test_app_with_two_ready_workspaces();
+    app.refresh().unwrap();
+    let ws = app.workspaces[0].1.id;
+    app.store.add_workspace_tag(ws, "alpha").unwrap();
+    app.store.add_workspace_tag(ws, "parked").unwrap();
+    open_editor(&mut app).await;
+    let shared = shared_app();
+    crate::app::input::handle_paste(&mut app, &shared, " Parked ".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        stored_tags(&app, ws),
+        ["alpha", "parked"],
+        "nothing toggled"
+    );
+    let Some(Modal::WorkspaceTags { input, .. }) = &app.modal else {
+        panic!("{:?}", app.modal);
+    };
+    assert_eq!(input, " Parked ");
+}
+
+#[tokio::test]
+async fn space_while_typing_does_not_toggle() {
+    let mut app = test_app_with_two_ready_workspaces();
+    app.refresh().unwrap();
+    let ws = app.workspaces[0].1.id;
+    app.store.add_workspace_tag(ws, "parked").unwrap();
+    open_editor(&mut app).await;
+    type_str(&mut app, "par ").await;
+    assert_eq!(stored_tags(&app, ws), ["parked"]);
+}

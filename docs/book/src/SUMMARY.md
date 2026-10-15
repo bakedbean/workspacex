@@ -16,6 +16,7 @@
   - [Process tracking](daily-use/process-tracking.md)
   - [Workspace detail bar](daily-use/detail-bar.md)
   - [Workspace updates panel](daily-use/updates-panel.md)
+  - [Hiding workspaces](daily-use/hiding-workspaces.md)
   - [Split panes](daily-use/split-panes.md)
   - [Project manager digest](daily-use/project-manager-pane.md)
 - [Configuration and customization](configuration/index.md)

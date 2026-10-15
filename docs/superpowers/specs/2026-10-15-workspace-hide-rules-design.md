@@ -1,7 +1,7 @@
 # Workspace hide rules — design
 
 **Date:** 2026-10-15
-**Status:** approved in chat, pending spec review
+**Status:** implemented
 
 ## Problem
 
@@ -29,7 +29,7 @@ work in flight. The `/` filter can't help: it matches text only and clears on
 
 ## Rule model
 
-New module `src/ui/dashboard/hide_rules.rs`:
+New module `src/data/hide_rules.rs` (rule model; glyph/style come from the dashboard via `HideRule::lifecycle()`):
 
 ```rust
 pub enum HideRule {
@@ -130,9 +130,8 @@ mode), one dimmed row per rule with a nonzero count:
 - Expansion lives in `DashboardState.expanded_hidden: HashSet<(RepoId,
   token)>`. Session-only, not persisted.
 - When a selected workspace becomes hidden (PR merges, rule toggled on), the
-  existing "hidden but existing" parking logic moves selection to a
-  neighbor; a `HiddenGroup` target whose group vanishes falls back the same
-  way a vanished repo does.
+  selection moves to the workspace's group summary row; a `HiddenGroup`
+  target whose group vanishes falls back the same way a vanished repo does.
 
 ## Editing rules: the `F` picker
 

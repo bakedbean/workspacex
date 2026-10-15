@@ -177,3 +177,13 @@ mode), one dimmed row per rule with a nonzero count:
 5. `F` picker modal.
 6. Updates-panel hiding.
 7. Docs.
+
+## Amendment: in-progress no-PR workspaces stay visible
+
+`pr:none` also hid freshly created workspaces. `HideSubject` now carries
+`work_in_progress` (ahead of base or dirty), `agent_live` (running session,
+or a fresh reported working/waiting/blocked/busy) and `idle_secs`.
+`HideRule::matches` spares a no-PR subject when any applies, or when it was
+active within `NO_PR_RECENT_DAYS` (3). Other PR rules are unchanged.
+`App::hide_subject` is the only builder; `WorkspaceItem.hide` carries its
+result so the rendered rows, selection, and picker counts agree.

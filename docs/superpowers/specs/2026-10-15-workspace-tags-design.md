@@ -30,7 +30,8 @@ workspaces by those labels. PR state can't express intent; a tag can.
 
 ## Tag names
 
-`normalize_tag(&str) -> Option<String>` in a new `src/data/tags.rs`: trim, lowercase, then accept only `[a-z0-9_-]{1,32}`.
+`normalize_tag(&str) -> Option<String>` in a new `src/data/tags.rs`: trim, lowercase, then accept only `[a-z0-9][a-z0-9_-]{0,31}` (no leading `-`, so a tag
+never reads as a CLI flag).
 Everything else is rejected. The TUI and CLI both go through it, and it
 guarantees a tag can't break the comma-separated `tag:<name>` token.
 

@@ -14,7 +14,7 @@ text. The list offers every tag used anywhere in wsx. `esc`, or `enter` with not
 Changes save as you make them.
 
 Tags are lowercased and may use `a-z`, `0-9`, `-` and `_`, up to 32
-characters.
+characters. They must start with a letter or digit.
 
 From a shell or an agent:
 

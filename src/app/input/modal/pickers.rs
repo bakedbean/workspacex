@@ -241,7 +241,7 @@ pub(super) async fn workspace_tags_editor(
     selected: usize,
     browsing: bool,
 ) -> Result<()> {
-    use crate::data::tags::{MAX_TAG_LEN, normalize_tag};
+    use crate::data::tags::{TAG_RULE, normalize_tag};
     let items = crate::ui::modal::workspace_tags::tag_items(&known, &tags, &input);
     let reopen = |app: &mut App, input: String, selected: usize, browsing: bool, notice| {
         app.modal = Some(Modal::WorkspaceTags {
@@ -293,7 +293,7 @@ pub(super) async fn workspace_tags_editor(
                 }
             }
             None => {
-                let notice = format!("invalid tag: use 1-{MAX_TAG_LEN} of a-z 0-9 - _");
+                let notice = format!("invalid tag: {TAG_RULE}");
                 reopen(app, input, selected, false, Some(notice));
             }
         },

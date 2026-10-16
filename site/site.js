@@ -14,6 +14,15 @@
   document.querySelectorAll('video[data-src]').forEach((v) => {
     const src = v.getAttribute('data-src');
     const ph = v.nextElementSibling;
+    // file:// can't answer a HEAD probe; attach the source and drop the
+    // placeholder only once the video actually loads.
+    if (location.protocol === 'file:') {
+      v.addEventListener('loadedmetadata', () => {
+        if (ph && ph.classList.contains('cast-ph')) ph.style.display = 'none';
+      }, { once: true });
+      v.src = src;
+      return;
+    }
     const xhr = new XMLHttpRequest();
     xhr.open('HEAD', src, true);
     xhr.onload = () => {

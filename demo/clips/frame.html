@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>wsx clip frame</title>
+<!-- One video frame: the terminal capture, centred, over a caption band.
+     shoot.mjs loads this once and swaps frames in with show(i). -->
+<style>
+  html, body { margin: 0; background: #0e1116; }
+  .canvas { width: 1280px; height: 720px; display: flex; flex-direction: column; overflow: hidden; }
+  .term { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; }
+  pre {
+    margin: 0; color: #e8edf4; background: #0e1116; white-space: pre;
+    font: 13px/1.2 "FiraCode Nerd Font", "JetBrains Mono", ui-monospace, monospace;
+    font-variant-ligatures: none;
+  }
+  pre i { display: inline-block; width: 0.6em; overflow: visible; text-align: center;
+          font-style: inherit; position: relative; z-index: 1; }
+  .cap {
+    height: 46px; flex: none; display: flex; align-items: center; justify-content: center;
+    border-top: 1px solid #1e2733; background: #0a0d12; color: #e8edf4;
+    font: 17px/1 "FiraCode Nerd Font", ui-monospace, monospace; letter-spacing: 0.01em;
+  }
+  .cap:empty { visibility: hidden; }
+  .cap b { color: #5ab0ff; font-weight: 400; margin-right: 0.6em; }
+</style>
+<div class="canvas">
+  <div class="term"><pre id="t"></pre></div>
+  <div class="cap" id="c"></div>
+</div>
+<script src="frames.js"></script>
+<script>
+  function show(i) {
+    var f = window.FRAMES[i];
+    document.getElementById("t").innerHTML = f.html;
+    var c = document.getElementById("c");
+    c.innerHTML = "";
+    if (f.caption) {
+      var b = document.createElement("b"); b.textContent = "›";
+      c.appendChild(b); c.appendChild(document.createTextNode(f.caption));
+    }
+    return window.FRAMES.length;
+  }
+</script>

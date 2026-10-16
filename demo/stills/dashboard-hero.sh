@@ -13,6 +13,10 @@
 #     in the row and in the detail bar for the selected row
 #   - one agent is told to ask a question (the `?` status), one finishes at
 #     once (`✓`), the rest are mid-task (spinner)
+#   - rows carry workspace tags, and three `#parked` workspaces fold into
+#     hidden-group rows under toy-api and toy-web
+#   - the last takes open the F hide-rules picker in the bottom drawer
+#     (dashboard-drawer-N.png)
 #
 # The bars wear the orange example bar theme over the jellybeans palette;
 # STILL_THEME=<file> shoots another theme.toml, STILL_THEME= the stock bars.
@@ -51,6 +55,7 @@ recap toy-api security-review \
 status toy-api security-review working "reviewing auth.py; codex has the SQLi fix"
 
 scene_background_workspaces
+scene_tags
 
 echo "staged $("$WSX" workspace list | wc -l | tr -d ' ') workspaces"
 
@@ -77,4 +82,8 @@ still_keys Up; still_keys Up; sleep 20; still_shot "$OUT/dashboard-hero-5.png"
 sleep 30;  still_shot "$OUT/dashboard-hero-6.png"
 still_keys Down; still_keys Down; sleep 30; still_shot "$OUT/dashboard-hero-7.png"
 still_keys Up; still_keys Up; sleep 40; still_shot "$OUT/dashboard-hero-8.png"
-echo "stills in demo/out/dashboard-hero-*.png"
+# The bottom drawer: toy-api's hide rules, tags above PR states.
+still_keys F; sleep 1.5; still_shot "$OUT/dashboard-drawer-1.png"
+still_keys Down; sleep 1; still_shot "$OUT/dashboard-drawer-2.png"
+still_keys Escape
+echo "stills in demo/out/dashboard-{hero,drawer}-*.png"

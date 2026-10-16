@@ -70,7 +70,7 @@ h1 .dim{color:var(--fg-muted)}
 .thumbs-label{font-family:var(--mono);font-size:12px;color:var(--fg-muted);margin:0 0 10px;text-wrap:pretty}
 .thumbs-label a{color:var(--accent);text-decoration:underline;text-underline-offset:3px;text-decoration-color:color-mix(in srgb,var(--accent) 45%,transparent)}
 .thumbs-label a:hover{text-decoration-color:var(--accent)}
-.thumb-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.thumb-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 @media (max-width:620px){.thumb-row{grid-template-columns:1fr}}
 .thumb{display:block;width:100%;padding:0;margin:0;font:inherit;color:inherit;text-align:left;cursor:zoom-in;transition:border-color .15s,transform .15s}
 .thumb:hover,.thumb:focus-visible{border-color:var(--accent-soft);outline:none}

@@ -163,6 +163,19 @@ pub(crate) enum DrawerOwner {
     LeaderMenu,
 }
 
+/// Drop the drawer's held height when what owns the drawer has changed since
+/// it was last drawn. Called after every input event as well as each frame:
+/// input coalesces between frames, so a modal closed and a same-kind one
+/// reopened before the next draw would otherwise inherit the old height.
+pub(crate) fn release_stale_drawer_hold(app: &mut App) {
+    if app
+        .drawer_hold
+        .is_some_and(|(held, _)| Some(held) != drawer_owner(app))
+    {
+        app.drawer_hold = None;
+    }
+}
+
 fn drawer_owner(app: &App) -> Option<DrawerOwner> {
     match &app.modal {
         Some(m) => Some(DrawerOwner::Modal(std::mem::discriminant(m))),
@@ -198,6 +211,34 @@ mod drawer_hold_tests {
         Some(Modal::Error {
             message: vec!["line"; lines].join("\n"),
         })
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn closing_and_reopening_between_frames_does_not_inherit_the_height() {
+        use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+        app.modal = error(1);
+        let short = drawer_height(&mut app);
+        app.modal = error(6);
+        let tall = drawer_height(&mut app);
+        assert!(tall > short);
+
+        // Esc closes the error; a same-kind modal opens before any redraw.
+        let shared = std::sync::Arc::new(tokio::sync::Mutex::new(
+            App::new(
+                Store::open_in_memory().unwrap(),
+                PathBuf::from("/tmp/wsx-test"),
+            )
+            .unwrap(),
+        ));
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        crate::app::input::handle_event(&mut app, &shared, Event::Key(esc))
+            .await
+            .unwrap();
+        assert!(app.modal.is_none());
+        app.modal = error(1);
+        assert_eq!(drawer_height(&mut app), short, "sized to its own content");
     }
 
     #[test]

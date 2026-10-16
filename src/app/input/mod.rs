@@ -198,6 +198,7 @@ pub(crate) async fn handle_event(app: &mut App, shared: &SharedApp, evt: CtEvent
         }
         _ => {}
     }
+    crate::app::render::release_stale_drawer_hold(app);
     Ok(())
 }
 

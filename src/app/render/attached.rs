@@ -499,7 +499,9 @@ pub(super) fn draw_attached_nav_overlay(
     area: ratatui::layout::Rect,
     app: &App,
 ) {
-    if !app.leader_pending {
+    // Keys go to an open modal before the leader, so a leader still pending
+    // under one is stale: drawing the menu would cover the modal.
+    if !app.leader_pending || app.modal.is_some() {
         return;
     }
     let (items, pinned_hint) = match &app.view {

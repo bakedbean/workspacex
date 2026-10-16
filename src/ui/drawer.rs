@@ -40,9 +40,18 @@ thread_local! {
 /// content but never shrinks under the user while it stays open. Outside a
 /// scope (e.g. a renderer under test) drawers size to their content exactly.
 pub fn hold_height<R>(floor: u16, draw: impl FnOnce() -> R) -> (R, u16) {
-    let prev = HOLD.replace(Some((floor, floor)));
+    /// Restores the enclosing scope's hold even if `draw` unwinds, so a
+    /// caught panic cannot leave a floor installed for unrelated drawers.
+    struct Restore(Option<(u16, u16)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            HOLD.set(self.0);
+        }
+    }
+    let restore = Restore(HOLD.replace(Some((floor, floor))));
     let out = draw();
-    let tallest = HOLD.replace(prev).map_or(floor, |(_, t)| t);
+    let tallest = HOLD.get().map_or(floor, |(_, t)| t);
+    drop(restore);
     (out, tallest)
 }
 
@@ -249,6 +258,13 @@ mod tests {
             .unwrap();
         }
         assert_eq!(drawn, [3, 6, 6]);
+    }
+
+    #[test]
+    fn a_panic_inside_a_hold_does_not_leave_the_floor_installed() {
+        let caught = std::panic::catch_unwind(|| hold_height(20, || panic!("draw failed")));
+        assert!(caught.is_err());
+        assert_eq!(HOLD.get(), None);
     }
 
     #[test]

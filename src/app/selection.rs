@@ -81,12 +81,21 @@ impl App {
                     | ReportedState::Busy
             )
         );
-        let tags = self
+        let workspace = self
             .workspaces
             .iter()
             .find(|(_, w)| w.id == ws)
-            .map(|(_, w)| w.tags.clone())
-            .unwrap_or_default();
+            .map(|(_, w)| w);
+        let tags = workspace.map(|w| w.tags.clone()).unwrap_or_default();
+        // Creation counts as activity, so a fresh workspace isn't hidden
+        // before anyone has touched it.
+        let created_secs = workspace
+            .filter(|w| w.created_at > 0)
+            .map(|w| ((crate::util::time::now_ms() - w.created_at).max(0) / 1000) as u64);
+        let idle_secs = match (idle_secs, created_secs) {
+            (Some(a), Some(c)) => Some(a.min(c)),
+            (a, c) => a.or(c),
+        };
         crate::data::hide_rules::HideSubject {
             lifecycle: self.pr_lifecycle.get(&ws).copied(),
             work_in_progress: dirty || ahead,

@@ -14,7 +14,7 @@ stays visible if any of these is true:
 - it has commits ahead of its base branch, or uncommitted changes;
 - an agent session is running, or its agent reports working, waiting, or
   blocked;
-- its agent was active in the last 3 days.
+- it was created, or its agent was active, in the last 3 days.
 
 The other states hide every matching workspace.
 

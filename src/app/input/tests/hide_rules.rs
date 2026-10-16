@@ -212,7 +212,8 @@ async fn esc_closes_picker() {
 
 const NO_PR: HideRule = HideRule::Pr(PrCriterion::NoPr);
 
-/// One repo hiding no-PR workspaces; both start with no PR and no activity.
+/// One repo hiding no-PR workspaces; both start with no PR and no activity,
+/// created long enough ago that creation no longer counts as recent.
 fn app_with_no_pr_hidden() -> (
     App,
     crate::data::store::RepoId,
@@ -225,6 +226,10 @@ fn app_with_no_pr_hidden() -> (
         .set_repo_hide_rules(repo, &HideRules::parse(Some("pr:none")))
         .unwrap();
     app.refresh().unwrap();
+    let stale_ms = (crate::data::hide_rules::NO_PR_RECENT_DAYS as i64 + 1) * 86_400_000;
+    for (_, w) in &mut app.workspaces {
+        w.created_at = crate::util::time::now_ms() - stale_ms;
+    }
     let ids: Vec<_> = app.workspaces.iter().map(|(_, w)| w.id).collect();
     for id in &ids {
         app.pr_lifecycle.insert(*id, BranchLifecycle::NoPr);
@@ -254,6 +259,20 @@ async fn no_pr_workspace_with_uncommitted_changes_stays_visible() {
             ..Default::default()
         },
     );
+    draw(&mut app);
+    assert!(app.selectable.contains(&SelectionTarget::Workspace(ids[0])));
+    assert_eq!(app.hidden_group_of(ids[1]), Some((repo, NO_PR)));
+}
+
+#[tokio::test]
+async fn newly_created_no_pr_workspace_stays_visible() {
+    let (mut app, repo, ids) = app_with_no_pr_hidden();
+    let now = crate::util::time::now_ms();
+    for (_, w) in &mut app.workspaces {
+        if w.id == ids[0] {
+            w.created_at = now;
+        }
+    }
     draw(&mut app);
     assert!(app.selectable.contains(&SelectionTarget::Workspace(ids[0])));
     assert_eq!(app.hidden_group_of(ids[1]), Some((repo, NO_PR)));

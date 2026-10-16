@@ -35,7 +35,7 @@ pub struct HideSubject {
     pub work_in_progress: bool,
     /// A running agent session, or a fresh wsx status of working/waiting/blocked.
     pub agent_live: bool,
-    /// Seconds since last activity; `None` when none was ever recorded.
+    /// Seconds since last activity or creation; `None` when neither is known.
     pub idle_secs: Option<u64>,
     /// The workspace's tags, sorted.
     pub tags: Vec<Arc<str>>,

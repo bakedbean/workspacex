@@ -10,7 +10,7 @@ surface that:
   workspace. When the row runs out of room it ends in `… +N more`; click
   that to open the updates panel described next.
 
-- A floating panel via `Ctrl-x u` listing ALL workspaces — a stripped-down
+- A bottom drawer panel via `Ctrl-x u` listing ALL workspaces — a stripped-down
   dashboard. Rows come in the dashboard's own order. Grouped by repo, each
   repo's rows follow the dashboard's sort mode (recency or status). Grouped
   by attention, the NEEDS ATTENTION / WORKING / RECENT / IDLE sections use

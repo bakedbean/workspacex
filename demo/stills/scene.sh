@@ -10,6 +10,8 @@
 #   status <repo> <slug> <state> <message>
 #   scene_bar_theme                             install $STILL_THEME and turn bar_theme on
 #   scene_background_workspaces                 stage the eight background workspaces
+#   scene_tags                                  tag the scene's rows and park three
+#                                               agentless workspaces under a `#parked` hide rule
 SCENE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 ws() { # <repo> <slug> <agent> <prompt>
@@ -114,4 +116,27 @@ scene_background_workspaces() {
     "DocumentFragment rewrite committed; 40x fewer reflows" "fragment rewrite committed" \
     "Open the PR" "open PR"
   status toy-web list-render-perf done "renderList rewrite committed"
+}
+
+# Tags on the live rows, plus three agentless workspaces tagged `parked` that
+# each repo's `tag:parked` hide rule folds into a `▸ #parked · N hidden` row.
+# Call after the scene's workspaces exist; security-review is tagged when present.
+scene_tags() {
+  local db="$XDG_STATE_HOME/wsx/state.db" s
+  "$WSX" config set dashboard_branch_width 34 >/dev/null
+  [ -n "$("$WSX" workspace list toy-api | awk '$2=="security-review"')" ] &&
+    in_ws toy-api security-review workspace tag add security >/dev/null
+  in_ws toy-api fix-auth workspace tag add security >/dev/null
+  in_ws toy-api add-rate-limit workspace tag add api >/dev/null
+  in_ws toy-cli config-loader workspace tag add cli >/dev/null
+  in_ws toy-web form-validation workspace tag add ui >/dev/null
+  in_ws toy-web persist-dark-mode workspace tag add ui >/dev/null
+  in_ws toy-web list-render-perf workspace tag add perf >/dev/null
+  for s in toy-api/old-session-store toy-api/graphql-spike toy-web/redesign-v1; do
+    "$WSX" workspace create "${s%/*}" --name "${s#*/}" >/dev/null
+    in_ws "${s%/*}" "${s#*/}" workspace tag add parked >/dev/null
+  done
+  # Hide rules have no CLI; the F drawer writes this same column.
+  sqlite3 "$db" "update repos set hide_rules='tag:parked' where name in ('toy-api','toy-web')"
+  echo "tagged rows; parked 3 workspaces"
 }

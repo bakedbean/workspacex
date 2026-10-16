@@ -126,21 +126,21 @@ pub fn render_setup_log(f: &mut Frame, area: Rect, view: &SetupLogView, theme: &
         (None, _) => ("(setup log is empty)".to_string(), theme.dim_style()),
     });
 
-    // Status line, the log (or its empty state, wrapped), and the footer.
-    let body_rows = match &empty_state {
-        Some((text, _)) => {
-            let width = usize::from(crate::ui::drawer::body_width(area).max(1));
-            text.lines().map(|l| wrapped_rows(l, width)).sum()
-        }
-        None => lines.len(),
-    };
-    let inner = panel_frame(
+    // A log is a document to read, not a prompt: it floats over nearly the
+    // whole screen at a fixed size, so a live tail scrolls inside a still
+    // frame instead of pushing a drawer up the screen line by line.
+    let inner = crate::ui::drawer::float_frame(
         f,
         area,
-        1 + body_rows + 1,
+        area.width - area.width / 10,
+        area.height - area.height / 10,
         format!(" Setup log — {} ", view.label),
         theme,
-    );
+    )
+    .inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -205,37 +205,8 @@ pub fn render_setup_log(f: &mut Frame, area: Rect, view: &SetupLogView, theme: &
     scroll
 }
 
-/// Rows `line` takes when word-wrapped greedily at `width`, as the empty
-/// state's `Wrap` renders it. A word wider than a row is split across rows.
-fn wrapped_rows(line: &str, width: usize) -> usize {
-    use crate::ui::text::display_width;
-    let mut rows = 1;
-    let mut used = 0;
-    for word in line.split(' ') {
-        let w = display_width(word);
-        let need = if used == 0 { w } else { used + 1 + w };
-        if need <= width {
-            used = need;
-        } else {
-            rows += usize::from(used > 0) + w.saturating_sub(1) / width.max(1);
-            used = w % width.max(1);
-            if used == 0 && w > 0 {
-                used = width;
-            }
-        }
-    }
-    rows
-}
-
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn wrapped_rows_counts_word_wrapped_rows() {
-        assert_eq!(wrapped_rows("", 10), 1);
-        assert_eq!(wrapped_rows("short line", 10), 1);
-        assert_eq!(wrapped_rows("two words fit", 10), 2);
-        assert_eq!(wrapped_rows("aaaaaaaaaaaaaaa", 10), 2);
-    }
 
     use super::*;
     use crate::data::in_flight::InFlight;
@@ -342,8 +313,11 @@ mod tests {
                     .contains("no such file")
             })
             .expect("the stderr line should be on screen");
+        let err_col = (0..buf.area.width)
+            .find(|&x| buf[(x, err_row)].symbol() == "!")
+            .expect("the stderr marker");
         assert_eq!(
-            buf[(1, err_row)].style().fg,
+            buf[(err_col, err_row)].style().fg,
             theme.err_style().fg,
             "live stderr must render in the error style"
         );
@@ -475,9 +449,9 @@ mod tests {
             clamped < all.len(),
             "clamp must be a real offset, got {clamped}"
         );
-        // A 12-row screen gives a 9-row drawer: its rule, one line of
-        // status, and one of footer leave six for the log.
-        assert_eq!(clamped, all.len() - 6);
+        // A 12-row screen gives an 11-row float: its two borders, one line
+        // of status, and one of footer leave seven for the log.
+        assert_eq!(clamped, all.len() - 7);
     }
 
     #[test]

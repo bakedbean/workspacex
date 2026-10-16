@@ -6,10 +6,12 @@
 //! by a single rule that carries the title. No side borders and no centering
 //! math, so the only thing a caller decides is how many rows its body needs.
 //!
-//! The one exception is [`float_frame`]: a centered box for content with a
-//! fixed two-dimensional shape (the name-color swatch grid), which gains
-//! nothing from full width. It wears the same chrome so it still reads as
-//! part of the family.
+//! The rule of thumb: the drawer is for prompts, choices, and menus. Content
+//! with a shape of its own opens in a centered [`float_frame`] instead, in
+//! the same chrome so it still reads as part of the family: the name-color
+//! swatch grid (fixed 2D layout, gains nothing from full width) and the
+//! setup log (a document to read, which wants most of the screen and a frame
+//! that holds still while a live tail streams in).
 //!
 //! Layout, top to bottom:
 //!

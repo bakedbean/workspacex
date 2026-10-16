@@ -347,6 +347,7 @@ mod tests {
                 name_color: None,
                 workspace_id: crate::data::store::WorkspaceId(i as i64),
                 has_multi_pane_layout: false,
+                tags: Vec::new(),
             })
             .collect();
         workspaces.sort_by_key(|w| std::cmp::Reverse(w.status.priority()));

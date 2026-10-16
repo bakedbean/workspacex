@@ -104,7 +104,7 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     // also drops a selection whose workspace was archived: `refresh()`
     // rebuilds `selectable` between draws, so the shape can be unchanged
     // here even though the target no longer exists.
-    let prev_selection = app.dashboard.selection;
+    let prev_selection = app.dashboard.selection.clone();
     let prev_selected = app.dashboard.selected;
     let (selection, selected) =
         dashboard::reconcile_selection(prev_selection, prev_selected, &new_selectable, |t| {
@@ -427,6 +427,7 @@ pub(super) fn build_row_inputs(
         name_color: ws.name_color.map(crate::config::name_color::color),
         workspace_id: ws.id,
         has_multi_pane_layout: app.workspaces_with_multi_pane_layouts.contains(&ws.id),
+        tags: ws.tags.clone(),
     }
 }
 
@@ -641,7 +642,7 @@ mod selection_anchoring_tests {
         draw_once(&mut app);
         assert_eq!(app.selected_target(), Some(SelectionTarget::Workspace(b)));
         assert_eq!(
-            app.selectable.get(app.dashboard.selected).copied(),
+            app.selectable.get(app.dashboard.selected).cloned(),
             Some(SelectionTarget::Workspace(b)),
             "highlight index restored to B"
         );

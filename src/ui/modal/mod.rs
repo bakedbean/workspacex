@@ -19,6 +19,7 @@ mod setup_log;
 mod textarea;
 mod updates_panel;
 mod usage_picker;
+pub mod workspace_tags;
 
 // Panel renderers called from app::render via `crate::ui::modal::*`.
 pub use agents_panel::render_agents_panel;
@@ -168,13 +169,28 @@ pub enum Modal {
         hosts: Vec<(String, String)>,
         selected: usize,
     },
-    /// The `F` checklist of hide rules for one repo. `counts[i]` is how many
-    /// of its workspaces `HideRule::ALL[i]` matches, snapshotted on open.
+    /// The `#` tag editor. `known`/`tags` are snapshots refreshed after each
+    /// write; `selected` indexes `workspace_tags::tag_items(..)`.
+    WorkspaceTags {
+        workspace_id: crate::data::store::WorkspaceId,
+        name: String,
+        known: Vec<String>,
+        tags: Vec<String>,
+        input: String,
+        selected: usize,
+        /// Set by ↑/↓, cleared by typing: space/enter then act on the
+        /// highlighted row instead of the typed text.
+        browsing: bool,
+        notice: Option<String>,
+    },
+    /// The `F` checklist of hide rules for one repo: tag rows (sorted) then
+    /// PR rows, each with how many of the repo's workspaces it matches,
+    /// snapshotted on open.
     HideRules {
         repo_id: crate::data::store::RepoId,
         repo_name: String,
         rules: crate::data::hide_rules::HideRules,
-        counts: [usize; 6],
+        rows: Vec<(crate::data::hide_rules::HideRule, usize)>,
         selected: usize,
     },
     /// The `C` name-color picker for one workspace: an xterm-256 swatch grid
@@ -328,8 +344,9 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
     ) {
         return;
     }
-    let rect = centered(area, 60, 14);
-    f.render_widget(Clear, rect);
+    // Room for list rows: the terminal minus borders and each list modal's
+    // fixed lines (prompt, blanks, footer, notice), so the footer stays put.
+    let list_cap = usize::from(area.height).saturating_sub(10).max(3);
     let (title, body) = match modal {
         Modal::NewWorkspace {
             name_buffer,
@@ -459,7 +476,8 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
              e   edit        t   term\n  \
              v   diff        g   lazygit\n  \
              r   rename      C   name color\n  \
-             o   setup log   x   cancel setup\n\n  \
+             o   setup log   x   cancel setup\n  \
+             #   tags\n\n  \
              ?/Esc  close"
                 .to_string(),
         ),
@@ -507,28 +525,68 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                 ),
             )
         }
+        Modal::WorkspaceTags {
+            name,
+            known,
+            tags,
+            input,
+            selected,
+            notice,
+            ..
+        } => {
+            let lines: Vec<String> = workspace_tags::tag_items(known, tags, input)
+                .iter()
+                .enumerate()
+                .map(|(i, it)| {
+                    let cursor = if i == *selected { ">" } else { " " };
+                    let mark = if it.checked { "x" } else { " " };
+                    let new = if it.new { "  (new)" } else { "" };
+                    format!("{cursor} [{mark}] {}{new}", it.name)
+                })
+                .collect();
+            let list = window_lines(&lines, *selected, list_cap).join("\n");
+            let notice = notice
+                .as_deref()
+                .map(|n| format!("\n{n}"))
+                .unwrap_or_default();
+            (
+                "workspace tags",
+                format!(
+                    "{name}\n\n# {input}\u{2588}\n{list}{notice}\n\n\
+                     \u{2191}\u{2193} move   space toggle   enter add   Esc close"
+                ),
+            )
+        }
         Modal::HideRules {
             repo_name,
             rules,
-            counts,
+            rows,
             selected,
             ..
         } => {
-            let list = crate::data::hide_rules::HideRule::ALL
-                .iter()
-                .enumerate()
-                .map(|(i, rule)| {
-                    let cursor = if i == *selected { ">" } else { " " };
-                    let mark = if rules.contains(*rule) { "x" } else { " " };
-                    format!("{cursor} [{mark}] {:<12} {:>3}", rule.label(), counts[i])
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
+            use crate::data::hide_rules::HideRule;
+            let mut lines = Vec::new();
+            let mut focus = 0;
+            let mut section: Option<bool> = None;
+            for (i, (rule, n)) in rows.iter().enumerate() {
+                let is_tag = matches!(rule, HideRule::Tag(_));
+                if section != Some(is_tag) {
+                    lines.push(if is_tag { "  tagged" } else { "  PR state" }.to_string());
+                    section = Some(is_tag);
+                }
+                if i == *selected {
+                    focus = lines.len();
+                }
+                let cursor = if i == *selected { ">" } else { " " };
+                let mark = if rules.contains(rule) { "x" } else { " " };
+                lines.push(format!("{cursor} [{mark}] {:<14} {n:>3}", rule.label()));
+            }
             (
                 "hide workspaces",
                 format!(
-                    "Hide {repo_name} workspaces whose PR is:\n\n{list}\n\n\
-                     \u{2191}\u{2193} move   space toggle   Esc close"
+                    "Hide {repo_name} workspaces that are:\n\n{}\n\n\
+                     \u{2191}\u{2193} move   space toggle   Esc close",
+                    window_lines(&lines, focus, list_cap).join("\n")
                 ),
             )
         }
@@ -638,6 +696,8 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
     } else {
         theme.header_style()
     };
+    let want = u16::try_from(body.lines().count() + 2).unwrap_or(u16::MAX);
+    let rect = centered(area, 60, want.clamp(14, area.height.max(14)));
     let para = Paragraph::new(body)
         .block(
             Block::default()
@@ -646,7 +706,17 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                 .title_alignment(Alignment::Left),
         )
         .style(style);
+    f.render_widget(Clear, rect);
     f.render_widget(para, rect);
+}
+
+/// At most `cap` of `lines`, scrolled so `focus` stays visible.
+fn window_lines(lines: &[String], focus: usize, cap: usize) -> &[String] {
+    if lines.len() <= cap {
+        return lines;
+    }
+    let start = focus.saturating_sub(cap / 2).min(lines.len() - cap);
+    &lines[start..start + cap]
 }
 
 /// Truncate `s` to at most `max` characters, appending '…' (which counts
@@ -689,6 +759,63 @@ mod tests {
     use super::*;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn hide_rules_picker_draws_section_headers() {
+        use crate::data::hide_rules::{HideRule, HideRules, PrCriterion};
+        let m = Modal::HideRules {
+            repo_id: crate::data::store::RepoId(1),
+            repo_name: "wsx".into(),
+            rules: HideRules::parse(Some("tag:parked")),
+            rows: vec![
+                (HideRule::tag("parked"), 2),
+                (HideRule::Pr(PrCriterion::Merged), 0),
+            ],
+            selected: 0,
+        };
+        let text = render_to_text(&m);
+        let tagged = text.find("tagged").expect("tag header");
+        let tag_row = text.find("#parked").expect("tag row");
+        let pr = text.find("PR state").expect("pr header");
+        assert!(tagged < tag_row && tag_row < pr, "{text}");
+        assert!(text.contains("[x] #parked"), "{text}");
+    }
+
+    #[test]
+    fn long_hide_rules_picker_keeps_footer_and_cursor_visible() {
+        use crate::data::hide_rules::{HideRule, HideRules};
+        let mut rows: Vec<_> = (0..20)
+            .map(|i| (HideRule::tag(&format!("t{i:02}")), 0))
+            .collect();
+        rows.extend(HideRule::PR_RULES.map(|r| (r, 0)));
+        let selected = 19;
+        let text = render_to_text(&Modal::HideRules {
+            repo_id: crate::data::store::RepoId(1),
+            repo_name: "wsx".into(),
+            rules: HideRules::default(),
+            rows,
+            selected,
+        });
+        assert!(text.contains("Esc close"), "{text}");
+        assert!(text.contains("> [ ] #t19"), "{text}");
+    }
+
+    #[test]
+    fn long_tag_editor_keeps_footer_and_cursor_visible() {
+        let known: Vec<String> = (0..20).map(|i| format!("t{i:02}")).collect();
+        let text = render_to_text(&Modal::WorkspaceTags {
+            workspace_id: crate::data::store::WorkspaceId(1),
+            name: "ws".into(),
+            known,
+            tags: Vec::new(),
+            input: String::new(),
+            selected: 19,
+            browsing: false,
+            notice: None,
+        });
+        assert!(text.contains("Esc close"), "{text}");
+        assert!(text.contains("> [ ] t19"), "{text}");
+    }
 
     fn render_to_text(modal: &Modal) -> String {
         let theme = Theme::wsx();

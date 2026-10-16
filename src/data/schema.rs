@@ -224,6 +224,10 @@ impl Store {
             self.add_column_if_missing("repos", "hide_rules", "hide_rules TEXT")?;
             self.conn().execute("PRAGMA user_version = 29", [])?;
         }
+        if v < 30 {
+            self.conn().execute_batch(SCHEMA_V30_WORKSPACE_TAGS)?;
+            self.conn().execute("PRAGMA user_version = 30", [])?;
+        }
         Ok(())
     }
 
@@ -367,6 +371,14 @@ CREATE TABLE IF NOT EXISTS share_requests (
     claimed_at   INTEGER,
     finished_at  INTEGER,
     error        TEXT
+);
+";
+
+const SCHEMA_V30_WORKSPACE_TAGS: &str = "
+CREATE TABLE IF NOT EXISTS workspace_tags (
+    workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    tag          TEXT NOT NULL,
+    PRIMARY KEY (workspace_id, tag)
 );
 ";
 

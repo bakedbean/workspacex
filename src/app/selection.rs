@@ -8,7 +8,7 @@ impl App {
     /// selection survives a temporarily-hidden row (folded repo / filter /
     /// quiet repo) instead of silently following the index onto a neighbor.
     pub fn selected_target(&self) -> Option<SelectionTarget> {
-        self.dashboard.selection
+        self.dashboard.selection.clone()
     }
 
     /// The repo the selection belongs to: the header itself, a workspace's
@@ -30,7 +30,7 @@ impl App {
     /// landing on a freshly-created workspace).
     pub(crate) fn select_index(&mut self, idx: usize) {
         self.dashboard.selected = idx;
-        self.dashboard.selection = self.selectable.get(idx).copied();
+        self.dashboard.selection = self.selectable.get(idx).cloned();
     }
 
     /// The facts hide rules test for `ws`, from the app's caches. Every hide
@@ -81,11 +81,18 @@ impl App {
                     | ReportedState::Busy
             )
         );
+        let tags = self
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == ws)
+            .map(|(_, w)| w.tags.clone())
+            .unwrap_or_default();
         crate::data::hide_rules::HideSubject {
             lifecycle: self.pr_lifecycle.get(&ws).copied(),
             work_in_progress: dirty || ahead,
             agent_live: session_live || reported_live,
             idle_secs,
+            tags,
         }
     }
 

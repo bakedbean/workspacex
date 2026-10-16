@@ -496,7 +496,7 @@ pub fn visible_targets(
                             .map(|w| SelectionTarget::Workspace(*w)),
                     );
                     for (rule, rows) in &groups {
-                        push_group_targets(&mut out, repo_id, *rule, rows, state);
+                        push_group_targets(&mut out, repo_id, rule, rows, state);
                     }
                 }
             }
@@ -526,7 +526,7 @@ pub fn visible_targets(
                 );
             }
             for (r, rule, rows) in all_hidden_groups(inputs, filter) {
-                push_group_targets(&mut out, r.id, rule, &rows, state);
+                push_group_targets(&mut out, r.id, &rule, &rows, state);
             }
         }
     }
@@ -702,7 +702,7 @@ pub fn reconcile_selection(
         if let Some(idx) = new_selectable.iter().position(|s| *s == t) {
             return (Some(t), idx);
         }
-        if matches!(t, SelectionTarget::Workspace(_)) && target_exists(t) {
+        if matches!(t, SelectionTarget::Workspace(_)) && target_exists(t.clone()) {
             let idx = old_selected.min(new_selectable.len().saturating_sub(1));
             return (Some(t), idx);
         }
@@ -711,7 +711,7 @@ pub fn reconcile_selection(
         (None, 0)
     } else {
         let idx = old_selected.min(new_selectable.len() - 1);
-        (new_selectable.get(idx).copied(), idx)
+        (new_selectable.get(idx).cloned(), idx)
     }
 }
 
@@ -739,8 +739,8 @@ fn hidden_group_view(
         state.blocked_pin_max_age_secs,
     );
     HiddenGroupView {
+        expanded: state.expanded_hidden.contains(&(repo, rule.clone())),
         rule,
-        expanded: state.expanded_hidden.contains(&(repo, rule)),
         workspaces,
     }
 }
@@ -749,12 +749,15 @@ fn hidden_group_view(
 fn push_group_targets(
     out: &mut Vec<SelectionTarget>,
     repo: RepoId,
-    rule: HideRule,
+    rule: &HideRule,
     rows: &[&WorkspaceItem<'_>],
     state: &DashboardState,
 ) {
-    out.push(SelectionTarget::HiddenGroup { repo, rule });
-    if state.expanded_hidden.contains(&(repo, rule)) {
+    out.push(SelectionTarget::HiddenGroup {
+        repo,
+        rule: rule.clone(),
+    });
+    if state.expanded_hidden.contains(&(repo, rule.clone())) {
         let mut nav: Vec<NavRow> = rows.iter().map(|w| NavRow::from(*w)).collect();
         order_workspaces(&mut nav, state.sort_mode, state.blocked_pin_max_age_secs);
         out.extend(
@@ -776,9 +779,9 @@ fn hidden_groups<'w, 'a>(
         .filter_map(|rule| {
             let rows: Vec<_> = workspaces
                 .iter()
-                .filter(|w| w.repo.id == repo.id && hidden_by(w, filter) == Some(rule))
+                .filter(|w| w.repo.id == repo.id && hidden_by(w, filter).as_ref() == Some(rule))
                 .collect();
-            (!rows.is_empty()).then_some((rule, rows))
+            (!rows.is_empty()).then(|| (rule.clone(), rows))
         })
         .collect()
 }
@@ -807,11 +810,17 @@ fn default_expanded(counts: StatusCounts, has_hidden: bool) -> bool {
 }
 
 /// Case-insensitive substring match against the workspace branch, owning
-/// repo name, and the row's status-adaptive column (status token, recap
-/// segments, or fallback text — whichever the column carries).
+/// repo name, tags, and the row's status-adaptive column (status token, recap
+/// segments, or fallback text — whichever the column carries). A leading `#`
+/// matches one tag exactly and nothing else.
 fn matches_filter(w: &WorkspaceItem<'_>, filter: &str) -> bool {
     let needle = filter.to_lowercase();
-    if w.row.branch.to_lowercase().contains(&needle) || w.repo.name.to_lowercase().contains(&needle)
+    if let Some(tag) = needle.strip_prefix('#') {
+        return w.row.tags.iter().any(|t| **t == *tag);
+    }
+    if w.row.branch.to_lowercase().contains(&needle)
+        || w.repo.name.to_lowercase().contains(&needle)
+        || w.row.tags.iter().any(|t| t.contains(&needle))
     {
         return true;
     }
@@ -916,7 +925,7 @@ fn render_by_repo<'a>(
     let mut selected_idx: Option<usize> = None;
     let mut chip_spans: Vec<PrChipSpan> = Vec::new();
     let mut flat_idx: usize = 0;
-    let selection = state.selection;
+    let selection = state.selection.clone();
     for view in &mut views {
         // Header item
         if let Some(SelectionTarget::Repo(rid)) = selection {
@@ -944,7 +953,7 @@ fn render_by_repo<'a>(
             if selection
                 == Some(SelectionTarget::HiddenGroup {
                     repo: RepoId(view.id as i64),
-                    rule: g.rule,
+                    rule: g.rule.clone(),
                 })
             {
                 selected_idx = Some(flat_idx);
@@ -1072,7 +1081,7 @@ fn render_by_attention<'a>(
     let mut selected_idx: Option<usize> = None;
     let mut chip_spans: Vec<PrChipSpan> = Vec::new();
     let mut flat_idx: usize = 0;
-    let selection = state.selection;
+    let selection = state.selection.clone();
     for section in [
         &mut data.needs_attention,
         &mut data.working,
@@ -1102,7 +1111,7 @@ fn render_by_attention<'a>(
             if selection
                 == Some(SelectionTarget::HiddenGroup {
                     repo: *repo_id,
-                    rule: g.rule,
+                    rule: g.rule.clone(),
                 })
             {
                 selected_idx = Some(flat_idx);

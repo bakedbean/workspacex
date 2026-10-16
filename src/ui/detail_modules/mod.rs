@@ -143,6 +143,7 @@ pub(crate) mod tests_helpers {
             agent: crate::pty::session::AgentKind::Claude,
             shared: false,
             name_color: None,
+            tags: Vec::new(),
         }));
         let theme: &'static Theme = Box::leak(Box::new(Theme::default()));
         DetailContext {

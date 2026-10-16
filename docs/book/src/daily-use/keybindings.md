@@ -14,7 +14,8 @@
 | `Shift + K`                       | On a workspace: show processes under its worktree. On a repo header: move the repo up one slot (persisted)   |
 | `Shift + J`                       | On a repo header: move the repo down one slot (persisted). No-op on a workspace                              |
 | `s`                               | Open repo settings modal for the selected repo (or the parent repo when a workspace is selected)             |
-| `Shift + F`                       | Choose which PR states to hide for the selected row's repo (persisted per repo). See [Hiding workspaces](hiding-workspaces.md) |
+| `Shift + F`                       | Choose which PR states and tags hide workspaces in the selected row's repo (persisted per repo). See [Hiding workspaces](hiding-workspaces.md) |
+| `#`                               | Edit the selected workspace's [tags](workspace-tags.md) (no-op on repo header)                              |
 | `enter` / `l` on a hidden-group row | Show that group's workspaces inline (this session only)                                                      |
 | `h` on a hidden-group row or a row inside it | Collapse the group back to its summary row (on an already-collapsed summary row, fold the repo)              |
 | `d`                               | Archive the selected workspace (no-op on repo header)                                                        |
@@ -45,6 +46,7 @@
 | ----- | --------------------------------------------------------------------------------------- |
 | `r`   | Rename the workspace (and its git branch)                                                |
 | `C`   | Pick a name color for its dashboard row                                                  |
+| `#`   | Edit the workspace's [tags](workspace-tags.md)                                           |
 | `o`   | Open its setup log — see below                                                            |
 | `x`   | Cancel an in-flight setup (creates only; archive is not cancellable)                     |
 | `?` / `esc` | Close the card                                                                     |

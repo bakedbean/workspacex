@@ -1,4 +1,5 @@
-//! Small option pickers: workspace name color and usage window.
+//! Small option pickers: workspace name color, workspace tags, usage window
+//! and hide rules.
 
 use super::*;
 use crate::app::{App, SharedApp};
@@ -115,11 +116,10 @@ pub(super) async fn hide_rules_picker(
     repo_id: crate::data::store::RepoId,
     repo_name: String,
     mut rules: crate::data::hide_rules::HideRules,
-    counts: [usize; 6],
+    rows: Vec<(crate::data::hide_rules::HideRule, usize)>,
     selected: usize,
 ) -> Result<()> {
-    use crate::data::hide_rules::HideRule;
-    let last = HideRule::ALL.len() - 1;
+    let last = rows.len().saturating_sub(1);
     let selected = match k.code {
         KeyCode::Esc | KeyCode::Enter => {
             app.modal = None;
@@ -128,15 +128,17 @@ pub(super) async fn hide_rules_picker(
         KeyCode::Up | KeyCode::Char('k') => selected.saturating_sub(1),
         KeyCode::Down | KeyCode::Char('j') => (selected + 1).min(last),
         KeyCode::Char(' ') => {
-            let rule = HideRule::ALL[selected];
-            rules.toggle(rule);
+            let Some((rule, _)) = rows.get(selected).cloned() else {
+                return Ok(());
+            };
+            rules.toggle(rule.clone());
             if let Err(e) = app.store.set_repo_hide_rules(repo_id, &rules) {
                 app.modal = Some(Modal::Error {
                     message: format!("could not save hide rules: {e}"),
                 });
                 return Ok(());
             }
-            if !rules.contains(rule) {
+            if !rules.contains(&rule) {
                 app.dashboard.expanded_hidden.remove(&(repo_id, rule));
             }
             app.refresh()?;
@@ -148,8 +150,174 @@ pub(super) async fn hide_rules_picker(
         repo_id,
         repo_name,
         rules,
-        counts,
+        rows,
         selected,
     });
+    Ok(())
+}
+
+/// Every tag in use plus any this repo still has a rule for, then PR rules,
+/// each with how many of this repo's workspaces it matches.
+pub(crate) fn hide_rule_rows(
+    app: &App,
+    repo: crate::data::store::RepoId,
+    rules: &crate::data::hide_rules::HideRules,
+) -> Result<Vec<(crate::data::hide_rules::HideRule, usize)>> {
+    use crate::data::hide_rules::HideRule;
+    let mut tag_rules: Vec<HideRule> = app
+        .store
+        .all_tags()?
+        .iter()
+        .map(|(t, _)| HideRule::tag(t))
+        .collect();
+    tag_rules.extend(
+        rules
+            .iter()
+            .filter(|r| matches!(r, HideRule::Tag(_)))
+            .cloned(),
+    );
+    tag_rules.sort();
+    tag_rules.dedup();
+    let ids: Vec<_> = app
+        .workspaces
+        .iter()
+        .filter(|(rid, _)| *rid == repo)
+        .map(|(_, w)| w.id)
+        .collect();
+    Ok(tag_rules
+        .into_iter()
+        .chain(HideRule::PR_RULES)
+        .map(|rule| {
+            let n = ids
+                .iter()
+                .filter(|id| rule.matches(&app.hide_subject(**id)))
+                .count();
+            (rule, n)
+        })
+        .collect())
+}
+
+/// Open (or reopen after a write) the `#` editor for `ws` with fresh snapshots.
+/// `seen` keeps names already listed, so unchecking a tag's last use doesn't
+/// drop it from the list mid-edit.
+pub(crate) fn open_workspace_tags(
+    app: &mut App,
+    ws: crate::data::store::WorkspaceId,
+    input: String,
+    selected: usize,
+    seen: &[String],
+) -> Result<()> {
+    let Some(w) = app.store.workspace_by_id(ws)? else {
+        app.modal = None;
+        return Ok(());
+    };
+    let mut known: Vec<String> = app.store.all_tags()?.into_iter().map(|(t, _)| t).collect();
+    known.extend(seen.iter().cloned());
+    known.sort();
+    known.dedup();
+    app.modal = Some(Modal::WorkspaceTags {
+        workspace_id: ws,
+        name: w.name,
+        known,
+        tags: w.tags.iter().map(|t| t.to_string()).collect(),
+        input,
+        selected,
+        browsing: false,
+        notice: None,
+    });
+    Ok(())
+}
+
+/// Every edit writes through immediately; `Esc` (or `Enter` on empty input) closes.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn workspace_tags_editor(
+    app: &mut App,
+    k: crossterm::event::KeyEvent,
+    workspace_id: crate::data::store::WorkspaceId,
+    name: String,
+    known: Vec<String>,
+    tags: Vec<String>,
+    mut input: String,
+    selected: usize,
+    browsing: bool,
+) -> Result<()> {
+    use crate::data::tags::{TAG_RULE, normalize_tag};
+    let items = crate::ui::modal::workspace_tags::tag_items(&known, &tags, &input);
+    let reopen = |app: &mut App, input: String, selected: usize, browsing: bool, notice| {
+        app.modal = Some(Modal::WorkspaceTags {
+            workspace_id,
+            name: name.clone(),
+            known: known.clone(),
+            tags: tags.clone(),
+            input,
+            selected,
+            browsing,
+            notice,
+        });
+    };
+    let write = |app: &mut App, tag: &str, add: bool| -> Result<bool> {
+        let r = if add {
+            app.store.add_workspace_tag(workspace_id, tag)
+        } else {
+            app.store.remove_workspace_tag(workspace_id, tag)
+        };
+        if let Err(e) = r {
+            app.modal = Some(Modal::Error {
+                message: format!("could not save tags: {e}"),
+            });
+            return Ok(false);
+        }
+        app.refresh()?;
+        Ok(true)
+    };
+    // Toggle the highlighted row, keeping the filter, cursor, and browse mode.
+    let toggle = |app: &mut App, input: String| -> Result<()> {
+        if let Some(it) = items.get(selected)
+            && write(app, &it.name, !it.checked)?
+        {
+            open_workspace_tags(app, workspace_id, input, selected, &known)?;
+            if let Some(Modal::WorkspaceTags { browsing: b, .. }) = app.modal.as_mut() {
+                *b = browsing;
+            }
+        }
+        Ok(())
+    };
+    match k.code {
+        KeyCode::Esc => app.modal = None,
+        KeyCode::Enter if browsing => toggle(app, input)?,
+        KeyCode::Enter if input.trim().is_empty() => app.modal = None,
+        KeyCode::Enter => match normalize_tag(&input) {
+            Some(t) => {
+                if write(app, &t, true)? {
+                    open_workspace_tags(app, workspace_id, String::new(), 0, &known)?;
+                }
+            }
+            None => {
+                let notice = format!("invalid tag: {TAG_RULE}");
+                reopen(app, input, selected, false, Some(notice));
+            }
+        },
+        // Tags can't contain spaces, so a space mid-typing is dropped rather
+        // than toggling whatever row the cursor happens to be on.
+        KeyCode::Char(' ') if !input.is_empty() && !browsing => {}
+        KeyCode::Char(' ') => toggle(app, input)?,
+        KeyCode::Up => reopen(app, input, selected.saturating_sub(1), true, None),
+        KeyCode::Down => {
+            let last = items.len().saturating_sub(1);
+            reopen(app, input, (selected + 1).min(last), true, None)
+        }
+        KeyCode::Backspace => {
+            input.pop();
+            reopen(app, input, 0, false, None);
+        }
+        KeyCode::Char(c)
+            if !k.modifiers.contains(KeyModifiers::CONTROL)
+                && !k.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            input.push(c);
+            reopen(app, input, 0, false, None);
+        }
+        _ => {}
+    }
     Ok(())
 }

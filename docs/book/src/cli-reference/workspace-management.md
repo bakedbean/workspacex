@@ -68,3 +68,10 @@ wsx workspace archive <repo> <slug> [--keep-worktree] [--force-delete-branch]
 ```
 
 Equivalent to the dashboard's archive action: stops any tracked processes running under the worktree unless `--keep-worktree` is given (`SIGTERM`, a two-second grace period, then `SIGKILL`; best-effort — see [Process tracking](../daily-use/process-tracking.md)), runs the per-repo archive script, removes the worktree (unless `--keep-worktree`), deletes the branch (force if `--force-delete-branch`), and drops the workspace from the registry.
+
+```
+wsx workspace tag add|rm <tag>... [--workspace <repo>/<slug>]
+wsx workspace tag list [--workspace <repo>/<slug> | --all] [--json]
+```
+
+Adds, removes, or lists [workspace tags](../daily-use/workspace-tags.md). Targets the current workspace unless `--workspace` is given, and prints the workspace's tags afterwards. Tags are lowercased; if any tag in an `add` or `rm` isn't 1-32 of `a-z 0-9 - _` starting with a letter or digit, nothing is written and the command fails naming it. `list --all` prints `tag<TAB>count` for every tag in use. With `--json`, a workspace's tags print as an array of strings and `--all` as an array of `{"tag", "workspaces"}` objects.

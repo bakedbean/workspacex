@@ -390,6 +390,7 @@ pub(super) async fn workspace_actions(
         | KeyCode::Char('v')
         | KeyCode::Char('g')
         | KeyCode::Char('C')
+        | KeyCode::Char('#')
         | KeyCode::Enter => {
             app.modal = None;
             handle_key_dashboard(app, k).await?;

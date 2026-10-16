@@ -118,6 +118,22 @@ pub(in crate::app::input) async fn handle_paste(
             return Ok(());
         }
     }
+    // The tag editor takes a paste as text: replayed per char, its spaces
+    // would toggle list rows.
+    if let Some(Modal::WorkspaceTags {
+        input,
+        selected,
+        browsing,
+        notice,
+        ..
+    }) = app.modal.as_mut()
+    {
+        input.extend(content.chars().filter(|c| !c.is_control()));
+        *selected = 0;
+        *browsing = false;
+        *notice = None;
+        return Ok(());
+    }
     if input_trace_enabled() {
         tracing::info!(
             target: "wsx::input_trace",

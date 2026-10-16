@@ -122,6 +122,7 @@ pub struct WorkspaceRecord {
     pub recap: Option<RecapShortRecord>,
     pub agents: Vec<AgentRecord>,
     pub pr: Option<PrRecord>,
+    pub tags: Vec<String>,
 }
 
 fn repo_name(store: &Store, ws: &Workspace) -> Result<String> {
@@ -209,6 +210,7 @@ pub fn workspace_records(
                     agents.get(&w.id).map(Vec::as_slice).unwrap_or_default(),
                     &agent_statuses,
                 ),
+                tags: w.tags.iter().map(|t| t.to_string()).collect(),
                 pr: scm.get(&w.id).and_then(|c| {
                     Some(PrRecord {
                         state: crate::data::scm_cache::lifecycle_to_str(c.pr_lifecycle?)
@@ -501,6 +503,16 @@ mod tests {
         assert_eq!(json["pr"]["review"], "approved");
         assert_eq!(json["pr"]["unresolved"], 2);
         assert_eq!(json["pr"]["fetched_at"], 7000, "seconds in, ms out");
+        assert_eq!(json["tags"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn workspace_records_carry_tags() {
+        let (store, ws, _, _) = seed();
+        store.add_workspace_tag(ws.id, "parked").unwrap();
+        let repos = crate::data::repo::list(&store).unwrap();
+        let recs = workspace_records(&store, &repos).unwrap();
+        assert_eq!(recs[0].tags, ["parked"]);
     }
 
     #[test]

@@ -79,6 +79,7 @@ fn build_inputs<'a>(
                     name_color: None,
                     workspace_id: id,
                     has_multi_pane_layout: false,
+                    tags: Vec::new(),
                 },
             });
         }
@@ -837,6 +838,7 @@ fn base_row() -> row::RowInputs {
         name_color: None,
         workspace_id: WorkspaceId(1),
         has_multi_pane_layout: false,
+        tags: Vec::new(),
     }
 }
 
@@ -888,6 +890,20 @@ fn matches_filter_matches_recap_segments() {
     assert!(matches_filter(&item, "drift"));
     assert!(matches_filter(&item, "audit"));
     assert!(!matches_filter(&item, "nonexistent"));
+}
+
+#[test]
+fn matches_filter_matches_tags_by_substring_and_hash_exactly() {
+    let repo = fake_repo(1, "repo", "/tmp/repo");
+    let mut item = item_with_column(&repo, None);
+    item.row.tags = vec!["parked".into()];
+    item.row.branch = "spike-x".into();
+    assert!(matches_filter(&item, "park"));
+    assert!(matches_filter(&item, "#parked"));
+    assert!(matches_filter(&item, "#Parked"));
+    assert!(!matches_filter(&item, "#park"), "# is exact");
+    assert!(!matches_filter(&item, "#spike"), "# skips branch");
+    assert!(matches_filter(&item, "spike"), "plain still hits branch");
 }
 
 #[test]
@@ -1380,6 +1396,7 @@ mod hide_rules {
                 name_color: None,
                 workspace_id: WorkspaceId(id),
                 has_multi_pane_layout: false,
+                tags: Vec::new(),
             },
         }
     }
@@ -1465,6 +1482,60 @@ mod hide_rules {
         let inputs = inputs(&repo, items(&repo));
         let screen = draw(&inputs, &mut DashboardState::default());
         assert!(line_with(&screen, "/r/wsx").contains("2 ws"));
+    }
+
+    fn tag<'a>(mut it: WorkspaceItem<'a>, t: &str) -> WorkspaceItem<'a> {
+        it.hide.tags.push(std::sync::Arc::from(t));
+        it
+    }
+
+    #[test]
+    fn tag_rule_hides_into_a_hash_group() {
+        let repo = repo_with("tag:parked");
+        let mut ws = items(&repo);
+        ws[0] = tag(item(&repo, 1, "open-pr", Some(PrOpen)), "parked");
+        let screen = draw(&inputs(&repo, ws), &mut DashboardState::default());
+        assert!(!screen.contains("open-pr"));
+        let group = line_with(&screen, "#parked");
+        assert!(group.contains("1 hidden"));
+        assert!(!group.contains('\u{2387}'), "no branch glyph: {group:?}");
+    }
+
+    #[test]
+    fn tag_rule_wins_over_pr_rule_in_dashboard() {
+        let repo = repo_with("pr:merged,tag:merged");
+        let tagged = |repo| {
+            let mut ws = items(repo);
+            ws[1] = tag(item(repo, 2, "merged-a", Some(PrMerged)), "merged");
+            ws
+        };
+        let t = visible_targets(&inputs(&repo, tagged(&repo)), &DashboardState::default());
+        let rid = RepoId(1);
+        let tag_group = SelectionTarget::HiddenGroup {
+            repo: rid,
+            rule: HideRule::tag("merged"),
+        };
+        let pr_group = SelectionTarget::HiddenGroup {
+            repo: rid,
+            rule: MERGED,
+        };
+        let ti = t.iter().position(|x| *x == tag_group).expect("tag group");
+        let pi = t.iter().position(|x| *x == pr_group).expect("pr group");
+        assert!(ti < pi, "tag groups render first: {t:?}");
+        let screen = draw(
+            &inputs(&repo, tagged(&repo)),
+            &mut DashboardState::default(),
+        );
+        assert!(
+            screen.lines().any(|l| l.contains("#merged  ·  1 hidden")),
+            "{screen}"
+        );
+        assert!(
+            screen
+                .lines()
+                .any(|l| l.contains("merged  ·  1 hidden") && !l.contains('#')),
+            "merged-b stays in the PR group: {screen}"
+        );
     }
 
     #[test]
@@ -1658,7 +1729,7 @@ mod hide_rules {
             (SelectionTarget::Workspace(WorkspaceId(3)), "merged-b"),
         ] {
             assert!(visible_targets(&inputs, &state).contains(&target));
-            state.selection = Some(target);
+            state.selection = Some(target.clone());
             let hl = highlighted_lines(&inputs, &mut state);
             assert_eq!(hl.len(), 1, "{target:?}: {hl:?}");
             assert!(hl[0].contains(needle), "{target:?}: {hl:?}");

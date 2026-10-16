@@ -639,6 +639,7 @@ mod digest_tests {
                 agent: crate::pty::session::AgentKind::Claude,
                 shared: false,
                 name_color: None,
+                tags: Vec::new(),
             },
         )
     }

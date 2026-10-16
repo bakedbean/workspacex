@@ -2,7 +2,7 @@
 //! sharing a workspace's tmux session with another machine.
 
 use super::Args;
-use crate::cli::action::CliAction;
+use crate::cli::action::{CliAction, TagOp};
 use crate::error::{Error, Result};
 
 pub(in crate::cli) fn parse_shared(it: &mut Args) -> Result<CliAction> {
@@ -204,6 +204,47 @@ pub(in crate::cli) fn parse_workspace(it: &mut Args) -> Result<CliAction> {
                 name,
                 keep_worktree,
                 force_delete_branch,
+            })
+        }
+        Some("tag") => {
+            const USAGE: &str = "workspace tag add|rm <tag>... [--workspace <repo>/<slug>] \
+                                 | list [--workspace <repo>/<slug> | --all] [--json]";
+            let usage = || Error::Usage {
+                group: None,
+                msg: USAGE.into(),
+            };
+            let op = match it.next().as_deref() {
+                Some("add") => TagOp::Add,
+                Some("rm") => TagOp::Rm,
+                Some("list") => TagOp::List,
+                _ => return Err(usage()),
+            };
+            let (mut tags, mut workspace, mut all, mut json) = (Vec::new(), None, false, false);
+            while let Some(arg) = it.next() {
+                match arg.as_str() {
+                    "--workspace" => {
+                        let value = it.next().filter(|v| !v.starts_with("--"));
+                        workspace = Some(value.ok_or_else(|| Error::Usage {
+                            group: None,
+                            msg: "--workspace needs value (<repo>/<slug>)".into(),
+                        })?);
+                    }
+                    "--all" if op == TagOp::List => all = true,
+                    "--json" if op == TagOp::List => json = true,
+                    s if s.starts_with("--") => return Err(usage()),
+                    _ if op != TagOp::List => tags.push(arg),
+                    _ => return Err(usage()),
+                }
+            }
+            if (op != TagOp::List && tags.is_empty()) || (all && workspace.is_some()) {
+                return Err(usage());
+            }
+            Ok(CliAction::WorkspaceTag {
+                op,
+                tags,
+                workspace,
+                all,
+                json,
             })
         }
         Some(sub @ ("share" | "unshare")) => {

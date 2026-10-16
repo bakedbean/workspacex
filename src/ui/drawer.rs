@@ -150,14 +150,14 @@ fn title_line<'a>(title: Line<'a>, rule: Style, theme: &Theme) -> Line<'a> {
     Line::from(spans).style(theme.header_style())
 }
 
-/// A row of key hints in the footer's pill style: `␣key␣ label   ␣key␣ label`.
+/// A row of key hints in the footer's pill style: `␣key␣ label  ␣key␣ label`.
 /// The single renderer for every "what can I press here" line, so the drawer
 /// never mixes `[y] yes`, `Enter confirm`, and `y  yes` dialects.
 pub fn hint_line(hints: &[Hint<'_>], theme: &Theme) -> Line<'static> {
     let mut spans = Vec::with_capacity(hints.len() * 5);
     for (i, (key, label)) in hints.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::raw("   "));
+            spans.push(Span::raw("  "));
         }
         spans.extend(crate::ui::footer::key_pill_spans(key, theme));
         spans.push(Span::styled(format!(" {label}"), theme.dim_style()));
@@ -202,6 +202,6 @@ mod tests {
             .iter()
             .map(|s| s.content.as_ref())
             .collect();
-        assert_eq!(text, " enter  create    esc  cancel");
+        assert_eq!(text, " enter  create   esc  cancel");
     }
 }

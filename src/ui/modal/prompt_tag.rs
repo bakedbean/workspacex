@@ -185,10 +185,16 @@ fn render_pick(
     f.render_widget(Paragraph::new(lines), list_area);
 
     f.render_widget(
-        Paragraph::new(
-            "[\u{2191}/\u{2193}] move   [enter] body   [1-9] pick   [^d] delete   [esc] close",
-        )
-        .style(theme.dim_style()),
+        Paragraph::new(crate::ui::drawer::hint_line(
+            &[
+                ("↑↓", "move"),
+                ("↵", "body"),
+                ("1-9", "pick"),
+                ("^d", "delete"),
+                ("esc", "close"),
+            ],
+            theme,
+        )),
         footer_area,
     );
 }
@@ -225,7 +231,10 @@ fn render_body(
         );
     }
     f.render_widget(
-        Paragraph::new("[^s] insert   [enter] newline   [esc] back").style(theme.dim_style()),
+        Paragraph::new(crate::ui::drawer::hint_line(
+            &[("^s", "insert"), ("↵", "newline"), ("esc", "back")],
+            theme,
+        )),
         chunks[2],
     );
 }

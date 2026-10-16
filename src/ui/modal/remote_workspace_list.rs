@@ -190,11 +190,27 @@ pub fn render_remote_workspace_list(
 
     f.render_widget(
         Paragraph::new(if list.can_share {
-            "[\u{2191}/\u{2193}] move   [enter] attach / share   [n] new   [r] refresh   [esc] close"
+            crate::ui::drawer::hint_line(
+                &[
+                    ("↑↓", "move"),
+                    ("↵", "attach / share"),
+                    ("n", "new"),
+                    ("r", "refresh"),
+                    ("esc", "close"),
+                ],
+                theme,
+            )
         } else {
-            "[\u{2191}/\u{2193}] move   [enter] attach   [r] refresh   [esc] close"
-        })
-        .style(theme.dim_style()),
+            crate::ui::drawer::hint_line(
+                &[
+                    ("↑↓", "move"),
+                    ("↵", "attach"),
+                    ("r", "refresh"),
+                    ("esc", "close"),
+                ],
+                theme,
+            )
+        }),
         footer_area,
     );
 }
@@ -326,7 +342,7 @@ mod tests {
         };
         assert!(line("direct").contains("not shared"), "{text}");
         assert!(line("idle").contains("stopped"), "{text}");
-        assert!(text.contains("[enter] attach / share"), "{text}");
+        assert!(text.contains("↵  attach / share"), "{text}");
     }
 
     /// Render one shared workspace at `lifecycle` and return the foreground

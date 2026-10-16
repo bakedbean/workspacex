@@ -40,8 +40,15 @@ pub fn render_agents_panel(
         .collect();
     lines.push(Line::from(add));
     lines.push(Line::from(""));
-    lines.push(Line::from(
-        "Enter add   a add all   x remove   \u{2191}\u{2193} move   Esc close",
+    lines.push(crate::ui::drawer::hint_line(
+        &[
+            ("↵", "add"),
+            ("a", "add all"),
+            ("x", "remove"),
+            ("↑↓", "move"),
+            ("esc", "close"),
+        ],
+        theme,
     ));
 
     f.render_widget(Paragraph::new(lines), inner);

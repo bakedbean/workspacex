@@ -101,16 +101,31 @@ pub fn render_process_list(
 
     if let Some(buf) = input {
         f.render_widget(
-            Paragraph::new(format!("run: {buf}\u{2588}   [enter] launch  [esc] cancel"))
-                .style(theme.header_style()),
+            Paragraph::new(Line::from(
+                [
+                    vec![Span::styled(
+                        format!("run: {buf}\u{2588}   "),
+                        theme.header_style(),
+                    )],
+                    crate::ui::drawer::hint_line(&[("↵", "launch"), ("esc", "cancel")], theme)
+                        .spans,
+                ]
+                .concat(),
+            )),
             footer_area,
         );
     } else {
         f.render_widget(
-            Paragraph::new(
-                "[\u{2191}/\u{2193}] move   [r] run   [k] term   [K] kill   [esc] close",
-            )
-            .style(theme.dim_style()),
+            Paragraph::new(crate::ui::drawer::hint_line(
+                &[
+                    ("↑↓", "move"),
+                    ("r", "run"),
+                    ("k", "term"),
+                    ("K", "kill"),
+                    ("esc", "close"),
+                ],
+                theme,
+            )),
             footer_area,
         );
     }

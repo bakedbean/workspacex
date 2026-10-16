@@ -139,8 +139,15 @@ pub fn render_repo_settings(
     f.render_widget(Paragraph::new(lines), body_area);
 
     f.render_widget(
-        Paragraph::new("[\u{2191}/\u{2193}] move   [enter] edit   [d] clear   [esc] close")
-            .style(theme.dim_style()),
+        Paragraph::new(crate::ui::drawer::hint_line(
+            &[
+                ("↑↓", "move"),
+                ("↵", "edit"),
+                ("d", "clear"),
+                ("esc", "close"),
+            ],
+            theme,
+        )),
         footer_area,
     );
 }

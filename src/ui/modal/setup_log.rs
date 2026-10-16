@@ -181,17 +181,21 @@ pub fn render_setup_log(f: &mut Frame, area: Rect, view: &SetupLogView, theme: &
         f.render_widget(Paragraph::new(rendered), body_area);
     }
 
-    let footer = if lines.len() > body_h {
-        let more = lines.len() - body_h - scroll;
-        if more > 0 {
-            format!("[\u{2191}/\u{2193}] scroll ({more} more above)   [g/G] top/end   [esc] close")
-        } else {
-            "[\u{2191}/\u{2193}] scroll   [g/G] top/end   [esc] close".to_string()
-        }
+    let more = lines.len().saturating_sub(body_h + scroll);
+    let scroll_label = if more > 0 {
+        format!("scroll ({more} more above)")
     } else {
-        "[esc] close".to_string()
+        "scroll".to_string()
     };
-    f.render_widget(Paragraph::new(footer).style(theme.dim_style()), footer_area);
+    let footer = if lines.len() > body_h {
+        crate::ui::drawer::hint_line(
+            &[("↑↓", &scroll_label), ("g/G", "top/end"), ("esc", "close")],
+            theme,
+        )
+    } else {
+        crate::ui::drawer::hint_line(&[("esc", "close")], theme)
+    };
+    f.render_widget(Paragraph::new(footer), footer_area);
 
     scroll
 }
@@ -268,7 +272,7 @@ mod tests {
             text.contains("Installing dependencies"),
             "missing line:\n{text}"
         );
-        assert!(text.contains("[esc] close"), "missing footer:\n{text}");
+        assert!(text.contains("esc  close"), "missing footer:\n{text}");
     }
 
     /// F7 regression: an archive entry never sets a `SetupPhase` (there is no

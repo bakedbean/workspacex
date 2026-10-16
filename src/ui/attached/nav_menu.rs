@@ -6,7 +6,6 @@
 use super::*;
 use crate::ui::footer::key_for_glyph;
 use ratatui::text::Text;
-use ratatui::widgets::{Block, Borders, Clear};
 
 /// One row in the navigation overlay. `glyph` is the key as printed in the
 /// pill (`"d"`, `"x"`, `"←→"`); it doubles as the Enter-dispatch key via
@@ -86,7 +85,7 @@ pub fn nav_item_key(items: &[NavItem], selected: usize) -> Option<crossterm::eve
     items.get(selected).and_then(|i| key_for_glyph(i.glyph))
 }
 
-/// Visible column width of one overlay row, mirroring the spans built in
+/// Visible column width of one overlay cell, mirroring the spans built in
 /// `render_nav_overlay`'s loop: marker(2) + key pill(`2 + glyph_len`, per
 /// `key_pill_spans`) + gap(3) + label. Measuring the pill with the real glyph
 /// length keeps multi-cell glyphs like "←→" from being truncated.
@@ -94,10 +93,12 @@ fn nav_row_width(glyph_len: usize, label_len: usize) -> usize {
     2 + (2 + glyph_len) + 3 + label_len
 }
 
-/// Draw the centered Ctrl-x navigation overlay. Keybind column first, then
-/// label; the `selected` row carries a `▌` marker. `pinned_hint` adds a
-/// "1-9 pinned" note to the footer hint line when the workspace has pinned
-/// commands. Mirrors the dim bordered framing of the other modals.
+/// Draw the Ctrl-x navigation overlay as a which-key style grid in the bottom
+/// drawer: each cell is the key pill then its label, columns as wide as the
+/// widest row, filled column-major so ↑↓ (which walk `items` in order) move
+/// down a column and wrap into the next. The `selected` cell carries a `▌`
+/// marker. `pinned_hint` adds a "1-9 pinned" hint when the workspace has
+/// pinned commands.
 pub fn render_nav_overlay(
     f: &mut Frame,
     area: Rect,
@@ -106,77 +107,52 @@ pub fn render_nav_overlay(
     pinned_hint: bool,
     theme: &Theme,
 ) {
-    let hint = if pinned_hint {
-        "↑↓ move · enter · 1-9 pinned · esc"
-    } else {
-        "↑↓ move · enter · esc"
-    };
-    // Widest row (or the hint) sets the box width. Each row is measured with
-    // its actual glyph width via `nav_row_width` so multi-cell glyphs like
-    // "←→" don't get truncated on narrow terminals.
-    let content_w = items
+    const GAP: usize = 2;
+    let cell_w = items
         .iter()
         .map(|i| nav_row_width(i.glyph.chars().count(), i.label.chars().count()))
-        .chain(std::iter::once(hint.chars().count()))
         .max()
         .unwrap_or(20);
-    let w = (content_w as u16 + 4).min(area.width); // + borders + 1 pad each side
-    let h = (items.len() as u16 + 4).min(area.height); // borders + blank + hint
+    // The drawer's body is the screen less a 1-cell gutter each side.
+    let usable = usize::from(area.width).saturating_sub(2);
+    let cols = ((usable + GAP) / (cell_w + GAP)).clamp(1, items.len().max(1));
+    let rows = items.len().div_ceil(cols);
 
-    let rect = centered_box(area, w, h);
-    f.render_widget(Clear, rect);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title("actions")
-        .style(theme.dim_style());
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
+    let mut hints = vec![("↑↓", "move"), ("↵", "run")];
+    if pinned_hint {
+        hints.push(("1-9", "pinned"));
+    }
+    hints.push(("esc", "close"));
+    let inner = crate::ui::drawer::frame(f, area, rows as u16, "actions", &hints, theme);
 
-    let mut lines: Vec<Line<'static>> = Vec::with_capacity(items.len() + 2);
-    for (i, item) in items.iter().enumerate() {
-        let mut spans: Vec<Span<'static>> = Vec::with_capacity(4);
-        if i == selected {
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(rows);
+    for row in 0..rows {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        for col in 0..cols {
+            let Some(item) = items.get(col * rows + row) else {
+                break;
+            };
+            if col > 0 {
+                spans.push(Span::raw(" ".repeat(GAP)));
+            }
+            let width = nav_row_width(item.glyph.chars().count(), item.label.chars().count());
+            if col * rows + row == selected {
+                spans.push(Span::styled(
+                    "▌ ".to_string(),
+                    Style::default().fg(theme.waiting),
+                ));
+            } else {
+                spans.push(Span::raw("  ".to_string()));
+            }
+            spans.extend(crate::ui::footer::key_pill_spans(item.glyph, theme));
             spans.push(Span::styled(
-                "▌ ".to_string(),
-                Style::default().fg(theme.waiting),
+                format!("   {}{}", item.label, " ".repeat(cell_w - width)),
+                Style::default().fg(theme.path),
             ));
-        } else {
-            spans.push(Span::raw("  ".to_string()));
         }
-        spans.extend(crate::ui::footer::key_pill_spans(item.glyph, theme));
-        spans.push(Span::styled(
-            format!("   {}", item.label),
-            Style::default().fg(theme.path),
-        ));
         lines.push(Line::from(spans));
     }
-    lines.push(Line::from(Vec::<Span<'static>>::new()));
-    lines.push(Line::from(Span::styled(
-        hint.to_string(),
-        theme.dim_style(),
-    )));
     f.render_widget(Paragraph::new(Text::from(lines)), inner);
-}
-
-/// Center a `w`×`h` rect inside `area` (local copy so nav_menu owns its
-/// framing without reaching into `ui::modal`).
-fn centered_box(area: Rect, w: u16, h: u16) -> Rect {
-    let v = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(0),
-            Constraint::Length(h),
-            Constraint::Min(0),
-        ])
-        .split(area)[1];
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(0),
-            Constraint::Length(w),
-            Constraint::Min(0),
-        ])
-        .split(v)[1]
 }
 
 #[cfg(test)]
@@ -305,6 +281,6 @@ mod tests {
         assert!(text.contains("send literal ^x"), "lists send-^x");
         // Selected row (index 1 = updates) carries the ▌ marker.
         assert!(text.contains("▌"), "highlight marker present");
-        assert!(text.contains("1-9 pinned"), "pinned hint shown");
+        assert!(text.contains("1-9  pinned"), "pinned hint shown");
     }
 }

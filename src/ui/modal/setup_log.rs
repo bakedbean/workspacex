@@ -436,8 +436,9 @@ mod tests {
             clamped < all.len(),
             "clamp must be a real offset, got {clamped}"
         );
-        // One line of status, one of footer, two of border.
-        assert_eq!(clamped, all.len() - (12 - 4));
+        // A 12-row screen gives a 9-row drawer: its rule, one line of
+        // status, and one of footer leave six for the log.
+        assert_eq!(clamped, all.len() - 6);
     }
 
     #[test]

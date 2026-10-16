@@ -1407,7 +1407,8 @@ fn updates_panel_render_omits_repos_without_workspaces() {
     let mut term = Terminal::new(backend).unwrap();
     term.draw(|f| draw_for_test(f, &mut app)).unwrap();
     let buf = term.backend().buffer();
-    let rendered = (0..buf.area.height)
+    // Only the drawer: the dashboard behind it still lists every repo.
+    let rendered = (drawer_top(buf)..buf.area.height)
         .map(|y| {
             (0..buf.area.width)
                 .map(|x| buf[(x, y)].symbol())
@@ -1455,7 +1456,8 @@ fn updates_panel_render_shows_global_empty_state_when_all_repos_empty() {
     let mut term = Terminal::new(backend).unwrap();
     term.draw(|f| draw_for_test(f, &mut app)).unwrap();
     let buf = term.backend().buffer();
-    let rendered = (0..buf.area.height)
+    // Only the drawer: the dashboard behind it still lists every repo.
+    let rendered = (drawer_top(buf)..buf.area.height)
         .map(|y| {
             (0..buf.area.width)
                 .map(|x| buf[(x, y)].symbol())
@@ -1788,4 +1790,12 @@ async fn attached_view_no_status_row_when_no_other_activity() {
         "unexpected activity glyph in row {}: {second_to_last:?}",
         h - 2
     );
+}
+
+/// First row of the bottom drawer (its `──` title rule) in a rendered frame.
+fn drawer_top(buf: &ratatui::buffer::Buffer) -> u16 {
+    (0..buf.area.height)
+        .rev()
+        .find(|&y| buf[(0, y)].symbol() == "─" && buf[(1, y)].symbol() == "─")
+        .expect("a drawer is open")
 }

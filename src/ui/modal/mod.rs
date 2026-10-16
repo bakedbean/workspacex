@@ -278,48 +278,21 @@ impl RemoteNewWorkspaceForm {
     }
 }
 
-fn centered(area: Rect, w: u16, h: u16) -> Rect {
-    let popup = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(0),
-            Constraint::Length(h),
-            Constraint::Min(0),
-        ])
-        .split(area)[1];
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(0),
-            Constraint::Length(w),
-            Constraint::Min(0),
-        ])
-        .split(popup)[1]
-}
-
-/// Draw a centered, bordered modal box of size `w`×`h` (centered within
-/// `area`) titled `title`: clears the region, paints the dim-styled border,
-/// and returns the inner content area. Shared framing for the floating panel
-/// renderers (updates, processes, repo settings, agents) so they look
-/// identical; each caller lays its own body/footer split inside the returned
-/// inner rect.
+/// Open a drawer (see `ui::drawer`) for a panel that asked for an `h`-row box
+/// including its old top and bottom borders, and return the body rect. Shared
+/// framing for the panel renderers (updates, processes, repo settings,
+/// agents) so they look identical; each caller lays its own body/footer split
+/// inside the returned rect. `_w` is a leftover of the centered-box layout:
+/// drawers are always full width.
 fn panel_frame<'a>(
     f: &mut Frame,
     area: Rect,
-    w: u16,
+    _w: u16,
     h: u16,
     title: impl Into<Line<'a>>,
     theme: &Theme,
 ) -> Rect {
-    let rect = centered(area, w, h);
-    f.render_widget(Clear, rect);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .style(theme.dim_style());
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
-    inner
+    crate::ui::drawer::frame(f, area, h.saturating_sub(2), title, &[], theme)
 }
 
 /// Render the small fixed-size modals — confirmations, prompts, reference
@@ -344,9 +317,12 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
     ) {
         return;
     }
-    // Room for list rows: the terminal minus borders and each list modal's
-    // fixed lines (prompt, blanks, footer, notice), so the footer stays put.
-    let list_cap = usize::from(area.height).saturating_sub(10).max(3);
+    // Room for list rows: the tallest drawer minus its rule and each list
+    // modal's fixed lines (prompt, blanks, footer, notice), so the footer
+    // stays put.
+    let list_cap = usize::from(crate::ui::drawer::max_height(area))
+        .saturating_sub(9)
+        .max(3);
     let (title, body) = match modal {
         Modal::NewWorkspace {
             name_buffer,
@@ -696,18 +672,9 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
     } else {
         theme.header_style()
     };
-    let want = u16::try_from(body.lines().count() + 2).unwrap_or(u16::MAX);
-    let rect = centered(area, 60, want.clamp(14, area.height.max(14)));
-    let para = Paragraph::new(body)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .title_alignment(Alignment::Left),
-        )
-        .style(style);
-    f.render_widget(Clear, rect);
-    f.render_widget(para, rect);
+    let body_h = u16::try_from(body.lines().count()).unwrap_or(u16::MAX);
+    let inner = crate::ui::drawer::frame(f, area, body_h, title, &[], theme);
+    f.render_widget(Paragraph::new(body).style(style), inner);
 }
 
 /// At most `cap` of `lines`, scrolled so `focus` stays visible.

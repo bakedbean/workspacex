@@ -3944,3 +3944,62 @@ fn workspace_tag_rejects_unknown_op_and_flags() {
     assert!(parse(&["workspace", "tag", "nope"]).is_err());
     assert!(parse(&["workspace", "tag", "add", "x", "--json"]).is_err());
 }
+
+/// `wsx workspace tag` wiring: add/rm reach the store, and a batch with one
+/// invalid tag writes nothing.
+#[tokio::test]
+async fn workspace_tag_run_adds_removes_and_rejects_bad_batch() {
+    use crate::cli::action::TagOp;
+    use crate::config::Dirs;
+    use crate::data::store::{NewWorkspace, Store};
+    use crate::pty::session::AgentKind;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dirs = Dirs::for_test(tmp.path());
+    let ws = {
+        let store = Store::open(&dirs.db_path()).unwrap();
+        let repo = store
+            .add_repo(std::path::Path::new("/tmp/r"), "r", "wsx")
+            .unwrap();
+        store
+            .insert_workspace(&NewWorkspace {
+                repo_id: repo,
+                name: "alpha",
+                branch: "wsx/alpha",
+                worktree_path: std::path::Path::new("/tmp/r/alpha"),
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap()
+    };
+    let tag = |op, tags: &[&str]| CliAction::WorkspaceTag {
+        op,
+        tags: tags.iter().map(|t| t.to_string()).collect(),
+        workspace: Some("r/alpha".into()),
+        all: false,
+        json: false,
+    };
+    let stored = || -> Vec<String> {
+        let store = Store::open(&dirs.db_path()).unwrap();
+        let w = store.workspace_by_id(ws).unwrap().unwrap();
+        w.tags.iter().map(|t| t.to_string()).collect()
+    };
+
+    run_cli(tag(TagOp::Add, &["Parked", "ui"]), &dirs)
+        .await
+        .unwrap();
+    assert_eq!(stored(), ["parked", "ui"]);
+
+    let err = run_cli(tag(TagOp::Add, &["ok", "bad tag"]), &dirs)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("bad tag"), "{err}");
+    assert_eq!(stored(), ["parked", "ui"], "bad batch writes nothing");
+
+    run_cli(tag(TagOp::Rm, &["parked", "absent"]), &dirs)
+        .await
+        .unwrap();
+    assert_eq!(stored(), ["ui"]);
+}

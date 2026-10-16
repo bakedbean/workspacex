@@ -2,8 +2,12 @@
 
 use super::*;
 
-/// Render the floating process-list modal. Reads live App state via
-/// borrowed slices so the modal updates on every render tick.
+/// Render the process-list modal. Reads live App state via borrowed slices
+/// so the modal updates on every render tick. Like the setup log, it is
+/// content that runs long (many processes, wrapped command lines), so it
+/// floats over nearly the whole screen at a fixed size instead of opening in
+/// the bottom drawer; the list scrolls inside it to keep the selection
+/// visible.
 #[allow(clippy::too_many_arguments)]
 pub fn render_process_list(
     f: &mut Frame,
@@ -15,26 +19,66 @@ pub fn render_process_list(
     notice: Option<&str>,
     theme: &Theme,
 ) {
-    // Commands wrap at the drawer's width, so measure it before laying out.
-    let body_w = crate::ui::drawer::body_width(area);
-    let mut lines: Vec<Line> = Vec::new();
-    if procs.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "(no tracked processes)",
-            theme.dim_style(),
-        )));
+    let inner = crate::ui::drawer::float_frame(
+        f,
+        area,
+        area.width - area.width / 10,
+        area.height - area.height / 10,
+        format!(" Processes — {workspace_name} "),
+        theme,
+    )
+    .inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
+
+    let has_notice = notice.is_some();
+    // Column header, the list, the notice (if any), and the footer.
+    let constraints = if has_notice {
+        vec![
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ]
     } else {
-        lines.push(Line::from(Span::styled(
-            format!("  {:<7} {}", "PID", "CMD"),
-            theme.header_style(),
-        )));
+        vec![
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ]
+    };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(inner);
+    let (header_area, body_area) = (chunks[0], chunks[1]);
+    let (notice_area, footer_area) = if has_notice {
+        (Some(chunks[2]), chunks[3])
+    } else {
+        (None, chunks[2])
+    };
+
+    if procs.is_empty() {
+        f.render_widget(
+            Paragraph::new("(no tracked processes)").style(theme.dim_style()),
+            header_area,
+        );
+    } else {
+        f.render_widget(
+            Paragraph::new(format!("{:<7} {}", "PID", "CMD")).style(theme.header_style()),
+            header_area,
+        );
+        let mut lines: Vec<Line> = Vec::new();
+        // Visual rows of the selected process, first and last, for scrolling.
+        let mut sel_rows = (0, 0);
         for (i, p) in procs.iter().enumerate() {
-            // `  PID(7) CMD` — the prefix width sets the hanging indent so
+            // `PID(7) CMD` — the prefix width sets the hanging indent so
             // wrapped continuation lines align under the command column.
-            let prefix = format!("  {:<7} ", p.pid);
+            let prefix = format!("{:<7} ", p.pid);
             let prefix_w = prefix.chars().count();
             let indent = " ".repeat(prefix_w);
-            let text_w = (body_w as usize).saturating_sub(prefix_w).max(1);
+            let text_w = (body_area.width as usize).saturating_sub(prefix_w).max(1);
             // Fall back to the short `command` if `ps` never filled the
             // full command line (e.g. the command-ps call failed).
             let cmd = if p.cmdline.is_empty() {
@@ -42,6 +86,9 @@ pub fn render_process_list(
             } else {
                 p.cmdline.as_str()
             };
+            if i == selected {
+                sel_rows.0 = lines.len();
+            }
             for (j, seg) in wrap_text(cmd, text_w).iter().enumerate() {
                 let body = if j == 0 {
                     format!("{prefix}{seg}")
@@ -54,37 +101,16 @@ pub fn render_process_list(
                     lines.push(Line::from(body));
                 }
             }
+            if i == selected {
+                sel_rows.1 = lines.len() - 1;
+            }
         }
+        let top = list_top(sel_rows, usize::from(body_area.height));
+        f.render_widget(
+            Paragraph::new(lines).scroll((u16::try_from(top).unwrap_or(u16::MAX), 0)),
+            body_area,
+        );
     }
-
-    let has_notice = notice.is_some();
-    let inner = panel_frame(
-        f,
-        area,
-        lines.len() + usize::from(has_notice) + 1,
-        format!(" Processes — {workspace_name} "),
-        theme,
-    );
-    let constraints = if has_notice {
-        vec![
-            Constraint::Min(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ]
-    } else {
-        vec![Constraint::Min(1), Constraint::Length(1)]
-    };
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(inner);
-    let body_area = chunks[0];
-    let (notice_area, footer_area) = if has_notice {
-        (Some(chunks[1]), chunks[2])
-    } else {
-        (None, chunks[1])
-    };
-    f.render_widget(Paragraph::new(lines), body_area);
 
     if let (Some(area), Some(text)) = (notice_area, notice) {
         let style = if text.starts_with("error") {
@@ -125,6 +151,13 @@ pub fn render_process_list(
             footer_area,
         );
     }
+}
+
+/// First list row to show so the selected process's rows `(first, last)` are
+/// on screen in a `height`-row viewport. A process taller than the viewport
+/// shows its first rows.
+fn list_top((first, last): (usize, usize), height: usize) -> usize {
+    (last + 1).saturating_sub(height.max(1)).min(first)
 }
 
 /// Word-wrap `s` into lines no wider than `width` columns, breaking on
@@ -256,6 +289,41 @@ mod tests {
         let procs = vec![proc(7, "pnpm", "", "/wt")];
         let text = render_to_string(&procs, 80, 12);
         assert!(text.contains("pnpm"), "fallback command missing:\n{text}");
+    }
+
+    #[test]
+    fn list_top_keeps_the_selection_in_view() {
+        // Fits: no scroll.
+        assert_eq!(list_top((2, 3), 10), 0);
+        // Below the fold: scroll until its last row is the bottom row.
+        assert_eq!(list_top((12, 14), 10), 5);
+        // Taller than the viewport: show its first row at the top.
+        assert_eq!(list_top((12, 30), 10), 12);
+    }
+
+    #[test]
+    fn a_long_list_scrolls_to_the_selected_process() {
+        let procs: Vec<ProcInfo> = (0..40)
+            .map(|i| proc(1000 + i, "sleep", &format!("sleep {i}"), "/w"))
+            .collect();
+        let theme = Theme::wsx();
+        let mut term = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        term.draw(|f| render_process_list(f, f.area(), "demo", &procs, 39, None, None, &theme))
+            .unwrap();
+        let buf = term.backend().buffer();
+        let text: String = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("1039"),
+            "selected last process visible:\n{text}"
+        );
+        assert!(text.contains("PID"), "header stays pinned:\n{text}");
     }
 
     #[test]

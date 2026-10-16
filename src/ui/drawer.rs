@@ -9,9 +9,9 @@
 //! The rule of thumb: the drawer is for prompts, choices, and menus. Content
 //! with a shape of its own opens in a centered [`float_frame`] instead, in
 //! the same chrome so it still reads as part of the family: the name-color
-//! swatch grid (fixed 2D layout, gains nothing from full width) and the
-//! setup log (a document to read, which wants most of the screen and a frame
-//! that holds still while a live tail streams in).
+//! swatch grid (fixed 2D layout, gains nothing from full width), and the
+//! setup log and process list (content that runs long, which wants most of
+//! the screen and a frame that holds still while it streams or grows).
 //!
 //! Layout, top to bottom:
 //!

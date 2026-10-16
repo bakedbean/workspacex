@@ -1,34 +1,34 @@
 # wsx demo-screencast harness
 
-Reproducible tooling that records polished, captioned screencasts of wsx driving
-**live** coding agents — without anyone hand-driving the TUI. It stands up a
-fully isolated wsx install with synthetic repos, drives the real `wsx` TUI with
-[VHS](https://github.com/charmbracelet/vhs), collapses dead air, and burns in
-captions under GitHub's 10MB asset cap.
+Reproducible tooling that records captioned screencasts and stills of wsx
+driving **live** coding agents — without anyone hand-driving the TUI. It stands
+up a fully isolated wsx install with synthetic repos, drives the real `wsx` TUI
+in a detached tmux server, and renders what tmux captures through headless
+Chrome, in the TUI's real colors.
 
 > Provisioning is shared with the e2e test harness — see
 > [`../sandbox/README.md`](../sandbox/README.md) (env contract) and
 > [`../harness/README.md`](../harness/README.md) (running the app for tests). This `demo/`
-> dir is now just the screencast/video-production layer on top of `sandbox/`.
+> dir is the screencast/still production layer on top of `sandbox/`.
 
-See [`SPIKE-NOTES.md`](SPIKE-NOTES.md) for the hard-won mechanics (config
-isolation, trust pre-seeding, agent-pane switching, agent-to-agent coordination,
-detail-bar population, VHS gotchas). **If you are an agent picking this up, read
-`SPIKE-NOTES.md` end to end first** — every non-obvious failure mode and its fix
-is recorded there.
+[`SPIKE-NOTES.md`](SPIKE-NOTES.md) records the hard-won agent mechanics (config
+isolation, trust pre-seeding, agent-pane switching, agent-to-agent
+coordination, detail-bar population). It was written against the original VHS
+tapes, which tmux replaced; the agent-side findings still hold.
 
 ## Clips
 
 | Clip | Shows | Output |
 |---|---|---|
-| **hero** (~66s) | One workspace, two agents coordinating with no human in the loop: Claude reviews & finds a planted SQL-injection bug, then hands the fix to its Codex teammate over `wsx agent send`; Codex fixes, commits, and reports back the commit hash; Claude verifies. | `out/01-hero.mp4` |
-| **parallel** (~61s) | Three isolated worktrees in one repo (`toy-api`), an agent deployed to each to fix + commit the planted bug, then a tour of each workspace's live detail bar (SESSION SUMMARY / RECENT CHAT / RECENT FILES with `+X −Y` line counts) as it fills in. | `out/02-parallel.mp4` |
+| **hero** (~70s) | One workspace, two agents coordinating with no human in the loop: the workspace is created from the dashboard's bottom drawer and Codex is added from the agents drawer; Claude reviews & finds the planted SQL-injection bug, then hands the fix to Codex over `wsx agent send`; Codex fixes, commits, and reports back the commit hash; Claude verifies. | `out/01-hero.mp4` |
+| **parallel** (~70s) | Three isolated worktrees in one repo (`toy-api`), each created from the bottom drawer with an agent fixing + committing one planted bug, then a tour of the live detail bars (SESSION SUMMARY / RECENT CHAT / RECENT FILES with `+X −Y` counts). It ends by tagging one workspace from the `#` drawer and hiding that tag from the `F` drawer, which folds it into a `▸ #parked · 1 hidden` group row that expands in place. | `out/02-parallel.mp4` |
 
 ## Stills
 
 | Still | Shows | Output |
 |---|---|---|
-| **dashboard-hero** | The dashboard under load: three repos, nine live workspaces, Claude + Codex sharing one of them, `?`/`✓`/spinner statuses, recaps inline and in the detail bar. Used as the site hero image. | `out/dashboard-hero-N.png` (several takes) |
+| **dashboard-hero** | The dashboard under load: three repos, nine live workspaces, Claude + Codex sharing one of them, `?`/`✓`/spinner statuses, workspace tags on the rows, `#parked` workspaces folded into hidden-group rows, recaps inline and in the detail bar. Used as the site hero image. | `out/dashboard-hero-N.png` (several takes) |
+| **dashboard-drawer** | The same scene with the `F` hide-rules picker open in the bottom drawer: tags with their counts above the PR states. Shot at the end of `hero-still`. | `out/dashboard-drawer-N.png` |
 | **agent-chat** | The attached view: Claude reviews, hands the fix to Codex over `wsx agent send`, Codex fixes + commits + reports back, Claude verifies — with the pinned-command chips, the footer agents row, and the hero scene's other workspaces filling the top bar as they finish or ask. Progress is gated on wsx's own mail table, not sleeps. | `out/agent-chat-N.png` (several takes) |
 
 ```bash
@@ -51,18 +51,13 @@ another theme file (`STILL_PALETTE` picks the base palette it pairs with);
 
 ## Prerequisites
 
-- `vhs`, `ttyd`, `ffmpeg`, and a headless-capable `chromium` (VHS renders frames
-  through it). `agg` is optional (GIF fallback).
+- `tmux`, `ffmpeg` (with libx264), `node` ≥ 22 (built-in `WebSocket`), `python3`,
+  `sqlite3`, and Chrome or Chromium (`CHROME_BIN` to override the lookup).
+  FiraCode Nerd Font, when installed, renders the powerline caps and icons.
 - The `claude` and `codex` CLIs installed and **logged in** (the harness copies
   their credentials into an isolated config — see Isolation below).
-- `python3` (used by `sandbox/bootstrap.sh` and `deadair.sh`).
-
-`vhs`/`ttyd`/`agg` ship as static binaries — no root needed:
-
-```bash
-curl -fsSL https://github.com/charmbracelet/vhs/releases/latest/download/vhs_Linux_x86_64.tar.gz | tar xz -C ~/.local/bin --strip-components=1 vhs
-curl -fsSL -o ~/.local/bin/ttyd https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.x86_64 && chmod +x ~/.local/bin/ttyd
-```
+- Run with `WSX_BIN=./target/debug/wsx` (or another local build) to shoot the
+  code in this checkout rather than whatever `wsx` is on PATH.
 
 ## Usage
 
@@ -70,39 +65,40 @@ curl -fsSL -o ~/.local/bin/ttyd https://github.com/tsl0922/ttyd/releases/latest/
 make -C demo clips      # render both clips end-to-end
 make -C demo hero       # just the hero clip
 make -C demo parallel   # just the parallel clip
-make -C demo check      # unit-check the scripted pieces (no recording)
+make -C demo check      # unit-check the timeline builder (no recording)
 make -C demo clean      # wipe the sandbox and out/
 ```
 
 Everything in `out/` is **gitignored** — the committed deliverable is the harness
-that regenerates the clips, not the `.mp4`s. Intermediates: `*-raw.mp4`
-(uncaptioned, straight from VHS), `*-collapsed.mp4` (dead air removed),
-`*-fast.mp4` (hero only, after the speed-ramp); the final captioned ≤10MB clip is
-`NN-name.mp4` (`01-hero.mp4`, `02-parallel.mp4`).
+that regenerates the clips. Each clip keeps its capture in `out/rec-<name>/`, so
+`bash demo/clips/render.sh out/rec-<name> out/<name>.mp4` re-renders a take
+(e.g. after a caption-style change) without re-running the agents.
 
 ## Pipeline
 
-Each clip flows through these stages (chained by the `Makefile`):
+Each clip script (`demo/clips/0N-*.sh`) runs these stages:
 
-1. **`sandbox/bootstrap.sh`** — fresh isolated wsx install + synthetic repos +
-   pre-authed/pre-trusted Claude & Codex configs + the **wsx agent skill** copied
-   into both isolated configs (so agents know the `wsx agent send` CLI — see
-   *Agent coordination* below) + session-log symlinks (so the workspace detail
-   bars can find the agents' logs — see *Isolation* below).
-2. **`sandbox/render.sh tapes/*.tape`** — VHS drives the real `wsx` TUI with live
-   agents. `render.sh` first clears the `CLAUDECODE` / `CLAUDE_CODE_*` parent-session env
-   markers, so agents spawned while the harness runs *inside* a Claude Code
-   session still run as genuine top-level sessions and persist their per-worktree
-   session logs (required for SESSION SUMMARY / RECENT CHAT to populate). No-op
-   for a normal terminal user.
-3. **`deadair.sh`** — `freezedetect`-driven collapse of static stretches (agent
-   boots/idle) to a brief hold; active content stays at natural 1×.
-4. **`speedramp.sh`** *(hero only)* — speeds up the one long *actively-changing*
-   span deadair can't touch (Codex churning through its fix/commit), leaving every
-   reading-critical beat at 1×. Span is tuned to the take (Makefile `HERO_RAMP_*`).
-5. **`post.sh`** — burns in `drawtext` captions (from `captions/*.txt`, via
-   `textfile=` so any text is safe) and enforces a ≤9MB budget, stepping down
-   fps/scale until it fits.
+1. **`sandbox/bootstrap.sh`** (from the Makefile) — fresh isolated wsx install +
+   synthetic repos + pre-authed/pre-trusted Claude & Codex configs + the **wsx
+   agent skill** copied into both isolated configs + session-log symlinks.
+2. **`demo/stills/still.sh`** — starts the TUI in a detached tmux server with the
+   Claude Code parent-session markers cleared (so agents persist their session
+   logs and the detail bars populate), and sends keys.
+3. **`demo/clips/record.sh`** — samples `tmux capture-pane -e` about eight times
+   a second, keeping only changed frames, and timestamps marks the script
+   issues: `rec_caption` (caption from now on), `rec_speed` (play what follows
+   N× faster — used while agents work), `rec_wait` (block on a screen regex),
+   `rec_type` (type like a person). Progress waits on wsx's own mail table or on
+   commits, not sleeps.
+4. **`demo/clips/timeline.py`** — gives each frame its on-screen time divided by
+   the speed in force, capped at `MAX_HOLD` (2.5s) so boots and idle stretches
+   never show as dead air, and renders each frame to HTML with
+   `stills/ansi2html.py`.
+5. **`demo/clips/shoot.mjs`** — one headless Chrome over the DevTools protocol
+   screenshots every frame into `frame.html`: the terminal above a caption band,
+   so captions never cover the bottom drawer.
+6. **`demo/clips/render.sh`** — glues 4–5 together and encodes the PNGs at their
+   durations to a 1920×1080 H.264 MP4 (`SCALE`, `CRF`, `MAX_HOLD` tune it).
 
 ## Isolation (nothing touches your real setup)
 
@@ -132,32 +128,22 @@ The hero shows agents working *together* over wsx's own CLI, no human relaying:
   `dirs::home_dir()` and **ignores `CLAUDE_CONFIG_DIR` / `CODEX_HOME`**, so it
   can't target the sandbox — `sandbox/bootstrap.sh` copies the same skill into the
   isolated configs directly instead.
-- In the tape, Claude (after reviewing) runs `wsx agent send codex "<bug + location
+- In the hero clip, Claude (after reviewing) runs `wsx agent send codex "<bug + location
   + fix>"`; wsx prints the deterministic `queued message #<id> to codex (<n> bytes)`
-  (the only safe `Wait` anchor for this step). Codex receives it as a
+  (the script waits on the `agent_messages` row instead). Codex receives it as a
   `[message #<id> from claude; …]` banner, fixes + commits, then `wsx agent send claude` back with the hash.
-- **Known quirk (worked around in the tape):** a message from Claude often lands in
-  Codex's prompt *unsubmitted*. After switching to Codex (`Ctrl-x w`) the tape
+- **Known quirk (worked around in the clip script):** a message from Claude often lands in
+  Codex's prompt *unsubmitted*. After switching to Codex (`Ctrl-x w`) the script
   presses `Enter` to submit it. Once submitted, Codex reliably replies.
 
 ## Customizing
 
 - **Repos / planted bugs:** `sandbox/gen-repos.sh`.
-- **What each agent does / pacing:** the `.tape` files (see `SPIKE-NOTES.md` for
-  the driving conventions and timing gotchas).
-- **Captions:** `captions/*.txt` — tab-separated `start  end  text` (seconds),
-  timed to the clip that `post.sh` actually captions: the **post-ramp** clip for
-  the hero (`01-hero-fast.mp4`), the **collapsed** clip for parallel (no ramp).
-- **Dead-air aggressiveness:** `MIN_FREEZE` / `MAX_HOLD` in the `Makefile`.
-- **Protect a subtle beat from dead-air collapse:** `HERO_ADD_PROTECT` in the
-  `Makefile` — a `start:end` window (raw-clip seconds) `deadair.sh` keeps at full
-  1×. Needed for beats whose motion is too subtle for `freezedetect` to register
-  (e.g. the agent-picker selector stepping across `claude · pi · hermes · codex`),
-  which would otherwise be collapsed to a flash. Take-specific — re-confirm if you
-  re-record.
-- **Hero speed-ramp window:** `HERO_RAMP_START` / `HERO_RAMP_END` /
-  `HERO_RAMP_FACTOR` in the `Makefile` — absolute seconds in the *collapsed* clip,
-  tuned to the recorded take (re-confirm if you re-record; see `SPIKE-NOTES.md`).
-- **Tests:** `make -C demo check` runs the screencast scripts `test-{post,speedramp}.sh`
-  (no recording). The provisioning tests moved to `sandbox/`: run them with
+- **What each agent does / pacing / captions:** the clip scripts in
+  `demo/clips/`. Captions are issued inline with `rec_caption`, so they stay on
+  the beat they describe however long the agents take.
+- **Dead-air cap / quality / resolution:** `MAX_HOLD`, `CRF`, `SCALE` for
+  `demo/clips/render.sh`.
+- **Tests:** `make -C demo check` runs `clips/test-timeline.sh` (no recording).
+  The provisioning tests live in `sandbox/`: run them with
   `bash sandbox/test-{gen-repos,bootstrap,agent-env,env}.sh`.

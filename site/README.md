@@ -45,8 +45,9 @@ GitHub Pages, via `.github/workflows/docs.yml`: on every push to `main` that
 touches `site/**` the workflow copies `site/` to the web root and the mdBook
 build of `docs/book` under `/docs/`, which is where the Docs links point.
 Nothing is server-rendered. The favicon links use root-absolute paths, so
-serving from a subdirectory needs those adjusted; the HEAD probe needs an
-HTTP server, so `file://` shows the video placeholders.
+serving from a subdirectory needs those adjusted. Under `file://` there is no
+HEAD probe: the source is attached directly and the placeholder hides once
+the video loads.
 
 ## Page structure
 

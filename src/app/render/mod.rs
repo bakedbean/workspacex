@@ -142,7 +142,94 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
         crate::ui::View::Attached(_) => attached::draw_attached(f, app, area),
         crate::ui::View::AttachedRemote => attached::draw_attached_remote(f, app, area),
     }
-    overlay::draw_modal(f, app, area);
-    overlay::draw_anchored_pickers(f, app, area);
-    attached::draw_attached_nav_overlay(f, area, app);
+    let owner = drawer_owner(app);
+    let floor = match app.drawer_hold {
+        Some((held, rows)) if Some(held) == owner => rows,
+        _ => 0,
+    };
+    let ((), tallest) = crate::ui::drawer::hold_height(floor, || {
+        overlay::draw_modal(f, app, area);
+        overlay::draw_anchored_pickers(f, app, area);
+        attached::draw_attached_nav_overlay(f, area, app);
+    });
+    app.drawer_hold = owner.map(|o| (o, tallest));
+}
+
+/// What has the bottom drawer open. A change of owner (or closing it) resets
+/// the drawer's grow-only height.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DrawerOwner {
+    Modal(std::mem::Discriminant<crate::ui::modal::Modal>),
+    LeaderMenu,
+}
+
+fn drawer_owner(app: &App) -> Option<DrawerOwner> {
+    match &app.modal {
+        Some(m) => Some(DrawerOwner::Modal(std::mem::discriminant(m))),
+        None if app.leader_pending && matches!(app.view, crate::ui::View::Attached(_)) => {
+            Some(DrawerOwner::LeaderMenu)
+        }
+        None => None,
+    }
+}
+
+#[cfg(test)]
+mod drawer_hold_tests {
+    use super::*;
+    use crate::ui::modal::Modal;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use std::path::PathBuf;
+
+    /// Height of the drawer in a drawn frame: rows from its `──` title rule
+    /// to the bottom edge.
+    fn drawer_height(app: &mut App) -> u16 {
+        let mut term = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        term.draw(|f| draw(f, app)).unwrap();
+        let buf = term.backend().buffer();
+        let top = (0..buf.area.height)
+            .rev()
+            .find(|&y| buf[(0, y)].symbol() == "─" && buf[(1, y)].symbol() == "─")
+            .expect("a drawer is open");
+        buf.area.height - top
+    }
+
+    fn error(lines: usize) -> Option<Modal> {
+        Some(Modal::Error {
+            message: vec!["line"; lines].join("\n"),
+        })
+    }
+
+    #[test]
+    fn an_open_drawer_grows_but_never_shrinks_and_resets_on_a_new_modal() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+
+        app.modal = error(2);
+        let short = drawer_height(&mut app);
+        app.modal = error(6);
+        let tall = drawer_height(&mut app);
+        assert_eq!(tall, short + 4, "grows with its content");
+        app.modal = error(1);
+        assert_eq!(drawer_height(&mut app), tall, "never shrinks while open");
+
+        app.modal = Some(Modal::ConfirmQuit {
+            creates: 1,
+            archives: 0,
+        });
+        assert!(
+            drawer_height(&mut app) < tall,
+            "a different modal sizes to its own content"
+        );
+        app.modal = None;
+        drawer_height_closed(&mut app);
+        app.modal = error(1);
+        assert!(drawer_height(&mut app) < short, "closing resets the hold");
+    }
+
+    fn drawer_height_closed(app: &mut App) {
+        let mut term = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        term.draw(|f| draw(f, app)).unwrap();
+        assert!(app.drawer_hold.is_none());
+    }
 }

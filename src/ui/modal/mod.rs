@@ -279,21 +279,21 @@ impl RemoteNewWorkspaceForm {
     }
 }
 
-/// Open a drawer (see `ui::drawer`) for a panel that asked for an `h`-row box
-/// including its old top and bottom borders, and return the body rect. Shared
-/// framing for the panel renderers (updates, processes, repo settings,
-/// agents) so they look identical; each caller lays its own body/footer split
-/// inside the returned rect. `_w` is a leftover of the centered-box layout:
-/// drawers are always full width.
+/// Open a drawer (see `ui::drawer`) sized to a panel's `body_h` rows of
+/// content, footer included, and return the body rect. Shared framing for the
+/// panel renderers (updates, processes, repo settings, agents) so they look
+/// identical; each caller lays its own body/footer split inside the returned
+/// rect, which may be shorter than asked (height cap) or taller (the drawer
+/// never shrinks while a panel stays open).
 fn panel_frame<'a>(
     f: &mut Frame,
     area: Rect,
-    _w: u16,
-    h: u16,
+    body_h: usize,
     title: impl Into<Line<'a>>,
     theme: &Theme,
 ) -> Rect {
-    crate::ui::drawer::frame(f, area, h.saturating_sub(2), title, &[], theme)
+    let body_h = u16::try_from(body_h).unwrap_or(u16::MAX);
+    crate::ui::drawer::frame(f, area, body_h, title, &[], theme)
 }
 
 /// Render the small fixed-size modals — confirmations, prompts, reference

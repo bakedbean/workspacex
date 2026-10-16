@@ -45,6 +45,7 @@ impl App {
             worktree_base,
             leader_pending: false,
             leader_selected: 0,
+            drawer_hold: None,
             z_leader_pending: false,
             quit: false,
             workspace_status: std::collections::HashMap::new(),
@@ -634,6 +635,10 @@ pub struct App {
     /// Highlighted row in the Ctrl-x navigation overlay. Reset to 0 each time
     /// the attached/PM leader is armed; adjusted by ↑↓ while the overlay is up.
     pub leader_selected: usize,
+    /// Which surface has the bottom drawer open and the tallest body it has
+    /// drawn, so the drawer only grows while that surface stays open. See
+    /// `ui::drawer::hold_height`.
+    pub(crate) drawer_hold: Option<(crate::app::render::DrawerOwner, u16)>,
     pub z_leader_pending: bool,
     pub quit: bool,
     pub workspace_status:

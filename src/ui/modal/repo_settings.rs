@@ -12,13 +12,11 @@ pub fn render_repo_settings(
     selected: usize,
     theme: &Theme,
 ) {
-    let w = area.width.clamp(40, 90);
-    let h = area.height.clamp(12, 20);
+    // Nine fields, the "inherited" note, and the footer.
     let inner = panel_frame(
         f,
         area,
-        w,
-        h,
+        9 + 1 + 1,
         format!(" Repo settings — {} ", repo.name),
         theme,
     );

@@ -62,27 +62,6 @@ pub struct SetupLogView<'a> {
 /// past the top of a short log would run the counter away and the first
 /// several Downs would appear to do nothing.
 pub fn render_setup_log(f: &mut Frame, area: Rect, view: &SetupLogView, theme: &Theme) -> usize {
-    let w = area.width.clamp(20, 100);
-    let h = area.height.clamp(8, 28);
-    let inner = panel_frame(
-        f,
-        area,
-        w,
-        h,
-        format!(" Setup log — {} ", view.label),
-        theme,
-    );
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-    let (status_area, body_area, footer_area) = (chunks[0], chunks[1], chunks[2]);
-
     // Archive never sets a `SetupPhase` — there is no phase concept for it —
     // so the status line is derived from the entry's kind rather than from
     // `phase()`, which would otherwise read "Fetching base…" while a worktree
@@ -120,6 +99,58 @@ pub fn render_setup_log(f: &mut Frame, area: Rect, view: &SetupLogView, theme: &
         }
     };
 
+    // Four distinct reasons the body is empty; saying the wrong one sends
+    // the user somewhere useless.
+    let empty_state = lines.is_empty().then(|| match (view.live, view.stored) {
+        // A live entry that has not printed anything yet, rather than a
+        // log that does not exist.
+        (Some(_), _) => ("(waiting for output…)".to_string(), theme.dim_style()),
+        (None, Some(StoredLog::ArchiveFinished)) => (
+            "(archive finished)\n\nArchive output is not kept. The dashboard row is \
+             gone if it succeeded, and still there if it did not."
+                .to_string(),
+            theme.dim_style(),
+        ),
+        (None, Some(StoredLog::Unreadable { path, error })) => (
+            format!("(setup log could not be read)\n\n{error}\n\n{path}"),
+            theme.err_style(),
+        ),
+        (None, Some(StoredLog::Missing { path })) => (
+            format!(
+                "(no setup log)\n\nNothing was captured for this workspace — either its \
+                 repo has no setup script, or it was created before setup logging.\n\n{path}"
+            ),
+            theme.dim_style(),
+        ),
+        // The file exists and read cleanly, but holds nothing.
+        (None, _) => ("(setup log is empty)".to_string(), theme.dim_style()),
+    });
+
+    // Status line, the log (or its empty state, wrapped), and the footer.
+    let body_rows = match &empty_state {
+        Some((text, _)) => {
+            let width = usize::from(crate::ui::drawer::body_width(area).max(1));
+            text.lines().map(|l| wrapped_rows(l, width)).sum()
+        }
+        None => lines.len(),
+    };
+    let inner = panel_frame(
+        f,
+        area,
+        1 + body_rows + 1,
+        format!(" Setup log — {} ", view.label),
+        theme,
+    );
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    let (status_area, body_area, footer_area) = (chunks[0], chunks[1], chunks[2]);
+
     f.render_widget(
         Paragraph::new(status).style(theme.header_style()),
         status_area,
@@ -127,33 +158,7 @@ pub fn render_setup_log(f: &mut Frame, area: Rect, view: &SetupLogView, theme: &
 
     let body_h = body_area.height as usize;
     let scroll = view.scroll.min(lines.len().saturating_sub(body_h));
-    if lines.is_empty() {
-        // Four distinct reasons the body is empty; saying the wrong one sends
-        // the user somewhere useless.
-        let (empty, style) = match (view.live, view.stored) {
-            // A live entry that has not printed anything yet, rather than a
-            // log that does not exist.
-            (Some(_), _) => ("(waiting for output…)".to_string(), theme.dim_style()),
-            (None, Some(StoredLog::ArchiveFinished)) => (
-                "(archive finished)\n\nArchive output is not kept. The dashboard row is \
-                 gone if it succeeded, and still there if it did not."
-                    .to_string(),
-                theme.dim_style(),
-            ),
-            (None, Some(StoredLog::Unreadable { path, error })) => (
-                format!("(setup log could not be read)\n\n{error}\n\n{path}"),
-                theme.err_style(),
-            ),
-            (None, Some(StoredLog::Missing { path })) => (
-                format!(
-                    "(no setup log)\n\nNothing was captured for this workspace — either its \
-                     repo has no setup script, or it was created before setup logging.\n\n{path}"
-                ),
-                theme.dim_style(),
-            ),
-            // The file exists and read cleanly, but holds nothing.
-            (None, _) => ("(setup log is empty)".to_string(), theme.dim_style()),
-        };
+    if let Some((empty, style)) = empty_state {
         f.render_widget(
             Paragraph::new(empty)
                 .style(style)
@@ -200,8 +205,38 @@ pub fn render_setup_log(f: &mut Frame, area: Rect, view: &SetupLogView, theme: &
     scroll
 }
 
+/// Rows `line` takes when word-wrapped greedily at `width`, as the empty
+/// state's `Wrap` renders it. A word wider than a row is split across rows.
+fn wrapped_rows(line: &str, width: usize) -> usize {
+    use crate::ui::text::display_width;
+    let mut rows = 1;
+    let mut used = 0;
+    for word in line.split(' ') {
+        let w = display_width(word);
+        let need = if used == 0 { w } else { used + 1 + w };
+        if need <= width {
+            used = need;
+        } else {
+            rows += usize::from(used > 0) + w.saturating_sub(1) / width.max(1);
+            used = w % width.max(1);
+            if used == 0 && w > 0 {
+                used = width;
+            }
+        }
+    }
+    rows
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn wrapped_rows_counts_word_wrapped_rows() {
+        assert_eq!(wrapped_rows("", 10), 1);
+        assert_eq!(wrapped_rows("short line", 10), 1);
+        assert_eq!(wrapped_rows("two words fit", 10), 2);
+        assert_eq!(wrapped_rows("aaaaaaaaaaaaaaa", 10), 2);
+    }
+
     use super::*;
     use crate::data::in_flight::InFlight;
     use crate::data::progress::{SetupPhase, SetupProgress};

@@ -257,19 +257,6 @@ pub fn render_updates_panel(
     now_ms: i64,
     theme: &Theme,
 ) {
-    // Sizing: up to PANEL_MAX_WIDTH cols wide, ~25 rows tall, but never
-    // larger than the area.
-    let w = area.width.clamp(20, PANEL_MAX_WIDTH);
-    let h = area.height.clamp(8, 25);
-    let inner = panel_frame(f, area, w, h, " Workspace updates ", theme);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inner);
-    let body_area = chunks[0];
-    let footer_area = chunks[1];
-
     let sections = panel_sections(inputs, view.filter);
     // Row labels: the workspace name, prefixed by its repo when the repo
     // headers are gone (attention grouping) — the same `<repo>/<name>` the
@@ -296,7 +283,9 @@ pub fn render_updates_panel(
 
     // One shared name column for the whole panel so every status text starts
     // at the same column regardless of which section a row is in.
-    let row_width = body_area.width as usize;
+    // Rows are laid out at the drawer's width, so measure it before
+    // building them.
+    let row_width = usize::from(crate::ui::drawer::body_width(area));
     let name_col = name_col_width(
         labels.iter().flatten().map(|(_, label)| label.as_str()),
         row_width,
@@ -372,6 +361,15 @@ pub fn render_updates_panel(
         };
         lines.push(Line::from(Span::styled(msg.to_string(), theme.dim_style())));
     }
+
+    // Every line, plus the footer.
+    let inner = panel_frame(f, area, lines.len() + 1, " Workspace updates ", theme);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+    let body_area = chunks[0];
+    let footer_area = chunks[1];
 
     // Stateless scroll: keep the selected workspace centered in the viewport
     // when the rendered lines overflow the body area. Clamped so we never

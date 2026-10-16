@@ -13,8 +13,6 @@ pub fn render_agents_panel(
     selected: usize,
     theme: &Theme,
 ) {
-    let inner = panel_frame(f, area, 60, 16, " agents ", theme);
-
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from("Attached:"));
     for a in agents {
@@ -51,5 +49,6 @@ pub fn render_agents_panel(
         theme,
     ));
 
+    let inner = panel_frame(f, area, lines.len(), " agents ", theme);
     f.render_widget(Paragraph::new(lines), inner);
 }

@@ -21,13 +21,19 @@ pub fn render_remote_workspace_list(
     theme: &Theme,
     nerd_fonts: bool,
 ) {
-    let w = area.width.clamp(20, 100);
-    let h = area.height.clamp(8, 25);
+    let rows = remote_rows(list);
+
+    // A notice can carry a host path or a host's error: wrap it over up to
+    // three lines rather than clip the part that says what to do.
+    let has_notice = notice.is_some();
+    let notice_lines = notice.map_or(0, |n| {
+        let width = usize::from(crate::ui::drawer::body_width(area).max(1));
+        display_width(n).div_ceil(width).clamp(1, 3) as u16
+    });
     let inner = panel_frame(
         f,
         area,
-        w,
-        h,
+        rows.len().max(1) + usize::from(notice_lines) + 1,
         if list.can_share {
             format!(" workspaces on {} ", list.host_name)
         } else {
@@ -36,15 +42,6 @@ pub fn render_remote_workspace_list(
         theme,
     );
 
-    let rows = remote_rows(list);
-
-    let has_notice = notice.is_some();
-    // A notice can carry a host path or a host's error: wrap it over up to
-    // three lines rather than clip the part that says what to do.
-    let notice_lines = notice.map_or(0, |n| {
-        let width = usize::from(inner.width.max(1));
-        display_width(n).div_ceil(width).clamp(1, 3) as u16
-    });
     let constraints = if has_notice {
         vec![
             Constraint::Min(1),

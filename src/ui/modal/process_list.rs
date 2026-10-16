@@ -15,47 +15,15 @@ pub fn render_process_list(
     notice: Option<&str>,
     theme: &Theme,
 ) {
-    // Full command lines are long, so give the modal more room than the
-    // old 80-col cap; anything still too wide is wrapped below.
-    let w = area.width.clamp(20, 100);
-    let h = area.height.clamp(8, 25);
-    let inner = panel_frame(
-        f,
-        area,
-        w,
-        h,
-        format!(" Processes — {workspace_name} "),
-        theme,
-    );
-
-    let has_notice = notice.is_some();
-    let constraints = if has_notice {
-        vec![
-            Constraint::Min(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ]
-    } else {
-        vec![Constraint::Min(1), Constraint::Length(1)]
-    };
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(inner);
-    let body_area = chunks[0];
-    let (notice_area, footer_area) = if has_notice {
-        (Some(chunks[1]), chunks[2])
-    } else {
-        (None, chunks[1])
-    };
-
+    // Commands wrap at the drawer's width, so measure it before laying out.
+    let body_w = crate::ui::drawer::body_width(area);
+    let mut lines: Vec<Line> = Vec::new();
     if procs.is_empty() {
-        f.render_widget(
-            Paragraph::new("(no tracked processes)").style(theme.dim_style()),
-            body_area,
-        );
+        lines.push(Line::from(Span::styled(
+            "(no tracked processes)",
+            theme.dim_style(),
+        )));
     } else {
-        let mut lines: Vec<Line> = Vec::new();
         lines.push(Line::from(Span::styled(
             format!("  {:<7} {}", "PID", "CMD"),
             theme.header_style(),
@@ -66,7 +34,7 @@ pub fn render_process_list(
             let prefix = format!("  {:<7} ", p.pid);
             let prefix_w = prefix.chars().count();
             let indent = " ".repeat(prefix_w);
-            let text_w = (body_area.width as usize).saturating_sub(prefix_w).max(1);
+            let text_w = (body_w as usize).saturating_sub(prefix_w).max(1);
             // Fall back to the short `command` if `ps` never filled the
             // full command line (e.g. the command-ps call failed).
             let cmd = if p.cmdline.is_empty() {
@@ -87,8 +55,36 @@ pub fn render_process_list(
                 }
             }
         }
-        f.render_widget(Paragraph::new(lines), body_area);
     }
+
+    let has_notice = notice.is_some();
+    let inner = panel_frame(
+        f,
+        area,
+        lines.len() + usize::from(has_notice) + 1,
+        format!(" Processes — {workspace_name} "),
+        theme,
+    );
+    let constraints = if has_notice {
+        vec![
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ]
+    } else {
+        vec![Constraint::Min(1), Constraint::Length(1)]
+    };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(inner);
+    let body_area = chunks[0];
+    let (notice_area, footer_area) = if has_notice {
+        (Some(chunks[1]), chunks[2])
+    } else {
+        (None, chunks[1])
+    };
+    f.render_widget(Paragraph::new(lines), body_area);
 
     if let (Some(area), Some(text)) = (notice_area, notice) {
         let style = if text.starts_with("error") {

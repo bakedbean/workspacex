@@ -22,9 +22,46 @@
 use crate::ui::theme::Theme;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear};
+use std::cell::Cell;
 
 /// Blank columns between the screen edge and the drawer's content.
 const GUTTER: u16 = 1;
+
+thread_local! {
+    /// `(floor, tallest)` body rows while a [`hold_height`] scope is active.
+    static HOLD: Cell<Option<(u16, u16)>> = const { Cell::new(None) };
+}
+
+/// Run `draw` with every drawer held to at least `floor` body rows, and return
+/// the tallest body asked for (never less than `floor`). The caller carries
+/// that into the next frame's `floor`, so an open drawer grows with its
+/// content but never shrinks under the user while it stays open. Outside a
+/// scope (e.g. a renderer under test) drawers size to their content exactly.
+pub fn hold_height<R>(floor: u16, draw: impl FnOnce() -> R) -> (R, u16) {
+    let prev = HOLD.replace(Some((floor, floor)));
+    let out = draw();
+    let tallest = HOLD.replace(prev).map_or(floor, |(_, t)| t);
+    (out, tallest)
+}
+
+/// Apply the active [`hold_height`] floor to `body_h` and record it.
+fn held(body_h: u16) -> u16 {
+    HOLD.with(|hold| match hold.get() {
+        Some((floor, tallest)) => {
+            let body_h = body_h.max(floor);
+            hold.set(Some((floor, tallest.max(body_h))));
+            body_h
+        }
+        None => body_h,
+    })
+}
+
+/// Width of a drawer's body on `area`: full width less the gutters. Panels
+/// that wrap or column-fit their rows measure against this before opening
+/// the drawer, since the row count they report depends on it.
+pub fn body_width(area: Rect) -> u16 {
+    area.width.saturating_sub(2 * GUTTER)
+}
 
 /// One key hint: the key glyph and what it does.
 pub type Hint<'a> = (&'a str, &'a str);
@@ -68,7 +105,7 @@ pub fn frame<'a>(
     hints: &[Hint<'_>],
     theme: &Theme,
 ) -> Rect {
-    let rect = rect(area, body_h, !hints.is_empty());
+    let rect = rect(area, held(body_h), !hints.is_empty());
     f.render_widget(Clear, rect);
     let rule = Style::default().fg(theme.path);
     let block = Block::default()
@@ -192,6 +229,24 @@ mod tests {
         assert_eq!(rect(screen(40), 100, true).height, 30);
         // Small terminals may use all of it.
         assert_eq!(rect(screen(10), 100, false).height, 10);
+    }
+
+    #[test]
+    fn a_held_drawer_grows_but_never_shrinks() {
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(40, 30)).unwrap();
+        let theme = Theme::wsx();
+        let mut floor = 0;
+        let mut drawn = Vec::new();
+        for want in [3, 6, 2] {
+            term.draw(|f| {
+                let ((), tallest) = hold_height(floor, || {
+                    drawn.push(frame(f, f.area(), want, "t", &[], &theme).height);
+                });
+                floor = tallest;
+            })
+            .unwrap();
+        }
+        assert_eq!(drawn, [3, 6, 6]);
     }
 
     #[test]

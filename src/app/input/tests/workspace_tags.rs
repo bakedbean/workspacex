@@ -163,3 +163,56 @@ async fn space_while_typing_does_not_toggle() {
     type_str(&mut app, "par ").await;
     assert_eq!(stored_tags(&app, ws), ["parked"]);
 }
+
+#[tokio::test]
+async fn space_toggles_filtered_row_after_arrowing_to_it() {
+    let mut app = test_app_with_two_ready_workspaces();
+    app.refresh().unwrap();
+    let ws = app.workspaces[0].1.id;
+    app.store.add_workspace_tag(ws, "parked").unwrap();
+    open_editor(&mut app).await;
+    type_str(&mut app, "par").await;
+    // Rows: "par" (new), then "parked".
+    modal_key(&mut app, KeyCode::Down).await;
+    modal_key(&mut app, KeyCode::Char(' ')).await;
+    assert!(stored_tags(&app, ws).is_empty(), "parked toggled off");
+    let Some(Modal::WorkspaceTags {
+        input, selected, ..
+    }) = &app.modal
+    else {
+        panic!("{:?}", app.modal);
+    };
+    assert_eq!(
+        (input.as_str(), *selected),
+        ("par", 1),
+        "filter and cursor kept"
+    );
+}
+
+#[tokio::test]
+async fn enter_acts_on_arrowed_row_not_typed_text() {
+    let mut app = test_app_with_two_ready_workspaces();
+    app.refresh().unwrap();
+    app.store
+        .add_workspace_tag(app.workspaces[1].1.id, "parked")
+        .unwrap();
+    let ws = app.workspaces[0].1.id;
+    open_editor(&mut app).await;
+    type_str(&mut app, "par").await;
+    modal_key(&mut app, KeyCode::Down).await;
+    modal_key(&mut app, KeyCode::Enter).await;
+    assert_eq!(stored_tags(&app, ws), ["parked"]);
+}
+
+#[tokio::test]
+async fn typing_after_arrowing_protects_rows_again() {
+    let mut app = test_app_with_two_ready_workspaces();
+    app.refresh().unwrap();
+    let ws = app.workspaces[0].1.id;
+    app.store.add_workspace_tag(ws, "parked").unwrap();
+    open_editor(&mut app).await;
+    type_str(&mut app, "pa").await;
+    modal_key(&mut app, KeyCode::Down).await;
+    type_str(&mut app, "r ").await;
+    assert_eq!(stored_tags(&app, ws), ["parked"]);
+}

@@ -178,6 +178,9 @@ pub enum Modal {
         tags: Vec<String>,
         input: String,
         selected: usize,
+        /// Set by ↑/↓, cleared by typing: space/enter then act on the
+        /// highlighted row instead of the typed text.
+        browsing: bool,
         notice: Option<String>,
     },
     /// The `F` checklist of hide rules for one repo: tag rows (sorted) then
@@ -550,7 +553,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                 "workspace tags",
                 format!(
                     "{name}\n\n# {input}\u{2588}\n{list}{notice}\n\n\
-                     \u{2191}\u{2193} move   space toggle   enter add typed   Esc close"
+                     \u{2191}\u{2193} move   space toggle   enter add   Esc close"
                 ),
             )
         }
@@ -807,6 +810,7 @@ mod tests {
             tags: Vec::new(),
             input: String::new(),
             selected: 19,
+            browsing: false,
             notice: None,
         });
         assert!(text.contains("Esc close"), "{text}");

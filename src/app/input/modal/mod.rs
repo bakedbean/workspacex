@@ -130,10 +130,21 @@ pub(in crate::app::input) async fn handle_key_modal(
             tags,
             input,
             selected,
+            browsing,
             ..
         } => {
-            pickers::workspace_tags_editor(app, k, workspace_id, name, known, tags, input, selected)
-                .await?
+            pickers::workspace_tags_editor(
+                app,
+                k,
+                workspace_id,
+                name,
+                known,
+                tags,
+                input,
+                selected,
+                browsing,
+            )
+            .await?
         }
         Modal::HideRules {
             repo_id,

@@ -8,8 +8,9 @@ show on the dashboard row, narrow the `/` filter, and can
 
 Press `#` on a workspace (or `#` on its `?` card) to open the tag editor.
 Type a tag and press `enter` to add it, or move to a listed tag with the
-arrow keys and press `space` to toggle it. The list offers every tag used
-anywhere in wsx. `esc`, or `enter` with nothing typed, closes the editor.
+arrow keys and press `space` to toggle it. Typing filters the list; once you
+arrow to a row, `space` or `enter` acts on that row instead of the typed
+text. The list offers every tag used anywhere in wsx. `esc`, or `enter` with nothing typed, closes the editor.
 Changes save as you make them.
 
 Tags are lowercased and may use `a-z`, `0-9`, `-` and `_`, up to 32

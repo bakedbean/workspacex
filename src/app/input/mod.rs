@@ -123,12 +123,14 @@ pub(in crate::app::input) async fn handle_paste(
     if let Some(Modal::WorkspaceTags {
         input,
         selected,
+        browsing,
         notice,
         ..
     }) = app.modal.as_mut()
     {
         input.extend(content.chars().filter(|c| !c.is_control()));
         *selected = 0;
+        *browsing = false;
         *notice = None;
         return Ok(());
     }

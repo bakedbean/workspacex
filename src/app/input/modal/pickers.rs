@@ -222,6 +222,7 @@ pub(crate) fn open_workspace_tags(
         tags: w.tags.iter().map(|t| t.to_string()).collect(),
         input,
         selected,
+        browsing: false,
         notice: None,
     });
     Ok(())
@@ -238,10 +239,11 @@ pub(super) async fn workspace_tags_editor(
     tags: Vec<String>,
     mut input: String,
     selected: usize,
+    browsing: bool,
 ) -> Result<()> {
     use crate::data::tags::{MAX_TAG_LEN, normalize_tag};
     let items = crate::ui::modal::workspace_tags::tag_items(&known, &tags, &input);
-    let reopen = |app: &mut App, input: String, selected: usize, notice: Option<String>| {
+    let reopen = |app: &mut App, input: String, selected: usize, browsing: bool, notice| {
         app.modal = Some(Modal::WorkspaceTags {
             workspace_id,
             name: name.clone(),
@@ -249,6 +251,7 @@ pub(super) async fn workspace_tags_editor(
             tags: tags.clone(),
             input,
             selected,
+            browsing,
             notice,
         });
     };
@@ -267,8 +270,21 @@ pub(super) async fn workspace_tags_editor(
         app.refresh()?;
         Ok(true)
     };
+    // Toggle the highlighted row, keeping the filter, cursor, and browse mode.
+    let toggle = |app: &mut App, input: String| -> Result<()> {
+        if let Some(it) = items.get(selected)
+            && write(app, &it.name, !it.checked)?
+        {
+            open_workspace_tags(app, workspace_id, input, selected, &known)?;
+            if let Some(Modal::WorkspaceTags { browsing: b, .. }) = app.modal.as_mut() {
+                *b = browsing;
+            }
+        }
+        Ok(())
+    };
     match k.code {
         KeyCode::Esc => app.modal = None,
+        KeyCode::Enter if browsing => toggle(app, input)?,
         KeyCode::Enter if input.trim().is_empty() => app.modal = None,
         KeyCode::Enter => match normalize_tag(&input) {
             Some(t) => {
@@ -278,34 +294,28 @@ pub(super) async fn workspace_tags_editor(
             }
             None => {
                 let notice = format!("invalid tag: use 1-{MAX_TAG_LEN} of a-z 0-9 - _");
-                reopen(app, input, selected, Some(notice));
+                reopen(app, input, selected, false, Some(notice));
             }
         },
         // Tags can't contain spaces, so a space mid-typing is dropped rather
         // than toggling whatever row the cursor happens to be on.
-        KeyCode::Char(' ') if !input.is_empty() => {}
-        KeyCode::Char(' ') => {
-            if let Some(it) = items.get(selected)
-                && write(app, &it.name, !it.checked)?
-            {
-                open_workspace_tags(app, workspace_id, input, selected, &known)?;
-            }
-        }
-        KeyCode::Up => reopen(app, input, selected.saturating_sub(1), None),
+        KeyCode::Char(' ') if !input.is_empty() && !browsing => {}
+        KeyCode::Char(' ') => toggle(app, input)?,
+        KeyCode::Up => reopen(app, input, selected.saturating_sub(1), true, None),
         KeyCode::Down => {
             let last = items.len().saturating_sub(1);
-            reopen(app, input, (selected + 1).min(last), None)
+            reopen(app, input, (selected + 1).min(last), true, None)
         }
         KeyCode::Backspace => {
             input.pop();
-            reopen(app, input, 0, None);
+            reopen(app, input, 0, false, None);
         }
         KeyCode::Char(c)
             if !k.modifiers.contains(KeyModifiers::CONTROL)
                 && !k.modifiers.contains(KeyModifiers::ALT) =>
         {
             input.push(c);
-            reopen(app, input, 0, None);
+            reopen(app, input, 0, false, None);
         }
         _ => {}
     }

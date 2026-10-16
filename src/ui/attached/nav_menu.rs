@@ -125,8 +125,13 @@ pub fn render_nav_overlay(
     hints.push(("esc", "close"));
     let inner = crate::ui::drawer::frame(f, area, rows as u16, "actions", &hints, theme);
 
-    let mut lines: Vec<Line<'static>> = Vec::with_capacity(rows);
-    for row in 0..rows {
+    // A short screen caps the drawer below `rows`; scroll so the selected
+    // cell's row stays on screen, or ↓ could walk onto an invisible action
+    // that Enter would still run.
+    let visible = usize::from(inner.height).max(1);
+    let top = (selected % rows.max(1)).saturating_sub(visible - 1);
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(visible);
+    for row in top..rows.min(top + visible) {
         let mut spans: Vec<Span<'static>> = Vec::new();
         for col in 0..cols {
             let Some(item) = items.get(col * rows + row) else {
@@ -254,6 +259,33 @@ mod tests {
                 KeyModifiers::NONE
             ))
         );
+    }
+
+    #[test]
+    fn a_capped_drawer_scrolls_to_keep_the_selection_visible() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let theme = Theme::wsx();
+        let items = nav_menu_items(false);
+        // 40x12: one column of ten actions in a drawer capped to nine rows.
+        let last = items.len() - 1;
+        let mut term = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        term.draw(|f| render_nav_overlay(f, f.area(), &items, last, false, &theme))
+            .unwrap();
+        let buf = term.backend().buffer();
+        let text: String = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("send literal ^x"),
+            "selection visible:\n{text}"
+        );
+        assert!(text.contains("▌"), "with its marker:\n{text}");
     }
 
     #[test]

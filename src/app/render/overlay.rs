@@ -1,5 +1,6 @@
-//! Drawing whatever sits on top of the current view: the modal stack,
-//! and the two pickers anchored to a widget rather than centered.
+//! Drawing whatever sits on top of the current view: the modal stack (in
+//! the bottom drawer, see `ui::drawer`) and the two pickers that publish
+//! click hit rects.
 
 use super::*;
 use crate::app::{ActivityState, App};
@@ -143,8 +144,9 @@ fn draw_setup_log(f: &mut ratatui::Frame, app: &mut App, area: ratatui::layout::
 
 /// The usage-window and name-color pickers.
 ///
-/// Both anchor to a widget rather than centering, and both return click
-/// hit-test rects, so they are drawn here instead of through `draw_modal`.
+/// Neither opens in the bottom drawer (the usage picker anchors to the footer
+/// graph, the color picker floats centered), and both return click hit-test
+/// rects, so they are drawn here instead of through `draw_modal`.
 pub(super) fn draw_anchored_pickers(
     f: &mut ratatui::Frame,
     app: &mut App,

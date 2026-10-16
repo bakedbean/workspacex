@@ -3,7 +3,7 @@
 use crate::data::hide_rules::HideRule;
 use crate::ui::dashboard::row::RowInputs;
 use crate::ui::theme::Theme;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 /// One rule's hidden rows within a repo, already ordered for display.
@@ -43,7 +43,34 @@ pub fn hidden_group_line(
     Line::from(spans)
 }
 
-/// Fade an expanded hidden row so it reads as revealed, not restored.
-pub fn dimmed(line: Line<'static>) -> Line<'static> {
-    line.patch_style(Style::default().add_modifier(Modifier::DIM))
+/// Fade an expanded hidden row so it reads as revealed, not restored. Spans
+/// already in the dim grey (recap, age) are left alone: DIM on top made them
+/// unreadable unless the selection background lit them up.
+pub fn dimmed(mut line: Line<'static>, theme: &Theme) -> Line<'static> {
+    for span in &mut line.spans {
+        if span.style.fg != Some(theme.dim) {
+            span.style = span.style.add_modifier(Modifier::DIM);
+        }
+    }
+    line
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::style::Style;
+
+    #[test]
+    fn dimmed_fades_colored_spans_but_not_dim_grey_ones() {
+        let theme = Theme::default();
+        let line = Line::from(vec![
+            Span::styled("branch", Style::default().fg(theme.path)),
+            Span::styled("recap text", theme.dim_style()),
+            Span::styled("  29s ago", theme.dim_style()),
+        ]);
+        let out = dimmed(line, &theme);
+        assert!(out.spans[0].style.add_modifier.contains(Modifier::DIM));
+        assert!(!out.spans[1].style.add_modifier.contains(Modifier::DIM));
+        assert!(!out.spans[2].style.add_modifier.contains(Modifier::DIM));
+    }
 }

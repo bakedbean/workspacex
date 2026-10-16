@@ -238,6 +238,7 @@ pub fn render_list(
                     };
                     items.push(ListItem::new(crate::ui::dashboard::hidden::dimmed(
                         flat_row_line(&flat, widths, tick, theme, width),
+                        theme,
                     )));
                 }
             }

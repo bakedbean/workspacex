@@ -11,7 +11,9 @@ Cloudflare Web Analytics beacon (cookieless) at the end of `index.html`.
       site.js         nav shadow, copy button, scroll reveal, lazy video
       assets/
         01-hero.mp4       screencast 01 — Claude hands a fix to Codex, one workspace
-        02-parallel.mp4   screencast 02 — parallel agents across isolated worktrees
+                          (`WSX_BIN=./target/debug/wsx make -C demo hero`)
+        02-parallel.mp4   screencast 02 — parallel agents across isolated worktrees,
+                          then a workspace tagged and hidden (`make -C demo parallel`)
         og-cover.png      Open Graph / Twitter card image
         dashboard-hero.{png,webp}  hero still — the dashboard under load, stock bars
                           (regenerate with `STILL_THEME= make -C demo hero-still`)
@@ -21,6 +23,9 @@ Cloudflare Web Analytics beacon (cookieless) at the end of `index.html`.
                           the clickable thumbnails under the hero, full size
                           in the lightbox (`make -C demo hero-still` /
                           `agent-chat-still` with the default STILL_THEME)
+        dashboard-drawer-orange.{png,webp}  third thumbnail — the F hide-rules
+                          picker in the bottom drawer (`dashboard-drawer-N.png`
+                          from the orange `hero-still` run)
 
 To publish a take: copy the chosen `demo/out/<name>-N.png` to `assets/` and
 re-encode the webp losslessly — a text UI compresses far better that way than
@@ -31,8 +36,8 @@ with lossy encoding:
 `site.js` sends a HEAD request per `<video data-src>` and only sets `src`
 when the file responds 2xx/3xx; a missing file shows the diagonal-hatch
 "screencast coming soon" placeholder instead. The slots are 16:9 to match
-the current recordings (1280x720 H.264, ~1 MB each). To replace one, keep
-the same filename and aspect ratio.
+the current recordings (1920x1080 H.264, ~2–3 MB each). To replace one,
+keep the same filename and aspect ratio; `demo/out/<name>.mp4` drops in as is.
 
 ## Deploy
 
@@ -52,7 +57,7 @@ HTTP server, so `file://` shows the video placeholders.
 3. `#features` — value props as `.prop` rows (glyph / name / description)
 4. `#how` — quickstart command block with copy button; scrolls sideways
    below 620px instead of truncating commands
-5. `#see` — two screencast slots
+5. `#see` — the attached-view still and two screencast slots
 6. `#cta` — clone line + buttons
 7. `footer` — links, tagline, license line
 

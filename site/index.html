@@ -174,16 +174,18 @@
             <source srcset="assets/dashboard-hero.webp" type="image/webp" />
             <img
               src="assets/dashboard-hero.png"
-              width="2730"
+              width="2728"
               height="1196"
-              alt="The wsx dashboard with three repos and nine workspaces: agents thinking, one waiting on a question, per-workspace diff counts, goal/state/next recaps inline, and the selected workspace's session summary, recent chat and recent files in the detail bar."
+              alt="The wsx dashboard with three repos and nine workspaces: agents thinking, one waiting on a question, per-workspace diff counts, workspace tags after each branch name, parked workspaces folded into dimmed hidden-group rows, goal/state/next recaps inline, and the selected workspace's session summary, recent chat and recent files in the detail bar."
               loading="eager"
               decoding="async"
             />
           </picture>
           <figcaption>
             three repos · nine live workspaces · Claude and Codex sharing one of
-            them · every row is a real agent session
+            them · tags on the rows, parked work folded into
+            <span class="accent">#parked</span> groups · every row is a real
+            agent session
           </figcaption>
         </figure>
 
@@ -237,7 +239,7 @@
                 />
                 <img
                   src="assets/agent-chat-orange.png"
-                  width="2730"
+                  width="2738"
                   height="1196"
                   alt="The attached view in the orange bar theme: the workspace name on an orange block, the other workspaces needing attention beside it, a [message from codex] commit report in Claude's chat, and the agents row with Claude and Codex under their own icons. Opens full size."
                   loading="lazy"
@@ -245,6 +247,29 @@
                 />
               </picture>
               <span class="thumb-cap">attached view · orange bar theme</span>
+            </button>
+            <button
+              class="thumb term"
+              type="button"
+              data-full="assets/dashboard-drawer-orange.png"
+              data-full-webp="assets/dashboard-drawer-orange.webp"
+              data-caption="bottom drawer · F opens toy-api's hide rules under the dashboard · tags with their counts above the PR states · modals, panels and the ^x menu all open here"
+            >
+              <picture>
+                <source
+                  srcset="assets/dashboard-drawer-orange.webp"
+                  type="image/webp"
+                />
+                <img
+                  src="assets/dashboard-drawer-orange.png"
+                  width="2728"
+                  height="1196"
+                  alt="The dashboard with the hide-workspaces picker open in a full-width bottom drawer: toy-api's workspace tags with how many workspaces carry each, then the PR states, with the tagged rules checked. Opens full size."
+                  loading="lazy"
+                  decoding="async"
+                />
+              </picture>
+              <span class="thumb-cap">bottom drawer · hide by tag</span>
             </button>
           </div>
         </div>
@@ -308,7 +333,9 @@
             ><span class="name">one scannable view</span>
             <p class="desc">
               Original prompt, latest agent update, git diff and workspace
-              details, sorted so questions and stalls surface first.
+              details, sorted so questions and stalls surface first. Tag
+              workspaces and hide them by tag or PR state; they fold into one
+              row you can open in place.
             </p>
           </li>
           <li class="prop reveal">
@@ -428,7 +455,7 @@
         <div class="sec-head reveal">
           <h2 class="mono"><span class="pfx">$ </span>wsx --demo</h2>
           <span class="rule"></span>
-          <p class="note">a live session and two short screencasts, unedited</p>
+          <p class="note">a live session and two short screencasts · real agents, sped up while they work</p>
         </div>
         <figure class="still term reveal">
           <picture>
@@ -500,7 +527,7 @@
             </div>
             <span class="cast-cap"
               ><span class="n">02</span> · parallel agents across isolated
-              worktrees</span
+              worktrees, then tag and hide one</span
             >
           </div>
         </div>

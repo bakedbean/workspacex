@@ -2,6 +2,7 @@ pub mod attached;
 pub mod bar;
 pub mod dashboard;
 pub mod detail_modules;
+pub mod drawer;
 pub mod footer;
 pub mod modal;
 pub mod pm_pane;

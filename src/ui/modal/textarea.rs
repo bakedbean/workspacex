@@ -233,6 +233,11 @@ impl TextArea {
     /// Draw the box into `area` and place the terminal cursor. Scrolls so
     /// the cursor row is always visible, keeping it on the last row once
     /// the text is taller than the area.
+    /// Rows the text occupies wrapped at `width`.
+    pub fn row_count(&self, width: usize) -> usize {
+        self.wrap_rows(width.max(1)).0.len()
+    }
+
     pub fn render(&self, f: &mut Frame, area: Rect, theme: &Theme) {
         if area.width == 0 || area.height == 0 {
             return;

@@ -2,6 +2,7 @@ use crate::config::usage_window::UsageWindow;
 use crate::data::store::RepoId;
 use crate::git::forge::BranchLifecycle;
 use crate::ui::dashboard::status::Status;
+use crate::ui::drawer::Hint;
 use crate::ui::theme::Theme;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
@@ -278,48 +279,21 @@ impl RemoteNewWorkspaceForm {
     }
 }
 
-fn centered(area: Rect, w: u16, h: u16) -> Rect {
-    let popup = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(0),
-            Constraint::Length(h),
-            Constraint::Min(0),
-        ])
-        .split(area)[1];
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(0),
-            Constraint::Length(w),
-            Constraint::Min(0),
-        ])
-        .split(popup)[1]
-}
-
-/// Draw a centered, bordered modal box of size `w`×`h` (centered within
-/// `area`) titled `title`: clears the region, paints the dim-styled border,
-/// and returns the inner content area. Shared framing for the floating panel
-/// renderers (updates, processes, repo settings, agents) so they look
+/// Open a drawer (see `ui::drawer`) sized to a panel's `body_h` rows of
+/// content, footer included, and return the body rect. Shared framing for the
+/// panel renderers (updates, processes, repo settings, agents) so they look
 /// identical; each caller lays its own body/footer split inside the returned
-/// inner rect.
+/// rect, which may be shorter than asked (height cap) or taller (the drawer
+/// never shrinks while a panel stays open).
 fn panel_frame<'a>(
     f: &mut Frame,
     area: Rect,
-    w: u16,
-    h: u16,
+    body_h: usize,
     title: impl Into<Line<'a>>,
     theme: &Theme,
 ) -> Rect {
-    let rect = centered(area, w, h);
-    f.render_widget(Clear, rect);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .style(theme.dim_style());
-    let inner = block.inner(rect);
-    f.render_widget(block, rect);
-    inner
+    let body_h = u16::try_from(body_h).unwrap_or(u16::MAX);
+    crate::ui::drawer::frame(f, area, body_h, title, &[], theme)
 }
 
 /// Render the small fixed-size modals — confirmations, prompts, reference
@@ -344,10 +318,15 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
     ) {
         return;
     }
-    // Room for list rows: the terminal minus borders and each list modal's
-    // fixed lines (prompt, blanks, footer, notice), so the footer stays put.
-    let list_cap = usize::from(area.height).saturating_sub(10).max(3);
-    let (title, body) = match modal {
+    // Room for list rows: the tallest drawer minus its rule and each list
+    // modal's fixed lines (prompt, blanks, footer, notice), so the footer
+    // stays put.
+    let list_cap = usize::from(crate::ui::drawer::max_height(area))
+        .saturating_sub(9)
+        .max(3);
+    const CONFIRM: &[Hint] = &[("y", "yes"), ("n", "cancel")];
+    const LIST: &[Hint] = &[("↑↓", "move"), ("↵", "confirm"), ("esc", "cancel")];
+    let (title, body, hints): (&str, Text<'static>, &[Hint]) = match modal {
         Modal::NewWorkspace {
             name_buffer,
             yolo,
@@ -357,11 +336,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
             ..
         } => {
             let agent_label = agent.display_name();
-            let shared_line = if *shared {
-                "shared (tmux): on — ^s toggles\n"
-            } else {
-                "shared (tmux): off — ^s toggles\n"
-            };
+            let shared_line = if *shared { "on" } else { "off" };
             let notice_line = notice
                 .as_deref()
                 .map(|n| format!("{n}\n"))
@@ -373,13 +348,23 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                     "new workspace"
                 },
                 format!(
-                    "name: {name_buffer}\nagent: {agent_label}  [tab] toggle\n{shared_line}\n{notice_line}[enter] create   [esc] cancel"
-                ),
+                    "name:   {name_buffer}\u{2588}\nagent:  {agent_label}\nshared: {shared_line} (tmux)\n{notice_line}"
+                )
+                .trim_end()
+                .to_string()
+                .into(),
+                &[
+                    ("↵", "create"),
+                    ("tab", "agent"),
+                    ("^s", "shared"),
+                    ("esc", "cancel"),
+                ],
             )
         }
         Modal::ConfirmArchive { name, .. } => (
             "archive workspace",
-            format!("archive '{name}'?\n\n[y] yes   [n]/[esc] cancel"),
+            format!("archive '{name}'?").into(),
+            CONFIRM,
         ),
         Modal::ConfirmShare {
             name,
@@ -422,9 +407,8 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
             };
             (
                 "toggle sharing",
-                format!(
-                    "switch '{name}' to {dest}?\n\n{restart_note}\n\n[y] yes   [n]/[esc] cancel"
-                ),
+                format!("switch '{name}' to {dest}?\n\n{restart_note}").into(),
+                CONFIRM,
             )
         }
         Modal::ConfirmQuit { creates, archives } => {
@@ -440,13 +424,14 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                 format!(
                     "{} still running.\n\n\
                      Quitting stops them: setups are cancelled, and an archive is\n\
-                     left part-done (archiving again finishes it).\n\n\
-                     [y] quit anyway   [n]/[esc] stay",
+                     left part-done (archiving again finishes it).",
                     what.join(" and ")
-                ),
+                )
+                .into(),
+                &[("y", "quit anyway"), ("n", "stay")],
             )
         }
-        Modal::Error { message } => ("error", message.clone()),
+        Modal::Error { message } => ("error", message.clone().into(), &[("esc", "dismiss")]),
         // UpdatesPanel is handled by the early-return above; this arm is
         // unreachable but required for exhaustiveness.
         Modal::UpdatesPanel { .. } => unreachable!("UpdatesPanel must not reach render()"),
@@ -463,23 +448,31 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
             format!(
                 "{name} is not installed.\n\n\
                  The `{binary}` binary was not found on PATH.\n\
-                 Install it, then re-enter the workspace.\n\n\
-                 s    switch agent for this workspace\n\
-                 Esc  dismiss",
+                 Install it, then re-enter the workspace.",
                 name = capitalize_first(agent.display_name()),
                 binary = binary,
-            ),
+            )
+            .into(),
+            &[("s", "switch agent"), ("esc", "dismiss")],
         ),
         Modal::WorkspaceActions => (
             "workspace actions",
-            "These apply to the selected workspace:\n\n  \
-             e   edit        t   term\n  \
-             v   diff        g   lazygit\n  \
-             r   rename      C   name color\n  \
-             o   setup log   x   cancel setup\n  \
-             #   tags\n\n  \
-             ?/Esc  close"
-                .to_string(),
+            key_grid(
+                &[
+                    ("e", "edit"),
+                    ("t", "term"),
+                    ("v", "diff"),
+                    ("g", "lazygit"),
+                    ("r", "rename"),
+                    ("C", "name color"),
+                    ("o", "setup log"),
+                    ("x", "cancel setup"),
+                    ("#", "tags"),
+                ],
+                area.width,
+                theme,
+            ),
+            &[("esc", "close")],
         ),
         Modal::RenameWorkspace {
             name_buffer,
@@ -492,9 +485,11 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                 .unwrap_or_default();
             (
                 "rename workspace",
-                format!(
-                    "name: {name_buffer}\u{2588}\n\n{notice_line}[enter] rename   [esc] cancel"
-                ),
+                format!("name: {name_buffer}\u{2588}\n{notice_line}")
+                    .trim_end()
+                    .to_string()
+                    .into(),
+                &[("↵", "rename"), ("esc", "cancel")],
             )
         }
         // RemoteWorkspaceList is handled by the early-return above; this arm
@@ -519,10 +514,8 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                 .join("\n");
             (
                 "pick a shared host",
-                format!(
-                    "Choose a host to browse shared workspaces:\n\n{list}\n\n\
-                     \u{2191}\u{2193} move   Enter fetch   Esc cancel"
-                ),
+                format!("Choose a host to browse shared workspaces:\n\n{list}").into(),
+                &[("↑↓", "move"), ("↵", "fetch"), ("esc", "cancel")],
             )
         }
         Modal::WorkspaceTags {
@@ -551,10 +544,13 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                 .unwrap_or_default();
             (
                 "workspace tags",
-                format!(
-                    "{name}\n\n# {input}\u{2588}\n{list}{notice}\n\n\
-                     \u{2191}\u{2193} move   space toggle   enter add   Esc close"
-                ),
+                format!("{name}\n\n# {input}\u{2588}\n{list}{notice}").into(),
+                &[
+                    ("↑↓", "move"),
+                    ("space", "toggle"),
+                    ("↵", "add"),
+                    ("esc", "close"),
+                ],
             )
         }
         Modal::HideRules {
@@ -584,15 +580,17 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
             (
                 "hide workspaces",
                 format!(
-                    "Hide {repo_name} workspaces that are:\n\n{}\n\n\
-                     \u{2191}\u{2193} move   space toggle   Esc close",
+                    "Hide {repo_name} workspaces that are:\n\n{}",
                     window_lines(&lines, focus, list_cap).join("\n")
-                ),
+                )
+                .into(),
+                &[("↑↓", "move"), ("space", "toggle"), ("esc", "close")],
             )
         }
         Modal::RemoteListLoading { host_name } => (
             "remote workspaces",
-            format!("fetching shared workspaces from {host_name}…\n\n[esc] cancel"),
+            format!("fetching shared workspaces from {host_name}…").into(),
+            &[("esc", "cancel")],
         ),
         Modal::RemoteShareConfirm {
             host_name,
@@ -611,8 +609,10 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                 "share remote workspace",
                 format!(
                     "Share {repo}/{workspace} on {host_name} and attach?\n\n{note}\n\
-                     Needs wsx running on {host_name}.\n\n[y] share & attach   [n] back"
-                ),
+                     Needs wsx running on {host_name}."
+                )
+                .into(),
+                &[("y", "share & attach"), ("n", "back")],
             )
         }
         Modal::RemoteShareRunning {
@@ -623,12 +623,15 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
             "share remote workspace",
             format!(
                 "sharing {workspace} on {host_name}…\n\n\
-                 waiting for its agents to come up in tmux\n\n[esc] back to the list"
-            ),
+                 waiting for its agents to come up in tmux"
+            )
+            .into(),
+            &[("esc", "back to the list")],
         ),
         Modal::RemoteReposLoading { host_name, .. } => (
             "new remote workspace",
-            format!("fetching repos from {host_name}…\n\n[esc] back to the list"),
+            format!("fetching repos from {host_name}…").into(),
+            &[("esc", "back to the list")],
         ),
         Modal::RemoteNewWorkspace(form) => {
             let repo = &form.repos[form.repo];
@@ -646,13 +649,22 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                     "new remote workspace"
                 },
                 format!(
-                    "host: {host}\nrepo: {repo}  [\u{2191}\u{2193}] change\n\
-                     name: {name}\u{2588}\nagent: {agent}  [tab] cycle\n\
-                     yolo: {yolo}  [^y] toggle\n\n{notice_line}\
-                     [enter] create & attach   [esc] back",
+                    "host: {host}\nrepo: {repo}\n\
+                     name: {name}\u{2588}\nagent: {agent}\n\
+                     yolo: {yolo}\n{notice_line}",
                     host = form.host_name,
                     name = form.name_buffer,
-                ),
+                )
+                .trim_end()
+                .to_string()
+                .into(),
+                &[
+                    ("↵", "create & attach"),
+                    ("↑↓", "repo"),
+                    ("tab", "agent"),
+                    ("^y", "yolo"),
+                    ("esc", "back"),
+                ],
             )
         }
         Modal::RemoteCreateRunning(form) => {
@@ -662,11 +674,12 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                 "new remote workspace",
                 format!(
                     "creating {repo}/{name} on {host}…\n\n\
-                     running its setup, then starting its agents in tmux\n\n\
-                     [esc] back to the list",
+                     running its setup, then starting its agents in tmux",
                     repo = req.repo,
                     host = form.host_name,
-                ),
+                )
+                .into(),
+                &[("esc", "back to the list")],
             )
         }
         Modal::AgentPicker {
@@ -684,10 +697,8 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                 .join("\n");
             (
                 "pick an agent",
-                format!(
-                    "Choose an agent for this workspace:\n\n{list}\n\n\
-                     \u{2191}\u{2193} move   Enter confirm   Esc cancel"
-                ),
+                format!("Choose an agent for this workspace:\n\n{list}").into(),
+                LIST,
             )
         }
     };
@@ -696,18 +707,33 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
     } else {
         theme.header_style()
     };
-    let want = u16::try_from(body.lines().count() + 2).unwrap_or(u16::MAX);
-    let rect = centered(area, 60, want.clamp(14, area.height.max(14)));
-    let para = Paragraph::new(body)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .title_alignment(Alignment::Left),
-        )
-        .style(style);
-    f.render_widget(Clear, rect);
-    f.render_widget(para, rect);
+    let body_h = u16::try_from(body.height()).unwrap_or(u16::MAX);
+    let inner = crate::ui::drawer::frame(f, area, body_h, title, hints, theme);
+    f.render_widget(Paragraph::new(body).style(style), inner);
+}
+
+/// `keys` laid out as a which-key style grid of pills: as many fixed-width
+/// columns as fit in `width`, filled row by row.
+fn key_grid(keys: &[Hint], width: u16, theme: &Theme) -> Text<'static> {
+    let cell = keys
+        .iter()
+        .map(|(k, l)| k.chars().count() + l.chars().count() + 3)
+        .max()
+        .unwrap_or(0)
+        + 4;
+    let cols = (usize::from(width).saturating_sub(2) / cell.max(1)).max(1);
+    keys.chunks(cols)
+        .map(|row| {
+            let mut spans = Vec::new();
+            for (k, l) in row {
+                spans.extend(crate::ui::footer::key_pill_spans(k, theme));
+                let used = k.chars().count() + 2;
+                spans.push(Span::raw(format!(" {l:<w$}", w = cell - used - 1)));
+            }
+            Line::from(spans)
+        })
+        .collect::<Vec<_>>()
+        .into()
 }
 
 /// At most `cap` of `lines`, scrolled so `focus` stays visible.
@@ -796,7 +822,7 @@ mod tests {
             rows,
             selected,
         });
-        assert!(text.contains("Esc close"), "{text}");
+        assert!(text.contains("esc  close"), "{text}");
         assert!(text.contains("> [ ] #t19"), "{text}");
     }
 
@@ -813,7 +839,7 @@ mod tests {
             browsing: false,
             notice: None,
         });
-        assert!(text.contains("Esc close"), "{text}");
+        assert!(text.contains("esc  close"), "{text}");
         assert!(text.contains("> [ ] t19"), "{text}");
     }
 
@@ -843,7 +869,7 @@ mod tests {
         });
         assert!(text.contains("Share r/w on mini and attach?"), "{text}");
         assert!(text.contains("restart inside tmux"), "{text}");
-        assert!(text.contains("[y] share & attach"), "{text}");
+        assert!(text.contains("y  share & attach"), "{text}");
     }
 
     #[test]

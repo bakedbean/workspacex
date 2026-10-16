@@ -107,24 +107,22 @@ pub fn render_prompt_tag(
     tags: &[PromptTag],
     theme: &Theme,
 ) {
-    let w = area.width.clamp(50, 90);
-    let h = area.height.clamp(12, 24);
     match &modal.stage {
-        TagStage::Pick => render_pick(f, area, w, h, modal, tags, theme),
-        TagStage::Body { name } => render_body(f, area, w, h, modal, name, theme),
+        TagStage::Pick => render_pick(f, area, modal, tags, theme),
+        TagStage::Body { name } => render_body(f, area, modal, name, theme),
     }
 }
 
 fn render_pick(
     f: &mut Frame,
     area: Rect,
-    w: u16,
-    h: u16,
     modal: &PromptTagModal,
     tags: &[PromptTag],
     theme: &Theme,
 ) {
-    let inner = panel_frame(f, area, w, h, " Prompt tag ", theme);
+    let list = modal.filtered(tags);
+    // Name field, a blank, the list (or its one-line hint), and the footer.
+    let inner = panel_frame(f, area, 2 + list.len().max(1) + 1, " Prompt tag ", theme);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -154,7 +152,6 @@ fn render_pick(
         field_area.y,
     ));
 
-    let list = modal.filtered(tags);
     let height = list_area.height as usize;
     let top = modal.selected.saturating_sub(height.saturating_sub(1));
     let mut lines: Vec<Line> = Vec::new();
@@ -185,25 +182,36 @@ fn render_pick(
     f.render_widget(Paragraph::new(lines), list_area);
 
     f.render_widget(
-        Paragraph::new(
-            "[\u{2191}/\u{2193}] move   [enter] body   [1-9] pick   [^d] delete   [esc] close",
-        )
-        .style(theme.dim_style()),
+        Paragraph::new(crate::ui::drawer::hint_line(
+            &[
+                ("↑↓", "move"),
+                ("↵", "body"),
+                ("1-9", "pick"),
+                ("^d", "delete"),
+                ("esc", "close"),
+            ],
+            theme,
+        )),
         footer_area,
     );
 }
 
-fn render_body(
-    f: &mut Frame,
-    area: Rect,
-    w: u16,
-    h: u16,
-    modal: &PromptTagModal,
-    name: &str,
-    theme: &Theme,
-) {
-    let inner = panel_frame(f, area, w, h, format!(" <{name}> "), theme);
+/// Rows the body editor opens with, so there is room to write before the
+/// text itself asks for more.
+const BODY_MIN_ROWS: usize = 6;
+
+fn render_body(f: &mut Frame, area: Rect, modal: &PromptTagModal, name: &str, theme: &Theme) {
     let notice_rows = u16::from(modal.notice.is_some());
+    // The editor is inset one column each side inside the drawer body.
+    let text_w = crate::ui::drawer::body_width(area).saturating_sub(2);
+    let text_rows = modal.body.row_count(usize::from(text_w)).max(BODY_MIN_ROWS);
+    let inner = panel_frame(
+        f,
+        area,
+        text_rows + usize::from(notice_rows) + 1,
+        format!(" <{name}> "),
+        theme,
+    );
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -225,7 +233,10 @@ fn render_body(
         );
     }
     f.render_widget(
-        Paragraph::new("[^s] insert   [enter] newline   [esc] back").style(theme.dim_style()),
+        Paragraph::new(crate::ui::drawer::hint_line(
+            &[("^s", "insert"), ("↵", "newline"), ("esc", "back")],
+            theme,
+        )),
         chunks[2],
     );
 }

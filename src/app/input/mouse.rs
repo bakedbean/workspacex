@@ -185,6 +185,16 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
                 return;
             }
 
+            // The attached ctrl-x menu opens in the bottom drawer, which paints
+            // over the footer hints and pinned chips without being a modal.
+            // Their rects are still live underneath, so a click there would
+            // fire a hidden target (the ^x pill re-arms, sending a literal ^X).
+            // Treat a click anywhere as click-outside: dismiss the menu.
+            if app.leader_pending && matches!(app.view, crate::ui::View::Attached(_)) {
+                app.leader_pending = false;
+                return;
+            }
+
             // Footer keybind hint click → behave exactly like pressing the
             // printed key. The footer row doesn't overlap any other click
             // target, so this is checked first and returns early.

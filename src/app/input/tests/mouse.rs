@@ -453,10 +453,8 @@ async fn click_attached_footer_leader_pill_arms_leader() {
     );
 }
 
-/// The `^x` pill routes a real `Ctrl-x` through the handlers rather than
-/// poking `leader_pending` directly, so a second click behaves like a
-/// second `Ctrl-x` keypress: it clears the leader (and sends a literal
-/// `^X`) instead of leaving the leader stuck armed.
+/// A second click on the `^x` pill lands while the ctrl-x drawer covers the
+/// footer, so it dismisses the menu instead of leaving the leader stuck armed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn double_click_attached_leader_pill_does_not_stick_armed() {
     use crate::ui::footer::FooterHintAction;
@@ -489,6 +487,41 @@ async fn double_click_attached_leader_pill_does_not_stick_armed() {
         !app.leader_pending,
         "second ^x click must clear the leader, matching double Ctrl-x \
          (not leave it stuck armed)"
+    );
+}
+
+/// While the ctrl-x drawer is open it covers the footer, so a click on a
+/// footer hint underneath it must not fire: it only dismisses the menu.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn click_under_open_leader_drawer_dismisses_without_firing() {
+    use crate::ui::footer::FooterHintAction;
+    use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+    let store = Store::open_in_memory().unwrap();
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    let _ws_id = spawn_attached_workspace(&mut app);
+    app.leader_pending = true;
+
+    app.footer_hint_rects = vec![(
+        ratatui::layout::Rect {
+            x: 20,
+            y: 40,
+            width: 9,
+            height: 1,
+        },
+        FooterHintAction::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+    )];
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 22,
+        row: 40,
+        modifiers: KeyModifiers::NONE,
+    };
+    handle_mouse(&mut app, &super::common::shared_app(), click).await;
+
+    assert!(!app.leader_pending, "the click dismisses the menu");
+    assert!(
+        app.modal.is_none(),
+        "the hidden `a` hint must not open the agents panel"
     );
 }
 

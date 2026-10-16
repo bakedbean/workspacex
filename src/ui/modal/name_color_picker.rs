@@ -75,7 +75,8 @@ pub fn render_name_color_picker(
     let w = grid_w + 4; // 1 cell of padding each side + 2 border columns
     let h = rows as u16 + 7;
 
-    // `panel_frame` centers by clamping to `area`, which would silently CLIP
+    // A fixed grid gains nothing from a full-width drawer, so this one modal
+    // floats. `float_frame` centers by clamping to `area`, which would silently CLIP
     // the grid: the swatches past the edge stop being drawn, but their hit
     // rects would still be published — and `handle_mouse` consults those
     // before the click-outside dismissal, so a click on empty screen would
@@ -83,7 +84,7 @@ pub fn render_name_color_picker(
     // return no hit rects. Narrowing the filter shrinks `h`, so the picker
     // becomes usable again on a short screen as soon as the user types.
     if area.width < w || area.height < h {
-        let inner = panel_frame(f, area, w.min(area.width), 5.min(area.height), "", theme);
+        let inner = crate::ui::drawer::float_frame(f, area, w, 5, "", theme);
         f.render_widget(
             Paragraph::new(vec![
                 Line::from(Span::styled(
@@ -113,7 +114,7 @@ pub fn render_name_color_picker(
         return Vec::new();
     }
 
-    let inner = panel_frame(f, area, w, h, "workspace name color", theme);
+    let inner = crate::ui::drawer::float_frame(f, area, w, h, "workspace name color", theme);
     if inner.width == 0 || inner.height == 0 {
         return Vec::new();
     }

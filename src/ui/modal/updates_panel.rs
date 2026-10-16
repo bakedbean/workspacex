@@ -193,18 +193,50 @@ pub fn ordered_workspaces_for_panel(
 /// and group hints name the dashboard's modes, because that is what `o`
 /// and `G` cycle here. While filtering, printable keys are filter text
 /// rather than shortcuts, so only the hints that still work are listed.
-fn footer_text(sort: SortMode, group: GroupMode, filter: Option<&str>) -> String {
+fn footer_line(
+    sort: SortMode,
+    group: GroupMode,
+    filter: Option<&str>,
+    theme: &Theme,
+) -> Line<'static> {
     match filter {
-        Some(needle) => format!(
-            "/{}    [esc] clear  [\u{2191}\u{2193}] move  [\u{21b5}] switch",
-            truncate(needle, FILTER_ECHO_MAX)
-        ),
-        None => format!(
-            "[\u{2191}\u{2193}] move  [\u{21b5}] switch  [v/s] split  [o] sort:{}  [G] group:{}  [/] filter  [esc] close",
-            sort.as_str(),
-            group_label(group)
+        Some(needle) => {
+            let mut spans = vec![Span::styled(
+                format!("/{}    ", truncate(needle, FILTER_ECHO_MAX)),
+                theme.header_style(),
+            )];
+            spans.extend(
+                crate::ui::drawer::hint_line(
+                    &[("esc", "clear"), ("↑↓", "move"), ("↵", "switch")],
+                    theme,
+                )
+                .spans,
+            );
+            Line::from(spans)
+        }
+        None => crate::ui::drawer::hint_line(
+            &[
+                ("↑↓", "move"),
+                ("↵", "switch"),
+                ("v/s", "split"),
+                ("o", &format!("sort:{}", sort.as_str())),
+                ("G", &format!("group:{}", group_label(group))),
+                ("/", "filter"),
+                ("esc", "close"),
+            ],
+            theme,
         ),
     }
+}
+
+/// [`footer_line`] as plain text, for width checks and tests.
+#[cfg(test)]
+fn footer_text(sort: SortMode, group: GroupMode, filter: Option<&str>) -> String {
+    footer_line(sort, group, filter, &Theme::wsx())
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect()
 }
 
 /// The group mode's tab label on the dashboard's title row.
@@ -225,19 +257,6 @@ pub fn render_updates_panel(
     now_ms: i64,
     theme: &Theme,
 ) {
-    // Sizing: up to PANEL_MAX_WIDTH cols wide, ~25 rows tall, but never
-    // larger than the area.
-    let w = area.width.clamp(20, PANEL_MAX_WIDTH);
-    let h = area.height.clamp(8, 25);
-    let inner = panel_frame(f, area, w, h, " Workspace updates ", theme);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(1)])
-        .split(inner);
-    let body_area = chunks[0];
-    let footer_area = chunks[1];
-
     let sections = panel_sections(inputs, view.filter);
     // Row labels: the workspace name, prefixed by its repo when the repo
     // headers are gone (attention grouping) — the same `<repo>/<name>` the
@@ -264,7 +283,9 @@ pub fn render_updates_panel(
 
     // One shared name column for the whole panel so every status text starts
     // at the same column regardless of which section a row is in.
-    let row_width = body_area.width as usize;
+    // Rows are laid out at the drawer's width, so measure it before
+    // building them.
+    let row_width = usize::from(crate::ui::drawer::body_width(area));
     let name_col = name_col_width(
         labels.iter().flatten().map(|(_, label)| label.as_str()),
         row_width,
@@ -341,6 +362,15 @@ pub fn render_updates_panel(
         lines.push(Line::from(Span::styled(msg.to_string(), theme.dim_style())));
     }
 
+    // Every line, plus the footer.
+    let inner = panel_frame(f, area, lines.len() + 1, " Workspace updates ", theme);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+    let body_area = chunks[0];
+    let footer_area = chunks[1];
+
     // Stateless scroll: keep the selected workspace centered in the viewport
     // when the rendered lines overflow the body area. Clamped so we never
     // scroll past the last line.
@@ -353,12 +383,12 @@ pub fn render_updates_panel(
     // when lifecycle is unknown.
     f.render_widget(Paragraph::new(lines).scroll((scroll_y, 0)), body_area);
     f.render_widget(
-        Paragraph::new(footer_text(
+        Paragraph::new(footer_line(
             inputs.sort_mode,
             inputs.group_mode,
             view.filter,
-        ))
-        .style(theme.dim_style()),
+            theme,
+        )),
         footer_area,
     );
 }
@@ -1841,11 +1871,11 @@ mod ordering_tests {
     #[test]
     fn footer_shows_the_dashboard_sort_and_group_modes() {
         let f = footer_text(SortMode::Recency, GroupMode::Attention, None);
-        assert!(f.contains("[o] sort:recency"), "{f}");
-        assert!(f.contains("[G] group:attention"), "{f}");
+        assert!(f.contains("o  sort:recency"), "{f}");
+        assert!(f.contains("G  group:attention"), "{f}");
         let f = footer_text(SortMode::Status, GroupMode::Repo, None);
-        assert!(f.contains("[o] sort:status"), "{f}");
-        assert!(f.contains("[G] group:repo"), "{f}");
+        assert!(f.contains("o  sort:status"), "{f}");
+        assert!(f.contains("G  group:repo"), "{f}");
     }
 
     /// Idle footer advertises the filter key; filtering footer echoes the
@@ -1854,13 +1884,13 @@ mod ordering_tests {
     #[test]
     fn footer_swaps_hints_when_filtering() {
         let idle = footer_text(SortMode::Recency, GroupMode::Repo, None);
-        assert!(idle.contains("[/] filter"), "{idle}");
-        assert!(idle.contains("[esc] close"), "{idle}");
+        assert!(idle.contains("/  filter"), "{idle}");
+        assert!(idle.contains("esc  close"), "{idle}");
 
         let filtering = footer_text(SortMode::Recency, GroupMode::Repo, Some("auth"));
         assert!(filtering.starts_with("/auth"), "{filtering}");
-        assert!(filtering.contains("[esc] clear"), "{filtering}");
-        assert!(!filtering.contains("[esc] close"), "{filtering}");
+        assert!(filtering.contains("esc  clear"), "{filtering}");
+        assert!(!filtering.contains("esc  close"), "{filtering}");
     }
 
     /// `/` with nothing typed still echoes, so the keypress has visible
@@ -1869,7 +1899,7 @@ mod ordering_tests {
     fn footer_echoes_empty_needle() {
         let filtering = footer_text(SortMode::Recency, GroupMode::Repo, Some(""));
         assert!(filtering.starts_with('/'), "{filtering}");
-        assert!(filtering.contains("[esc] clear"), "{filtering}");
+        assert!(filtering.contains("esc  clear"), "{filtering}");
     }
 
     /// A long needle is truncated rather than pushing the key hints off
@@ -1878,7 +1908,7 @@ mod ordering_tests {
     fn footer_truncates_a_long_needle() {
         let filtering = footer_text(SortMode::Recency, GroupMode::Repo, Some(&"x".repeat(60)));
         assert!(filtering.contains('…'), "{filtering}");
-        assert!(filtering.contains("[↑↓] move"), "{filtering}");
+        assert!(filtering.contains("↑↓  move"), "{filtering}");
     }
 
     /// The needle matches the workspace name, case-insensitively.

@@ -12,13 +12,11 @@ pub fn render_repo_settings(
     selected: usize,
     theme: &Theme,
 ) {
-    let w = area.width.clamp(40, 90);
-    let h = area.height.clamp(12, 20);
+    // Nine fields, the "inherited" note, and the footer.
     let inner = panel_frame(
         f,
         area,
-        w,
-        h,
+        9 + 1 + 1,
         format!(" Repo settings — {} ", repo.name),
         theme,
     );
@@ -136,11 +134,24 @@ pub fn render_repo_settings(
             theme.dim_style(),
         )));
     }
-    f.render_widget(Paragraph::new(lines), body_area);
+    // A short screen caps the drawer below the field count; scroll so the
+    // selected field stays visible, or Enter/d would act on a hidden row.
+    let top = selected.saturating_sub(usize::from(body_area.height.max(1)) - 1);
+    f.render_widget(
+        Paragraph::new(lines).scroll((u16::try_from(top).unwrap_or(u16::MAX), 0)),
+        body_area,
+    );
 
     f.render_widget(
-        Paragraph::new("[\u{2191}/\u{2193}] move   [enter] edit   [d] clear   [esc] close")
-            .style(theme.dim_style()),
+        Paragraph::new(crate::ui::drawer::hint_line(
+            &[
+                ("↑↓", "move"),
+                ("↵", "edit"),
+                ("d", "clear"),
+                ("esc", "close"),
+            ],
+            theme,
+        )),
         footer_area,
     );
 }
@@ -235,6 +246,38 @@ mod preview_tests {
             })
             .find(|line| line.contains("pinned_commands"))
             .unwrap()
+    }
+
+    #[test]
+    fn a_capped_drawer_scrolls_to_keep_the_selected_field_visible() {
+        use crate::data::store::Store;
+        use ratatui::{Terminal, backend::TestBackend};
+        use std::path::Path;
+
+        let store = Store::open_in_memory().unwrap();
+        store
+            .add_repo(Path::new("/preview"), "preview", "")
+            .unwrap();
+        let repo = store.repos().unwrap().remove(0);
+        // 80x12 caps the drawer at nine rows: seven for the nine fields.
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        terminal
+            .draw(|f| render_repo_settings(f, f.area(), &store, &repo, 8, &Theme::wsx()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row = (0..buffer.area.height)
+            .find(|&y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .contains("detail_bar_config")
+            })
+            .expect("the selected last field is on screen");
+        assert_eq!(
+            buffer[(3, row)].bg,
+            Theme::wsx().selected_bg,
+            "and highlighted"
+        );
     }
 
     #[test]

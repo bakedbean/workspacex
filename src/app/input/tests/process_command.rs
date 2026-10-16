@@ -147,7 +147,7 @@ fn footer_shows_run_hint_in_list_mode() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(rendered.contains("[r] run"), "{rendered}");
+    assert!(rendered.contains("r  run"), "{rendered}");
 }
 
 #[test]

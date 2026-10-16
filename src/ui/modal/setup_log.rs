@@ -62,27 +62,6 @@ pub struct SetupLogView<'a> {
 /// past the top of a short log would run the counter away and the first
 /// several Downs would appear to do nothing.
 pub fn render_setup_log(f: &mut Frame, area: Rect, view: &SetupLogView, theme: &Theme) -> usize {
-    let w = area.width.clamp(20, 100);
-    let h = area.height.clamp(8, 28);
-    let inner = panel_frame(
-        f,
-        area,
-        w,
-        h,
-        format!(" Setup log — {} ", view.label),
-        theme,
-    );
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
-        .split(inner);
-    let (status_area, body_area, footer_area) = (chunks[0], chunks[1], chunks[2]);
-
     // Archive never sets a `SetupPhase` — there is no phase concept for it —
     // so the status line is derived from the entry's kind rather than from
     // `phase()`, which would otherwise read "Fetching base…" while a worktree
@@ -120,6 +99,58 @@ pub fn render_setup_log(f: &mut Frame, area: Rect, view: &SetupLogView, theme: &
         }
     };
 
+    // Four distinct reasons the body is empty; saying the wrong one sends
+    // the user somewhere useless.
+    let empty_state = lines.is_empty().then(|| match (view.live, view.stored) {
+        // A live entry that has not printed anything yet, rather than a
+        // log that does not exist.
+        (Some(_), _) => ("(waiting for output…)".to_string(), theme.dim_style()),
+        (None, Some(StoredLog::ArchiveFinished)) => (
+            "(archive finished)\n\nArchive output is not kept. The dashboard row is \
+             gone if it succeeded, and still there if it did not."
+                .to_string(),
+            theme.dim_style(),
+        ),
+        (None, Some(StoredLog::Unreadable { path, error })) => (
+            format!("(setup log could not be read)\n\n{error}\n\n{path}"),
+            theme.err_style(),
+        ),
+        (None, Some(StoredLog::Missing { path })) => (
+            format!(
+                "(no setup log)\n\nNothing was captured for this workspace — either its \
+                 repo has no setup script, or it was created before setup logging.\n\n{path}"
+            ),
+            theme.dim_style(),
+        ),
+        // The file exists and read cleanly, but holds nothing.
+        (None, _) => ("(setup log is empty)".to_string(), theme.dim_style()),
+    });
+
+    // A log is a document to read, not a prompt: it floats over nearly the
+    // whole screen at a fixed size, so a live tail scrolls inside a still
+    // frame instead of pushing a drawer up the screen line by line.
+    let inner = crate::ui::drawer::float_frame(
+        f,
+        area,
+        area.width - area.width / 10,
+        area.height - area.height / 10,
+        format!(" Setup log — {} ", view.label),
+        theme,
+    )
+    .inner(Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    let (status_area, body_area, footer_area) = (chunks[0], chunks[1], chunks[2]);
+
     f.render_widget(
         Paragraph::new(status).style(theme.header_style()),
         status_area,
@@ -127,33 +158,7 @@ pub fn render_setup_log(f: &mut Frame, area: Rect, view: &SetupLogView, theme: &
 
     let body_h = body_area.height as usize;
     let scroll = view.scroll.min(lines.len().saturating_sub(body_h));
-    if lines.is_empty() {
-        // Four distinct reasons the body is empty; saying the wrong one sends
-        // the user somewhere useless.
-        let (empty, style) = match (view.live, view.stored) {
-            // A live entry that has not printed anything yet, rather than a
-            // log that does not exist.
-            (Some(_), _) => ("(waiting for output…)".to_string(), theme.dim_style()),
-            (None, Some(StoredLog::ArchiveFinished)) => (
-                "(archive finished)\n\nArchive output is not kept. The dashboard row is \
-                 gone if it succeeded, and still there if it did not."
-                    .to_string(),
-                theme.dim_style(),
-            ),
-            (None, Some(StoredLog::Unreadable { path, error })) => (
-                format!("(setup log could not be read)\n\n{error}\n\n{path}"),
-                theme.err_style(),
-            ),
-            (None, Some(StoredLog::Missing { path })) => (
-                format!(
-                    "(no setup log)\n\nNothing was captured for this workspace — either its \
-                     repo has no setup script, or it was created before setup logging.\n\n{path}"
-                ),
-                theme.dim_style(),
-            ),
-            // The file exists and read cleanly, but holds nothing.
-            (None, _) => ("(setup log is empty)".to_string(), theme.dim_style()),
-        };
+    if let Some((empty, style)) = empty_state {
         f.render_widget(
             Paragraph::new(empty)
                 .style(style)
@@ -181,23 +186,28 @@ pub fn render_setup_log(f: &mut Frame, area: Rect, view: &SetupLogView, theme: &
         f.render_widget(Paragraph::new(rendered), body_area);
     }
 
-    let footer = if lines.len() > body_h {
-        let more = lines.len() - body_h - scroll;
-        if more > 0 {
-            format!("[\u{2191}/\u{2193}] scroll ({more} more above)   [g/G] top/end   [esc] close")
-        } else {
-            "[\u{2191}/\u{2193}] scroll   [g/G] top/end   [esc] close".to_string()
-        }
+    let more = lines.len().saturating_sub(body_h + scroll);
+    let scroll_label = if more > 0 {
+        format!("scroll ({more} more above)")
     } else {
-        "[esc] close".to_string()
+        "scroll".to_string()
     };
-    f.render_widget(Paragraph::new(footer).style(theme.dim_style()), footer_area);
+    let footer = if lines.len() > body_h {
+        crate::ui::drawer::hint_line(
+            &[("↑↓", &scroll_label), ("g/G", "top/end"), ("esc", "close")],
+            theme,
+        )
+    } else {
+        crate::ui::drawer::hint_line(&[("esc", "close")], theme)
+    };
+    f.render_widget(Paragraph::new(footer), footer_area);
 
     scroll
 }
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::data::in_flight::InFlight;
     use crate::data::progress::{SetupPhase, SetupProgress};
@@ -268,7 +278,7 @@ mod tests {
             text.contains("Installing dependencies"),
             "missing line:\n{text}"
         );
-        assert!(text.contains("[esc] close"), "missing footer:\n{text}");
+        assert!(text.contains("esc  close"), "missing footer:\n{text}");
     }
 
     /// F7 regression: an archive entry never sets a `SetupPhase` (there is no
@@ -303,8 +313,11 @@ mod tests {
                     .contains("no such file")
             })
             .expect("the stderr line should be on screen");
+        let err_col = (0..buf.area.width)
+            .find(|&x| buf[(x, err_row)].symbol() == "!")
+            .expect("the stderr marker");
         assert_eq!(
-            buf[(1, err_row)].style().fg,
+            buf[(err_col, err_row)].style().fg,
             theme.err_style().fg,
             "live stderr must render in the error style"
         );
@@ -436,8 +449,9 @@ mod tests {
             clamped < all.len(),
             "clamp must be a real offset, got {clamped}"
         );
-        // One line of status, one of footer, two of border.
-        assert_eq!(clamped, all.len() - (12 - 4));
+        // A 12-row screen gives an 11-row float: its two borders, one line
+        // of status, and one of footer leave seven for the log.
+        assert_eq!(clamped, all.len() - 7);
     }
 
     #[test]

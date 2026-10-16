@@ -311,7 +311,7 @@ compatibility but does nothing: it is a no-op, not a reset, so it neither
 clears inherited attributes nor cancels other tokens in the same style.
 A **color** is `#rrggbb`, a 0–255
 index, an ANSI name (`red`, `bright-blue`, `white`), a `[palette]` name, or
-a theme token: `dim path code bg_alt bg_soft ok warn err attention merged
+a theme token: `dim row_dim path code bg_alt bg_soft ok warn err attention merged
 header_fg selected_fg selected_bg question stalled waiting thinking complete
 idle brand wordmark agent_claude agent_pi agent_hermes agent_codex agent_omp`
 (the `agent_*` tokens are each agent kind's fixed identity colour, the same

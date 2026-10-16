@@ -226,8 +226,9 @@ fn app_with_no_pr_hidden() -> (
         .set_repo_hide_rules(repo, &HideRules::parse(Some("pr:none")))
         .unwrap();
     app.refresh().unwrap();
+    let stale_ms = (crate::data::hide_rules::NO_PR_RECENT_DAYS as i64 + 1) * 86_400_000;
     for (_, w) in &mut app.workspaces {
-        w.created_at = 0;
+        w.created_at = crate::util::time::now_ms() - stale_ms;
     }
     let ids: Vec<_> = app.workspaces.iter().map(|(_, w)| w.id).collect();
     for id in &ids {

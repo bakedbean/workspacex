@@ -43,12 +43,14 @@ pub fn hidden_group_line(
     Line::from(spans)
 }
 
-/// Fade an expanded hidden row so it reads as revealed, not restored. Spans
-/// already in the dim grey (recap, age) are left alone: DIM on top made them
-/// unreadable unless the selection background lit them up.
+/// Fade an expanded hidden row so it reads as revealed, not restored. Muted
+/// row columns (recap, age) step down from `row_dim` to `dim` instead of
+/// taking DIM, which made them unreadable off the selection background.
 pub fn dimmed(mut line: Line<'static>, theme: &Theme) -> Line<'static> {
     for span in &mut line.spans {
-        if span.style.fg != Some(theme.dim) {
+        if span.style.fg == Some(theme.row_dim) {
+            span.style = span.style.fg(theme.dim);
+        } else if span.style.fg != Some(theme.dim) {
             span.style = span.style.add_modifier(Modifier::DIM);
         }
     }
@@ -61,16 +63,18 @@ mod tests {
     use ratatui::style::Style;
 
     #[test]
-    fn dimmed_fades_colored_spans_but_not_dim_grey_ones() {
+    fn dimmed_fades_colored_spans_and_steps_row_grey_down_to_dim() {
         let theme = Theme::default();
         let line = Line::from(vec![
             Span::styled("branch", Style::default().fg(theme.path)),
-            Span::styled("recap text", theme.dim_style()),
+            Span::styled("recap text", theme.row_dim_style()),
             Span::styled("  29s ago", theme.dim_style()),
         ]);
         let out = dimmed(line, &theme);
         assert!(out.spans[0].style.add_modifier.contains(Modifier::DIM));
-        assert!(!out.spans[1].style.add_modifier.contains(Modifier::DIM));
-        assert!(!out.spans[2].style.add_modifier.contains(Modifier::DIM));
+        for span in &out.spans[1..] {
+            assert_eq!(span.style.fg, Some(theme.dim));
+            assert!(!span.style.add_modifier.contains(Modifier::DIM));
+        }
     }
 }

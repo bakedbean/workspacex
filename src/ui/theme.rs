@@ -32,6 +32,9 @@ pub struct Theme {
     pub selected_bg: Color,
     /// Sub-lines, empty hints, dashboard footer.
     pub dim: Color,
+    /// Muted columns (recap, age, tags) on active dashboard rows — one tone
+    /// lighter than `dim`, which expanded hidden rows fall back to.
+    pub row_dim: Color,
     /// Repo header's path/count tail — distinct muted tone so the path
     /// doesn't blur into the workspace sub-lines (which use `dim`).
     pub path: Color,
@@ -75,6 +78,7 @@ impl Theme {
             selected_fg: Color::White,
             selected_bg: Color::DarkGray,
             dim: Color::DarkGray,
+            row_dim: Color::Indexed(245),
             path: Color::Indexed(67),
             code: Color::Cyan,
             bg_alt: Color::Indexed(235),
@@ -104,6 +108,7 @@ impl Theme {
             // tint reads cleanly against the dark wsx background.
             selected_bg: Color::Rgb(0x35, 0x49, 0x66),
             dim: Color::Rgb(0xb5, 0xb5, 0xb5),
+            row_dim: Color::Rgb(0xc8, 0xc8, 0xc8),
             path: Color::Rgb(0x6b, 0x6e, 0x75),
             code: Color::Rgb(0x7e, 0xb6, 0xb0), // teal
             bg_alt: Color::Rgb(0x13, 0x18, 0x20),
@@ -144,6 +149,7 @@ impl Theme {
             selected_fg: foreground,
             selected_bg: selection_bg,
             dim: comment,
+            row_dim: Color::Rgb(0x7a, 0x88, 0xb8),
             path: Color::Rgb(0x82, 0x90, 0xb4), // softer blue-grey
             code: cyan,
             bg_alt: Color::Rgb(0x21, 0x22, 0x2e),
@@ -185,6 +191,7 @@ impl Theme {
             selected_fg: fg,
             selected_bg: selection_bg,
             dim: gray,
+            row_dim: Color::Rgb(0x9e, 0x9e, 0x9e),
             path: Color::Rgb(0xb8, 0xa0, 0x78), // warmer tan, clearer separation from gray
             code: green,
             bg_alt: Color::Rgb(0x1c, 0x1c, 0x1c),
@@ -227,6 +234,7 @@ impl Theme {
             // disappear inside the selected row.
             selected_bg: polar2,
             dim: polar3,
+            row_dim: Color::Rgb(0x61, 0x6e, 0x88),
             path: Color::Rgb(0x81, 0xa1, 0xc1), // Nord frost3
             code: Color::Rgb(0x8f, 0xbc, 0xbb), // nord frost0 (nord7)
             bg_alt: Color::Rgb(0x29, 0x2e, 0x39),
@@ -265,6 +273,7 @@ impl Theme {
             "selected_fg" => self.selected_fg,
             "selected_bg" => self.selected_bg,
             "dim" => self.dim,
+            "row_dim" => self.row_dim,
             "path" => self.path,
             "code" => self.code,
             "bg_alt" => self.bg_alt,
@@ -304,6 +313,7 @@ impl Theme {
                 "selected_fg" => t.selected_fg = c,
                 "selected_bg" => t.selected_bg = c,
                 "dim" => t.dim = c,
+                "row_dim" => t.row_dim = c,
                 "path" => t.path = c,
                 "code" => t.code = c,
                 "bg_alt" => t.bg_alt = c,
@@ -345,6 +355,9 @@ impl Theme {
     }
     pub fn dim_style(&self) -> Style {
         Style::default().fg(self.dim)
+    }
+    pub fn row_dim_style(&self) -> Style {
+        Style::default().fg(self.row_dim)
     }
     /// Per-chip background fill for key/chord chips inside the footer bar.
     /// Pair with the chip's own fg style (dim+bold for keys, path for
@@ -803,6 +816,7 @@ mod tests {
             "selected_fg",
             "selected_bg",
             "dim",
+            "row_dim",
             "path",
             "code",
             "bg_alt",

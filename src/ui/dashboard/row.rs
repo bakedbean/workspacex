@@ -263,7 +263,7 @@ pub fn agent_strip_spans(
             let hidden = &inputs.peers[..inputs.peers.len() - peer_cells];
             spans.push(match hidden.iter().find(|peer| peer.active) {
                 Some(peer) => peer_span(peer),
-                None => Span::styled("+".to_string(), theme.dim_style()),
+                None => Span::styled("+".to_string(), theme.row_dim_style()),
             });
         }
         for peer in &inputs.peers[inputs.peers.len() - peer_cells..] {
@@ -311,7 +311,7 @@ pub fn render(
     ));
 
     // 2: elbow
-    spans.push(Span::styled("├  ".to_string(), theme.dim_style()));
+    spans.push(Span::styled("├  ".to_string(), theme.row_dim_style()));
 
     // 3: glyph or spinner. The static glyph is colored by status like the
     // gutter bar beside it. The live spinner instead takes the primary
@@ -357,7 +357,7 @@ pub fn render(
         0
     };
     if inputs.has_multi_pane_layout && inputs.nerd_fonts {
-        spans.push(Span::styled("\u{f0db} ".to_string(), theme.dim_style()));
+        spans.push(Span::styled("\u{f0db} ".to_string(), theme.row_dim_style()));
     }
     // Shared (tmux-backed) badge, immediately left of the branch glyph:
     // with nerd fonts, nf-md-check_network while the session is alive and
@@ -420,7 +420,7 @@ pub fn render(
     }
     let glyph_style = theme
         .lifecycle_style(inputs.lifecycle)
-        .unwrap_or_else(|| theme.dim_style())
+        .unwrap_or_else(|| theme.row_dim_style())
         .add_modifier(Modifier::BOLD);
     // Split the ALREADY-truncated text rather than truncating the glyph and
     // the name separately, so the column's cell budget is accounted for in
@@ -439,7 +439,7 @@ pub fn render(
         spans.push(Span::styled(name_cell, name_style));
     }
     if !tags_cell.is_empty() {
-        spans.push(Span::styled(tags_cell, theme.dim_style()));
+        spans.push(Span::styled(tags_cell, theme.row_dim_style()));
     }
     if let Some(b) = inputs.badge {
         spans.push(Span::styled(b.glyph(tick), b.style(theme)));
@@ -479,7 +479,7 @@ pub fn render(
     let procs_style = if inputs.procs > 0 {
         theme.status_style(Status::Thinking)
     } else {
-        theme.dim_style()
+        theme.row_dim_style()
     };
     spans.push(Span::styled(procs_padded, procs_style));
 
@@ -519,7 +519,9 @@ pub fn render(
             // One grey for every recap. Fading a stale one only made the
             // text unreadable without making the staleness legible; the PM
             // pane carries that signal as an explicit `recap stale` fact.
-            ColumnBody::Recap { segments } => (fit_segments(segments, avail), theme.dim_style()),
+            ColumnBody::Recap { segments } => {
+                (fit_segments(segments, avail), theme.row_dim_style())
+            }
             ColumnBody::Fallback { text, emphasis } => {
                 let sep_len = SEG_SEP.chars().count();
                 let fitted = if avail > sep_len + 1 {
@@ -528,13 +530,13 @@ pub fn render(
                     String::new()
                 };
                 let style = match emphasis {
-                    ColumnEmphasis::Dim => theme.dim_style(),
+                    ColumnEmphasis::Dim => theme.row_dim_style(),
                     ColumnEmphasis::Status => theme.status_style(inputs.status),
                     ColumnEmphasis::Warn => theme.warn_style(),
                 };
                 (fitted, style)
             }
-            ColumnBody::Empty => (String::new(), theme.dim_style()),
+            ColumnBody::Empty => (String::new(), theme.row_dim_style()),
         };
         used += display_width(&rest);
         if !rest.is_empty() {
@@ -542,17 +544,17 @@ pub fn render(
         }
         spans.push(Span::styled(
             " ".repeat(body_width.saturating_sub(used)),
-            theme.dim_style(),
+            theme.row_dim_style(),
         ));
     } else {
         let body = truncate_pad("—", message_width);
-        spans.push(Span::styled(body, theme.dim_style()));
+        spans.push(Span::styled(body, theme.row_dim_style()));
     }
 
     // 9: ago, right-aligned
     let ago = format_ago(inputs.ago_secs);
     let ago_padded = left_pad(&ago, AGE_WIDTH);
-    spans.push(Span::styled(ago_padded, theme.dim_style()));
+    spans.push(Span::styled(ago_padded, theme.row_dim_style()));
 
     Line::from(spans)
 }
@@ -905,7 +907,7 @@ mod tests {
             .iter()
             .find(|s| s.content.contains("#parked"))
             .unwrap();
-        assert_eq!(span.style.fg, theme.dim_style().fg);
+        assert_eq!(span.style.fg, theme.row_dim_style().fg);
     }
 
     #[test]
@@ -1281,7 +1283,7 @@ mod tests {
         let line = render(&inputs, ColumnWidths::default(), 0, &theme, 120);
         assert_eq!(
             find_body(&line, "backfill the migration").fg,
-            theme.dim_style().fg
+            theme.row_dim_style().fg
         );
     }
 
@@ -1446,7 +1448,7 @@ mod tests {
             .iter()
             .find(|s| s.content.contains("Audit V2"))
             .expect("segment span present");
-        assert_eq!(seg_span.style.fg, theme.dim_style().fg);
+        assert_eq!(seg_span.style.fg, theme.row_dim_style().fg);
         assert!(!seg_span.style.add_modifier.contains(Modifier::DIM));
     }
 
@@ -1686,7 +1688,7 @@ mod tests {
             inputs.lifecycle = lc;
             assert_eq!(
                 branch_glyph_style(&inputs, &theme).fg,
-                Some(theme.dim),
+                Some(theme.row_dim),
                 "glyph dims for {lc:?}"
             );
         }

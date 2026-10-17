@@ -14,8 +14,8 @@
 | `Shift + K`                       | On a workspace: show processes under its worktree. On a repo header: move the repo up one slot (persisted)   |
 | `Shift + J`                       | On a repo header: move the repo down one slot (persisted). No-op on a workspace                              |
 | `s`                               | Open repo settings modal for the selected repo (or the parent repo when a workspace is selected)             |
-| `Shift + F`                       | Choose which PR states and tags hide workspaces in the selected row's repo (persisted per repo). See [Hiding workspaces](hiding-workspaces.md) |
-| `#`                               | Edit the selected workspace's [tags](workspace-tags.md) (no-op on repo header)                              |
+| `Shift + F`                       | Choose which PR states and tags hide workspaces in the selected row's repo (persisted per repo). See [Hiding workspaces](tags-and-hiding.md) |
+| `#`                               | Edit the selected workspace's [tags](tags-and-hiding.md) (no-op on repo header)                              |
 | `enter` / `l` on a hidden-group row | Show that group's workspaces inline (this session only)                                                      |
 | `h` on a hidden-group row or a row inside it | Collapse the group back to its summary row (on an already-collapsed summary row, fold the repo)              |
 | `d`                               | Archive the selected workspace (no-op on repo header)                                                        |
@@ -52,7 +52,7 @@ A panel keeps those keys for itself while you are typing in it (the tag editor, 
 | ----- | --------------------------------------------------------------------------------------- |
 | `r`   | Rename the workspace (and its git branch)                                                |
 | `C`   | Pick a name color for its dashboard row                                                  |
-| `#`   | Edit the workspace's [tags](workspace-tags.md)                                           |
+| `#`   | Edit the workspace's [tags](tags-and-hiding.md)                                           |
 | `o`   | Open its setup log — see below                                                            |
 | `x`   | Cancel an in-flight setup (creates only; archive is not cancellable)                     |
 | `?` / `esc` | Close the card                                                                     |
@@ -63,7 +63,7 @@ Other keys (`e`, `t`, `v`, `g`, `enter`) are forwarded to the dashboard and act 
 
 Whenever the selected workspace carries a lifecycle badge — `⚙!` (setup failed), `⚙?` (setup cancelled), or a spinner (being created or archived) — the footer shows a `? o  setup log` hint, since the badge itself has no room to say where the reason lives.
 
-The viewer shows the [setup script](../configuration/per-repo-setup-scripts.md)'s output for the selected workspace, whatever state it is in: the live tail while the workspace is still being created, and the persisted log from `~/.local/state/wsx/logs/` once it has finished. Stderr lines are marked `!` and highlighted in both. Only the last 256 KiB of a log is read, and at most 2000 lines are shown, so a very verbose setup script loses the start of its output — the end, which says how the run finished, is always kept.
+The viewer shows the [setup script](../configuration/setup-scripts.md)'s output for the selected workspace, whatever state it is in: the live tail while the workspace is still being created, and the persisted log from `~/.local/state/wsx/logs/` once it has finished. Stderr lines are marked `!` and highlighted in both. Only the last 256 KiB of a log is read, and at most 2000 lines are shown, so a very verbose setup script loses the start of its output — the end, which says how the run finished, is always kept.
 
 A workspace with no log to show says which case it is rather than showing an empty pane: no setup script was ever run, the file could not be read (with the path and the error), or — while archiving — that archive output is not kept at all.
 
@@ -86,7 +86,7 @@ Keystrokes are forwarded to the running `claude` session, except:
 | `Ctrl-x Esc`     | Dismiss the navigation overlay without detaching (stay in the attached view).                               |
 | `Ctrl-x ←/→/↑/↓` | Move focus between split panes in that direction (vim's `Ctrl-w` motions).                                  |
 | `Ctrl-x u`       | Open the updates panel in the bottom drawer (a stripped-down dashboard in the dashboard's order; `v`/`s` open in a split, `o` / `G` cycle the dashboard's sort and grouping, `/` filters the list) |
-| `Ctrl-x a`       | Open the agents panel to add/remove agents in this workspace (see [Multi-agent workspaces](../configuration/multi-agent-workspaces.md)) |
+| `Ctrl-x a`       | Open the agents panel to add/remove agents in this workspace (see [Multi-agent workspaces](../agents/multi-agent-workspaces.md)) |
 | `Ctrl-x e`       | Open the attached workspace in your editor (same `editor_cmd` as `[e]` on the dashboard)                    |
 | `Ctrl-x t`       | Open the attached workspace in a terminal (same `terminal_cmd` as `[t]`)                                    |
 | `Ctrl-x v`       | View diff of the attached workspace's branch vs the base branch (same `diff_cmd` as `[v]`)                  |
@@ -104,4 +104,4 @@ Keystrokes are forwarded to the running `claude` session, except:
 | `Enter` *(bar focused)*    | Open the full-change detail modal for the selected entry                              |
 | `Esc` *(bar focused)*      | Return focus to the agent pane                                                        |
 
-When a workspace has more than one agent, the footer also binds bare keys `q w r y i o p s h j` (no leader) to switch the focused pane between agents — see [Multi-agent workspaces](../configuration/multi-agent-workspaces.md).
+When a workspace has more than one agent, the footer also binds bare keys `q w r y i o p s h j` (no leader) to switch the focused pane between agents — see [Multi-agent workspaces](../agents/multi-agent-workspaces.md).

@@ -31,7 +31,7 @@ it. Drafts and conflicted PRs count, since the link's
 have dropped out of that list and leave the link dim. Folding a repo
 hides its rows but not this signal.
 
-With [`nerd_fonts`](../configuration/global-settings.md) off the link
+With [`nerd_fonts`](../configuration/settings.md) off the link
 renders as the literal text `PR`:
 
 ```

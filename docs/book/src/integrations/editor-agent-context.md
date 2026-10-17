@@ -100,7 +100,7 @@ The digest ends with this block, addressed to the editor-hosted agent:
 ## The other direction
 
 wsx-spawned agents get a matching doctrine clause (see
-[Coding agents](../configuration/coding-agents.md)): an editor-hosted agent
+[Coding agents](../agents/coding-agents.md)): an editor-hosted agent
 may share the worktree, it reads this digest, and its messages arrive
 unlabelled. They are told to re-check `git status` before assuming the tree
 is theirs. The bundled wsx skill repeats the same guidance.

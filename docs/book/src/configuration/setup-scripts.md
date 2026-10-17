@@ -28,8 +28,8 @@ row's repo. The modal lists the per-repo fields:
 - `archive_script`
 - `pinned_commands`
 - `related_repos`
-- `detail_bar_config` (see [Workspace detail bar](../daily-use/detail-bar.md))
-- `chronology_config` (see [Change chronology](change-chronology.md))
+- `detail_bar_config` (see [Workspace detail bar](../dashboard/detail-bar.md))
+- `chronology_config` (see [Change chronology](../attached-view/change-chronology.md))
 
 When no repo value is set, `branch_prefix`, `custom_instructions`,
 `pinned_commands`, and `detail_bar_config` preview the global value with

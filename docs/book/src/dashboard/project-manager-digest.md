@@ -22,7 +22,7 @@ first.
   with its message appended when the agent reported one. This is the same
   status set via `wsx status set`. With several agents in a workspace it's
   the most urgent of their statuses (see
-  [Per-agent status](../configuration/multi-agent-workspaces.md#per-agent-status)).
+  [Per-agent status](../agents/multi-agent-workspaces.md#per-agent-status)).
 - **Recap lines** — `goal:`, `state:`, `next:` — the agent's own account of
   what the workspace is for, where it's at, and what's left. Only fields the
   agent has actually set are shown. Workspaces whose agent hasn't run since
@@ -57,7 +57,7 @@ wsx status set blocked --message "need a decision" --state "auth approach unsett
 
 Bare `wsx status` is `wsx status show` for the current workspace. This isn't something you normally run by hand — the standing operating
 doctrine wsx injects into every session (see `process_doctrine` in
-[Global settings](../configuration/global-settings.md)) instructs the agent
+[Global settings](../configuration/settings.md)) instructs the agent
 to set the goal once scope is clear and refresh state/next alongside its
 status updates.
 

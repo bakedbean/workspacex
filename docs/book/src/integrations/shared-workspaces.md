@@ -117,4 +117,4 @@ Fetching fails if the host is unreachable, ssh authentication fails, or wsx is m
 
 **v1 limitation — scrollback:**
 
-Reattaching (in wsx or via a bare `tmux attach`) only repaints the tmux session's *current visible screen* — wsx's own scrollback buffer (see [Mouse, scrollback, and text selection](../daily-use/mouse-scrollback-selection.md)) resets with each new client and doesn't carry history across a detach/reattach. tmux's own scrollback for the session is unaffected and still reachable in-session via its usual copy-mode (`Ctrl-b [` with tmux's default prefix). A richer remote-scrollback view is planned for a later phase.
+Reattaching (in wsx or via a bare `tmux attach`) only repaints the tmux session's *current visible screen* — wsx's own scrollback buffer (see [Mouse, scrollback, and text selection](../dashboard/mouse.md)) resets with each new client and doesn't carry history across a detach/reattach. tmux's own scrollback for the session is unaffected and still reachable in-session via its usual copy-mode (`Ctrl-b [` with tmux's default prefix). A richer remote-scrollback view is planned for a later phase.

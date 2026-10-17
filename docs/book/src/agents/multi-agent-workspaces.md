@@ -295,7 +295,7 @@ wsx agent list   --workspace backend/add-widgets
 wsx context show --workspace backend/add-widgets
 ```
 
-For every workspace at once, `wsx workspace list --json` — see [Workspace management](../cli-reference/workspace-management.md).
+For every workspace at once, `wsx workspace list --json` — see [Workspace management](../cli-reference/workspace.md).
 
 ### Agent identity and labels
 

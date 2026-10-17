@@ -17,7 +17,6 @@ working together in one workspace.
 - **Tags and hiding**: label workspaces and hide them by tag or PR state. See [Tags and hiding](dashboard/tags-and-hiding.md).
 - **Split panes and saved layouts**: watch other workspaces while attached. See [Updates panel and split panes](attached-view/updates-and-splits.md).
 - **Pinned commands and prompt tags**: fire saved prompts with `Ctrl-x <digit>` and insert XML-wrapped prompt sections. See [Pinned commands](attached-view/pinned-commands.md) and [Prompt tags](attached-view/prompt-tags.md).
-- **Change chronology**: a timeline of every file edit the agent made. See [Change chronology](attached-view/change-chronology.md).
 - **Bundled agent skills**: `wsx`, `agent-review`, and `handoff`. See [Agent skills](agents/skills.md).
 - **Editor, terminal, and diff hooks**: open a workspace in your tools with one key. See [Editor, terminal, and diff](integrations/editor-terminal-diff.md).
 - **Editor-hosted agents**: give an agent in your editor the workspace's context with `wsx context`. See [Editor-hosted agents](integrations/editor-agent-context.md).

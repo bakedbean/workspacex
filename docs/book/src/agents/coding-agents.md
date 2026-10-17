@@ -1,163 +1,86 @@
-By default, wsx spawns Claude Code (`claude`) as the coding agent in every workspace. You can choose a different agent per-workspace or set a global default:
+# Coding agents
+
+wsx runs Claude Code in each workspace by default. You can pick a different coding agent for all new workspaces or for one workspace.
 
 ```bash
-wsx config set coding_agent hermes           # new workspaces use hermes by default
-wsx workspace create backend --agent pi      # override for a single workspace
+wsx config set coding_agent codex            # default for new workspaces
+wsx workspace create backend --agent pi      # this workspace only
 ```
 
-Supported agents:
+A workspace created from inside another workspace inherits its agent kind. See [`wsx workspace create`](../cli-reference/workspace.md#wsx-workspace-create).
 
-| Agent              | CLI option       | Source                                                                    | Config                                    |
-| ------------------ | ---------------- | ------------------------------------------------------------------------- | ----------------------------------------- |
-| `claude` (default) | `--agent claude` | `claude` binary (override via `WSX_CLAUDE_BIN`)                           | Environment + `~/.claude.json` MCP        |
-| `pi`               | `--agent pi`     | `pi` binary, [`@earendil-works/pi-coding-agent`](https://github.com/badlogic/pi-mono) (override via `WSX_PI_BIN`) | `~/.pi/`                 |
-| `hermes`           | `--agent hermes` | [nousresearch/hermes-agent](https://github.com/nousresearch/hermes-agent) | `~/.hermes/config.yaml` (provider, model) |
-| `codex`            | `--agent codex`  | `codex` binary (override via `WSX_CODEX_BIN`)                             | `~/.codex/config.toml`                    |
-| `omp`              | `--agent omp`    | `omp` binary, [oh-my-pi](https://github.com/can1357/oh-my-pi) (override via `WSX_OMP_BIN`) | `~/.omp/agent/config.yml` |
+| Agent              | Project                                                                          | Its own config            |
+| ------------------ | -------------------------------------------------------------------------------- | ------------------------- |
+| `claude` (default) | Claude Code                                                                      | `~/.claude.json`          |
+| `pi`               | [`@earendil-works/pi-coding-agent`](https://github.com/badlogic/pi-mono)         | `~/.pi/`                  |
+| `hermes`           | [hermes-agent](https://github.com/nousresearch/hermes-agent)                     | `~/.hermes/config.yaml`   |
+| `codex`            | OpenAI Codex                                                                     | `~/.codex/config.toml`    |
+| `omp`              | [oh-my-pi](https://github.com/can1357/oh-my-pi) (`@oh-my-pi/pi-coding-agent`)    | `~/.omp/agent/config.yml` |
 
-### Hermes integration
+wsx runs the binary of the same name from `PATH`. Override the path with `WSX_<AGENT>_BIN`, and the model with the agent's model variables. See [Environment variables](../reference/environment-variables.md).
 
-When a workspace uses `coding_agent: hermes`, wsx spawns `hermes` (or the path in `WSX_HERMES_BIN`) instead of `claude`. Hermes runs in classic REPL mode and receives wsx custom instructions and auto-rename directives.
+## Capabilities
 
-**AGENTS.md management**: Because Hermes lacks a `--append-system-prompt` flag, wsx injects instructions into a fenced block at the end of `AGENTS.md` in the worktree's working directory:
+| Capability                             | claude | pi  | hermes | codex | omp |
+| -------------------------------------- | :----: | :-: | :----: | :---: | :-: |
+| wsx instructions and auto-rename       | ✓      | ✓   | ✓      | ✓     | ✓   |
+| [Related repos](../integrations/related-repos.md) as extra dirs | ✓ | – | – | – | ✓ |
+| Automatic status from the harness      | ✓      | –   | –      | ✓     | –   |
+| Each agent resumes its own session     | ✓      | ✓   | –      | ✓     | ✓   |
+| Yolo mode (`--yolo`)                   | ✓      | –   | ✓      | ✓     | ✓   |
+| [MCP inheritance](../integrations/mcp-inheritance.md) | ✓ | – | – | – | – |
+| [Remote control](../integrations/remote-access.md)   | ✓ | – | – | – | – |
+| `~/.claude/skills` and `~/.claude/commands` | ✓  | skills | – | commands | ✓ |
 
-```markdown
-<!-- BEGIN wsx-managed -->
+- "wsx instructions" is the [process doctrine](status-and-recap.md#what-agents-are-told), the auto-rename prompt, and the repo's custom instructions.
+- Agents without automatic status still report through `wsx status set`. See [Status and recap](status-and-recap.md).
+- Session resume is covered in [Multi-agent workspaces](multi-agent-workspaces.md#sessions-survive-a-restart).
 
-…injected instructions…
+## claude
 
-<!-- END wsx-managed -->
-```
+- Instructions go in `--append-system-prompt`. Related repos go in `--add-dir`.
+- wsx adds status hooks through `--settings`.
+- Yolo passes `--dangerously-skip-permissions`.
+- Remote control is on by default. Turn it off with the `remote_control` setting.
 
-The block is rewritten every time Hermes spawns and automatically cleaned up when there's nothing to inject. This approach works whether or not the repository tracks `AGENTS.md` in git:
+## pi
 
-- **Untracked `AGENTS.md`**: wsx adds it to `.git/info/exclude` so it doesn't show up in `git status`.
-- **Tracked `AGENTS.md`**: the worktree will show the file as modified during a Hermes spawn — this is expected and the modification disappears on subsequent spawns when there's no custom instructions to inject.
+- Instructions go in `--append-system-prompt`.
+- wsx loads a small extension (`pi -e`) that reports each session start, so each pi agent resumes its own session.
+- `WSX_PI_MODEL` and `WSX_PI_PROVIDER` pick the model for new sessions.
+- pi reads skills from `~/.claude/skills`.
 
-**Session detection**: On every Hermes spawn, wsx writes a timestamp marker at `<worktree>/.git/info/wsx-hermes-spawn-at` (per-worktree-local, never committed). To find the active Hermes session for a worktree, wsx queries `~/.hermes/state.db` for the most recent session started at or after that timestamp (with a 2-second look-back buffer to absorb clock skew). This drives both the prior-session indicator on the dashboard and the `--resume <id>` flag on Continue spawns. Note: if two worktrees both spawn Hermes within a few seconds of each other, the lookup is best-effort — the more-recent session could be attributed to either worktree depending on timing.
+## hermes
 
-**Session-tail**: wsx tails `~/.hermes/state.db` (sqlite) to populate the dashboard's RECENT CHAT, SESSION SUMMARY, and last-message columns for Hermes workspaces. The following fields are populated: last assistant text, first user prompt, stop reason, tool-use counts, and per-event snapshots (user messages, assistant text, and tool calls — including `ran \`<cmd>\`` display for terminal/bash tool invocations). Tool-use counts treat all Hermes tool names as "other" for now — categorization into read/edit/write/bash buckets is a follow-up since Hermes uses lowercase tool names rather than Claude's capitalized convention. Still missing compared to Claude/Pi: edited-files tracking and pending-tool-use timing for permission-prompt detection.
+- Hermes has no flag for extra instructions, so wsx writes them into a `<!-- BEGIN wsx-managed -->` block at the end of the worktree's `AGENTS.md` on each start.
+  - When wsx creates `AGENTS.md`, it copies the repo's `CLAUDE.md` into it.
+  - An untracked `AGENTS.md` is added to `.git/info/exclude`.
+  - A tracked `AGENTS.md` shows as modified while the block is present.
+- On resume, wsx picks the newest Hermes session started since the workspace's first Hermes spawn. If two worktrees start Hermes within a few seconds, it can pick the wrong one.
+- Added Hermes agents always start fresh.
+- `WSX_HERMES_MODEL` and `WSX_HERMES_PROVIDER` override `~/.hermes/config.yaml`.
+- The detail bar shows chat and tool counts, but not edited files.
 
-**Environment overrides**: configure Hermes via `~/.hermes/config.yaml` (persistent settings), or set `WSX_HERMES_MODEL` and `WSX_HERMES_PROVIDER` to override per-workspace:
+## codex
 
-```bash
-WSX_HERMES_MODEL=llama-3-70b-instruct WSX_HERMES_PROVIDER=together wsx workspace create backend --agent hermes
-```
+- Requires Codex 0.146.0 or newer.
+- Instructions go in `-c developer_instructions=…`. Nothing is written to the worktree. Codex reads `CLAUDE.md` when the repo has no `AGENTS.md`.
+- Instructions are set only on a fresh start. A resumed session keeps the ones it started with, so edits to custom instructions or related repos don't reach it.
+- Status comes from Codex's `notify` after each turn.
+- Your `~/.claude/commands/*.md` are mirrored into a Codex plugin on each start, so commands such as `/pull-request` work in Codex.
+- wsx turns off Codex's startup update prompt, which would block input. Update Codex yourself, for example with `npm install -g @openai/codex`.
+- Yolo passes `--dangerously-bypass-approvals-and-sandbox`.
+- The detail bar doesn't show edited files.
 
-### Codex integration
+## omp
 
-When a workspace uses `coding_agent: codex`, wsx spawns `codex` (or the path in `WSX_CODEX_BIN`) instead of `claude`. Codex receives wsx custom instructions and auto-rename directives.
+`omp` and `pi` are separate harnesses with different binaries. You can install both.
 
-**Instruction injection**: Codex has no `--append-system-prompt` flag, so wsx passes the workspace doctrine, the auto-rename hint, and any custom instructions as a Codex config override on the spawn command line:
-
-```bash
-codex -c 'developer_instructions="…injected instructions…"' \
-      -c 'project_doc_fallback_filenames=["CLAUDE.md"]'
-```
-
-Codex renders `developer_instructions` as the first developer-role message, ahead of its own instructions and ahead of the user-role message that carries `AGENTS.md`. **Nothing is written to your worktree** — no `AGENTS.md`, no `.git/info/exclude` entry. A repo's own `AGENTS.md` is still read by Codex as usual, and `project_doc_fallback_filenames` makes Codex fall back to `CLAUDE.md` in repos that have no `AGENTS.md`.
-
-Both overrides are applied only to **fresh** spawns. `codex resume --last` restores the session's stored configuration and ignores these two keys, so a resumed session keeps the doctrine it was started with. It also means edits to a workspace's custom instructions or related-repo context never reach an already-started Codex session — re-attaching with `resume --last` after editing them won't pick up the change, since only a fresh spawn re-composes the `-c` overrides. Requires Codex `0.146.0` or newer.
-
-If a worktree was used with an older wsx, it may contain a wsx-created `AGENTS.md`; deleting it lets the new `CLAUDE.md` fallback work.
-
-**Claude slash commands**: before each Codex spawn, wsx mirrors Markdown files from `~/.claude/commands/` into a local Codex plugin at `~/plugins/wsx-claude-commands/commands/` and registers that plugin in the implicit personal marketplace at `~/.agents/plugins/marketplace.json`. The marketplace entry is marked `INSTALLED_BY_DEFAULT`, so commands such as `/pull-request` and `/commit-changes` are available in Codex without maintaining a second command set. Edits to the Claude command files are picked up on the next Codex spawn.
-
-**Update check**: every Codex spawn, fresh or resumed, passes `-c check_for_update_on_startup=false`. Codex's startup "Update available" dialog blocks input until someone answers it, which would leave a handoff or reviewer agent stuck behind it with its brief unread. wsx therefore never updates Codex for you: run `codex` outside wsx to see the update prompt, or upgrade through your package manager (e.g. `npm install -g @openai/codex` or `brew upgrade codex`).
-
-**Spawn**: fresh workspaces launch bare `codex`. Non-yolo sessions use Codex's built-in interactive approvals + workspace-write sandbox; `--yolo` workspaces add `--dangerously-bypass-approvals-and-sandbox`.
-
-**Continue**: `codex resume <thread-id>` once the instance's thread id has been recorded from its `notify` payload (see [Sessions survive a restart](multi-agent-workspaces.md#sessions-survive-a-restart)); before that, `codex resume --last`, which Codex filters to the current directory natively — the worktree's own most-recent session.
-
-**Activity**: the dashboard detail bar tails the worktree's rollout file under `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. RECENT FILES is not yet populated for Codex (file edits are inferred-via-shell and not tracked).
-
-**Model**: set `WSX_CODEX_MODEL` to pass `-m <model>` to Codex (e.g. `gpt-5.4`). Unset = Codex default.
-
-### Pi integration
-
-**Session identity**: wsx writes a small extension to its state dir
-(`pi-session-report.ts`) and passes it as `pi -e <file>` on every spawn. On
-each `session_start` (startup, `/new`, `/resume`, fork) it runs `wsx status
-from-notify --agent pi` with the session id, which is how a pi instance is
-resumed exactly after a wsx restart — see [Sessions survive a
-restart](multi-agent-workspaces.md#sessions-survive-a-restart). Nothing is
-written to the worktree.
-
-### Oh My Pi integration
-
-`omp` is [oh-my-pi](https://github.com/can1357/oh-my-pi)
-(`@oh-my-pi/pi-coding-agent`). It is **not** the same harness as `pi`, which is
-`@earendil-works/pi-coding-agent`. The two share ancestry — which is why they
-write the same session-file format — but they are separately maintained, have
-different CLIs, and can both be installed at once. `--agent pi` and `--agent
-omp` mean different binaries.
-
-**Spawn**: fresh workspaces launch bare `omp`. Non-yolo sessions inherit
-whatever `tools.approvalMode` you configured; `--yolo` workspaces add
-`--approval-mode yolo`.
-
-**Continue**: `omp --resume=<file>` once wsx has read the instance's session
-file from omp's terminal breadcrumb (see [Sessions survive a
-restart](multi-agent-workspaces.md#sessions-survive-a-restart)); before that,
-`omp -c`, which omp resolves against the session directory for the current
-cwd — the worktree's own most-recent session, exact only while one omp agent
-lives there.
-
-**Instructions**: doctrine, the auto-rename directive, and a workspace's custom
-instructions compose into a single `--append-system-prompt`. Related-repo paths
-ride on `--add-dir`. omp is the only harness besides Claude that supports both
-flags, so nothing is written into the worktree — no `AGENTS.md` block (unlike
-Hermes) and no config overrides (unlike Codex).
-
-**Skills and slash commands ride on a config overlay.** omp's Claude discovery
-provider can load `~/.claude/skills/*/SKILL.md`, `~/.claude/commands/*.md` and
-Claude marketplace plugins (superpowers, for example), but since omp 18 every
-Claude user-level source is off by default: `skills.enableClaudeUser` and
-`commands.enableClaudeUser` default to `false` (they were `true` in 17.x), and
-the new `enabledProviders` list defaults to empty, which keeps the
-`claude-plugins` source out too. Left alone, omp reports `Unknown skill: wsx`,
-your pinned command chips do nothing, and plugin skills are missing. So before
-every omp spawn wsx writes a small overlay to `<wsx state dir>/omp-config.yml`
-(by default `~/.local/state/wsx/omp-config.yml`; `XDG_STATE_HOME` relocates it)
-that turns the two toggles on and sets `enabledProviders: [claude-plugins]`,
-then launches `omp --config <that file>`.
-
-The overlay applies to that run only; your `~/.omp/agent/config.yml` is never
-edited. It does take precedence over your own config: an explicit `false` for
-either toggle is overridden in wsx-spawned sessions, and because omp replaces
-arrays rather than merging them, an `enabledProviders` list of your own is
-replaced by `[claude-plugins]` for those sessions. It enables every skill and
-command under `~/.claude`, not only the ones wsx installs. It deliberately
-lists `claude-plugins` rather than `claude`: the whole `claude` source would
-also load your Claude hooks, MCP servers and `~/.claude/CLAUDE.md` into omp. If
-the overlay cannot be written (read-only state dir), wsx logs a warning and
-launches omp without it. omp's other skill filters (`skills.ignoredSkills`,
-`skills.includeSkills`) still apply. There is still no separate omp skills target for `wsx setup
-install-skill` — the Claude one covers it, for the same reason it covers Pi.
-
-**Session detection and activity**: omp stores sessions at
-`~/.omp/agent/sessions/<encoded-cwd>/<ts>_<uuid>.jsonl`, where the directory
-name is the cwd with `$HOME` (or the temp root) stripped and `/` collapsed to
-`-`. Because omp writes the same JSONL schema pi does, wsx reuses the pi parser,
-so RECENT CHAT, SESSION SUMMARY, tool-use counts and the last-message column are
-populated exactly as they are for Pi. Like Claude, Pi and Codex, omp indexes
-sessions by worktree path, so it participates in the worktree-sessions snapshot
-that stops a recycled workspace slug from resuming its predecessor's
-conversation.
-
-**Status reporting**: omp exposes pre/post *tool* hooks only — there is no
-turn-lifecycle event (nothing equivalent to Claude's stop / prompt-submitted /
-permission-prompt hooks, or Codex's `notify`) — so there is no deterministic
-status wiring, the same position Pi and Hermes are in. Status still updates from
-the agent itself calling `wsx status set`, and from the session-JSONL heuristic.
-Claude and Codex remain the only harnesses with automatic harness-level status.
-
-**Environment overrides**: configure omp via `~/.omp/agent/config.yml`, or set
-`WSX_OMP_MODEL` to override the model per-workspace:
-
-```bash
-WSX_OMP_MODEL=anthropic/claude-opus-5 wsx workspace create backend --agent omp
-```
-
-There is no `WSX_OMP_PROVIDER`: omp documents `--provider` as legacy and accepts
-`provider/id` in `--model`, so `WSX_OMP_MODEL` covers both.
+- Instructions go in `--append-system-prompt`. Related repos go in `--add-dir`.
+- Yolo passes `--approval-mode yolo`. Otherwise omp uses your `tools.approvalMode`.
+- `WSX_OMP_MODEL` sets the model. It accepts `provider/id`.
+- On each start wsx passes `--config <state dir>/omp-config.yml`. This overlay turns on omp's `~/.claude` skills, commands and Claude plugins, which omp 18 turns off by default.
+  - It overrides your own settings for those keys in wsx sessions, and replaces your `enabledProviders` list.
+  - It enables every skill and command under `~/.claude`, not only wsx's.
+  - Your `~/.omp/agent/config.yml` is never edited.
+- Pinned chips that name a bundled skill are sent as `/skill:<name>`. See [Agent skills](skills.md#pinning-skills-as-chips).

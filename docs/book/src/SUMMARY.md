@@ -17,7 +17,6 @@
   - [Updates panel and split panes](attached-view/updates-and-splits.md)
   - [Pinned commands](attached-view/pinned-commands.md)
   - [Prompt tags](attached-view/prompt-tags.md)
-  - [Change chronology](attached-view/change-chronology.md)
 - [Agents](agents/index.md)
   - [Coding agents](agents/coding-agents.md)
   - [Multi-agent workspaces](agents/multi-agent-workspaces.md)

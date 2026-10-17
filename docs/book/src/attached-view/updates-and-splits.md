@@ -1,77 +1,53 @@
-When you're attached to a workspace (full-screen claude session), wsx
-still tracks the other workspaces in the background. Two affordances
-surface that:
+# Updates panel and split panes
 
-- A one-row workspace list in the top bar, after the focused workspace's
-  label. Every other workspace gets an entry, `<glyph> <repo>/<name> (<age>)`,
-  with the same status glyph and color its dashboard row shows. Workspaces
-  that need attention come first; the rest follow in the dashboard's own
-  order under its current sort mode. Click an entry to switch to that
-  workspace. When the row runs out of room it ends in `… +N more`; click
-  that to open the updates panel described next.
+While you're attached to one workspace, wsx keeps the others in view. Use the top-bar strip and the updates panel to jump between workspaces, and split the view to watch several agents at once.
 
-- A bottom drawer panel via `Ctrl-x u` listing ALL workspaces — a stripped-down
-  dashboard. Rows come in the dashboard's own order. Grouped by repo, each
-  repo's rows follow the dashboard's sort mode (recency or status). Grouped
-  by attention, the NEEDS ATTENTION / WORKING / RECENT / IDLE sections use
-  the dashboard's fixed per-section order (urgency then age, or age alone),
-  with `repo/name` rows; the sort mode does not apply there, exactly as on
-  the dashboard. Each row shows the workspace's current state and latest
-  event, plus the same PR chip (`⏺ #123 open ✓`) and `+N −N` line diff the
-  dashboard row shows — in a terminal too narrow for both, the diff is
-  dropped first, then the chip. Unlike the dashboard, nothing is folded or
-  collapsed: every workspace is listed, and empty repos are skipped. Press
-  `Esc` to close — with a filter active, `Esc` clears the filter first and
-  closes on the second press. The panel re-renders live, so ages count up
-  and attention flags appear/clear in real time.
+## Workspace strip
 
-  From the panel:
+The top bar lists every other workspace after the focused one's label, as `<glyph> <repo>/<name> (<age>)`:
 
-  | Key                          | Action                                                                                 |
-  | ---------------------------- | -------------------------------------------------------------------------------------- |
-  | `Up` / `Down` (or `k` / `j`) | Move selection within the panel; wraps from either end to the other.                   |
-  | `Enter`                      | Switch the current pane to the selected workspace (replaces it).                       |
-  | `v`                          | Open the selected workspace in a vertical split (panes side by side, vim's `:vsplit`). |
-  | `s`                          | Open the selected workspace in a horizontal split (panes stacked, vim's `:split`).     |
-  | `o`                          | Cycle the dashboard's sort mode (recency ↔ status); persisted, like the dashboard's `o`. |
-  | `G`                          | Toggle the dashboard's grouping (by repo ↔ by attention).                              |
-  | `/`                          | Filter the list; type to narrow it, `Esc` to clear.                                    |
+- The glyph and color match the workspace's dashboard row.
+- Workspaces that need attention come first. The rest follow the dashboard's order.
+- Click an entry to switch to that workspace.
+- When the strip runs out of room it ends in `… +N more`. Click it to open the updates panel.
 
-  The filter matches the workspace name, its repo's name, and the row's
-  status text (the same text the row shows, case-insensitively), and repo
-  headers with no surviving workspaces disappear along with their rows.
-  While a filter is active, printable keys are filter text rather than
-  shortcuts — so the arrow keys and `Enter` are how you navigate and attach
-  mid-search.
+## Updates panel
 
-Multiple workspace PTYs can be tiled in the attached view, vim-style. Any
-pane can be split again — recursively — into a tree of vertical and
-horizontal splits. Each pane shows a 1-line title bar with the workspace
-name and a `●` marker on the focused pane (which receives keystrokes).
+Press `Ctrl-x u` to open the updates panel, a compact dashboard in the bottom drawer. It lists every workspace in the dashboard's order and grouping, with nothing folded. Each row shows the workspace's state, latest event, PR chip, and `+N −N` diff. It updates live.
 
-The flow:
+| Key                 | Action                                                         |
+| ------------------- | -------------------------------------------------------------- |
+| `↑` / `↓`, `k` / `j` | Move the selection (wraps at the ends)                        |
+| `Enter` or `l`      | Switch the current pane to the selected workspace              |
+| `v`                 | Open the selected workspace in a vertical split (side by side) |
+| `s`                 | Open the selected workspace in a horizontal split (stacked)    |
+| `o`                 | Cycle the sort mode (recency ↔ status), same as the dashboard  |
+| `G`                 | Toggle grouping (by repo ↔ by attention)                       |
+| `/`                 | Filter by workspace name, repo, or status text                 |
+| `Esc`               | Clear the filter, or close the panel                           |
 
-1. Attach to a workspace as usual (`Enter` on the dashboard).
-2. Press `Ctrl-x u` to open the updates panel.
-3. Move to another workspace; press `v` (vertical) or `s` (horizontal) to
-   add it as a new pane alongside the current one. Focus jumps to the
-   new pane.
-4. Navigate between panes with `Ctrl-x ←/→/↑/↓` — direction-aware
-   walking up the split tree, like vim's `Ctrl-w` motions.
-5. Close the focused pane with `Ctrl-x d`. The other panes keep
-   running; when the last pane closes you detach back to the dashboard.
+While a filter is active, letter keys type into the filter. Use the arrow keys and `Enter` to pick a row.
 
-When you split the _focused_ pane again in the same direction as its
-parent, the new pane is inserted as a sibling instead of nesting deeper —
-matches vim and keeps the tree shallow.
+## Split panes
 
-**Saving a layout.** `Ctrl-x d` detaches without remembering how the panes
-were arranged. To keep the arrangement, press `Ctrl-x Shift-D` instead: wsx
-saves the split tree (and which pane was focused) against the _anchor_
-workspace — the first pane you attached to — then detaches to the
-dashboard. (`Ctrl-x Esc` just dismisses the navigation overlay and leaves
-you attached.) The next time you attach to that workspace, wsx restores the
-layout and respawns the side panes' sessions. Panes whose workspaces no
-longer exist are pruned on restore; if none survive you get a plain
-single-pane view. Workspaces with a saved multi-pane layout show a columns
-glyph next to their branch on the dashboard (nerd fonts only).
+You can tile several workspaces in the attached view, vim-style. Any pane can split again, so you can build any tree of vertical and horizontal splits. Each pane has a one-line title bar, and `●` marks the focused pane, which receives your keystrokes.
+
+1. Attach to a workspace and press `Ctrl-x u`.
+2. Select another workspace and press `v` or `s`. Focus moves to the new pane.
+3. Repeat to add more panes.
+
+| Key                   | Action                                                       |
+| --------------------- | ------------------------------------------------------------ |
+| `Ctrl-x ←/→/↑/↓`      | Move focus to the neighboring pane                           |
+| `Ctrl-x d`            | Close the focused pane. Closing the last pane detaches       |
+| `Ctrl-x Shift-D`      | Save the layout and detach to the dashboard                  |
+
+Other panes keep running when you close one.
+
+## Saving a layout
+
+`Ctrl-x d` doesn't remember the arrangement. Press `Ctrl-x Shift-D` to save the split tree and the focused pane against the first workspace you attached to, then detach.
+
+- The next time you attach to that workspace, wsx restores the layout and restarts the other panes' sessions.
+- Panes whose workspaces no longer exist are dropped. If none remain, you get a single pane.
+- A workspace with a saved layout shows a columns glyph next to its branch on the dashboard (Nerd Fonts only).

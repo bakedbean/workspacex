@@ -1,31 +1,48 @@
-```
+# Agent skills
+
+wsx bundles skills that teach agents to drive wsx: creating workspaces, messaging peers, and handing work off. Install them once per machine.
+
+```bash
 wsx setup install-skill
 ```
 
-Writes the [bundled skills](#bundled-skills) to each detected agent's skills directory — `~/.claude/skills/<skill>/SKILL.md` and the equivalent under `~/.codex` / `~/.hermes`. Claude is always targeted; Codex and Hermes are added when detected. The skills are embedded in the binary at compile time, so installing wsx on a new machine is `cargo install` then `wsx setup install-skill`.
+This writes every bundled skill to each agent's skills directory:
 
-Codex is considered installed when `WSX_CODEX_BIN` is set, `codex` is on `PATH`, or `~/.codex` already exists; Hermes likewise via `WSX_HERMES_BIN`, `hermes` on `PATH`, or `~/.hermes`.
+| Agent            | Directory           | When                                                        |
+| ---------------- | ------------------- | ----------------------------------------------------------- |
+| claude, pi, omp  | `~/.claude/skills/` | Always                                                      |
+| codex            | `~/.codex/skills/`  | `codex` is on `PATH`, `WSX_CODEX_BIN` is set, or `~/.codex` exists |
+| hermes           | `~/.hermes/skills/` | `hermes` is on `PATH`, `WSX_HERMES_BIN` is set, or `~/.hermes` exists |
 
-There is intentionally no separate target for `pi` or `omp`. Both read skills from `~/.claude/skills` — omp via its Claude discovery provider, which loads `~/.claude/skills/*/SKILL.md` (and `~/.claude/commands/*.md` as slash commands) — so the Claude target already covers them. omp 18 turned that user-level scan off by default, so wsx passes a config overlay on every omp spawn to turn it back on; see [Coding agents](coding-agents.md).
+Re-run it after upgrading wsx. It reports `already up to date` for unchanged skills and overwrites any copy that differs, including your local edits. omp reads `~/.claude/skills` through a config overlay wsx passes. See [Coding agents](coding-agents.md#omp).
 
-Idempotent: re-running when an installed copy already matches reports "already up to date" without writing. If an installed copy has drifted (you edited it locally, or you're upgrading wsx with skill changes), it's overwritten and reports "updated".
+## Bundled skills
 
-### Bundled skills
+| Skill          | Use it to                                                                                  |
+| -------------- | ------------------------------------------------------------------------------------------ |
+| `wsx`          | Drive the wsx CLI: workspaces, naming, peer agents, and work across related repos          |
+| `agent-review` | Start a peer agent that reviews the current branch against `main` and reports back to you  |
+| `handoff`      | Continue a finished workspace's feature in a fresh workspace                               |
 
-`wsx setup install-skill` installs every bundled skill for each detected agent:
+**`agent-review`** takes the reviewer kind (`claude`, `pi`, `hermes`, `codex`, or `omp`) and asks if you omit it. It adds the reviewer with `wsx agent add` and gives it the branch diff. The reviewer runs its harness's `code-review` skill when there is one, then replies with a risk assessment and gap analysis.
 
-- **`wsx`** — drives the wsx CLI (workspace ops, slug-vs-`branch_prefix` naming, cross-repo orchestration).
-- **`agent-review`** — run inside a workspace to spin up a peer review agent. It takes the reviewer kind (`claude` | `pi` | `hermes` | `codex` | `omp`; asks when omitted), spawns it with `wsx agent add`, hands it the branch diff vs `main` (telling it to run the `code-review` skill first when its harness has one, such as Claude Code's `/code-review`), and has it report a risk assessment + gap analysis back via `wsx agent reply`.
-- **`handoff`** — run inside a *finished* workspace (PR merged, work wrapping up) to continue the same feature or epic in a fresh workspace. The agent asks what the new workspace should implement (or takes it as the argument: `/handoff add a --json flag`), creates a same-repo workspace with `wsx workspace create <repo> --name <slug>`, and briefs its primary agent with a distilled summary of the session — decisions and why, rejected approaches, gotchas, file:line pointers, follow-ups — plus the request as its task. Reply `defer` to have the new agent wait for your request instead. The outgoing agent sets itself `done` and does not archive the old workspace.
+**`handoff`** takes what the new workspace should implement, or asks for it:
 
-Pin either skill to a chip so it is one click away — add a line to your [pinned commands](../attached-view/pinned-commands.md). Use `wsx config edit pinned_commands` to append without clobbering existing chips (`wsx config set` replaces the whole value):
+```
+/handoff add a --json flag
+```
+
+It creates a workspace in the same repo and briefs its agent with a summary of this session: decisions, rejected approaches, gotchas, file pointers, and follow-ups. Reply `defer` to have the new agent wait for your request. The old agent marks itself `done` and doesn't archive its workspace.
+
+## Pinning skills as chips
+
+Add skills to your [pinned commands](../attached-view/pinned-commands.md) with `wsx config edit pinned_commands`:
 
 ```
 agent-review=/agent-review ...
 handoff=/handoff
 ```
 
-The `agent-review` line ends in `...`, so the chip types `/agent-review ` and waits for you to add the reviewer kind (`codex`, `omp`, …) before pressing enter; press enter with nothing and the skill asks which kind to spawn. Pin it as a plain `/agent-review` if you'd rather always be asked. The `handoff` chip runs `/handoff` with no request, so the agent asks for one before creating the workspace — the question is the chip's way of taking input.
-
-In an omp session, a chip naming a bundled skill is sent as `/skill:<name>` (`/skill:handoff`, `/skill:agent-review`): omp only exposes skills under that prefix, and its own builtin `/handoff` — which summarizes and compacts the session in place — would otherwise catch the chip. Pin the bare `/handoff` form; wsx does the rewrite. Typing `/handoff` by hand in omp still reaches omp's builtin.
-
+- The `...` makes the `agent-review` chip type `/agent-review ` and wait for you to add the reviewer kind.
+- The `handoff` chip runs with no request, so the agent asks what to implement.
+- In omp, wsx sends a chip naming a bundled skill as `/skill:<name>`, because omp's own `/handoff` would catch it. Pin the plain `/handoff` form. Typing `/handoff` yourself in omp still runs omp's built-in command.

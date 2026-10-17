@@ -372,9 +372,6 @@ pub(super) async fn workspace_actions(
     _shared: &SharedApp,
     k: crossterm::event::KeyEvent,
 ) -> Result<()> {
-    if super::switch_drawer(app, k).await? {
-        return Ok(());
-    }
     match k.code {
         // Dismiss without side effects.
         KeyCode::Esc => {
@@ -392,8 +389,6 @@ pub(super) async fn workspace_actions(
         | KeyCode::Char('t')
         | KeyCode::Char('v')
         | KeyCode::Char('g')
-        | KeyCode::Char('C')
-        | KeyCode::Char('#')
         | KeyCode::Enter => {
             app.modal = None;
             handle_key_dashboard(app, k).await?;

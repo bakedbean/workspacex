@@ -31,6 +31,12 @@
 | `q` / `p` (when digest focused)   | Close the digest (`q` only closes it while the digest is focused — dashboard-focused `q` quits wsx)          |
 | `r` (when digest visible)         | Force a git/PR cache refresh                                                                                 |
 
+### Switching panels
+
+Every panel in the bottom drawer follows the same rules. While one is open, pressing another panel's key (`?`, `Shift + F`, `s`, `#`, `Shift + C`, `Shift + K`, `Shift + H`, or a `Ctrl-x` chord such as `Ctrl-x a`, or `Ctrl-x u` / `Ctrl-x k` / `Ctrl-x <` in the attached view) replaces it, and pressing the open panel's own key closes it. A key that has nothing to open for the current selection (`?` on a repo header) leaves the open panel alone.
+
+A panel keeps those keys for itself while you are typing in it (the tag editor, the name-color filter, a name field, a filter you started with `/`), and where a key is one of its own commands: `Shift + K` kills a process in the process list, and `s` opens a split in the updates panel. `Ctrl-x` chords work from every panel, including the ones you are typing in.
+
 ### New Workspace / Confirm Archive modals
 
 | Key                           | Action                              |
@@ -51,7 +57,7 @@
 | `x`   | Cancel an in-flight setup (creates only; archive is not cancellable)                     |
 | `?` / `esc` | Close the card                                                                     |
 
-Other keys (`e`, `t`, `v`, `g`, `c`, `enter`) are forwarded to the dashboard and act on the selected workspace.
+Other keys (`e`, `t`, `v`, `g`, `enter`) are forwarded to the dashboard and act on the selected workspace.
 
 ### Setup log viewer (`o`)
 

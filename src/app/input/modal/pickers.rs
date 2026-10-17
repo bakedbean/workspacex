@@ -119,9 +119,6 @@ pub(super) async fn hide_rules_picker(
     rows: Vec<(crate::data::hide_rules::HideRule, usize)>,
     selected: usize,
 ) -> Result<()> {
-    if super::switch_drawer(app, k).await? {
-        return Ok(());
-    }
     let last = rows.len().saturating_sub(1);
     let selected = match k.code {
         KeyCode::Esc | KeyCode::Enter => {

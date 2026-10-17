@@ -1,57 +1,56 @@
-Install wsx first. See [Installation](installation.md) for every method;
-the short version on macOS and Linux is:
+# Quick start
 
-```bash
-brew tap bakedbean/workspacex https://github.com/bakedbean/workspacex
-brew install bakedbean/workspacex/wsx
-```
+This walkthrough takes you from install to a running agent session, then
+connects wsx to your editor, terminal, and diff tool.
 
-Then point wsx at a repository and launch it:
+1. Install wsx. On macOS or Linux with Homebrew:
 
-```bash
-wsx repo add /path/to/your/repo
-wsx              # launch TUI
-```
+   ```bash
+   brew tap bakedbean/workspacex https://github.com/bakedbean/workspacex
+   brew install bakedbean/workspacex/wsx
+   ```
 
-Press `n` (or SHIFT + N for permissive) to create your first workspace, then `enter` to attach. Claude Code spawns inside the worktree.
+   For other methods, see [Installation](installation.md).
 
-Out of the box, wsx drives your agent sessions, but the three keys that make it
-feel like a cockpit (`[e]` editor, `[v]` diff, `[t]` terminal) do nothing useful
-until you tell wsx *which* tools to launch. These aren't configured by default,
-and the payoff isn't obvious until you've set them: jump straight from a
-workspace into your editor, a full branch diff, or a fresh shell, all rooted in
-that workspace's worktree.
+2. Register a repository:
 
-Set them once globally with `wsx config set`. Sample commands for a Neovim +
-Alacritty setup:
+   ```bash
+   wsx repo add /path/to/your/repo
+   ```
 
-```bash
-# [e] — open the worktree in Neovim, running inside a new Alacritty window
-wsx config set editor_cmd "alacritty --working-directory={path} -e nvim"
+3. Launch the dashboard:
 
-# [v] — view the branch diff in Neovim via diffview.nvim
-wsx config set diff_cmd "alacritty --working-directory={path} -e nvim -c 'DiffviewOpen {base}...HEAD'"
+   ```bash
+   wsx
+   ```
 
-# [t] — open a shell in the worktree in a new Alacritty window
-wsx config set terminal_cmd "alacritty --working-directory={path}"
-```
+4. Press `n` to create a workspace: a new branch and worktree with its own
+   agent session. Press `N` (`Shift-N`) instead to start the agent in
+   permissive mode, which skips permission prompts.
 
-A few things worth knowing, all covered in detail under
-[Editor, terminal, and diff integration](../integrations/editor-terminal-diff.md):
+5. Press `enter` to attach. The agent (Claude Code by default) runs inside
+   the worktree.
 
-- **`{path}` and `{base}` placeholders.** `{path}` expands to the worktree path
-  and `{base}` to the diff base ref (e.g. `origin/main`). If a command has no
-  `{path}`, wsx *appends* the worktree path as a trailing argument. That's why
-  Alacritty uses `--working-directory={path}` — passing the path positionally
-  (`alacritty /some/path`) is an error, and setting its working directory also
-  lets Neovim start in the worktree without opening the directory as a buffer.
-- **TUI editors need a terminal wrapper.** vim/nvim/helix are launched detached
-  from wsx and have no TTY of their own, so wrap them in a terminal command
-  (`alacritty -e nvim`). GUI editors (`code`, `cursor`, `zed`) work directly.
-- **Why `{base}...HEAD` (three dots).** Three dots anchor the diff at the merge
-  base, so a stale local `main` doesn't pollute the view — the same diff `gh pr`
-  shows.
+6. Press `Ctrl-x d` to detach back to the dashboard. The session keeps
+   running.
 
-`editor_cmd` and `terminal_cmd` fall back to `$VISUAL`/`$EDITOR` and `$TERMINAL`
-respectively if unset; `diff_cmd` has no fallback and must be set explicitly.
-Each can also be overridden per-repo — see the linked section.
+7. Tell wsx which tools the `[e]` editor, `[t]` terminal, and `[v]` diff keys
+   launch. For example, Neovim in Alacritty:
+
+   ```bash
+   wsx config set editor_cmd   "alacritty --working-directory={path} -e nvim"
+   wsx config set terminal_cmd "alacritty --working-directory={path}"
+   wsx config set diff_cmd     "alacritty --working-directory={path} -e nvim -c 'DiffviewOpen {base}...HEAD'"
+   ```
+
+   `{path}` is the worktree and `{base}` is the diff base ref. Wrap terminal
+   editors like `nvim` in a terminal command; GUI editors like `code` work
+   directly. See [Editor, terminal, and diff](../integrations/editor-terminal-diff.md)
+   for fallbacks and per-repo overrides.
+
+## Next steps
+
+- [Dashboard](../dashboard/index.md) and [Keybindings](../dashboard/keybindings.md)
+- [Attached view](../attached-view/index.md)
+- [Coding agents](../agents/coding-agents.md), to switch from Claude Code
+- [Settings](../configuration/settings.md)

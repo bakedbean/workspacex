@@ -1,10 +1,10 @@
 //! The `Ctrl-x` leader chord: the second keystroke after the prefix.
 
+use super::panel::{Panel, Surface};
 use super::*;
 use crate::app::{App, save_layout_for, schedule_detach_refresh};
 use crate::error::Result;
 use crate::ui::View;
-use crate::ui::modal::Modal;
 use crate::ui::split::{Arrow, CloseOutcome};
 use crossterm::event::KeyCode;
 
@@ -103,20 +103,8 @@ pub(in crate::app::input) async fn dispatch_leader_action(
                 .await;
             Ok(())
         }
-        KeyCode::Char('u') => {
-            app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
-                selected: 0,
-                filter: None,
-            });
-            Ok(())
-        }
-        KeyCode::Char('a') => {
-            app.modal = Some(crate::ui::modal::Modal::AgentsPanel {
-                workspace_id: id,
-                selected: 0,
-            });
-            Ok(())
-        }
+        KeyCode::Char('u') => Panel::Updates.open(app, Surface::Attached(id)),
+        KeyCode::Char('a') => Panel::Agents.open(app, Surface::Attached(id)),
         KeyCode::Char('e') => {
             if let Some(path) = app.workspace_path(id) {
                 let cmd = app.store.get_setting("editor_cmd").ok().flatten();
@@ -150,20 +138,9 @@ pub(in crate::app::input) async fn dispatch_leader_action(
             }
             Ok(())
         }
-        KeyCode::Char('k') => {
-            app.modal = Some(Modal::ProcessList {
-                workspace_id: id,
-                selected: 0,
-                input: None,
-                notice: None,
-            });
-            Ok(())
-        }
-        KeyCode::Char('<') => {
-            // Prompt tag: pick an XML tag, type a body, insert it unsubmitted.
-            app.modal = Some(Modal::PromptTag(crate::ui::modal::PromptTagModal::pick()));
-            Ok(())
-        }
+        KeyCode::Char('k') => Panel::ProcessList.open(app, Surface::Attached(id)),
+        // Prompt tag: pick an XML tag, type a body, insert it unsubmitted.
+        KeyCode::Char('<') => Panel::PromptTag.open(app, Surface::Attached(id)),
         KeyCode::Char(c @ '1'..='9') => {
             let idx = (c as u8 - b'1') as usize;
             if let Some(cmd) = app.pinned_commands_cache.get(idx) {

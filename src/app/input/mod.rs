@@ -10,6 +10,7 @@
 //!   [`leader`]     the `Ctrl-x` prefix chord
 //!   [`footer`]     hint bar and the detail bar's reply input
 //!   [`mouse`]      clicks and wheel, including hit-testing
+//!   [`panel`]      the keys that summon, swap, and close panels
 //!   [`keys`]       key <-> byte encoding and input tracing
 
 pub(crate) mod attached;
@@ -19,6 +20,7 @@ pub(crate) mod keys;
 pub(crate) mod leader;
 pub(crate) mod modal;
 pub(crate) mod mouse;
+pub(crate) mod panel;
 
 pub(in crate::app::input) use attached::*;
 pub(in crate::app::input) use dashboard::*;

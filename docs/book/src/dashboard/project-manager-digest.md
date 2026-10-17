@@ -27,4 +27,4 @@ Agents write recaps and statuses with `wsx recap` and `wsx status`. See [Status 
 | `r`                    | Refresh git and PR data                      |
 | `q`                    | Close the digest                             |
 
-`q` closes the digest only while the digest has focus. With the list focused, `q` quits wsx and kills running sessions.
+`q` closes the digest only while the digest has focus. With the list focused, `q` quits wsx and stops its direct (non-shared) sessions.

@@ -17,7 +17,7 @@ Every key in the wsx TUI, grouped by where you press it. Capital letters mean `S
 | `o`                     | Sort by recency or by status (saved)                   |
 | `G`                     | Group by repo or by attention                          |
 | `Tab`                   | Focus the detail-bar reply, then the digest            |
-| `q`                     | Quit; kills running sessions                           |
+| `q`                     | Quit; stops direct sessions (shared ones keep running)  |
 
 `q` asks first if a workspace is still being created or archived.
 

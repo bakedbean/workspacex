@@ -46,7 +46,7 @@ connects wsx to your editor, terminal, and diff tool.
    `{path}` is the worktree and `{base}` is the diff base ref. Wrap terminal
    editors like `nvim` in a terminal command; GUI editors like `code` work
    directly. See [Editor, terminal, and diff](../integrations/editor-terminal-diff.md)
-   for fallbacks and per-repo overrides.
+   for placeholders and fallbacks.
 
 ## Next steps
 

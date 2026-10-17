@@ -12,7 +12,7 @@ Set these in the shell that starts wsx. wsx passes its environment on to the age
 | `WSX_PI_PROVIDER` | Limits pi to one provider's models. |
 | `WSX_HERMES_BIN` | Path to `hermes`. Default: `hermes` on `PATH`. |
 | `WSX_HERMES_MODEL` | Model for Hermes, overriding `~/.hermes/config.yaml`. |
-| `WSX_HERMES_PROVIDER` | Provider passed to Hermes as `--provider`. |
+| `WSX_HERMES_PROVIDER` | Provider passed to Hermes as `--provider`. Hermes's default REPL mode may ignore it in favour of `~/.hermes/config.yaml`. |
 | `WSX_CODEX_BIN` | Path to `codex`. Default: `codex` on `PATH`. |
 | `WSX_CODEX_MODEL` | Model passed to Codex as `-m`. |
 | `WSX_OMP_BIN` | Path to `omp` (oh-my-pi). Default: `omp` on `PATH`. |

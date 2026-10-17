@@ -58,7 +58,7 @@ wsx runs the binary of the same name from `PATH`. Override the path with `WSX_<A
   - A tracked `AGENTS.md` shows as modified while the block is present.
 - On resume, wsx picks the newest Hermes session started since the workspace's first Hermes spawn. If two worktrees start Hermes within a few seconds, it can pick the wrong one.
 - Added Hermes agents always start fresh.
-- `WSX_HERMES_MODEL` and `WSX_HERMES_PROVIDER` override `~/.hermes/config.yaml`.
+- `WSX_HERMES_MODEL` overrides the model in `~/.hermes/config.yaml`. `WSX_HERMES_PROVIDER` is passed as `--provider`, which Hermes's default REPL mode may ignore; set the provider in `config.yaml` to be sure.
 - The detail bar shows chat and tool counts, but not edited files.
 
 ## codex

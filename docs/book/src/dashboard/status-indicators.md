@@ -60,7 +60,7 @@ PR data needs [`gh`](https://cli.github.com), installed and authenticated.
 
 When an agent asks a question, waits on a permission prompt, finishes, or stalls, wsx rings the terminal bell. The workspace also moves to the front of the attached view's [workspace strip](../attached-view/updates-and-splits.md) until you attach to it.
 
-- Each state has its own bell pattern: `notification_bell_question` (default double), `notification_bell_permission` (single), `notification_bell_complete` (single), `notification_bell_stalled` (triple).
+- Each state has its own bell pattern, set with the `notification_bell_*` settings.
 - `wsx config set notifications off` turns off the bell and the flag.
 - Workspaces that were already waiting when wsx started don't ring.
 - While wsx runs, the bell doesn't ask the window manager for urgency, so on Hyprland it won't switch your desktop workspace.

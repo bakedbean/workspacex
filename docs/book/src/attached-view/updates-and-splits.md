@@ -13,7 +13,7 @@ The top bar lists every other workspace after the focused one's label, as `<glyp
 
 ## Updates panel
 
-Press `Ctrl-x u` to open the updates panel, a compact dashboard in the bottom drawer. It lists every workspace in the dashboard's order and grouping, with nothing folded. Each row shows the workspace's state, latest event, PR chip, and `+N −N` diff. It updates live.
+Press `Ctrl-x u` to open the updates panel, a compact dashboard in the bottom drawer. It lists every visible workspace in the dashboard's order and grouping, with nothing folded. Hidden workspaces appear only when you search with `/`. Each row shows the workspace's state, latest event, PR chip, and `+N −N` diff. It updates live.
 
 | Key                 | Action                                                         |
 | ------------------- | -------------------------------------------------------------- |

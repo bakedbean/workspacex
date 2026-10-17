@@ -1,46 +1,113 @@
-```
-wsx config get <key>
-wsx config set <key> <value-or-@file>
+# Settings
+
+Global settings live in the wsx state database. Read and change them with `wsx config`. Per-repo values override some of them.
+
+```bash
 wsx config list
-wsx config edit <key>          # opens $EDITOR (default: vi)
+wsx config get <key>
+wsx config set <key> <value>
+wsx config edit <key>        # opens $EDITOR (default: vi)
 ```
-
-Known keys:
-
-| Key                      | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `branch_prefix`          | Default branch prefix for repos with no per-repo override. Branches are named `<prefix>/<workspace>`.                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `custom_instructions`    | Free-text appended to claude's system prompt on every workspace spawn.                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `process_doctrine`       | Standing "operating doctrine" injected into every developer session (new and resumed) across all agents: think and plan before scope is set, break work into logical commits, load the wsx skill, report status with `wsx status set`, and maintain the workspace recap with `wsx recap set` (see [Project manager digest](../dashboard/project-manager-digest.md)). Set this to replace the default text verbatim (`@file` supported); set it to `off` / `none` / `disabled` to suppress injection entirely. A blank value restores the default (it is not an off switch). |
-| `process_doctrine_extra` | Extra clauses appended to the end of the effective doctrine (default or `process_doctrine` override), one per line in the same `- ...` bullet style, for every agent. Use it to add per-install practices without freezing a copy of the whole default text — e.g. `wsx config set process_doctrine_extra "- Use the superpowers skills by default when evaluating the initial request; drop them if the task turns out not to need that level of planning."` (`@file` supported). Ignored when `process_doctrine` is set to a disable sentinel. |
-| `coding_agent`           | Default coding agent for new workspaces: `claude` (default) / `pi` / `hermes` / `codex` / `omp`. Per-workspace override via `wsx workspace create <repo> --agent <agent>`. See [Coding agents](../agents/coding-agents.md).                                                                                                                                                                                                                                                  |
-| `nerd_fonts`             | Render nerd-font glyphs in the dashboard. Default ON; set to `false` / `0` / `off` to disable.                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `editor_cmd`             | Command to run for `[e] edit` on the dashboard. Worktree path appended as final arg unless the command contains `{path}` (substituted in place). Examples: `code`, `cursor`, `alacritty -e nvim`, `xdg-terminal-exec --dir={path} nvim`. Also required for the chronology bar's "open at changed line" action; see [Change chronology](../attached-view/change-chronology.md) for the `{file}`/`{line}` injection details.                                                                                                          |
-| `terminal_cmd`           | Command to run for `[t] terminal` on the dashboard. Spawned with cwd=worktree; `{path}` substituted in place if present. Examples: `alacritty`, `kitty`, `gnome-terminal`. A jump that launches a TUI (`wsx waybar jump`, `wsx desktop jump`, the macOS menubar) uses it only when it contains `{cmd}`, which it replaces with the wsx command to run, e.g. `konsole -e {cmd}`; `[t]` doesn't substitute `{cmd}`, so a value meant for jumps doesn't suit `[t]`.                                                                                                                                                                                                                                                                                                                                       |
-| `notifications`          | Ring the terminal bell and show a `!` marker when a workspace transitions to `waiting` (claude paused for ≥30s). Default ON; set to `off` / `false` / `0` / `no` to disable.                                                                                                                                                                                                                                                                                                                                     |
-| `notification_bell_question` | Bell pattern when a workspace's agent asks you a question. One of `off`, `single`, `double`, `triple` (anything else is rejected by `config set`). Default `double`. The `!` attention marker still appears when set to `off`; use `notifications` to silence everything. |
-| `notification_bell_complete` | Bell pattern when a workspace's agent finishes a turn. Same values. Default `single`. |
-| `notification_bell_permission` | Bell pattern when a workspace's agent is waiting on a permission prompt. Same values. Default `single`. |
-| `notification_bell_stalled` | Bell pattern when a workspace's agent has stalled. Same values. Default `triple`. |
-| `theme` | Base color palette. One of `wsx` (default), `default` (palette-adaptive ANSI), `dracula`, `jellybeans`, `nord`. Unknown values fall back to `wsx`. Restart wsx after changing. Bar layout and styling live in `~/.config/wsx/theme.toml`; see [Themes](themes.md). |
-| `bar_theme` | Opt-in for the bar theme file. Default OFF: wsx draws its stock bars and never reads `~/.config/wsx/theme.toml`. Set to `on` / `true` / `1` / `yes` to honor the file (live reload, error notice); back to `off` snaps to the stock bars. Takes effect within a second, no restart. See [Themes](themes.md). |
-| `mcp_mirror`             | Inherit MCP servers from the source repo into worktrees (see [MCP server inheritance](../integrations/mcp-inheritance.md)). Default ON; set to `off` / `false` / `0` / `no` to disable.                                                                                                                                                                                                                                                                                                                     |
-| `remote_control`         | Pass `--remote-control` to claude on every spawn so the session is reachable via [claude.ai/code](https://claude.ai/code) and the Claude mobile app (see [Remote control](../integrations/remote-access.md)). Default ON; set to `off` / `false` / `0` / `no` to disable.                                                                                                                                                                                                                                         |
-| `remote_control_sandbox` | When `remote_control` is on, also pass `--sandbox` for an extra safety wrapper on remote-issued commands. Default OFF; set to `on` / `true` / `1` / `yes` to enable.                                                                                                                                                                                                                                                                                                                                             |
-| `pinned_commands`        | Newline-separated list of `Label=command` (or bare `command`) entries. Each becomes a chip in the attached view, fired via `Ctrl-x <digit>` or click; a command ending in `...` is typed but not submitted. Max 9 visible/keyable. Per-repo override available via `wsx repo set-pinned-commands`.                                                                                                                                                                                                                                                                     |
-| `prompt_tags`            | Newline-separated `name=uses` entries — the saved prompt tags and their use counts, maintained by the attached view's `Ctrl-x <` picker. Editable by hand; malformed lines (an invalid name, a non-numeric count) are dropped on read and disappear on the next save.                                                                                                                                                                                                                                                                                                                         |
-| `remotes`                | Newline-separated list of `name=command` entries — named shell commands run by `wsx remote <name>`, typically `ssh -t host '…tmux attach…'` for reattaching a wsx session running on another machine. List with `wsx remote`; add or edit with `wsx config edit remotes`. See [Named remote shortcuts](../integrations/remote-access.md).                                                                                                                                                                                 |
-| `dashboard_branch_width` | Width (chars) of the `⎇ branch` column on the dashboard. Default `28`. Clamped to `10..=80`.                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `dashboard_pr_width`     | Width (chars) of the PR chip column (`⏺ #123 open`) on the dashboard. Default `16`. Clamped to `8..=24`.                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `dashboard_sort_mode`    | How workspaces are ordered inside a repo on the dashboard: `recency` (default) or `status`. Toggled live with `o`, which writes this setting; a CLI change applies at the next wsx start. |
-| `dashboard_blocked_pin_max_age_secs` | How long a workspace blocked on you (`?` question, `!` stalled) is pinned above the recency-ordered rows. Default `86400` (24h). Past this it sorts on age like anything else, so a workspace parked blocked for weeks stops camping at the top. Only applies in `recency` mode. |
-| `detail_bar_config`      | JSON blob controlling the per-workspace detail bar (visibility, height, and the container/module layout). See [Workspace detail bar](../dashboard/detail-bar.md) for the schema, defaults, and per-repo override flow. Out-of-range values are clamped on save.                                                                                                                                                                                                                                                       |
-| `chronology_config`      | JSON blob controlling the change chronology bar in the attached view (visibility, side, and width). See [Change chronology](../attached-view/change-chronology.md) for the schema, defaults, and per-repo override flow.                                                                                                                                                                                                                                                                                                            |
 
 Value sources:
 
-- A literal string: `wsx config set branch_prefix bakedbean`
-- A file (prefix with `@`): `wsx config set custom_instructions @./instructions.md`
-- Empty (clears): `wsx config set custom_instructions ""`
+- A literal: `wsx config set branch_prefix bakedbean`
+- A file, prefixed with `@`: `wsx config set custom_instructions @./instructions.md`
+- An empty string clears the key and restores the default: `wsx config set custom_instructions ""`
+- `wsx config edit <key>` opens the current value in `$EDITOR`. Use it for multi-line values.
 
-`wsx config edit <key>` opens `$EDITOR` on a tempfile prepopulated with the current value; saving updates the setting. Useful for multi-line `custom_instructions`.
+`config set` rejects unknown keys. On/off keys accept `on`/`true`/`1`/`yes` and `off`/`false`/`0`/`no`. See [`wsx config`](../cli-reference/other.md#wsx-config-set) for the full syntax.
+
+## General
+
+| Key | Default | Effect |
+|---|---|---|
+| `branch_prefix` | unset | Names new branches `<prefix>/<workspace>`. Unset, the branch is the bare workspace name. |
+| `coding_agent` | `claude` | Agent for new workspaces: `claude`, `pi`, `hermes`, `codex` or `omp`. See [Coding agents](../agents/coding-agents.md). |
+
+## Agent sessions
+
+| Key | Default | Effect |
+|---|---|---|
+| `custom_instructions` | unset | Text appended to the agent's system prompt on every spawn. |
+| `process_doctrine` | built-in text | Replaces the working doctrine injected into every session. `off`, `none` or `disabled` turns it off; an empty value restores the default. See [What agents are told](../agents/status-and-recap.md#what-agents-are-told). |
+| `process_doctrine_extra` | unset | Extra `- ...` bullet lines appended to the doctrine. |
+| `mcp_mirror` | on | Copy the source repo's MCP servers into each worktree. See [MCP server inheritance](../integrations/mcp-inheritance.md). |
+
+## Editor and tools
+
+| Key | Default | Effect |
+|---|---|---|
+| `editor_cmd` | `$VISUAL`, then `$EDITOR` | Command for `e`. The worktree path is appended unless the command contains `{path}`. |
+| `terminal_cmd` | `$TERMINAL` | Command for `t`, run in the worktree. `{cmd}` makes it usable for desktop-widget jumps. |
+| `diff_cmd` | unset | Command for `v`. Accepts `{path}` and `{base}`. |
+| `lazygit_cmd` | unset | Command for `g`, run in the worktree. It must open its own window, for example `wezterm start -- lazygit`. |
+
+See [Editor, terminal, and diff](../integrations/editor-terminal-diff.md) for examples.
+
+## Notifications
+
+| Key | Default | Effect |
+|---|---|---|
+| `notifications` | on | Master switch for the terminal bell and the `!` attention marker. |
+| `notification_bell_question` | `double` | Bell when the agent asks you a question. |
+| `notification_bell_complete` | `single` | Bell when the agent finishes a turn. |
+| `notification_bell_permission` | `single` | Bell when the agent waits on a permission prompt. |
+| `notification_bell_stalled` | `triple` | Bell when the agent stalls. |
+
+Bell values are `off`, `single`, `double` or `triple`. `off` silences the bell but keeps the `!` marker. See [Status indicators](../dashboard/status-indicators.md).
+
+## Dashboard
+
+| Key | Default | Effect |
+|---|---|---|
+| `dashboard_sort_mode` | `recency` | Workspace order within a repo: `recency` or `status`. `o` toggles it. |
+| `dashboard_blocked_pin_max_age_secs` | `86400` | How long a workspace blocked on you stays pinned to the top in `recency` mode. |
+| `dashboard_branch_width` | `28` | Width of the branch column, clamped to 10–80. |
+| `dashboard_pr_width` | `16` | Width of the PR column, clamped to 8–24. |
+| `detail_bar_config` | built-in | JSON for the detail pane. See [Detail bar](../dashboard/detail-bar.md) for the schema. |
+| `usage_graph_window` | `24h` | Window of the `$usage` activity graph: `24h`, `1w` or `1mo`. Shown only when a [theme](themes.md) places `$usage`. |
+| `pinned_commands` | unset | `Label=command` lines shown as chips. See [Pinned commands](../attached-view/pinned-commands.md). |
+| `prompt_tags` | unset | `name=uses` lines, maintained by the prompt-tag picker. See [Prompt tags](../attached-view/prompt-tags.md). |
+
+## Appearance
+
+| Key | Default | Effect |
+|---|---|---|
+| `theme` | `wsx` | Base palette: `wsx`, `default` (terminal ANSI colors), `dracula`, `jellybeans` or `nord`. Restart wsx to apply. |
+| `bar_theme` | off | Read bar layout and styling from `~/.config/wsx/theme.toml`. Applies within a second. See [Themes](themes.md). |
+| `nerd_fonts` | on | Use Nerd Font glyphs on the dashboard. |
+
+## Remote
+
+| Key | Default | Effect |
+|---|---|---|
+| `remote_control` | on | Start claude with `--remote-control`, so claude.ai/code and the mobile app can reach it. See [Remote access](../integrations/remote-access.md). |
+| `remote_control_sandbox` | off | Also pass `--sandbox` when `remote_control` is on. |
+| `remotes` | unset | `name=command` lines run by `wsx remote <name>`. See [Remote access](../integrations/remote-access.md). |
+| `shared_hosts` | unset | `name=ssh-destination` lines for browsing and creating workspaces on other machines. See [Shared workspaces](../integrations/shared-workspaces.md). |
+
+## Per-repo settings
+
+Each repo can override or add these values:
+
+| Setting | CLI | Notes |
+|---|---|---|
+| Name | `wsx repo set-name` | |
+| Branch prefix | `wsx repo set-prefix` | Overrides `branch_prefix`. |
+| Base branch | `wsx repo set-base-branch` | |
+| Custom instructions | `wsx repo set-instructions` | Added to the global `custom_instructions`. |
+| Setup and archive scripts | `wsx repo set-setup`, `set-archive` | See [Setup and archive scripts](setup-scripts.md). |
+| Pinned commands | `wsx repo set-pinned-commands` | Replaces the global `pinned_commands`. |
+| Related repos | `wsx repo set-related-repos` | See [Related repos](../integrations/related-repos.md). |
+| Detail bar | drawer only | Merged over the global `detail_bar_config`. |
+
+You can also edit them in the repo settings drawer: press `s` on any dashboard row.
+
+- An unset field shows the global value marked `(inherited)`, or `(unset)`.
+- `↑`/`↓` selects a field. `Enter` opens the repo value in `$EDITOR` and saves it when the editor exits.
+- `d` clears the repo value, which restores inheritance. `Esc` closes the drawer.
+
+Use a terminal editor that blocks until you quit (vim, helix, nano). A GUI editor that returns immediately saves nothing.
+
+See [`wsx repo`](../cli-reference/repo.md) for the full syntax.

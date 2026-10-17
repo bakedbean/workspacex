@@ -1,9 +1,15 @@
-After your first prompt in a freshly-created workspace, wsx renames the workspace + git branch based on the conversation. Controlled by `WSX_RENAME_MODE`:
+# Auto-rename
 
-| Mode               | Behavior                                                                                                                                                                                                                           |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `claude` (default) | Claude itself runs `git branch -m` as the first action in its response, based on your first message. A background poller propagates the rename to the wsx store. Higher-quality slugs at the cost of ~80 tokens per session start. |
-| `local`            | wsx intercepts your first prompt's keystrokes locally and slugifies them. Zero tokens; literal text.                                                                                                                               |
-| `off`              | No auto-rename. Workspaces keep their generated `<adjective>-<plant>` name forever.                                                                                                                                                |
+After your first prompt in a new workspace, wsx renames the workspace and its git branch to match the task. Set the `WSX_RENAME_MODE` environment variable before starting wsx to choose how.
 
-The rename only fires on workspaces whose name still matches the generated `<adjective>-<plant>` pattern.
+| Mode | Behavior |
+|---|---|
+| `claude` (default) | The coding agent picks a slug from your first message and renames the branch. Costs a few tokens per new session. |
+| `local` | wsx slugifies the text of your first prompt. Costs no tokens. |
+| `off` | No auto-rename. |
+
+```bash
+WSX_RENAME_MODE=local wsx
+```
+
+Auto-rename only applies to a workspace that still has its generated `<adjective>-<plant>` name. To rename a workspace by hand, press `r` on its card (`?` on the dashboard).

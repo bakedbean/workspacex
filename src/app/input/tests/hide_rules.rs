@@ -467,3 +467,21 @@ async fn drawer_key_that_opens_nothing_keeps_the_open_card() {
         Some(crate::ui::modal::Modal::HideRules { .. })
     ));
 }
+
+#[tokio::test]
+async fn own_drawer_key_closes_after_selection_moves_off_its_target() {
+    use crate::ui::modal::Modal;
+    let (mut app, repo, ids) = app_with_merged_hidden();
+    draw(&mut app);
+    select(&mut app, SelectionTarget::Workspace(ids[1]));
+    press(&mut app, '?', KeyModifiers::NONE).await;
+    assert!(matches!(app.modal, Some(Modal::WorkspaceActions)));
+    // The card lets the selection move underneath; `?` would not open on a
+    // repo header, but it must still close the card it opened.
+    select(&mut app, SelectionTarget::Repo(repo));
+    let shared = shared_app();
+    crate::app::input::modal::handle_key_modal(&mut app, &shared, key(KeyCode::Char('?')))
+        .await
+        .unwrap();
+    assert!(app.modal.is_none());
+}

@@ -1,36 +1,47 @@
+# wsx workspace
+
+Commands that create, inspect and retire workspaces. Each workspace is a git worktree on its own branch, with one or more agents.
+
+## wsx workspace create
+
 ```
-wsx workspace create <repo> [--name <slug>] [--yolo] [--shared] [--start [--json]] [--agent claude|pi|hermes|codex|omp] [--prompt <text>]
+wsx workspace create <repo> [--name <slug>] [--yolo] [--shared] [--start [--json]] [--agent <kind>] [--prompt <text>]
 ```
 
-Creates a workspace in `<repo>`, equivalent to the dashboard's `[n]` keybind. `<slug>` is a kebab-case workspace name; the resulting git branch is `<branch_prefix>/<slug>`. A name git won't accept in that branch (one with a space, `~ ^ : ? * [ \`, or `..`, for example) is refused before anything is created, here and in the `[n]` modal, and so is one whose branch already exists or clashes with an existing branch's path (`wsx/foo` blocks `wsx/foo/bar`). When `--name` is omitted, an adjective-noun slug like `merry-birch` is generated. `--yolo` skips the permission prompts in the spawned agent session. `--shared` runs the workspace's agents under tmux (see [Shared workspaces](../integrations/shared-workspaces.md)). `--agent` overrides the `coding_agent` setting (see [Coding agents](../agents/coding-agents.md)) for this workspace; when omitted, the setting applies (claude unless configured otherwise).
+Creates a branch and worktree in `<repo>`, like `n` on the dashboard.
 
-`--start` also has the dashboard running on this machine start the new workspace's agents inside tmux, then waits until their sessions are live and prints the session names to attach to. It implies `--shared`, and works like `wsx workspace share --restart` on the new workspace: without a running dashboard the command fails once the workspace exists, leaving it created but stopped. `--json` (with `--start`) prints the workspace's record instead and moves the human-readable report to stderr. The record is printed even when the start fails, with the reason in `start_error` (the command still exits non-zero). A failed setup script adds `setup_exit_code` and `setup_log`. This is what another machine's host picker runs to create a workspace there (see [Shared workspaces](../integrations/shared-workspaces.md#browsing-another-machine)).
+| Flag | Effect |
+| --- | --- |
+| `--name <slug>` | Workspace name. The branch is `<branch_prefix>/<slug>`. Default: a generated name like `merry-birch`. |
+| `--yolo` | Skip permission prompts in the agent session. |
+| `--shared` | Run the workspace's agents under tmux. See [Shared workspaces](../integrations/shared-workspaces.md). |
+| `--start` | Have the running dashboard start the agents in tmux, wait until they're live, and print the sessions to attach to. Implies `--shared`. |
+| `--json` | With `--start` only: print the workspace record on stdout, even when the start fails. |
+| `--agent <kind>` | `claude`, `pi`, `hermes`, `codex` or `omp`. Overrides the `coding_agent` setting. See [Coding agents](../agents/coding-agents.md). |
+| `--prompt <text>` | Queue a first task for the primary agent, like an immediate [`wsx agent send`](agent.md#wsx-agent-send). |
 
-`--prompt` seeds the new workspace's agent with a starting task, equivalent to running [`wsx agent send`](../agents/multi-agent-workspaces.md) against it immediately afterward. Like any queued message it is delivered by the dashboard, which spawns the agent on demand — so a workspace created with `--prompt` while no dashboard is running stays idle, and the command says so on stderr.
+- Run from inside a workspace, `create` inherits that workspace's yolo mode and agent kind unless you pass `--yolo` or `--agent`. It prints what it inherited.
+- wsx refuses a slug that git can't use in a branch name, or whose branch already exists or clashes with an existing branch path (`wsx/foo` blocks `wsx/foo/bar`).
+- A failing setup script prints a warning and its log path. The workspace is still created.
+- `--start` and `--prompt` need a running dashboard. Without one, `--start` fails after creating the workspace, and a `--prompt` stays queued until a dashboard starts.
 
-When `create` runs from inside a workspace — an agent handing work off, or a shell in a worktree — the new workspace inherits that workspace's yolo mode and agent kind: yolo is on if `--yolo` is passed *or* the parent is yolo, and the agent is `--agent` if passed, else the parent's agent, else the `coding_agent` setting. The command prints what it inherited and from where. Creates from outside any workspace fall back to the flags and settings alone.
-
-## Starting work from a phone
-
-`--prompt` exists so a whole workspace can be started over SSH in one line, with the prompt as the only thing typed:
+Starting work from a phone over SSH, with a dashboard already running in tmux on the host:
 
 ```
 wsx workspace create backend --prompt "Fix the flaky input PTY tests"
 ```
 
-Omitting `--name` is deliberate here: the workspace gets a placeholder slug, and the agent renames both it and the git branch from the prompt on its first turn (see [Auto-rename modes](../configuration/auto-rename.md)).
+Without `--name`, the agent renames the workspace and branch from the prompt. See [Auto-rename](../configuration/auto-rename.md).
 
-Two existing behaviors make this self-sufficient. Claude sessions are spawned with `--remote-control` by default (see [Remote control](../integrations/remote-access.md)), so the new session appears in the Claude app without any URL to copy off the terminal. And agent sessions run under `tmux`, so the session survives your SSH connection dropping — back at a real terminal, the dashboard reattaches to it with full scrollback.
-
-This assumes a wsx dashboard is already running on the target machine, since nothing else delivers the prompt. Leaving `wsx` running in a tmux session is the usual arrangement.
+## wsx workspace list
 
 ```
 wsx workspace list [<repo>] [--json]
 ```
 
-Lists workspaces as tab-separated `repo<TAB>slug<TAB>branch<TAB>worktree_path` rows. Pass a repo name to filter.
+Lists workspaces as tab-separated `repo  slug  branch  worktree_path` rows, optionally for one repo.
 
-`--json` prints an array with everything a dashboard row shows, one object per workspace:
+`--json` prints one object per workspace with everything its dashboard row shows:
 
 ```json
 {
@@ -40,38 +51,89 @@ Lists workspaces as tab-separated `repo<TAB>slug<TAB>branch<TAB>worktree_path` r
   "path": "/home/me/.local/state/wsx/worktrees/backend/add-widgets",
   "status": {"state": "working", "message": "running tests", "source": "model", "reported_at": 1790342366562},
   "recap": {"goal_short": "POST /widgets", "state_short": "tests failing", "next_short": "fix validation"},
-  "agents": [
-    {"id": 12, "label": "claude", "kind": "claude", "primary": true, "status": {"state": "working", "message": "running tests", "source": "model", "reported_at": 1790342366562}}
-  ],
-  "pr": {"state": "open", "number": 241, "url": "https://github.com/acme/backend/pull/241", "review": "approved", "unresolved": 0, "fetched_at": 1790342836000}
+  "agents": [{"id": 12, "label": "claude", "kind": "claude", "primary": true, "status": {"state": "working", "...": "..."}}],
+  "pr": {"state": "open", "number": 241, "url": "https://github.com/acme/backend/pull/241", "review": "approved", "unresolved": 0, "fetched_at": 1790342836000},
+  "tags": ["spike"]
 }
 ```
 
-`status` is the workspace's derived status (see [Per-agent status](../agents/multi-agent-workspaces.md#per-agent-status)); `recap` holds the short forms. `pr` is whatever the dashboard or waybar last cached — `workspace list` makes no network calls — and is `null` when nothing was ever fetched; `state` is one of `no_pr`, `draft`, `open`, `conflicted`, `merged`, `closed`. Any field that was never set is `null`. Timestamps are epoch milliseconds.
+- `status` is the workspace's combined status. See [Status and recap](../agents/status-and-recap.md).
+- `pr` is the last PR state the dashboard or a desktop widget cached. `list` makes no network calls. `pr.state` is one of `no_pr`, `draft`, `open`, `conflicted`, `merged` or `closed`.
+- A field that was never set is `null`.
+
+## wsx workspace path
 
 ```
 wsx workspace path <repo> <slug>
 ```
 
-Prints just the worktree path. Designed for `cd "$(wsx workspace path backend my-slug)"`.
+Prints the workspace's worktree path, for `cd "$(wsx workspace path backend my-slug)"`.
+
+## wsx workspace rename
 
 ```
 wsx workspace rename <repo> <old-slug> <new-slug>
 ```
 
-Renames the workspace slug AND its git branch in sync with the wsx database. Using `git branch -m` directly leaves wsx's DB stale.
+Renames the workspace and its git branch together. Use this instead of `git branch -m`, which leaves wsx out of sync.
 
-The worktree directory is **not** moved: it keeps the path it was created with, so a renamed workspace's directory still carries the old slug. The command prints that path — `renamed workspace backend/merry-birch to backend/fix-login (worktree path unchanged: …/merry-birch)` — and `wsx workspace path` always returns it.
+- The worktree directory doesn't move. It keeps the old slug, and the command prints the unchanged path.
+
+## wsx workspace archive
 
 ```
 wsx workspace archive <repo> <slug> [--keep-worktree] [--force-delete-branch]
 ```
 
-Equivalent to the dashboard's archive action: stops any tracked processes running under the worktree unless `--keep-worktree` is given (`SIGTERM`, a two-second grace period, then `SIGKILL`; best-effort — see [Process tracking](../dashboard/process-tracking.md)), runs the per-repo archive script, removes the worktree (unless `--keep-worktree`), deletes the branch (force if `--force-delete-branch`), and drops the workspace from the registry.
+Retires a workspace, like the dashboard's archive action. In order, it:
+
+1. stops the workspace's tmux agent sessions;
+2. stops [tracked processes](../dashboard/process-tracking.md) under the worktree (`SIGTERM`, then `SIGKILL` after two seconds), unless `--keep-worktree`;
+3. runs the repo's [archive script](../configuration/setup-scripts.md);
+4. force-removes the worktree, unless `--keep-worktree`. **Uncommitted changes are lost.**
+5. deletes the branch, then unregisters the workspace.
+
+| Flag | Effect |
+| --- | --- |
+| `--keep-worktree` | Keep the worktree directory and leave its processes running. |
+| `--force-delete-branch` | Delete the branch even if it isn't merged. Without it, an unmerged branch is kept. |
+
+## wsx workspace share
+
+```
+wsx workspace share <repo> <slug> [--restart [--json]]
+```
+
+Switches a workspace to tmux-backed agent sessions, so other terminals or machines can attach. See [Shared workspaces](../integrations/shared-workspaces.md).
+
+| Flag | Effect |
+| --- | --- |
+| `--restart` | Have the running dashboard restart the agents in tmux now, and print the sessions to attach to. |
+| `--json` | With `--restart` only: print the workspace record as JSON. |
+
+- Without `--restart`, running sessions keep their current backend until they restart.
+
+## wsx workspace unshare
+
+```
+wsx workspace unshare <repo> <slug>
+```
+
+Switches a workspace back to direct (non-tmux) agent sessions. Running sessions change on their next restart.
+
+## wsx workspace tag
 
 ```
 wsx workspace tag add|rm <tag>... [--workspace <repo>/<slug>]
 wsx workspace tag list [--workspace <repo>/<slug> | --all] [--json]
 ```
 
-Adds, removes, or lists [workspace tags](../dashboard/tags-and-hiding.md). Targets the current workspace unless `--workspace` is given, and prints the workspace's tags afterwards. Tags are lowercased; if any tag in an `add` or `rm` isn't 1-32 of `a-z 0-9 - _` starting with a letter or digit, nothing is written and the command fails naming it. `list --all` prints `tag<TAB>count` for every tag in use. With `--json`, a workspace's tags print as an array of strings and `--all` as an array of `{"tag", "workspaces"}` objects.
+Adds, removes or lists [workspace tags](../dashboard/tags-and-hiding.md) on the current workspace, then prints its tags.
+
+| Flag | Effect |
+| --- | --- |
+| `--workspace <repo>/<slug>` | Act on another workspace. |
+| `--all` | `list` only: print `tag<TAB>count` for every tag in use. |
+| `--json` | `list` only: print an array of tags, or `{"tag", "workspaces"}` objects with `--all`. |
+
+- Tags are lowercased. Each must be 1–32 characters of `a-z 0-9 - _`, starting with a letter or digit. If any tag is invalid, nothing is written.

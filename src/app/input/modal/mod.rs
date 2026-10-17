@@ -52,6 +52,38 @@ pub(in crate::app::input) fn apply_name_color(
     Ok(())
 }
 
+/// The dashboard keys that open a drawer card with no text input: `?` the
+/// workspace actions, `F` the hide rules, `s` the repo settings. While one of
+/// those cards is up, its own key closes it and another's key replaces it,
+/// so the last key pressed always wins the drawer.
+const DRAWER_SWITCH_KEYS: [char; 3] = ['?', 'F', 's'];
+
+/// Handle a drawer-switch key pressed in one of the [`DRAWER_SWITCH_KEYS`]
+/// cards. Returns `true` when the key was consumed. A key whose card would not
+/// open for the current selection (`?` on a repo header) leaves the open card
+/// in place rather than closing it to nothing.
+pub(super) async fn switch_drawer(app: &mut App, k: crossterm::event::KeyEvent) -> Result<bool> {
+    let crossterm::event::KeyCode::Char(c) = k.code else {
+        return Ok(false);
+    };
+    if !DRAWER_SWITCH_KEYS.contains(&c) {
+        return Ok(false);
+    }
+    let Some(open) = app.modal.take() else {
+        return Ok(false);
+    };
+    handle_key_dashboard(app, k).await?;
+    match &app.modal {
+        // The key opened the card already up: it toggles closed.
+        Some(m) if std::mem::discriminant(m) == std::mem::discriminant(&open) => {
+            app.modal = None;
+        }
+        Some(_) => {}
+        None => app.modal = Some(open),
+    }
+    Ok(true)
+}
+
 pub(in crate::app::input) async fn handle_key_modal(
     app: &mut App,
     shared: &SharedApp,

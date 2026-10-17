@@ -388,6 +388,9 @@ pub(super) async fn repo_settings(
     repo_id: crate::data::store::RepoId,
     mut selected: usize,
 ) -> Result<()> {
+    if super::switch_drawer(app, k).await? {
+        return Ok(());
+    }
     match k.code {
         KeyCode::Esc => {
             app.modal = None;

@@ -372,9 +372,12 @@ pub(super) async fn workspace_actions(
     _shared: &SharedApp,
     k: crossterm::event::KeyEvent,
 ) -> Result<()> {
+    if super::switch_drawer(app, k).await? {
+        return Ok(());
+    }
     match k.code {
         // Dismiss without side effects.
-        KeyCode::Esc | KeyCode::Char('?') => {
+        KeyCode::Esc => {
             app.modal = None;
         }
         // Vertical navigation moves the dashboard selection underneath

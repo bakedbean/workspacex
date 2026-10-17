@@ -428,3 +428,60 @@ async fn picker_cursor_reaches_the_last_pr_row_past_tag_rows() {
     assert_eq!(*selected, rows.len() - 1);
     assert_eq!(rows.len(), 7, "one tag row plus six PR rows");
 }
+
+#[tokio::test]
+async fn drawer_keys_replace_each_other_and_toggle_their_own_card() {
+    use crate::ui::modal::Modal;
+    let (mut app, _, ids) = app_with_merged_hidden();
+    draw(&mut app);
+    select(&mut app, SelectionTarget::Workspace(ids[1]));
+    let shared = shared_app();
+    let modal_key = async |app: &mut App, c: char| {
+        crate::app::input::modal::handle_key_modal(app, &shared, key(KeyCode::Char(c)))
+            .await
+            .unwrap();
+    };
+    press(&mut app, 'F', KeyModifiers::NONE).await;
+    assert!(matches!(app.modal, Some(Modal::HideRules { .. })));
+    modal_key(&mut app, '?').await;
+    assert!(matches!(app.modal, Some(Modal::WorkspaceActions)));
+    modal_key(&mut app, 'F').await;
+    assert!(matches!(app.modal, Some(Modal::HideRules { .. })));
+    modal_key(&mut app, 's').await;
+    assert!(matches!(app.modal, Some(Modal::RepoSettings { .. })));
+    modal_key(&mut app, 's').await;
+    assert!(app.modal.is_none(), "a card's own key closes it");
+}
+
+#[tokio::test]
+async fn drawer_key_that_opens_nothing_keeps_the_open_card() {
+    let (mut app, _, _) = app_with_merged_hidden();
+    open_picker(&mut app).await;
+    let shared = shared_app();
+    // `?` needs a workspace row; on the repo header it opens nothing.
+    crate::app::input::modal::handle_key_modal(&mut app, &shared, key(KeyCode::Char('?')))
+        .await
+        .unwrap();
+    assert!(matches!(
+        app.modal,
+        Some(crate::ui::modal::Modal::HideRules { .. })
+    ));
+}
+
+#[tokio::test]
+async fn own_drawer_key_closes_after_selection_moves_off_its_target() {
+    use crate::ui::modal::Modal;
+    let (mut app, repo, ids) = app_with_merged_hidden();
+    draw(&mut app);
+    select(&mut app, SelectionTarget::Workspace(ids[1]));
+    press(&mut app, '?', KeyModifiers::NONE).await;
+    assert!(matches!(app.modal, Some(Modal::WorkspaceActions)));
+    // The card lets the selection move underneath; `?` would not open on a
+    // repo header, but it must still close the card it opened.
+    select(&mut app, SelectionTarget::Repo(repo));
+    let shared = shared_app();
+    crate::app::input::modal::handle_key_modal(&mut app, &shared, key(KeyCode::Char('?')))
+        .await
+        .unwrap();
+    assert!(app.modal.is_none());
+}

@@ -1,57 +1,32 @@
-wsx enables terminal mouse capture so the trackpad / wheel scrolls
-through the session's history (instead of getting translated into
-arrow keys that claude reads as prompt-history navigation). One
-consequence: native click-and-drag selection no longer works by
-default.
+# Mouse and text selection
 
-To select text from the claude pane, **hold Shift while
-dragging** — most modern terminals (Alacritty, Kitty, WezTerm,
-iTerm2, GNOME Terminal) bypass mouse capture under Shift and fall
-back to OS-native selection. iTerm2 also supports right-click →
-"Bypass mouse reporting", and macOS terminals often accept Option
-as the modifier instead of Shift.
+wsx captures the mouse so the wheel scrolls the agent's history and parts of the screen are clickable. As a result, a plain click-and-drag no longer selects text.
 
-## Clickable dashboard targets
+## Selecting text
 
-Mouse capture also makes parts of the dashboard clickable:
+Hold `Shift` while you drag. Most terminals (Alacritty, Kitty, WezTerm, iTerm2, GNOME Terminal) pass a Shift-drag through to their own selection. On macOS, some terminals use `Option` instead. In iTerm2 you can also right-click and choose **Bypass mouse reporting**.
 
-- **A workspace row's PR chip** (`⏺ #123 open`) opens that pull
-  request in your browser.
-- **A repo header's PR link** opens that repo's pull requests
-  filtered to your own open ones — the GitHub PRs tab with
-  `is:pr is:open author:@me` already applied.
+## Scrolling
 
-The repo PR link sits just before the repo's path, normally in the same
-dim colour, so the two read as one cluster identifying the repo. It turns
-**green** — the same green a row's open-PR chip uses — when at least one
-of that repo's workspaces has a pull request GitHub still counts as open,
-so the colour tells you whether the link leads anywhere before you click
-it. Drafts and conflicted PRs count, since the link's
-`is:pr is:open author:@me` query lists them too; merged and closed ones
-have dropped out of that list and leave the link dim. Folding a repo
-hides its rows but not this signal.
+- The wheel scrolls the attached pane's history. If the agent handles the mouse itself, the wheel goes to the agent; hold `Shift` to scroll wsx's history instead.
+- On the dashboard, the wheel over a [detail bar](detail-bar.md) container scrolls that container.
 
-With [`nerd_fonts`](../configuration/settings.md) off the link
-renders as the literal text `PR`:
+## Clickable targets
 
-```
-▾ ─── wsx  PR  /home/eben/workspace/wsx  ──────────────  ? 1  ! 1    4 ws
-           ▲ click here
-```
+| Click                        | Does                                                     |
+| ---------------------------- | -------------------------------------------------------- |
+| A key hint in the footer     | Presses that key                                         |
+| A row's PR chip (`⏺ #123 open`) | Opens the PR in your browser                          |
+| A repo header's PR link      | Opens your open PRs in that repo on GitHub               |
+| A row's process count (`● 2p`) | Opens the [process list](process-tracking.md)          |
+| A pinned-command chip        | Sends that [pinned command](../attached-view/pinned-commands.md) |
+| A prompt-tag chip            | Opens that [prompt tag](../attached-view/prompt-tags.md)'s body box |
+| A workspace in the attached view's strip | Attaches to it                               |
+| The strip's `+N more`        | Opens the updates panel                                  |
+| An agent pill                | Switches the pane to that agent                          |
+| A `$hosts` chip              | Opens that host's [shared workspaces](../integrations/shared-workspaces.md) |
+| The footer activity graph    | Picks the graph's time window                            |
 
-With `nerd_fonts` on it renders instead as the git-pull-request octicon
-(`nf-oct-git_pull_request`) at **U+F407** — the same glyph a workspace row
-uses for an open PR. That codepoint lives in the Private Use Area, so it
-only appears if your terminal font actually patches it; if you see a blank
-or a tofu box in that position, the link is still there and still
-clickable.
+The repo PR link shows as `PR`, or as a pull-request icon with [`nerd_fonts`](../configuration/settings.md) on. It turns green when one of the repo's workspaces has an open PR. It appears only for repos whose `origin` is on github.com.
 
-Repos without a link keep those columns blank rather than closing the
-gap, so every path starts in the same column either way.
-
-It appears only on repos whose `origin` remote points at github.com,
-so a repo wsx can't build that view for shows nothing rather than a
-link that opens a dead tab. Self-hosted GitHub Enterprise remotes are
-not recognised. Both actions shell out to
-[`gh`](https://cli.github.com), which must be installed and
-authenticated.
+Opening PRs needs [`gh`](https://cli.github.com), installed and authenticated.

@@ -1,93 +1,81 @@
-# Workspace tags
+# Tags and hiding
 
-Tags are short labels you put on workspaces, like `parked` or `spike`. They
-show on the dashboard row, narrow the `/` filter, and can
-[hide workspaces](tags-and-hiding.md#by-tag).
+Tags are short labels on workspaces, like `parked` or `spike`. Use them, and each PR's state, to search the dashboard and to hide workspaces you're not working on.
 
-## Adding and removing tags
+## Tagging workspaces
 
-Press `#` on a workspace (or `#` on its `?` card) to open the tag editor.
-Type a tag and press `enter` to add it, or move to a listed tag with the
-arrow keys and press `space` to toggle it. Typing filters the list; once you
-arrow to a row, `space` or `enter` acts on that row instead of the typed
-text. The list offers every tag used anywhere in wsx. `esc`, or `enter` with nothing typed, closes the editor.
-Changes save as you make them.
+Press `#` on a workspace to open the tag editor:
 
-Tags are lowercased and may use `a-z`, `0-9`, `-` and `_`, up to 32
-characters. They must start with a letter or digit.
+| Key                 | Action                                  |
+| ------------------- | --------------------------------------- |
+| type + `enter`      | Add the tag                             |
+| arrows + `space`    | Toggle a listed tag                     |
+| `esc`               | Close                                   |
+
+Typing filters the list, which offers every tag used in wsx. Changes save as you make them.
+
+Tag rules:
+
+- Lowercase `a-z`, `0-9`, `-`, and `_`, starting with a letter or digit.
+- Up to 32 characters.
 
 From a shell or an agent:
 
-    wsx workspace tag add parked
-    wsx workspace tag rm parked --workspace backend/old-spike
-    wsx workspace tag list --all
+```bash
+wsx workspace tag add parked
+wsx workspace tag rm parked --workspace backend/old-spike
+wsx workspace tag list --all
+```
 
-`add` and `rm` act on the current workspace unless `--workspace
-<repo>/<slug>` is given, and print its tags afterwards. `list --all` prints
-every tag in use with how many workspaces carry it. `wsx workspace list
---json` includes each workspace's `tags`.
+See [`wsx workspace tag`](../cli-reference/workspace.md#wsx-workspace-tag) for the full syntax.
 
-## On the dashboard
-
-Tags appear dimmed after the branch name: `⎇ wsx/my-slug #parked #ui`. They
-only use the room left in the branch column, so the name is never cut for
-them; tags that don't fit collapse to a `+2`-style count. If your branch
-names fill the column, widen it with
-`wsx config set dashboard_branch_width 40` (see
-[Global settings](../configuration/settings.md)).
-
-## Searching
-
-`/parked` matches tags along with names and recaps. `/#parked` matches only
-workspaces tagged exactly `parked`.
+Tags show dimmed after the branch name: `⎇ wsx/my-slug #parked #ui`. They use only the space left in the branch column, and tags that don't fit collapse to a count like `+2`. To make room, widen the column with the `dashboard_branch_width` [setting](../configuration/settings.md).
 
 Workspace tags are unrelated to [prompt tags](../attached-view/prompt-tags.md).
 
-# Hiding workspaces
+## Hiding workspaces
 
-Long-lived workspaces can crowd a repo's section once their PRs merge or if
-they never get one. Each repo can hide workspaces by PR state or by
-[tag](tags-and-hiding.md).
+Press `F` on a repo header, or any row in the repo, to choose what that repo hides. Move with `j`/`k` and toggle with `space`. wsx saves the choice per repo.
 
-Press `F` on a repo header (or any of its rows) and toggle states with
-`space`: no PR, draft, open, conflicted, merged, closed. The choice is saved
-per repo.
+Hidden workspaces collapse into one dimmed row per rule:
 
-"No PR" only hides workspaces that look abandoned. A workspace without a PR
-stays visible if any of these is true:
+```
+▸ ⏺ merged  ·  4 hidden
+▸ #parked  ·  2 hidden
+```
 
-- it has commits ahead of its base branch, or uncommitted changes;
-- an agent session is running, or its agent reports working, waiting, or
-  blocked;
-- it was created, or its agent was active, in the last 3 days.
+Press `enter` or `l` on that row to show its workspaces, and `h` to collapse it. Expanded rows stay open until wsx restarts.
 
-The other states hide every matching workspace.
+### By PR state
 
-Hidden workspaces collapse into one dimmed row per state under their repo:
+The states are no PR, draft, open, conflicted, merged, and closed. Each hides every matching workspace, except no PR, which keeps a workspace visible when any of these is true:
 
-    ▸ ⏺ merged  ·  4 hidden
+- It has commits ahead of its base branch, or uncommitted changes.
+- An agent session is running, or its agent reports working, waiting, or blocked.
+- It was created, or its agent was active, in the last 3 days.
 
-Press `enter` or `l` on that row to show its workspaces inline; `h` collapses
-it again. Expansion lasts until wsx restarts.
+A workspace whose PR state hasn't loaded yet stays visible.
 
-A few things stay predictable:
+### By tag
 
-- Typing a `/` filter searches every workspace, hidden or not.
-- A workspace whose PR state hasn't loaded yet is never hidden.
-- If a selected workspace becomes hidden (say its PR merges), the selection
-  moves to its group's row.
-- Status bar, waybar, and menubar counts still include hidden workspaces.
-- The updates panel (`Ctrl-x u`) leaves hidden workspaces out.
-- The by-attention view (`G`) lists hidden groups in a HIDDEN section.
+The `F` picker lists every tag in use above the PR states. A tag rule hides every workspace with that tag, even one with work in progress. A workspace matching a tag rule and a PR rule is grouped under the tag. A rule for a tag no longer in use stays in the picker with a count of 0, so you can turn it off.
 
-## By tag
+### What still counts hidden workspaces
 
-The `F` picker also lists every [workspace tag](tags-and-hiding.md) in use,
-above the PR states. Turning one on hides that repo's workspaces carrying
-the tag, whatever they're doing; there is no exemption for work in progress.
+- A `/` search covers every workspace, hidden or not.
+- Status bar, Waybar, and menu bar counts include hidden workspaces.
+- The updates panel (`Ctrl-x u`) leaves them out.
+- The by-attention view (`G`) lists them in a HIDDEN section.
 
-    ▸ #parked  ·  2 hidden
+If the selected workspace becomes hidden, for example when its PR merges, the selection moves to its group's row.
 
-A workspace matching both a tag rule and a PR rule is grouped under the
-tag. A rule for a tag no workspace carries any more stays in the picker,
-with a count of 0, so you can turn it off.
+## Searching
+
+Press `/` and type. The filter matches branch names, repo names, tags, status words, and recaps, ignoring case. Prefix a tag with `#` to match only that exact tag:
+
+```
+/parked      anything containing "parked"
+/#parked     tagged exactly "parked"
+```
+
+`esc` clears the filter.

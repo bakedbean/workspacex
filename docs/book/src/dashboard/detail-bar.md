@@ -1,145 +1,72 @@
-When a workspace is selected on the dashboard, wsx renders a multi-column
-detail bar across the bottom. The body is divided into 1–4 equal-width
-**containers**; each container holds one or more **modules** stacked
-vertically. Four built-in modules ship today: `session_summary`,
-`recent_chat`, `processes`, `recent_files`. The bar's appearance is
-controlled by the `detail_bar_config` setting — globally via `wsx config`,
-with optional per-repo overrides.
+# Detail bar
 
-### Schema and defaults
+The detail bar runs along the bottom of the dashboard and shows more about the selected workspace: its recap, recent chat, processes, and changed files. It ends in a reply input, so you can answer an agent without attaching.
 
-The global value is a full `DetailBarConfig` JSON blob. Every field is
-optional; missing fields fall back to defaults. Out-of-range values are
-clamped on save (see below).
+## Layout
+
+The bar holds 1–4 equal-width columns, called containers. Each container stacks one or more modules:
+
+| Module            | Shows                                                         |
+| ----------------- | ------------------------------------------------------------- |
+| `session_summary` | The recap (`goal`, `state`, `next`), tool counts, status, model |
+| `recent_chat`     | The latest messages between you and the agent                 |
+| `processes`       | [Tracked processes](process-tracking.md) in the worktree      |
+| `recent_files`    | Files the agent edited recently, with line counts             |
+
+`session_summary` falls back to the session's first prompt when the agent hasn't written a recap. Scroll a container with the mouse wheel.
+
+## Replying
+
+Press `Tab` to focus the reply input, type, and press `enter` to send it to the agent. wsx starts the agent first if it isn't running. `esc` discards the draft.
+
+## Configuring
+
+The `detail_bar_config` setting holds a JSON value. Every field is optional, and missing fields take the defaults:
 
 ```json
 {
   "visible": true,
-  "height": {
-    "percent": 30,
-    "min_rows": 8,
-    "max_rows": 18
-  },
-  "containers": [
-    ["session_summary"],
-    ["recent_chat"],
-    ["processes", "recent_files"]
-  ],
+  "height": { "percent": 30, "min_rows": 8, "max_rows": 18 },
+  "containers": [["session_summary"], ["recent_chat"], ["processes", "recent_files"]],
   "bottom_rule": true
 }
 ```
 
-| Field             | Type          | Default             | Effect                                                                                                                                                                                                                                         |
-| ----------------- | ------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `visible`         | bool          | `true`              | Master toggle. When `false`, the bar is hidden entirely and `Tab` skips the reply input.                                                                                                                                                       |
-| `height.percent`  | u8            | `30`                | Target height as a percent of the terminal's rows. Clamped to `[5, 80]`.                                                                                                                                                                       |
-| `height.min_rows` | u16           | `8`                 | Floor on the bar's height. Clamped to `[4, 40]`.                                                                                                                                                                                               |
-| `height.max_rows` | u16           | `18`                | Ceiling on the bar's height. Clamped to `[4, 60]`. If `min_rows > max_rows`, the two are swapped on save.                                                                                                                                      |
-| `containers`      | list of lists | (see default above) | Outer length 1–4: one entry per equal-width column. Inner is a list of module IDs stacked vertically within the column. An empty inner list `[]` reserves an empty column. Empty outer list resets to default. Lengths > 4 are truncated to 4. |
-| `bottom_rule`     | bool          | `true`              | Draw a dim rule under the reply row, separating the bar from the dashboard footer below it. Costs one row. `false` gives the row back.                                                                                                  |
+| Field             | Default  | Effect                                                      |
+| ----------------- | -------- | ----------------------------------------------------------- |
+| `visible`         | `true`   | `false` hides the bar and its reply input                   |
+| `height.percent`  | `30`     | Height as a percent of the terminal, 5–80                   |
+| `height.min_rows` | `8`      | Minimum height in rows, 4–40                                |
+| `height.max_rows` | `18`     | Maximum height in rows, 4–60                                |
+| `containers`      | as above | Up to 4 columns of module IDs; `[]` leaves a column empty   |
+| `bottom_rule`     | `true`   | Draw a rule under the reply row; `false` saves a row        |
 
-**Built-in module IDs:** `session_summary`, `recent_chat`, `processes`,
-`recent_files`. Unknown IDs render a `[unknown: <id>]` placeholder and
-log a warning, so typos are visible but don't break the dashboard.
+When every container is empty (`[[], [], []]`), the bar shrinks to its header and reply input. An unknown module ID shows a `[unknown: <id>]` placeholder.
 
-`session_summary` leads with the workspace's recap — the same
-`goal` / `state` / `next` the Project Manager pane shows, one labeled
-line per populated field, wrapped to the column:
-
-```
-SESSION SUMMARY
-▸ goal:  Audit all V2 invoices auto-issued
-         today for the CV-04964 drift bug
-▸ state: 3 of 12 checked, drift on 2
-▸ next:  Fix rounding in issue_v2()
-▸ Read×12 Edit×3 Bash×7
-▸ working
-▸ model: opus 5
-```
-
-Each field prefers the long form and falls back to the short one, so a
-workspace whose agent only set `--goal-short` still gets a line. A
-workspace with no recap at all falls back to the session's first user
-prompt, which is what the module always showed before recaps existed.
-Because the recap comes from the database rather than the session log,
-it appears immediately — it doesn't wait on the `loading…` scan.
-
-When every container is empty (`[[], [], []]`), the bar shrinks to its
-5-row chrome (header + two rules + reply input + bottom rule) regardless of
-`height.percent`, or 4 rows with `bottom_rule` off. That's how you trim the bar to just the reply input.
-
-### Setting the global value
+Set or edit the global value:
 
 ```bash
-wsx config edit detail_bar_config     # opens $EDITOR; seeded with the pretty-printed default
-wsx config set  detail_bar_config '{"height": {"percent": 50}}'
-wsx config get  detail_bar_config
-wsx config set  detail_bar_config ""  # clear (reverts to baked-in defaults)
+wsx config edit detail_bar_config          # open in $EDITOR
+wsx config set detail_bar_config ""        # back to the defaults
 ```
-
-Partial JSON is fine — `{"visible": false}` is a complete, valid value.
-Missing fields are filled in from defaults. Malformed JSON is rejected
-with a non-zero exit and the previous value is preserved.
 
 Examples:
 
 ```bash
-# Make the bar taller on big monitors.
+# Taller bar on a big monitor
 wsx config set detail_bar_config '{"height": {"percent": 45, "max_rows": 24}}'
 
-# Single full-width chat column.
+# One full-width chat column
 wsx config set detail_bar_config '{"containers": [["recent_chat"]]}'
 
-# Four columns, processes and files in separate slots.
-wsx config set detail_bar_config '{"containers": [["session_summary"], ["recent_chat"], ["processes"], ["recent_files"]]}'
-
-# Hide the bar entirely.
+# Hide the bar
 wsx config set detail_bar_config '{"visible": false}'
 ```
 
-### Per-repo override
+`wsx config set` rejects malformed JSON and keeps the old value. Out-of-range heights are clamped.
 
-Each repo can override any subset of the global config. The per-repo
-value is a `DetailBarOverride` — `visible` and `height.*` merge
-per-field; `containers` is whole-replace when present, fully-inherited
-when absent. An empty `{}` inherits everything; you only specify what
-you want to change.
+## Per-repo override
 
-Open the repo settings modal with `s` on the dashboard, select the
-`detail_bar_config` row, and press Enter. `$EDITOR` opens on `{}\n`
-(or the current override). Save to apply; press `d` on the row to
-clear the override and fall back to the global value.
+To change the bar for one repo, press `s` on the dashboard, select `detail_bar_config`, and press `enter`. `$EDITOR` opens on the repo's override. Write only the fields you want to change, for example `{ "visible": false }`. Press `d` on the row to clear the override.
 
-Override examples:
-
-Hide the bar entirely for this repo (global value can stay on):
-
-```json
-{ "visible": false }
-```
-
-Single chat column for this repo; keep `visible` and `height` inherited from global:
-
-```json
-{ "containers": [["recent_chat"]] }
-```
-
-Taller bar for a repo where the session-summary text is usually long
-(CLI tools with verbose tool-call traces):
-
-```json
-{ "height": { "percent": 45, "max_rows": 28 } }
-```
-
-Merge precedence: bake-in defaults → global `detail_bar_config` →
-per-repo override. `visible` and `height.*` apply per-field; `containers`
-whole-replaces when the override sets it. So a repo override that only
-sets `containers` still picks up any global `height` changes you make
-later.
-
-### Behavior on bad input
-
-- Malformed JSON at the global level — falls back to baked-in defaults at runtime, logged at `warn`.
-- Malformed JSON in a repo override — the override is ignored; the global value applies, logged at `warn` with the repo name.
-- Out-of-range `height.percent` / `min_rows` / `max_rows` — clamped to legal ranges on save (`wsx config set/edit`) and again at runtime as a defense-in-depth.
-- `min_rows > max_rows` — swapped on save so the lower bound is the floor and the higher is the ceiling.
+`visible`, `height`, and `bottom_rule` override field by field. `containers` replaces the global list.

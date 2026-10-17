@@ -1,94 +1,68 @@
-| Symbol                 | Meaning                                                                         |
-| ---------------------- | ------------------------------------------------------------------------------- |
-| `●`                    | Session is running in this wsx process                                          |
-| `↻`                    | Resumable — a prior claude session exists for this worktree; attach to continue |
-| `○`                    | No session ever started here                                                    |
-| `✕`                    | Workspace state is `Failed` (worktree creation didn't succeed). With no worktree to start in, opening it shows an error instead of an agent; archive it with `d` |
-| `[setup-failed]` badge | Setup script exited non-zero; workspace is otherwise usable (`?` then `o` shows the log) |
+# Status indicators
 
-Activity column for running sessions:
+Each dashboard row fits a workspace's agent status, PR, processes, and changes on one line, so you can see which workspace needs you without attaching.
 
-- `active` — output within the last 2 seconds
-- `idle` — output within the last 30 seconds
-- `waiting` — no output for over 30 seconds
-- `off` — no current session
-- `resumable` — prior session exists, not currently running
+## Row columns
 
-### Multiple agents
+Left to right:
 
-A non-primary agent's colored cell in the dashboard's agent strip becomes a
-spinner when its running session has produced terminal output within the last
-2 seconds. It returns to a bar when quiet; exited peers leave the strip.
-If peers overflow the strip, the `+` marker animates while any hidden peer is active.
+| Column       | Shows                                                                 |
+| ------------ | --------------------------------------------------------------------- |
+| Agent strip  | One colored bar per agent, primary rightmost                          |
+| Status       | A colored bar and a status glyph (see below)                          |
+| Branch       | `⎇` colored by PR state, the name, tags, and badges                   |
+| PR           | `⏺ #241 open` plus a review mark                                      |
+| Processes    | `● 2p` for two [tracked processes](process-tracking.md), `·` for none |
+| Diff         | `+N −N` lines committed on the branch since its base                  |
+| Message      | Status word, then the agent's recap or its latest activity            |
+| Age          | Time since the last activity                                          |
 
-This is terminal activity, not task status: typing or a resize repaint can
-briefly animate a peer cell too. The workspace's task-status glyph, section,
-age, details, and attention alerts are unchanged. Peer output does not move a
-completed workspace into `WORKING`, and a primary question remains visible
-alongside the peer indicator.
+The name is bold, and warn-colored for a workspace created in permissive mode unless you picked a name color with `C`. In the message column, `▸` means the agent reported its status with [`wsx status`](../agents/status-and-recap.md) and `└` means wsx inferred it.
 
-### Activity sub-line
+## Status glyphs
 
-Below each workspace row, wsx shows the most recent event from claude's
-session log (tailed from `~/.claude/projects/<encoded-cwd>/`):
+| Glyph    | Word      | Meaning                                                 |
+| -------- | --------- | ------------------------------------------------------- |
+| `?`      | asking    | The agent asked a question or waits on a permission prompt |
+| `!`      | stalled   | No output for 60 seconds mid-turn                       |
+| spinner  | thinking  | The agent is working                                    |
+| spinner  | waiting   | The session is running but quiet for over 30 seconds    |
+| `✓`      | done      | The agent finished its turn                             |
+| `·`      | idle      | No session, or a session you haven't prompted yet       |
 
-```
-  ● fix-bug    bakedbean/fix-bug   ~3 ?1   active
-    └ ran `cargo test --workspace` (3s ago)
-```
+In a workspace with several agents, a peer's bar in the agent strip turns into a spinner while that agent prints output. A `+` stands in for peers that don't fit.
 
-The sub-line updates on the 2-second poll tick. Workspaces with no
-claude session yet show no sub-line. Recognized events:
+## Branch badges
 
-- User message → `user: <text>`
-- Assistant text → `<text>`
-- Assistant tool use (Bash) → ``ran `<command>` ``
-- Assistant tool use (other) → `using <ToolName>`
+| Badge        | Meaning                                                     |
+| ------------ | ----------------------------------------------------------- |
+| spinner      | Being created or archived                                   |
+| `⚙!`         | Setup script failed; the workspace still works. `?` then `o` shows the log |
+| `⚙?`         | Setup was cancelled                                         |
+| `✗`          | The worktree was never created. Archive it with `d`         |
+| `✉!`         | A message to the agent couldn't be delivered                |
+| `◇`          | tmux-shared: green while its session runs, red when it doesn't |
+| columns icon | A saved split layout (nerd fonts only)                      |
 
-Lines longer than ~70 characters are truncated with an ellipsis.
+## PR chip
 
-### Diff counts column
+The chip and the `⎇` glyph take the PR state's color: no PR, draft, open, conflicts, merged, or closed. Open PRs also carry a review mark:
 
-Compact summary of `git status` per workspace, refreshed every 2 seconds:
+| Mark | Meaning                                                 |
+| ---- | ------------------------------------------------------- |
+| `✓`  | Approved                                                |
+| `✗`  | Changes requested; a number counts unresolved threads   |
+| `◌`  | Review required                                         |
 
-| Symbol (plain) | Symbol (nerd) | Meaning                                     |
-| -------------- | ------------- | ------------------------------------------- |
-| `~N`           | `N`           | Modified/staged/added/deleted tracked files |
-| `?N`           | `N`           | Untracked files                             |
-| `↑N`           | `N`           | Commits ahead of upstream                   |
-| `↓N`           | `N`           | Commits behind upstream                     |
+PR data needs [`gh`](https://cli.github.com), installed and authenticated.
 
-Zero values omitted. Clean workspaces show nothing in this column.
+## Alerts
 
-### Attention alerts
+When an agent asks a question, waits on a permission prompt, finishes, or stalls, wsx rings the terminal bell. The workspace also moves to the front of the attached view's [workspace strip](../attached-view/updates-and-splits.md) until you attach to it.
 
-wsx watches each workspace for two distinct "user needs to act" signals:
+- Each state has its own bell pattern: `notification_bell_question` (default double), `notification_bell_permission` (single), `notification_bell_complete` (single), `notification_bell_stalled` (triple).
+- `wsx config set notifications off` turns off the bell and the flag.
+- Workspaces that were already waiting when wsx started don't ring.
+- While wsx runs, the bell doesn't ask the window manager for urgency, so on Hyprland it won't switch your desktop workspace.
 
-- A `tool_use` event in the session log has been pending for ≥3 seconds —
-  almost always means claude is showing a permission prompt for a tool.
-  In this case the activity column reads `awaiting` and the sub-line shows
-  `└ ⚠ awaiting permission: <tool> (<age>)`.
-- The claude session has gone ≥30 seconds without producing PTY output
-  (state flips from `active` or `idle` to `waiting`).
-
-On either transition wsx considers the workspace to need attention:
-
-- A terminal bell (`\x07`) is written to stdout. Your terminal config decides
-  whether to beep, flash, or ignore. wsx also clears the terminal's bell
-  urgency hint (private mode `1042`) while it runs, so on terminals that
-  honour it (Alacritty, xterm) the bell does not ask the window manager for
-  attention. That matters on Hyprland with `misc:focus_on_activate = true`
-  (Omarchy's default), where an urgency request switches the OS workspace to
-  the terminal. On exit wsx puts the mode back only if the terminal reported
-  it on at startup, so xterm (off by default) and a session that turned it
-  off stay that way. Terminals without mode 1042 (kitty, foot, ghostty) keep
-  their own bell-urgency setting; the sequence also does not cross a tmux
-  boundary.
-- A `!` marker appears at the start of the workspace's row on the dashboard.
-
-The marker clears the moment you attach to the workspace (Enter on the row).
-The first observation of any workspace establishes a baseline; no bell rings
-for workspaces that are already in `waiting` or `awaiting` state when wsx
-launches.
-
-Turn off both via `wsx config set notifications off`.
+See [Settings](../configuration/settings.md) for the allowed values.

@@ -1,56 +1,40 @@
-`[k]` on the dashboard (or `Ctrl-x k` while attached) shows long-running
-processes whose current working directory is inside the selected
-workspace's worktree — dev servers, watchers, anything you started in
-that worktree from a terminal. Workspaces with detected processes show
-a `~N` count between the branch and activity columns on the dashboard.
+# Process tracking
 
-The modal lists each process's PID, command, and full cwd:
+wsx lists the long-running processes working inside each workspace's worktree, such as dev servers and watchers. Use it to find and stop what a workspace left running, or to start a command there without opening a terminal.
 
-    ─── Processes — fix-bug ──────
-      PID    COMMAND          CWD
-      12345  npm              /home/user/wt/fix-bug
-      12389  pytest           /home/user/wt/fix-bug/tests
-    ─────────────────────────────
-    [↑/↓] move   [r] run   [k] term   [K] kill   [esc] close
+A workspace with tracked processes shows a count like `● 2p` on its dashboard row. Press `K` on the row, `Ctrl-x k` while attached, or click the count to open the list:
 
-`k` sends `SIGTERM` to the highlighted process; `K` sends `SIGKILL`.
-After either, wsx immediately re-scans so the list reflects the new
-state.
+```
+  PID    COMMAND          CWD
+  12345  npm              /home/user/wt/fix-bug
+  12389  pytest           /home/user/wt/fix-bug/tests
+[↑/↓] move   [r] run   [k] term   [K] kill   [esc] close
+```
 
-`r` opens a prompt to run a command in the selected workspace's worktree —
-handy for starting a dev server without opening a separate terminal. The
-command runs via `sh -c` as a background process, with stdout and stderr
-captured to a log file under `~/.local/state/wsx/logs/`; the path is shown
-after launch. It runs detached (its own session, reparented away from wsx),
-so it keeps running if you close the dashboard and survives until it exits or
-you stop it. Because it runs in the worktree, it appears in this same list on
-the next scan, where `K` stops it.
+| Key        | Action                                        |
+| ---------- | --------------------------------------------- |
+| `↑` / `↓`  | Move the selection                            |
+| `k`        | Send `SIGTERM` to the process                 |
+| `K`        | Send `SIGKILL` to the process                 |
+| `r`        | Run a command in the worktree                 |
+| `esc`      | Close                                         |
 
-**Notes:**
+`j` and `k` don't move the selection here, because `k` stops a process.
 
-- Detection runs once every 10 seconds in the background via `lsof -d cwd`.
-- Shells and editors (bash, zsh, nvim, code, etc.) are filtered out so the
-  count surfaces what's interesting — your dev server, not the terminal
-  hosting it.
-- Helper processes spawned by Claude Code and editors (MCP servers,
-  language servers) are hidden too, since they inherit the worktree cwd
-  but aren't work you launched. The exception is a process holding a
-  listening TCP socket: a dev server started from inside Claude Code (e.g.
-  a `pnpm dev` on `:3000`) still shows up and can be killed here, while the
-  stdio-only helpers stay filtered.
-- wsx never starts these processes itself. Launch them however you
-  like (the `[t]` terminal keybind is one option). The feature is
-  observability plus a kill hook, not lifecycle management.
-- The one exception is archive: archiving a workspace stops every
-  process this list would show for it before the archive script runs and
-  the worktree is removed. Each gets `SIGTERM`, then two seconds to exit,
-  then `SIGKILL` if it is still running. Both the dashboard's `d` and
-  `wsx workspace archive` do this. `--keep-worktree` skips it: keeping
-  the checkout means keeping whatever is running in it. The teardown is
-  best-effort — a process wsx cannot signal (for example one owned by
-  another user) is logged and shown in the archive progress, and the
-  archive continues. Processes started after the scan, such as by the
-  archive script itself, are not covered.
-- Requires `lsof` to be installed (standard on most Linux/macOS setups).
-  If it's missing, the count stays at 0 and the modal shows "(no tracked
-  processes)" — no errors.
+## Running a command
+
+`r` runs a command with `sh -c` in the worktree, in the background. Output goes to a log file under `~/.local/state/wsx/logs/`, and wsx shows the path. The command keeps running after you quit wsx, and it appears in the list so you can stop it with `K`.
+
+## What's listed
+
+- Processes whose working directory is inside the worktree.
+- Not shells and editors (bash, zsh, nvim, code, and so on).
+- Not helpers that Claude Code and editors start, such as MCP and language servers, unless they listen on a TCP port. A dev server started from inside Claude Code still shows.
+
+## Archiving stops processes
+
+Archiving a workspace, with `d` or [`wsx workspace archive`](../cli-reference/workspace.md#wsx-workspace-archive), stops every listed process before it removes the worktree. Each gets `SIGTERM`, then `SIGKILL` after two seconds. `--keep-worktree` skips this. A process wsx can't signal, such as one owned by another user, is reported and the archive continues.
+
+## Requirements
+
+Process tracking needs `lsof`. Without it, the count stays at 0 and the list is empty.

@@ -1,107 +1,157 @@
-### Dashboard
+# Keybindings
 
-| Key                               | Action                                                                                                       |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `Up` / `Down` (or `k` / `j`)      | Move selection through repo headers and workspaces                                                           |
-| `h` / `l`                         | Fold / unfold the focused repo (idempotent; use `zz` to toggle)                                              |
-| `enter` (or `i`) on a workspace   | Attach to its claude session (spawns or resumes)                                                             |
-| `enter` (or `i`) on a repo header | Open the New Workspace modal targeting that repo                                                             |
-| `n`                               | New workspace in the selected row's repo                                                                     |
-| `Shift + N`                       | New workspace in permissive mode (claude launches with `--dangerously-skip-permissions`)                     |
-| `e`                               | Open the selected workspace in your editor (no-op on repo header)                                            |
-| `t`                               | Open the selected workspace in a terminal (no-op on repo header)                                             |
-| `v`                               | View diff of the selected workspace's branch vs the repo's base branch (auto-detected; no-op on repo header) |
-| `Shift + K`                       | On a workspace: show processes under its worktree. On a repo header: move the repo up one slot (persisted)   |
-| `Shift + J`                       | On a repo header: move the repo down one slot (persisted). No-op on a workspace                              |
-| `s`                               | Open repo settings modal for the selected repo (or the parent repo when a workspace is selected)             |
-| `Shift + F`                       | Choose which PR states and tags hide workspaces in the selected row's repo (persisted per repo). See [Hiding workspaces](tags-and-hiding.md) |
-| `#`                               | Edit the selected workspace's [tags](tags-and-hiding.md) (no-op on repo header)                              |
-| `enter` / `l` on a hidden-group row | Show that group's workspaces inline (this session only)                                                      |
-| `h` on a hidden-group row or a row inside it | Collapse the group back to its summary row (on an already-collapsed summary row, fold the repo)              |
-| `d`                               | Archive the selected workspace (no-op on repo header)                                                        |
-| `o`                               | Cycle how workspaces are ordered inside a repo: by recency (default) or by status. Persisted.                |
-| `q`                               | Quit (kills all running sessions)                                                                            |
-| `p`                               | Toggle the project-manager digest pane (opens focused, instant, no agent session)                            |
-| `Tab`                             | Swap focus between dashboard and the digest pane (when visible)                                              |
-| `z z`                             | Toggle fold on the focused repo                                                                              |
-| `z a`                             | Expand all repos (override default-fold heuristic)                                                           |
-| `z M`                             | Fold all repos                                                                                               |
-| `j` / `k` (or arrows) (when digest focused) | Move selection through digest cards                                                                |
-| `Enter` (when digest focused)     | Attach to the selected workspace                                                                             |
-| `q` / `p` (when digest focused)   | Close the digest (`q` only closes it while the digest is focused — dashboard-focused `q` quits wsx)          |
-| `r` (when digest visible)         | Force a git/PR cache refresh                                                                                 |
+Every key in the wsx TUI, grouped by where you press it. Capital letters mean `Shift` plus the letter.
 
-### Switching panels
+## Dashboard
 
-Every panel in the bottom drawer follows the same rules. While one is open, pressing another panel's key (`?`, `Shift + F`, `s`, `#`, `Shift + C`, `Shift + K`, `Shift + H`, or a `Ctrl-x` chord such as `Ctrl-x a`, or `Ctrl-x u` / `Ctrl-x k` / `Ctrl-x <` in the attached view) replaces it, and pressing the open panel's own key closes it. A key that has nothing to open for the current selection (`?` on a repo header) leaves the open panel alone.
+### Moving around
 
-A panel keeps those keys for itself while you are typing in it (the tag editor, the name-color filter, a name field, a filter you started with `/`), and where a key is one of its own commands: `Shift + K` kills a process in the process list, and `s` opens a split in the updates panel. `Ctrl-x` chords work from every panel, including the ones you are typing in; over a panel, only the chords that open a panel are recognized, and any other key after `Ctrl-x` just cancels the chord. Cards showing remote work in progress (fetching, sharing, creating on another host) ignore panel keys until the work finishes or you press `esc`.
+| Key                     | Action                                                 |
+| ----------------------- | ------------------------------------------------------ |
+| `j` / `k` (or arrows)   | Move the selection                                     |
+| `h` / `l`               | Fold / unfold the repo; `l` on a workspace attaches    |
+| `z z`                   | Toggle the repo's fold                                 |
+| `z a` (or `z r`)        | Unfold every repo                                      |
+| `z M` (or `z m`)        | Fold every repo                                        |
+| `/`                     | [Filter](tags-and-hiding.md#searching) the rows; `esc` clears |
+| `o`                     | Sort by recency or by status (saved)                   |
+| `G`                     | Group by repo or by attention                          |
+| `Tab`                   | Focus the detail-bar reply, then the digest            |
+| `q`                     | Quit; kills running sessions                           |
 
-### New Workspace / Confirm Archive modals
+`q` asks first if a workspace is still being created or archived.
 
-| Key                           | Action                              |
-| ----------------------------- | ----------------------------------- |
-| `enter`                       | Confirm                             |
-| `esc`                         | Cancel                              |
-| `y` / `n`                     | Confirm/cancel on ConfirmArchive    |
-| Printable chars / `backspace` | Edit the name field on NewWorkspace |
+### Workspaces
 
-### Workspace actions card (`?` on a workspace)
+| Key              | Action                                                       |
+| ---------------- | ------------------------------------------------------------ |
+| `enter` / `i`    | Attach; on a repo header, create a workspace there           |
+| `n`              | Create a workspace in the selected repo                      |
+| `N`              | Create one in permissive mode (skips agent permission prompts) |
+| `S`              | Create a [tmux-shared](../integrations/shared-workspaces.md) workspace |
+| `T`              | Toggle the workspace between shared and direct               |
+| `d`              | Archive                                                      |
+| `e` / `t` / `v` / `g` | Open in [editor, terminal, diff, or lazygit](../integrations/editor-terminal-diff.md) |
+| `?`              | Workspace actions card                                       |
+| `#`              | Edit [tags](tags-and-hiding.md)                              |
+| `C`              | Pick the row's name color                                    |
+| `K`              | [Processes](process-tracking.md) under the worktree          |
+| `Ctrl-x 1`–`9`   | Send a [pinned command](../attached-view/pinned-commands.md) to the workspace |
+| `Ctrl-x a`       | [Agents panel](../agents/multi-agent-workspaces.md)          |
 
-| Key   | Action                                                                                  |
-| ----- | --------------------------------------------------------------------------------------- |
-| `r`   | Rename the workspace (and its git branch)                                                |
-| `C`   | Pick a name color for its dashboard row                                                  |
-| `#`   | Edit the workspace's [tags](tags-and-hiding.md)                                           |
-| `o`   | Open its setup log — see below                                                            |
-| `x`   | Cancel an in-flight setup (creates only; archive is not cancellable)                     |
-| `?` / `esc` | Close the card                                                                     |
+### Repos and panes
 
-Other keys (`e`, `t`, `v`, `g`, `enter`) are forwarded to the dashboard and act on the selected workspace.
+| Key                | Action                                                  |
+| ------------------ | ------------------------------------------------------- |
+| `K` / `J` on a repo | Move the repo up / down (saved)                        |
+| `s`                | Repo settings                                           |
+| `F`                | [Hide rules](tags-and-hiding.md#hiding-workspaces) for the repo |
+| `H`                | [Remote hosts](../integrations/shared-workspaces.md)    |
+| `p`                | Toggle the [digest](project-manager-digest.md)          |
+| `r` (digest open)  | Refresh git and PR data                                 |
+| `enter` / `l` on a hidden group | Show its workspaces                        |
+| `h` on a hidden group | Collapse it                                          |
 
-### Setup log viewer (`o`)
+### Detail-bar reply
 
-Whenever the selected workspace carries a lifecycle badge — `⚙!` (setup failed), `⚙?` (setup cancelled), or a spinner (being created or archived) — the footer shows a `? o  setup log` hint, since the badge itself has no room to say where the reason lives.
+| Key        | Action                                             |
+| ---------- | -------------------------------------------------- |
+| `Tab`      | Focus the reply input                              |
+| `enter`    | Send to the agent (starts it if needed)            |
+| `esc`      | Discard and return to the list                     |
 
-The viewer shows the [setup script](../configuration/setup-scripts.md)'s output for the selected workspace, whatever state it is in: the live tail while the workspace is still being created, and the persisted log from `~/.local/state/wsx/logs/` once it has finished. Stderr lines are marked `!` and highlighted in both. Only the last 256 KiB of a log is read, and at most 2000 lines are shown, so a very verbose setup script loses the start of its output — the end, which says how the run finished, is always kept.
+## Switching panels
 
-A workspace with no log to show says which case it is rather than showing an empty pane: no setup script was ever run, the file could not be read (with the path and the error), or — while archiving — that archive output is not kept at all.
+Panels open in a drawer at the bottom of the screen.
 
-| Key                    | Action                    |
-| ---------------------- | ------------------------- |
-| `Up` / `Down` (`k`/`j`)| Scroll one line           |
-| `PageUp` / `PageDown`  | Scroll ten lines          |
-| `g` / `Home`           | Jump to the start of the log |
-| `G` / `End`            | Jump back to the end      |
-| `esc` / `enter`        | Close (background work keeps running) |
+- A panel's key opens it and replaces the open panel. Pressing the open panel's key again closes it. A key with nothing to open (`?` on a repo header) leaves the panel alone.
+- While a panel takes text (tag editor, name-color filter, name fields, a `/` filter), keys type. In the process list `K` kills; in the updates panel `s` splits.
+- `Ctrl-x` chords that open panels work from any panel. Progress cards for remote work ignore panel keys until they finish or you press `esc`.
 
-### Attached workspace
+## Dialogs
 
-Keystrokes are forwarded to the running `claude` session, except:
+| Key        | New workspace                  | Confirm (archive, quit, share) |
+| ---------- | ------------------------------ | ------------------------------ |
+| `enter`    | Create (blank name generates one) | —                           |
+| `y` / `n`  | —                              | Confirm / cancel               |
+| `esc`      | Cancel                         | Cancel                         |
+| `Tab`      | Cycle the agent                | —                              |
+| `Ctrl-s`   | Toggle shared                  | —                              |
 
-| Key              | Action                                                                                                      |
-| ---------------- | ----------------------------------------------------------------------------------------------------------- |
-| `Ctrl-x d`       | Close the focused pane. When only one pane is open, detaches back to the dashboard (session keeps running). |
-| `Ctrl-x Shift-D` | Save the current split layout for this workspace, then detach to the dashboard. Restored on next attach.    |
-| `Ctrl-x Esc`     | Dismiss the navigation overlay without detaching (stay in the attached view).                               |
-| `Ctrl-x ←/→/↑/↓` | Move focus between split panes in that direction (vim's `Ctrl-w` motions).                                  |
-| `Ctrl-x u`       | Open the updates panel in the bottom drawer (a stripped-down dashboard in the dashboard's order; `v`/`s` open in a split, `o` / `G` cycle the dashboard's sort and grouping, `/` filters the list) |
-| `Ctrl-x a`       | Open the agents panel to add/remove agents in this workspace (see [Multi-agent workspaces](../agents/multi-agent-workspaces.md)) |
-| `Ctrl-x e`       | Open the attached workspace in your editor (same `editor_cmd` as `[e]` on the dashboard)                    |
-| `Ctrl-x t`       | Open the attached workspace in a terminal (same `terminal_cmd` as `[t]`)                                    |
-| `Ctrl-x v`       | View diff of the attached workspace's branch vs the base branch (same `diff_cmd` as `[v]`)                  |
-| `Ctrl-x k`       | Show processes running under the attached workspace's worktree                                              |
-| `Ctrl-x <`       | Open the prompt-tag picker (wrap a body in an XML tag and insert it unsubmitted)                            |
-| `Ctrl-x x`       | Send a literal `Ctrl-x` to claude                                                                           |
-| `Ctrl-x c`       | Toggle the change chronology bar on/off                                                                     |
-| `Ctrl-x C`       | Swap the chronology bar's side (left ↔ right)                                                               |
-| `Ctrl-x →` (bar on right) / `Ctrl-x ←` (bar on left) | Move keyboard focus into the chronology bar (from the adjacent edge pane only) |
-| `Ctrl-x ←` (bar on right) / `Ctrl-x →` (bar on left) | Return focus from the bar to the agent pane                                    |
-| `↑` / `k` *(bar focused)* | Move selection up (toward newer entries)                                              |
-| `↓` / `j` *(bar focused)* | Move selection down (toward older entries)                                            |
-| `g` *(bar focused)*        | Jump to the top (newest entry)                                                        |
-| `G` *(bar focused)*        | Jump to the bottom (oldest entry)                                                     |
-| `Enter` *(bar focused)*    | Open the full-change detail modal for the selected entry                              |
-| `Esc` *(bar focused)*      | Return focus to the agent pane                                                        |
+## Workspace actions card (`?`)
 
-When a workspace has more than one agent, the footer also binds bare keys `q w r y i o p s h j` (no leader) to switch the focused pane between agents — see [Multi-agent workspaces](../agents/multi-agent-workspaces.md).
+| Key                 | Action                                     |
+| ------------------- | ------------------------------------------ |
+| `r`                 | Rename the workspace and its branch        |
+| `o`                 | Open the setup log                         |
+| `x`                 | Cancel a create in progress                |
+| `C` / `#`           | Name color / tags                          |
+| `j` / `k`           | Move the selection, card stays open        |
+| `e` `t` `v` `g` `enter` | Act on the workspace and close         |
+| `?` / `esc`         | Close                                      |
+
+## Setup log viewer (`?` then `o`)
+
+Shows the [setup script](../configuration/setup-scripts.md)'s output: live while the workspace is being created, the saved log afterwards. Stderr lines are marked `!`. Only the last 2000 lines show.
+
+| Key                     | Action                       |
+| ----------------------- | ---------------------------- |
+| `j` / `k` (or arrows)   | Scroll one line              |
+| `PageUp` / `PageDown`   | Scroll ten lines             |
+| `g` / `Home`            | Jump to the start            |
+| `G` / `End`             | Jump to the end              |
+| `esc` / `enter`         | Close; setup keeps running   |
+
+## Panels opened from the dashboard
+
+| Panel                  | Keys                                                                |
+| ---------------------- | ------------------------------------------------------------------- |
+| Tag editor (`#`)       | type + `enter` add; arrows + `space` toggle; `esc` close            |
+| Hide rules (`F`)       | `j`/`k` move; `space` toggle; `esc` close                           |
+| Name color (`C`)       | arrows move; type to filter; `enter` apply; `Delete` clear; `esc` close |
+| Repo settings (`s`)    | `j`/`k` move; `enter` edit; `d` clear the repo's value; `esc` close       |
+| Processes (`K`)        | arrows move; `r` run a command; `k` SIGTERM; `K` SIGKILL; `esc` close |
+| Remote hosts (`H`)     | `j`/`k` move; `enter` open; `esc` close                             |
+| Remote workspace list  | `enter` attach or share; `n`/`N` new; `r` refresh; `esc` close      |
+
+## Digest (`p`, focused)
+
+| Key                    | Action                              |
+| ---------------------- | ----------------------------------- |
+| `j` / `k` (or arrows)  | Move the selection                  |
+| `enter`                | Attach to the workspace             |
+| `/`                    | Filter by name                      |
+| `r`                    | Refresh git and PR data             |
+| `esc`                  | Clear the filter, or return focus   |
+| `Tab`                  | Return focus to the list            |
+| `p` / `q`              | Close the digest                    |
+
+## Attached view
+
+Keys go to the agent, except chords after `Ctrl-x`. Pressing `Ctrl-x` alone shows a menu; pick with arrows and `enter`, or press the letter. wsx drops `Ctrl-z` and `Ctrl-d` so a slip can't suspend or exit the agent.
+
+| Key                  | Action                                                  |
+| -------------------- | ------------------------------------------------------- |
+| `Ctrl-x d`           | Close the pane; detach if it's the last one             |
+| `Ctrl-x D`           | Save the split layout, then detach                      |
+| `Ctrl-x` arrows      | Move focus between split panes                          |
+| `Ctrl-x u`           | [Updates panel](../attached-view/updates-and-splits.md) |
+| `Ctrl-x a`           | [Agents panel](../agents/multi-agent-workspaces.md)     |
+| `Ctrl-x e` / `t` / `v` / `g` | Editor, terminal, diff, lazygit                 |
+| `Ctrl-x k`           | Processes                                               |
+| `Ctrl-x <`           | [Prompt tag](../attached-view/prompt-tags.md) picker    |
+| `Ctrl-x 1`–`9`       | Send a pinned command                                   |
+| `Ctrl-x x`           | Send a literal `Ctrl-x` to the agent                    |
+| `Ctrl-x esc`         | Dismiss the menu                                        |
+| `Ctrl-x q` `w` `r` `y` `i` `o` `p` `s` `h` `j` | Switch the pane to another agent (multi-agent workspaces) |
+
+A workspace attached from a remote host takes only `Ctrl-x d`, `Ctrl-x <`, and `Ctrl-x 1`–`9`.
+
+## Panels opened from the attached view
+
+| Panel                       | Keys                                                                |
+| --------------------------- | ------------------------------------------------------------------- |
+| Updates (`Ctrl-x u`)        | `j`/`k` move; `enter`/`l` attach; `v` side-by-side split; `s` stacked split; `o`/`G` sort and group; `/` filter; `esc` close |
+| Agents (`Ctrl-x a`)         | `j`/`k` move; `enter` add the selected kind; `a` add one of each; `x` remove the newest; `esc` close |
+| Prompt tag (`Ctrl-x <`)     | arrows move; `1`–`9` pick; type to filter or name a new tag; `enter` write the body; `Ctrl-d` delete the tag; `esc` close |
+| Prompt tag body             | `Ctrl-s` insert; `esc` back                                         |

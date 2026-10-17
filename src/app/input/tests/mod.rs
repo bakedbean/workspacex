@@ -27,6 +27,7 @@ mod leader;
 mod leader_view_transition;
 mod mouse;
 mod new_workspace_notice;
+mod panel;
 mod pm_pane;
 mod process_command;
 mod prompt_tag;

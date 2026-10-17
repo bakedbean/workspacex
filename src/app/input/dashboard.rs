@@ -3,6 +3,7 @@
 //! Also the selection and fold helpers it drives, which the mouse
 //! handler reuses so a click and its keyboard equivalent cannot drift.
 
+use super::panel::{Panel, Surface};
 use super::*;
 use crate::app::{App, SelectionTarget, attach_workspace};
 use crate::error::Result;
@@ -325,14 +326,7 @@ pub(in crate::app::input) async fn handle_key_dashboard(
     if app.leader_pending {
         app.leader_pending = false;
         match k.code {
-            KeyCode::Char('a') => {
-                if let Some(crate::app::SelectionTarget::Workspace(ws_id)) = app.selected_target() {
-                    app.modal = Some(crate::ui::modal::Modal::AgentsPanel {
-                        workspace_id: ws_id,
-                        selected: 0,
-                    });
-                }
-            }
+            KeyCode::Char('a') => Panel::Agents.open(app, Surface::Dashboard)?,
             KeyCode::Char(c @ '1'..='9') => {
                 let idx = (c as u8 - b'1') as usize;
                 fire_chip(app, idx).await;
@@ -467,24 +461,7 @@ pub(in crate::app::input) async fn handle_key_dashboard(
                 });
             }
         }
-        (KeyCode::Char('H'), _) => {
-            // Capital H opens a picker over the configured shared hosts
-            // (`wsx config edit shared_hosts`), sorted by name. No workspace
-            // or repo selection is required — the fetch that follows (Enter
-            // in the picker) targets a remote host, not the local tree.
-            let hosts: Vec<(String, String)> = crate::commands::shared_hosts::list(&app.store)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|h| (h.name, h.dest))
-                .collect();
-            if hosts.is_empty() {
-                app.modal = Some(Modal::Error {
-                    message: "no shared hosts configured — add name=ssh-dest lines via `wsx config edit shared_hosts`".into(),
-                });
-            } else {
-                app.modal = Some(Modal::RemoteHostPicker { hosts, selected: 0 });
-            }
-        }
+        (KeyCode::Char('H'), _) => Panel::RemoteHosts.open(app, Surface::Dashboard)?,
         (KeyCode::Char('e'), _) => {
             if let Some(SelectionTarget::Workspace(id)) = app.selected_target()
                 && let Some(path) = app.workspace_path(id)
@@ -524,18 +501,10 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             }
             // 'g' on a Repo header is intentionally a no-op.
         }
+        // Shift+K on a repo header moves it up one slot.
         (KeyCode::Char('K'), _) => match app.selected_target() {
-            Some(SelectionTarget::Workspace(id)) => {
-                app.modal = Some(Modal::ProcessList {
-                    workspace_id: id,
-                    selected: 0,
-                    input: None,
-                    notice: None,
-                });
-            }
-            // Shift+K on a repo header moves it up one slot.
             Some(SelectionTarget::Repo(_)) => move_selected_repo(app, true)?,
-            Some(SelectionTarget::HiddenGroup { .. }) | None => {}
+            _ => Panel::ProcessList.open(app, Surface::Dashboard)?,
         },
         (KeyCode::Char('J'), _) => {
             // Shift+J on a repo header moves it down one slot. On a workspace
@@ -544,17 +513,7 @@ pub(in crate::app::input) async fn handle_key_dashboard(
                 move_selected_repo(app, false)?;
             }
         }
-        (KeyCode::Char('s'), _) => {
-            let repo_id = app
-                .selected_repo()
-                .or_else(|| app.repos.first().map(|r| r.id));
-            if let Some(id) = repo_id {
-                app.modal = Some(Modal::RepoSettings {
-                    repo_id: id,
-                    selected: 0,
-                });
-            }
-        }
+        (KeyCode::Char('s'), _) => Panel::RepoSettings.open(app, Surface::Dashboard)?,
         (KeyCode::Char('d'), _) => {
             if let Some(SelectionTarget::Workspace(id)) = app.selected_target()
                 // A workspace with any in-flight entry (create or archive)
@@ -622,56 +581,10 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         (KeyCode::Char('/'), _) => {
             app.dashboard.filter = Some(String::new());
         }
-        (KeyCode::Char('?'), _) => {
-            if matches!(app.selected_target(), Some(SelectionTarget::Workspace(_))) {
-                app.modal = Some(Modal::WorkspaceActions);
-            }
-        }
-        (KeyCode::Char('#'), _) => {
-            if let Some(SelectionTarget::Workspace(ws)) = app.selected_target() {
-                crate::app::input::modal::pickers::open_workspace_tags(
-                    app,
-                    ws,
-                    String::new(),
-                    0,
-                    &[],
-                )?;
-            }
-        }
-        // `C` opens the name-color picker for the
-        // selected workspace. `current` is snapshotted here so the grid can
-        // mark the applied color without re-reading the store each frame.
-        (KeyCode::Char('C'), _) => {
-            if let Some(SelectionTarget::Workspace(ws_id)) = app.selected_target() {
-                let current = app
-                    .workspaces
-                    .iter()
-                    .find(|(_, w)| w.id == ws_id)
-                    .and_then(|(_, w)| w.name_color);
-                app.modal = Some(Modal::NameColorPicker {
-                    workspace_id: ws_id,
-                    current,
-                    selected: 0,
-                    filter: String::new(),
-                });
-            }
-        }
-        // `F` opens the hide-rules checklist for the selected row's repo.
-        (KeyCode::Char('F'), _) => {
-            if let Some(repo_id) = app.selected_repo()
-                && let Some(repo) = app.repos.iter().find(|r| r.id == repo_id)
-            {
-                let (repo_name, rules) = (repo.name.clone(), repo.hide_rules.clone());
-                let rows = crate::app::input::modal::pickers::hide_rule_rows(app, repo_id, &rules)?;
-                app.modal = Some(Modal::HideRules {
-                    repo_id,
-                    repo_name,
-                    rules,
-                    rows,
-                    selected: 0,
-                });
-            }
-        }
+        (KeyCode::Char('?'), _) => Panel::WorkspaceActions.open(app, Surface::Dashboard)?,
+        (KeyCode::Char('#'), _) => Panel::WorkspaceTags.open(app, Surface::Dashboard)?,
+        (KeyCode::Char('C'), _) => Panel::NameColor.open(app, Surface::Dashboard)?,
+        (KeyCode::Char('F'), _) => Panel::HideRules.open(app, Surface::Dashboard)?,
         (KeyCode::Char('p'), _) => {
             // Closing drops the filter; opening must never inherit a
             // stale one either.

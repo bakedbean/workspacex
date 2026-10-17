@@ -133,6 +133,12 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
         MouseEventKind::ScrollUp => scroll_active(app, 3, true),
         MouseEventKind::ScrollDown => scroll_active(app, 3, false),
         MouseEventKind::Down(MouseButton::Left) => {
+            // A click over a panel abandons a `Ctrl-x` chord armed over it
+            // (see `panel::switch`): the click may close the panel, and a
+            // leader left armed would turn the next bare key into a chord.
+            if app.modal.is_some() {
+                app.leader_pending = false;
+            }
             // If the usage-window picker is open, a click either applies the
             // option under the cursor or dismisses the picker (click-outside).
             if matches!(app.modal, Some(Modal::UsageWindowPicker { .. })) {

@@ -35,7 +35,7 @@
 
 Every panel in the bottom drawer follows the same rules. While one is open, pressing another panel's key (`?`, `Shift + F`, `s`, `#`, `Shift + C`, `Shift + K`, `Shift + H`, or a `Ctrl-x` chord such as `Ctrl-x a`, or `Ctrl-x u` / `Ctrl-x k` / `Ctrl-x <` in the attached view) replaces it, and pressing the open panel's own key closes it. A key that has nothing to open for the current selection (`?` on a repo header) leaves the open panel alone.
 
-A panel keeps those keys for itself while you are typing in it (the tag editor, the name-color filter, a name field, a filter you started with `/`), and where a key is one of its own commands: `Shift + K` kills a process in the process list, and `s` opens a split in the updates panel. `Ctrl-x` chords work from every panel, including the ones you are typing in.
+A panel keeps those keys for itself while you are typing in it (the tag editor, the name-color filter, a name field, a filter you started with `/`), and where a key is one of its own commands: `Shift + K` kills a process in the process list, and `s` opens a split in the updates panel. `Ctrl-x` chords work from every panel, including the ones you are typing in; over a panel, only the chords that open a panel are recognized, and any other key after `Ctrl-x` just cancels the chord. Cards showing remote work in progress (fetching, sharing, creating on another host) ignore panel keys until the work finishes or you press `esc`.
 
 ### New Workspace / Confirm Archive modals
 

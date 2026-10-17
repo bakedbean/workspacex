@@ -147,3 +147,70 @@ async fn leader_chords_swap_panels_over_an_attached_pane() {
     assert!(!app.leader_pending);
     assert!(matches!(app.modal, Some(Modal::UpdatesPanel { .. })));
 }
+
+#[tokio::test]
+async fn clicking_a_panel_away_abandons_an_armed_chord() {
+    let (mut app, _) = app_on_workspace();
+    press(&mut app, 'C', KeyModifiers::SHIFT).await;
+    ctrl_x(&mut app).await;
+    assert!(app.leader_pending);
+    // No swatch rects were laid out, so the click lands outside the grid.
+    let shared = shared_app();
+    handle_mouse(
+        &mut app,
+        &shared,
+        mouse_event(crossterm::event::MouseEventKind::Down(
+            crossterm::event::MouseButton::Left,
+        )),
+    )
+    .await;
+    assert!(app.modal.is_none());
+    assert!(!app.leader_pending, "the chord must not outlive the panel");
+    press(&mut app, 'a', KeyModifiers::NONE).await;
+    assert!(app.modal.is_none(), "a bare `a` is not `Ctrl-x a`");
+}
+
+#[tokio::test]
+async fn in_flight_cards_keep_summon_keys_and_chords() {
+    let (mut app, _) = app_on_workspace();
+    for card in [
+        Modal::RemoteListLoading {
+            host_name: "h".into(),
+        },
+        Modal::RemoteShareRunning {
+            selected: 0,
+            host_name: "h".into(),
+            workspace: "w".into(),
+        },
+        Modal::RemoteReposLoading {
+            selected: 0,
+            host_name: "h".into(),
+            yolo: false,
+            repo: None,
+        },
+    ] {
+        app.modal = Some(card.clone());
+        modal_char(&mut app, 'F').await;
+        ctrl_x(&mut app).await;
+        modal_char(&mut app, 'a').await;
+        assert!(!app.leader_pending);
+        assert_eq!(
+            std::mem::discriminant(app.modal.as_ref().unwrap()),
+            std::mem::discriminant(&card),
+            "{card:?} must stay up"
+        );
+    }
+}
+
+#[tokio::test]
+async fn host_picker_opens_from_a_panel_and_toggles_on_its_key() {
+    let (mut app, _) = app_on_workspace();
+    app.store
+        .set_setting("shared_hosts", "box=user@box")
+        .unwrap();
+    press(&mut app, 'F', KeyModifiers::SHIFT).await;
+    modal_char(&mut app, 'H').await;
+    assert!(matches!(app.modal, Some(Modal::RemoteHostPicker { .. })));
+    modal_char(&mut app, 'H').await;
+    assert!(app.modal.is_none());
+}

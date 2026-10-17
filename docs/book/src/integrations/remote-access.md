@@ -1,71 +1,68 @@
-Running wsx on one machine (e.g. your desktop) and attaching from another (e.g. a laptop) works cleanly with tmux + ssh — no wsx-specific networking required.
+# Remote access
 
-**On the host machine:**
+Reach wsx from another machine or your phone. Run the whole dashboard in tmux and attach over ssh, drive a single Claude Code session from claude.ai, or attach to one agent with [shared workspaces](shared-workspaces.md).
 
-```
+| You want | Use |
+| --- | --- |
+| The full dashboard from another computer | [tmux and ssh](#tmux-and-ssh) |
+| One reconnect command per machine | [Named remotes](#named-remotes) |
+| A Claude Code session from your phone or browser | [Remote control](#remote-control) |
+| One agent from another machine, or from the dashboard's host picker | [Shared workspaces](shared-workspaces.md) |
+
+## tmux and ssh
+
+On the host, start wsx inside tmux, or reattach if it's already running:
+
+```bash
 tmux new -As wsx 'wsx'
 ```
 
-This starts wsx inside a tmux session named `wsx` (or reattaches to it if one already exists).
+From any other machine:
 
-**From any other machine:**
-
-```
+```bash
 ssh desktop -t tmux attach -t wsx
 ```
 
-Workspaces — and the claude sessions running inside them — keep running while you're detached, so picking up where you left off from a different machine just works.
+Workspaces and their agents keep running while you're detached.
 
-**Notes:**
+- wsx's leader key is `Ctrl-x`, so it doesn't collide with tmux's `Ctrl-b` prefix.
+- On a flaky network, use mosh: `mosh desktop -- tmux attach -t wsx`.
+- Tailscale or another VPN makes the host reachable by name without port forwarding.
 
-- wsx's leader key is `Ctrl-x`, chosen specifically to not collide with tmux's default `Ctrl-b` prefix (or anyone's `Ctrl-a` customization). No tmux config needed.
-- **Mosh** drops in cleanly if your network is flaky: `mosh desktop -- tmux attach -t wsx`.
-- **Tailscale** (or any VPN) makes the host reachable from anywhere by a stable name without port-forwarding.
+## Named remotes
 
-**Saving the invocation**: once you've settled on a working `ssh … tmux attach …` command, save it as a named remote so reconnecting is just `wsx remote <name>`. See [Named remote shortcuts](remote-access.md).
+Save a reconnect command under a short name, then run it with `wsx remote`:
 
-This page covers running the whole wsx TUI over ssh + tmux. For per-workspace sharing — an individual agent session that survives wsx quitting and can be attached to directly, independent of wsx itself — see [Shared workspaces](shared-workspaces.md). For browsing and attaching to shared workspaces on a remote host directly from wsx's dashboard (press `H`), see the "Browsing another machine" section in [Shared workspaces](shared-workspaces.md).
-
-Claude Code's `--remote-control` flag exposes a running session to
-[claude.ai/code](https://claude.ai/code) and the Claude iOS/Android
-apps. The local PTY behavior is unchanged — claude prints a session
-URL and a QR code at startup that you can scan from your phone or
-open in a browser to attach remotely.
-
-wsx passes `--remote-control` to every claude spawn by default, so
-any session is reachable from your phone without extra setup.
-
-**Toggle**: disable with `wsx config set remote_control false`. With
-it off, sessions are local-only and nothing is sent to Anthropic's
-relay servers.
-
-**Sandbox**: claude offers `--sandbox` as an extra safety wrapper for
-remote-issued commands. Disabled by default in wsx; enable with
-`wsx config set remote_control_sandbox true`.
-
-**Auth**: the relay rides on your claude.ai account. If you're not
-signed in or you're offline, the local session continues to work and
-the remote relay just fails silently.
-
-**Privacy**: enabling remote control routes session state through
-Anthropic's relay infrastructure. The session URL emitted in the PTY
-is also visible to anyone seeing your screen.
-
-```
-wsx remote                 # list configured names (alphabetized), one per line
-wsx remote <name>          # exec the stored command — process-replaces wsx
-wsx config edit remotes    # opens $EDITOR on the blob
+```bash
+wsx remote                 # list saved names
+wsx remote desktop         # run the saved command
+wsx config edit remotes    # edit the list in $EDITOR
 ```
 
-Stores frequently-used remote shell commands — typically `ssh -t host '…tmux attach…'` for reattaching a wsx session running on another machine (see [Remote access](remote-access.md)) — under short names. The value is an arbitrary shell command run through `sh -c`, so nested quoting works as you'd type it at a terminal.
-
-The `remotes` setting is a newline-separated blob, one `name=command` per line. **There is no `wsx remote add`** — `wsx config edit remotes` opens the existing blob in `$EDITOR`, and you add a remote by appending a new line. Clearing the buffer and typing only the new line replaces every other remote, so always keep the existing lines unless you mean to drop them. Example:
+The `remotes` setting holds one `name=command` per line:
 
 ```
-ebenmini=ssh -4 -t ebenmini.local "zsh -lc 'tmux attach'"
+desktop=ssh -t desktop 'tmux attach -t wsx'
 gpu=ssh gpu-box -t 'tmux -u attach -t main || tmux -u new -s main'
 ```
 
-Parser rules: only the **first** `=` separates name from command (so `=` inside the command, e.g. an inline env-var, is preserved); whitespace around `=` is trimmed; blank lines are skipped; lines with an empty name or command are dropped; duplicate names take the last value.
+- There is no `wsx remote add`. Add a line in the editor, and keep the existing lines unless you mean to drop them.
+- Only the first `=` splits name from command, so the command can contain `=`.
+- The command runs with `sh -c` and replaces the wsx process. When it exits, you're back at your shell.
+- A duplicate name uses its last value.
 
-`wsx remote <name>` `exec`-replaces the wsx process with `sh -c <command>`, so signals and TTY state flow straight through to the remote session; when it exits you're back at your local shell with no wsx parent process. Unknown names error out with the list of available names.
+See [`wsx remote`](../cli-reference/other.md#wsx-remote).
+
+## Remote control
+
+wsx starts Claude Code with `--remote-control`, so each Claude session prints a URL and a QR code you can open on [claude.ai/code](https://claude.ai/code) or the Claude mobile apps. It applies to Claude Code agents only.
+
+| Setting | Effect |
+| --- | --- |
+| `remote_control` | Set to `false` to keep sessions local-only. |
+| `remote_control_sandbox` | Set to `true` to run remote-issued commands in Claude Code's `--sandbox`. |
+
+- The relay uses your claude.ai account. Signed out or offline, the local session still works.
+- Session state goes through Anthropic's relay, and anyone who can see your screen can see the session URL.
+
+See [Settings](../configuration/settings.md).

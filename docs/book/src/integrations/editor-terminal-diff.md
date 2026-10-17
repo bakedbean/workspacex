@@ -1,66 +1,52 @@
-`[e]` and `[t]` on the dashboard launch your editor or terminal in the selected workspace's worktree directory. Both spawn detached so wsx keeps running.
+# Editor, terminal, and diff
 
-Resolution chain (first non-empty wins):
+Open the selected workspace in your own tools without leaving wsx. Each key works on a dashboard row and, after `Ctrl-x`, in the attached view. The tool starts detached, so wsx keeps running.
 
-- Editor: `editor_cmd` setting → `$VISUAL` → `$EDITOR`
-- Terminal: `terminal_cmd` setting → `$TERMINAL`
+| Key | Opens | Setting | Fallback |
+| --- | --- | --- | --- |
+| `e` | Your editor on the worktree | `editor_cmd` | `$VISUAL`, then `$EDITOR` |
+| `t` | A terminal in the worktree | `terminal_cmd` | `$TERMINAL` |
+| `v` | Your difftool on the branch | `diff_cmd` | none |
+| `g` | lazygit or another git UI in the worktree | `lazygit_cmd` | none |
 
-**TUI editors (vim, nvim, helix, emacs -nw) need to be wrapped in a terminal command** because the spawned editor has no controlling TTY of its own. Example:
+If no command resolves, wsx shows an error that names the setting to set. See [Settings](../configuration/settings.md) for each key.
 
-```
-wsx config set editor_cmd "alacritty -e nvim"
-```
+## Placeholders
 
-GUI editors (VS Code, Cursor, Zed) work directly:
+| Placeholder | Replaced with | Used by |
+| --- | --- | --- |
+| `{path}` | The worktree path | All four |
+| `{base}` | The upstream base ref, such as `origin/main` | `diff_cmd` |
+| `{cmd}` | The wsx command a desktop jump runs | `terminal_cmd`, from [desktop widgets](desktop-widgets.md) |
 
-```
-wsx config set editor_cmd "code"
-```
+If `editor_cmd` or `diff_cmd` contains no placeholder, wsx appends the worktree path as the last argument. `terminal_cmd` and `lazygit_cmd` start with the worktree as their working directory instead.
 
-### `{path}` placeholder
+`{base}` comes from `origin/HEAD` and falls back to `main`. If it's wrong, run `git remote set-head origin --auto` in the repo.
 
-If your command contains `{path}`, the worktree path is substituted there
-instead of being appended. Useful when the editor expects the path as a flag
-value, or when launching a TUI editor inside a terminal where you want the
-terminal's cwd to be set rather than passing the path to the editor:
+## Examples
 
-```
+TUI editors have no terminal of their own, so wrap them in one:
+
+```bash
 wsx config set editor_cmd "xdg-terminal-exec --dir={path} nvim"
 ```
 
-Result: `xdg-terminal-exec --dir=/path/to/worktree nvim` (nvim starts in the
-worktree directory with no file argument — avoids triggering netrw / tree
-plugins on a directory open).
+GUI editors work directly:
 
-For terminal commands the same substitution applies, though most terminals
-honor the spawned process's cwd already so you typically don't need it.
-
-### Diff command
-
-`[v]` spawns the configured difftool with the selected workspace's worktree path as `{path}` and the repo's main branch as `{base}`. Unlike editor/terminal, there's no env-var fallback — set `diff_cmd` explicitly.
-
-Examples (note the **three dots** — explained under "Why three dots?" below):
-
+```bash
+wsx config set editor_cmd "code"
 ```
-# Terminal pager with delta-prettified diff
+
+A diff in a terminal pager. Use three dots so the diff starts at the merge base and a stale local `main` doesn't add noise:
+
+```bash
 wsx config set diff_cmd "alacritty -e sh -c 'cd {path} && git diff {base}...HEAD | delta'"
-
-# Neovim with diffview.nvim (set alacritty's cwd so nvim doesn't open {path} as a buffer)
-wsx config set diff_cmd "alacritty --working-directory={path} -e nvim -c 'DiffviewOpen {base}...HEAD'"
-
-# VS Code (opens the workspace; user navigates to Source Control panel)
-wsx config set diff_cmd "code {path}"
 ```
 
-The base ref is auto-detected from `origin/HEAD` and substituted as the **upstream** tracking ref (e.g. `origin/main`) — using the upstream means a stale local `main` doesn't poison the diff. Falls back to `main` if your repo doesn't have `origin/HEAD` set. (Tip: `git remote set-head origin --auto` after cloning fixes that for the wsx repo metadata too.)
+lazygit needs a terminal window, because wsx owns its own:
 
-**Why three dots?** `git diff A..B` (two dots) lists every commit on `B` that isn't on `A`'s current tip. If your local `main` is behind `origin/main`, those upstream commits show up as "extra changes" in your branch diff. `A...B` (three dots) anchors at the merge base — the commit where your branch diverged — so stale local refs don't pollute the view. This is what `gh pr` and most code-review tools use.
+```bash
+wsx config set lazygit_cmd "wezterm start -- lazygit"
+```
 
-For `editor_cmd` and `terminal_cmd`, if neither the setting nor the env-var fallback is set, an error modal explains how to configure. `diff_cmd` has no env-var fallback and errors directly if unset.
-
-## Giving your editor's agent wsx context
-
-If the editor you open has its own AI agent, see
-[Editor-hosted agent context](editor-agent-context.md) for `wsx context
-write`, which renders the workspace's recap, status, peers, and the primary
-agent's last message into a file that agent can read.
+If your editor hosts its own AI agent, see [Editor-hosted agents](editor-agent-context.md) to give it the workspace's context.

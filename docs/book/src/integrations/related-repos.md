@@ -1,16 +1,20 @@
-When you work across multiple repos that need to know about each other (a backend, a frontend, a marketing site), declare related repos per primary repo:
+# Related repos
+
+Declare related repos when your work spans several repos that need to know about each other, such as a backend, a frontend and a marketing site. A workspace's agent can then read the related repos' source.
 
 ```bash
 wsx repo set-related-repos backend frontend,marketing
+wsx repo edit-related-repos backend      # edit the list in $EDITOR
 ```
 
-When you spawn a workspace in `backend`, wsx invokes claude with `--add-dir` pointing at each related repo's source path. Claude can read, grep, and reference files in those directories freely.
+The value is a comma-separated list of registered repo names. When a workspace in `backend` starts its agent, wsx:
 
-To prevent claude from accidentally editing files in the source paths of related repos (which would land changes on whatever branch the source is on), wsx also appends a system-prompt instruction telling claude:
+- passes each related repo's source path with `--add-dir` (Claude Code and oh-my-pi);
+- tells the agent to treat those paths as read-only;
+- tells the agent that when a related repo needs changes, it should create a workspace there with `wsx workspace create`, hand the task to that workspace's agent with `wsx agent send`, and tell you which workspace owns it.
 
-- Treat those directories as read-only.
-- If changes are needed there, drive `wsx workspace create <other-repo> --name <slug>` from this session, then hand the task to that workspace's own agent with `wsx agent send --workspace <other-repo>/<slug> primary "<brief>"` — do not `cd` into the sibling worktree and make the changes yourself. Tell the user which workspace now owns the sibling task. Each repo gets its own branch and PR; cross-link them and merge in dependency order.
+Each repo gets its own branch and pull request. Merge them in dependency order.
 
-This is a soft guard, not a tool-level lock — it relies on claude following the instruction. The same trust model as `custom_instructions`. Installing the bundled wsx skill (`wsx setup install-skill`, see [Agent skill](agent-skill.md)) reinforces this with the full CLI vocabulary and slug-naming rules.
+The read-only rule is an instruction, not a lock. Installing the wsx skill (see [Agent skills](../agents/skills.md)) reinforces it. Unknown repo names in the list are skipped.
 
-Unknown names in the list (e.g. a repo you renamed or unregistered) are logged and skipped at spawn time; the spawn still proceeds with the recognized names.
+See [`wsx repo set-related-repos`](../cli-reference/repo.md#wsx-repo-set-related-repos).

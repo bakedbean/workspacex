@@ -15,3 +15,37 @@ additional-js = ["theme/cf-analytics.js"]
 
 [output.html.search]
 enable = true
+
+# Old page paths, kept working after the docs restructure.
+[output.html.redirect]
+"/overview/index.html" = "../getting-started/index.html"
+"/overview/key-features.html" = "../introduction.html#key-features"
+"/overview/installation.html" = "../getting-started/installation.html"
+"/overview/quick-start.html" = "../getting-started/quick-start.html"
+"/overview/wiring-up-tools.html" = "../getting-started/quick-start.html"
+"/daily-use/index.html" = "../dashboard/index.html"
+"/daily-use/keybindings.html" = "../dashboard/keybindings.html"
+"/daily-use/status-indicators.html" = "../dashboard/status-indicators.html"
+"/daily-use/detail-bar.html" = "../dashboard/detail-bar.html"
+"/daily-use/project-manager-pane.html" = "../dashboard/project-manager-digest.html"
+"/daily-use/workspace-tags.html" = "../dashboard/tags-and-hiding.html"
+"/daily-use/hiding-workspaces.html" = "../dashboard/tags-and-hiding.html"
+"/daily-use/process-tracking.html" = "../dashboard/process-tracking.html"
+"/daily-use/mouse-scrollback-selection.html" = "../dashboard/mouse.html"
+"/daily-use/updates-panel.html" = "../attached-view/updates-and-splits.html"
+"/daily-use/split-panes.html" = "../attached-view/updates-and-splits.html"
+"/daily-use/pinned-commands.html" = "../attached-view/pinned-commands.html"
+"/daily-use/prompt-tags.html" = "../attached-view/prompt-tags.html"
+"/configuration/change-chronology.html" = "../integrations/editor-terminal-diff.html"
+"/configuration/coding-agents.html" = "../agents/coding-agents.html"
+"/configuration/multi-agent-workspaces.html" = "../agents/multi-agent-workspaces.html"
+"/configuration/global-settings.html" = "settings.html"
+"/configuration/per-repo-setup-scripts.html" = "setup-scripts.html"
+"/configuration/auto-rename-modes.html" = "auto-rename.html"
+"/integrations/agent-skill.html" = "../agents/skills.html"
+"/integrations/remote-control.html" = "remote-access.html"
+"/integrations/named-remote-shortcuts.html" = "remote-access.html"
+"/cli-reference/launch-tui.html" = "index.html"
+"/cli-reference/documented-elsewhere.html" = "index.html"
+"/cli-reference/workspace-management.html" = "workspace.html"
+"/cli-reference/repository-management.html" = "repo.html"

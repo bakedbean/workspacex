@@ -1,153 +1,67 @@
 # Themes
 
-wsx has two layers of theming: a **base palette** chosen with the `theme`
-setting, and a **bar theme file** that describes what the dashboard header
-and footer, the attached view's top and bottom bars, and the dashboard
-detail pane's pinned-command row contain and how each piece is styled,
-using a subset of Starship's format grammar.
+wsx has two layers of theming. The `theme` setting picks a base palette for the whole UI. The optional bar theme file, `theme.toml`, controls what the dashboard and attached-view bars show and how they look, using a subset of Starship's format grammar.
+
+## Quick start
+
+```bash
+wsx theme init                  # write the bundled default to ~/.config/wsx/theme.toml
+$EDITOR "$(wsx theme path)"
+wsx theme check                 # print every error; exit 1 on any
+wsx config set bar_theme on
+```
+
+- `bar_theme` is off by default. While it's off, wsx draws its stock bars and never reads the file. The `wsx theme` commands still work, so you can prepare a file first.
+- Switching `bar_theme` either way, and saving the file, take effect within a second without a restart.
+- If a save has errors, the bars keep their last good look and the dashboard footer shows the first error for five seconds. An invalid file at startup falls back to the bundled default.
+- The file is optional, and anything you leave out keeps the bundled default.
+- The path is `$XDG_CONFIG_HOME/wsx/theme.toml` when `XDG_CONFIG_HOME` is an absolute path, and `~/.config/wsx/theme.toml` otherwise.
+- `wsx theme check <path>` validates another file before you install it.
+
+See [`wsx theme`](../cli-reference/other.md#wsx-theme-check) for the command syntax.
 
 ## Base palette
 
 ```bash
-wsx config set theme dracula
-wsx config set theme jellybeans
-wsx config set theme nord
-wsx config set theme wsx        # default
-wsx config set theme default    # ANSI colors that follow your terminal
+wsx config set theme nord       # wsx (default), default, dracula, jellybeans, nord
 ```
 
-The base palette colors repo headers, the selected row, status dots, modals,
-and markdown. Restart wsx after changing it. Its colors are also available
-to the bar theme file as *theme tokens* (below). The bar theme file does not
-change the base palette or the appearance of other UI elements.
+The base palette colors repo headers, the selected row, status dots, modals and markdown. `default` uses your terminal's ANSI colors. Restart wsx after changing it. The bar theme file can use the palette's colors as [theme tokens](#styles-and-colors), but can't change them.
 
-## Bar theme file
+## Example themes
 
-Ready-to-use examples live in the repo under `docs/examples/`:
+Ready-made files live in the repo under `docs/examples/`:
 
-| File | Look |
-|---|---|
-| `theme-starship.toml` | Powerline blocks in six stepped greys with orange accents, in the style of a starship prompt. |
-| `theme-rose-pine.toml` | Rosé Pine (main) in an airline layout. |
-| `theme-rose-pine-moon.toml` | Rosé Pine Moon, the softer, slightly lighter dark variant, same layout. |
-| `theme-nord.toml` | Nord, same layout. |
-| `theme-nord0.toml` | Nord one step darker: base blocks on nord0, so the middle of each bar melts into a nord terminal background. |
-| `theme-jellybeans.toml` | Jellybeans, same layout. |
-| `theme-orange.toml` | Dark orange, converted from a vim-airline theme: an orange block at each edge, then the greys stepping up from near-black toward the middle. |
-
-The Rosé Pine, Nord, and Jellybeans files share one arrangement and differ
-only by palette: generally a bright "mode" block at each outer edge, a
-mid-toned block beside it, and a base-toned block toward the middle. The
-attached bottom bar instead starts with a dark Menu block. Orange keeps
-the airline layout but splits more pieces into
-their own blocks (view, repos and workspaces, and each item on the attached
-bottom bar's right side). Across all seven example themes, the attached
-bottom bar starts with Menu on the same dark background as the top agent
-block, followed by separate pinned-command and Tags blocks. Orange keeps
-its blank orange stub only on the dashboard footer.
-In every file the dashboard header's wordmark stays flat on the bar in the
-app's brand colours (the bundled default's blue bar and "x"), so the left
-chain starts at the block beside it rather than on a mode block.
-The two Nord files pair with `wsx config set theme nord`, and Jellybeans and
-Orange with `wsx config set theme jellybeans`, so the rest of the UI
-matches; Rosé Pine has no built-in base palette, so leave the default `wsx`.
-
-To use one, copy it to `~/.config/wsx/theme.toml`, turn the feature on, and
-validate:
-
-```
-cp docs/examples/theme-starship.toml ~/.config/wsx/theme.toml
-wsx config set bar_theme on
-wsx theme check
-```
-
-To keep several on hand and switch between them, copy the files somewhere
-stable and make `theme.toml` a symlink you re-point. wsx fingerprints the
-file the link resolves to by its modification time, size, and permission
-bits, so re-pointing it reloads the bars within a second in the running
-app. Two targets with identical metadata would not be told apart; if a
-switch ever fails to show, `touch` the file the link now points at.
-
-```
-mkdir -p ~/.config/wsx/themes
-cp docs/examples/theme-*.toml ~/.config/wsx/themes/
-ln -sfn themes/theme-nord.toml ~/.config/wsx/theme.toml      # switch
-ln -sfn themes/theme-rose-pine.toml ~/.config/wsx/theme.toml # switch again
-```
-
-They need a Nerd Font (for the `` / `` caps) and a truecolor terminal.
-Those caps are private-use characters (U+E0B0 and U+E0B2), so copy the files
-as bytes (`cp`, `scp`, a dotfiles repo) rather than pasting them through a
-chat or editor that strips unknown glyphs; if they go missing, `wsx theme
-check` still passes but the blocks render with flat edges.
-
-The bar theme is opt-in. Turn it on with
-
-```
-wsx config set bar_theme on
-```
-
-and off again with `wsx config set bar_theme off` (the default). While off,
-wsx draws its stock bars and never reads the file; the `wsx theme` commands
-below still work, so you can prepare and validate a file before enabling it.
-The setting is re-read once a second, so switching either way takes effect
-in the running app without a restart.
+| File | Look | Pair with `theme` |
+|---|---|---|
+| `theme-starship.toml` | Powerline blocks in stepped greys with orange accents. | `wsx` |
+| `theme-rose-pine.toml` | Rosé Pine in an airline layout. | `wsx` |
+| `theme-rose-pine-moon.toml` | Rosé Pine Moon, same layout. | `wsx` |
+| `theme-nord.toml` | Nord, same layout. | `nord` |
+| `theme-nord0.toml` | Nord one step darker, blending into a Nord terminal. | `nord` |
+| `theme-jellybeans.toml` | Jellybeans, same layout. | `jellybeans` |
+| `theme-orange.toml` | Dark orange, from a vim-airline theme. | `jellybeans` |
 
 ```bash
-wsx theme path     # where wsx looks: ~/.config/wsx/theme.toml
-wsx theme init     # write the bundled default there (never overwrites)
-wsx theme check    # validate and print every error; exit 1 on any
+cp docs/examples/theme-starship.toml ~/.config/wsx/theme.toml
+wsx config set bar_theme on
 ```
 
-The path honors `XDG_CONFIG_HOME`: when set to an absolute path, the file is
-`$XDG_CONFIG_HOME/wsx/theme.toml`; a relative or unset value falls back to
-`~/.config/wsx/theme.toml`. `wsx theme check [path]` can also validate
-another file before you install it.
+They need a Nerd Font and a truecolor terminal. The powerline caps (U+E0B0, U+E0B2) are private-use characters, so copy the files as bytes (`cp`, `scp`, git). Pasting through a chat or editor can strip them: `wsx theme check` still passes, but the blocks lose their edges.
 
-The file is optional. Anything you leave out keeps the bundled default,
-which preserves wsx's stock bar content and styling, so `wsx theme init`
-gives you a commented starting point. wsx checks for changes once a second
-and reloads edits while running. If a save has an error, the bars keep their
-last good look; in its place, the dashboard footer shows the first error in
-red for five seconds (`(+N more)` when there is more than one), and the
-full list goes to the log. An invalid file at startup falls back to the
-bundled default.
+To switch between several themes, make `theme.toml` a symlink and re-point it:
 
-The loader reports every field-level problem it finds in one pass — an
-unknown segment, a bad color, a variable a format isn't allowed to use, and
-so on, each with its own location. A TOML syntax error or a format-string
-parse error is different: it stops parsing right there, so only the first
-such error in that string is reported, not every one that string might
-contain.
+```bash
+mkdir -p ~/.config/wsx/themes
+cp docs/examples/theme-*.toml ~/.config/wsx/themes/
+ln -sfn themes/theme-nord.toml ~/.config/wsx/theme.toml
+```
 
-### Differences from the stock bars
+The running app reloads within a second. If a switch doesn't show, `touch` the new target.
 
-A handful of narrow, accepted gaps between the engine and the bars it
-replaced:
+## Bars
 
-- A workspace with no PR leaves one blank cell at the chip row's right
-  edge instead of hugging it exactly (the stock chip row's `$pr` is bare,
-  with no trailing separator of its own).
-- When the dashboard footer is too narrow for its key hints plus the
-  right side, it drops the version string first, then the `funnel`
-  module, instead of overflowing the terminal width. Where that happens
-  depends on how much the funnel has to say, since each stage renders
-  only while its count is non-zero.
-- A pinned chip clipped by the right edge keeps its visible portion
-  clickable, rather than being dropped in full.
-- The stock attached view draws a dim `─` rule under its top bar to set it
-  off from the pane. With `bar_theme` on, the themed bar's own blocks do
-  that job, so the rule row is dropped and the pane gains a row.
-- The dashboard header's filter echo is capped at 24 characters and never
-  shrinks further. The stock header instead budgeted the needle against
-  whatever room was left on the line, so the repo/workspace counts always
-  survived. Now a long needle costs the counts (`priority` 50) first, and
-  below roughly 80 columns the header runs long and is clipped at the right
-  edge. Why the echo itself never drops is unchanged: a needle with no
-  visible cause is worse than a truncated one — rows are missing from the
-  list and nothing on screen says why.
-
-### Bars
+The bundled default:
 
 ```toml
 [dashboard_header]
@@ -158,6 +72,7 @@ fill         = " "
 [dashboard_footer]
 format       = "$keys"
 right_format = "$funnel"
+fill         = " "
 
 [attached_top]
 format = "($agent_bar )$workspace(   $attention)"
@@ -183,63 +98,47 @@ right_format = "$keys"
 fill         = " "
 ```
 
-`[dashboard_footer]`'s right side is the bundled `funnel` module — see
-[Modules](#modules) below for what a module is and how to replace or
-restyle it. `$version` (the running wsx version) is registered but not
-placed; `right_format = "$version(  $funnel)"` brings it back. There the
-group around `$funnel` and its leading two spaces means that separator drops
-along with `$funnel` itself when the fleet is empty or the funnel is dropped
-for width — the same "put separators inside the group" rule described under
-Grammar below. (`$version`'s lower priority means it is the first of the two
-to go on a narrow footer.)
+| Bar | Where |
+|---|---|
+| `dashboard_header` | The dashboard's top line: wordmark, `group:` and `sort:` tabs, filter echo, counts. Nothing on it is clickable. |
+| `dashboard_footer` | The dashboard's bottom line: key hints and the [`funnel` module](#modules). |
+| `attached_top` | The attached view's top bar. |
+| `attached_bottom` | The attached view's bottom bar (chip row). |
+| `dashboard_detail` | The detail pane's pinned-command row. Drawn only when the reply row leaves out `$pins` or this bar places a module. |
+| `dashboard_detail_header` | The detail pane's top row. |
+| `dashboard_detail_reply` | The detail pane's reply row, laid out like a shell prompt. |
 
-`$hosts` is also registered but not placed: one chip per configured shared
-host (`wsx config edit shared_hosts`), and clicking a chip opens that host's
-workspace list, the same as picking it under `H`. To show it, try
-`right_format = "$hosts(  $funnel)"`. `$name` is truncated to 14 columns
-(use `$dest` to tell similar names apart), and on a narrow footer the
-segment drops whole at its priority (45), never leaving some of its chips
-behind. `hosts` is now a built-in name, so a theme that defined its own
-`[module.hosts]` must rename that module.
+Each bar takes these keys:
 
-`[dashboard_header]` is the dashboard's top line: the wordmark, the `group:`
-and `sort:` mode tabs, the live filter echo, and the repo/workspace counts
-flush right. Its five segments are display only — nothing on that line is
-clickable.
+| Key | Meaning |
+|---|---|
+| `format` | The left side, clipped at the right edge if too long. |
+| `right_format` | Flush right. |
+| `style` | Base style for literal text, segment content and the fill. |
+| `fill` | Character repeated across the unused gap. |
+| `fill_style` | Style for the fill, merged over `style`. |
 
-A theme that sets its own `[attached_bottom].format` keeps that layout
-unchanged — add `$tags` to it yourself to get the prompt-tag chips (the
-keyboard chord works either way).
+When both sides are non-empty, at least one blank column separates them.
 
-`[dashboard_detail]` is the dashboard's own DETAIL pane (the pane shown when
-a workspace row is selected, distinct from the attached view): its
-pinned-command chip row, followed by a rule to the edge. The bundled reply
-row places `$pins` itself, which folds this row away (see below), so it is
-drawn only when a theme leaves `$pins` out of `[dashboard_detail_reply]` or
-places a module here. `$pins` is the only
-data-bearing segment there — every other registered segment renders empty if
-you put it in this bar's format.
+### Overflow
 
-`[dashboard_detail_header]` is that same pane's top row: the selected
-workspace's `$agent_bar`, `$workspace` (the name alone, no `$repo`),
-`$branch`, `$pr`, `$diff`, `$procs`, and `$status`, plus any module. Other
-segments render empty there. The segments it shares with the attached bars
-use the same `[segment]` tables, so a restyled `[pr]` or `[procs]` shows up
-in both places. Its `$pr` chip is clickable and opens the PR.
+When a bar is too narrow, segments with a `priority` below 100 drop, lowest first, from either side, until the bar fits. Segments at the default priority of 100 never drop. If it still doesn't fit, wsx omits the right side and clips the left.
 
-`[dashboard_detail_reply]` is that pane's bottom row, where you type a reply
-to the agent, laid out like a shell prompt. `format` is the prompt drawn
-before the draft and `right_format` a right prompt after it; the draft fills
-the gap and `fill` pads what it leaves. While the draft is empty it shows a
-dim `Reply to agent` placeholder. Long drafts scroll so their end, where the
-cursor is, stays in view; widths are measured per grapheme, as the terminal
-draws them, so wide and combined characters (CJK, emoji sequences, accents)
-are never split. `$prompt` is the prompt character; `$keys` holds the
-`↵ send` / `Esc cancel` hint, present only while the row has focus (`Tab`
-from a selected workspace). `$agent_bar`, `$workspace`, `$branch`, `$pins`,
-and modules carry data here too. The bundled row leads with the pinned
-chips, `($pins  )$prompt `; the example themes put them on the block their
-attached bottom bar gives `$pins`:
+The bundled priorities:
+
+| Bar | Priorities |
+|---|---|
+| `attached_bottom` | `model_tokens` 10, `agents` 20, `procs` 30, `diff` 40, `tags` 40, `pr` 50 |
+| `dashboard_footer` | `hosts` 45, `version` 50, `tokens` 55, `funnel` 60, `usage` 60 |
+| `dashboard_header` | `sort` 30, `counts` 50 |
+
+### The reply row
+
+`[dashboard_detail_reply]`'s `format` is the prompt before your draft and `right_format` is a right prompt after it. The draft fills the gap and always keeps at least 12 cells. To make room, the right side drops first, then the prompt's droppable segments.
+
+`$keys` holds the `↵ send` / `Esc cancel` hint and shows only while the row has focus (`Tab` from a selected workspace).
+
+When `$pins` is on the reply row, on either side, the separate pinned-command row folds away and the chips stay clickable on the reply row. To get the separate row back, leave `$pins` out: `format = "$prompt "`. The example themes place the chips on a block:
 
 ```toml
 [dashboard_detail_reply]
@@ -247,157 +146,170 @@ format       = "([ $pins ](bg:soot fg:orange)[\ue0b0](fg:soot) )$prompt "
 right_format = "([\ue0b2](fg:ash)[ $keys ](bg:ash fg:orange))"
 ```
 
-The draft always keeps at least 12 cells (the whole row, when narrower).
-To make that room the right side goes first, whole; then the prompt's
-droppable segments (`priority` below 100), lowest first; and a prompt still
-too long is clipped at 12 cells from the edge.
+### Unplaced segments
 
-**Folding the chip row into the prompt.** With `$pins` in
-`[dashboard_detail_reply]` — on either side — the separate pinned-chip row
-is dropped, saving a row; the chips stay clickable where the reply row draws
-them. The separate row is kept only when `[dashboard_detail]` places a
-module, in which case both rows show the chips. Chips on the right side go
-with it when the row is too narrow for the draft. To get the separate row
-back, leave `$pins` out: `format = "$prompt "`.
+The bundled default registers some segments without placing them:
 
-The reply row replaced a hand-built `┃ Reply to agent ┃` chip, and the
-pinned chips moved onto it. The stock row now reads `1 PR  2 Feedback  ❯ `
-then the draft, and its hint is drawn as `[keys]` pills. A dim rule under it
-(`detail_bar_config.bottom_rule`, on by default) separates the pane from the
-dashboard footer.
+- `$version`, the running wsx version: `right_format = "$version(  $funnel)"`.
+- `$hosts`, one clickable chip per [shared host](../integrations/shared-workspaces.md): `right_format = "$hosts(  $funnel)"`. A chip opens that host's workspace list, like `H`.
+- `$usage`, the activity sparkline; `usage_graph_window` sets its range.
+- `$tokens`, a module showing context size per agent kind.
 
-Drawing the header row through the engine changes the stock look slightly. It
-starts with `$agent_bar`, the agent-coloured `▎`, where the hand-built row
-had a status-coloured bar. The name takes the PR-lifecycle tint, and procs
-read `● 3p` and are hidden at zero.
+A theme that sets its own `[attached_bottom].format` must add `$tags` itself to show the prompt-tag chips.
 
-| Key | Meaning |
-|---|---|
-| `format` | The left side, clipped at the right edge if too long. |
-| `right_format` | Flush right. |
-| `style` | Base style inherited by literal text, segment content, and the fill; inner styles can override it. |
-| `fill` | The first character repeated across the unused gap. |
-| `fill_style` | Style for the fill, merged over the bar's base style. |
+### Differences from the stock bars
 
-When both sides are nonempty, at least one column between them stays blank,
-even with a visible `fill` character. This blank column counts when deciding
-whether the right side fits. The fill occupies the remaining gap.
+With `bar_theme` on:
 
-**Overflow.** When a bar is too narrow for both sides plus that blank
-column, segments with a `priority` below 100 may drop — from either side,
-lowest first, re-evaluating both sides after each removal so conditional
-groups shed their separators with them — until the bar fits or nothing
-droppable is left. Segments at the default priority (100) never drop. If
-the sides still don't fit after that, the right side is omitted entirely
-rather than partially rendered, and the left side is clipped at the right
-edge.
+- The attached view drops the dim `─` rule under its top bar, so the pane gains a row.
+- A workspace with no PR leaves one blank cell at the chip row's right edge.
+- A narrow dashboard footer drops the version, then the funnel, instead of overflowing.
+- The dashboard header's filter echo is capped at 24 characters and never drops. A long filter drops the counts first.
 
-### Grammar
+## Grammar
 
 | Syntax | Meaning |
 |---|---|
-| `$name`, `${name}` | Insert a segment (inside a segment's `format`: one of its variables). |
+| `$name`, `${name}` | Insert a segment (inside a segment's `format`, one of its variables). |
 | `[text](style)` | Style a run. Inner runs inherit the outer background unless they set their own, so powerline blocks compose. |
 | `( … )` | Render only if a `$name` inside produced output. Put separators inside the group so they vanish with the segment. |
-| `$$`, `\[`, `\(`, `\x` | Literal characters: `$`, `[`, `(`, or the escaped character `x`. |
+| `$$`, `\[`, `\(`, `\x` | Literal `$`, `[`, `(`, or `x`. |
 
-In TOML double-quoted strings, write a backslash as `\\`; TOML single-quoted
-literal strings can contain format escapes directly, such as `'\[$workspace\]'`.
+In TOML double-quoted strings, write a backslash as `\\`. Single-quoted literal strings take format escapes as-is: `'\[$workspace\]'`. Use double quotes when you need `\ue0b0` to decode to a glyph.
 
-A **style** is space-separated tokens: `fg:<c>`, `bg:<c>`, a bare `<c>`
-(foreground), `bold`, `dimmed`, `italic`, `underline`, `none`, and `$style`
-(the segment's resolved style, see below). `none` is accepted for Starship
-compatibility but does nothing: it is a no-op, not a reset, so it neither
-clears inherited attributes nor cancels other tokens in the same style.
-A **color** is `#rrggbb`, a 0–255
-index, an ANSI name (`red`, `bright-blue`, `white`), a `[palette]` name, or
-a theme token: `dim row_dim path code bg_alt bg_soft ok warn err attention merged
-header_fg selected_fg selected_bg question stalled waiting thinking complete
-idle brand wordmark agent_claude agent_pi agent_hermes agent_codex agent_omp`
-(the `agent_*` tokens are each agent kind's fixed identity colour, the same
-in every theme). Palette names shadow theme tokens, which shadow ANSI names.
-Shadowing changes color lookup in the bar theme only; it never changes the
-base `Theme` fields. `fg:dim` selects a color; `dimmed` is a text modifier.
+Bare parentheses are a conditional group, so escape a literal pair: `\($age\)`. An unescaped `($age)` drops the parentheses.
 
-### Segments
+### Styles and colors
 
-Each segment has its own table, such as `[workspace]`, with `format` (its
-layout, using the variables below), `style`, `symbol`, `disabled`,
-`priority` (overflow survival; higher lasts longer; unset defaults to 100,
-which never drops), a `palette` sub-table (see
-[Recolouring one segment](#recolouring-one-segment)), and, for multi-item
-segments, `separator` and `styles`. A multi-item segment's format
-describes one item; the items keep their existing order.
-`separator` is a format too — `"[ │ ](fg:dim)"` draws a dim joiner — but
-it sits between items rather than inside one, so it takes no variables and
-no `$style`. Because it is parsed with the grammar above, a separator that
-wants a literal `$`, `[`, `(`, or backslash must escape it (`$$`, `\[`,
-`\(`, `\\`), and a bare `(x)` is a conditional group that renders nothing;
-a plain run of spaces or box-drawing characters needs no change. Two
-segments also take `more_format`: on `attention` it is the tail drawn
-when entries don't fit the bar, on `tags` the manager chip that always
-follows the chips; its one variable is `$count` (entries folded, or tags
-saved), and setting it on any other segment is an error. `attention`
-alone takes `more_style`, the tail's own `$style` (see the caps below);
-`tags`' chip has none. Likewise `agent_bar`
-alone takes a `symbols` sub-table, one glyph per agent kind, tried ahead
-of `symbol`:
+A style is space-separated tokens:
+
+- `fg:<color>`, `bg:<color>`, or a bare `<color>` (foreground).
+- `bold`, `dimmed`, `italic`, `underline`.
+- `none`, accepted for Starship compatibility. It does nothing and doesn't reset anything.
+- `$style`, the segment's resolved style.
+
+A color is one of:
+
+- `#rrggbb`, or a 0–255 index.
+- An ANSI name: `red`, `bright-blue`, `white`.
+- A `[palette]` name.
+- A theme token: `dim row_dim path code bg_alt bg_soft ok warn err attention merged header_fg selected_fg selected_bg question stalled waiting thinking complete idle brand wordmark agent_claude agent_pi agent_hermes agent_codex agent_omp`. The `agent_*` tokens are each agent's fixed identity color.
+
+Palette names shadow theme tokens, which shadow ANSI names. This only affects the bar theme. `fg:dim` is a color, while `dimmed` is a text modifier.
+
+```toml
+[palette]
+rust = "#d75f00"
+```
+
+## Segments
+
+Each segment has its own table, such as `[workspace]`, with these keys:
+
+| Key | Meaning |
+|---|---|
+| `format` | The segment's layout, using its variables. |
+| `style` | Merged over the segment's state-derived style and exposed as `$style`. |
+| `symbol` | Substituted for `$symbol`. |
+| `disabled` | Hide the segment. |
+| `priority` | Overflow survival; higher lasts longer. Default 100 never drops. |
+| `palette` | A sub-table of colors for this segment only. See [Recoloring one segment](#recoloring-one-segment). |
+| `separator` | Multi-item segments: a format drawn between items. It takes no variables. |
+| `styles` | Multi-item segments: per-position styles. See [Grading items by position](#grading-items-by-position). |
+| `more_format` | `attention`: the tail when entries don't fit. `tags`: the manager chip. Its one variable is `$count`. |
+| `more_style` | `attention` only: the tail's `$style`. |
+| `symbols` | `agent_bar` only: one glyph per agent kind. |
+
+| Segment | Variables | Notes |
+|---|---|---|
+| `brand` | `$symbol $name $mark $view` | The wordmark. Dashboard header only. |
+| `group` | `$label $tabs` | The `group:` mode tabs; the active one is highlighted. Dashboard header only. |
+| `sort` | `$label $tabs` | The `sort:` mode tabs. Dashboard header only. |
+| `filter` | `$needle` | The live filter, capped at 24 characters. Dashboard header only. |
+| `counts` | `$repos $workspaces` | Repo and workspace counts. Dashboard header only. |
+| `keys` | `$key $label` | One pill per key hint. Clickable. |
+| `version` | `$version` | |
+| `usage` | `$label $spark` | The activity sparkline. Clickable. |
+| `agent_bar` | `$symbol` | The agent's glyph in its identity color. |
+| `workspace` | `$repo $name` | `$style` carries the PR-lifecycle tint (green open, purple merged, red closed). `$repo` is absent in the detail pane. |
+| `branch` | `$symbol $branch` | The git branch. `symbol` defaults to `⎇`. |
+| `prompt` | `$symbol $agent` | The reply row's prompt character. `symbol` defaults to `❯`. Bold in the agent's color while the row has focus. |
+| `status` | `$glyph $label $ago` | The workspace's status as its row shows it. `$ago` is how long it has held. Detail header only. |
+| `attention` | `$glyph $repo $name $age` | One item per workspace needing attention. Overflow folds into `more_format`. Clickable. |
+| `pins` | `$index $label` | One chip per pinned command. Clickable. |
+| `hosts` | `$index $name $dest` | One chip per shared host; `$name` is truncated to 14 columns. Dashboard footer only. Clickable. |
+| `tags` | `$index $label` | The three most-used prompt tags, then the manager chip. Attached view only. Clickable. |
+| `agents` | `$symbol $icon $label $key` | One pill per agent when there are two or more. `$symbol` shows which agent is focused, or a spinner while it works. Clickable. |
+| `model_tokens` | `$model $tokens` | `$style` turns `warn` near the context limit. |
+| `procs` | `$symbol $count` | Hidden at zero. Clickable. |
+| `diff` | `$added $removed` | Hidden when clean. |
+| `pr` | `$symbol $number $label $mark` | `$style` carries the lifecycle tint; `$mark_style` styles the review verdict. Clickable, except over a remote attach. |
+
+Where segments produce output:
+
+| Bar | Segments |
+|---|---|
+| Attached bars | All except the dashboard-header segments, `branch`, `prompt`, `status` and `hosts`. Either bar, either side. |
+| `dashboard_footer` | `keys`, `version`, `usage`, `hosts` |
+| `dashboard_header` | `brand`, `group`, `sort`, `filter`, `counts` |
+| `dashboard_detail` | `pins` |
+| `dashboard_detail_header` | `agent_bar`, `workspace`, `branch`, `pr`, `diff`, `procs`, `status` |
+| `dashboard_detail_reply` | `prompt`, `agent_bar`, `workspace`, `branch`, `pins`, `keys` |
+
+Other segments render empty there, and any segment renders empty when its data is absent. Modules work in every bar.
+
+`pr`, `procs`, `usage`, `attention` and `tags` may appear only once per scope. The scopes are: the two attached bars together, the dashboard footer, the dashboard header, and each of the three detail-pane rows. `wsx theme check` rejects a duplicate.
+
+Gotchas when overriding a segment:
+
+- `style` reaches the output only through `$style`. The stock formats of `keys`, `pins`, `version`, `usage` and `diff` don't use `$style`, so `style` alone does nothing on them.
+- Emptying `symbol` leaves the space after `$symbol` in the stock format. Remove it from `format` too.
+- An item whose `format` renders empty is dropped, with no separator or click target.
+- `[attention] format = "$items"` from older themes is rejected. Delete the table or use the item variables.
+- A built-in segment name, such as `hosts`, can't be a module name.
+
+### Overriding a segment's style
+
+`style` merges over the segment's state-derived style attribute by attribute. `style = "bg:second"` keeps the PR's lifecycle foreground, while `style = "fg:rust"` replaces it.
+
+```toml
+[workspace]
+format = "[($repo/)$name]($style)"
+style  = "fg:rust bold"
+```
+
+An explicit style on an inner run still overrides `$style`. For the PR review mark, use `[$mark]($mark_style)` to keep its verdict color.
+
+### Agent glyphs
+
+`[agent_bar.symbols]` sets a glyph per agent kind, tried before `symbol`:
 
 ```toml
 [agent_bar]
-symbol = "\ue0b0"        # kinds without an entry below (Nerd Font chevron)
+symbol = "\ue0b0"        # kinds without an entry
 
 [agent_bar.symbols]
 claude = "\uec82"
 codex  = "\uec81"
 ```
 
-Keys must be agent kind names; any other key, or the table on another
-segment, is an error. Entries union per kind over the bundled default,
-yours winning, like a segment palette. An empty entry (`pi = ""`) is an
-override, not an absence: that kind shows no glyph rather than `symbol`.
-The `agents` pills read the same table through their `$icon` variable,
-and a `[module.<name>]` format through `$icon_<kind>`, so each harness's
-glyph is drawn once and appears everywhere the theme names it, including
-`$agent_bar` at the head of the dashboard detail pane's header row.
+Keys must be `claude`, `pi`, `hermes`, `codex` or `omp`. Entries merge over the bundled default. An empty entry (`pi = ""`) shows no glyph. The same glyphs appear as `$icon` in `agents` pills and as `$icon_<kind>` in modules.
 
-An item whose `format` renders empty — an empty `format`, or one whose
-variables are all absent for that item — is dropped as if it were never in
-the list: no separator, no click target, no grade, and not counted in the
-tail.
+### Grading items by position
 
-#### Grading items by position
+A multi-item segment's `styles` is a list of styles. The first rendered item's `$style` is patched by `styles[0]`, the second by `styles[1]`, and items past the end take the last entry. A background-only grade keeps the item's state color in the foreground.
 
-A multi-item segment also takes `styles`, a list of style strings: the
-first rendered item's `$style` is the segment's usual style patched by
-`styles[0]`, the second's by `styles[1]`, and so on, with items past the
-end of the list all taking its last entry. A bg-only grade keeps the
-provider's state colour in the foreground (an attention entry's
-PR-lifecycle tint, an agent pill's identity colour). Positions count
-rendered items, so an empty item takes no grade with it, and an attention
-entry folded into the tail does not either.
+For powerline caps between graded blocks, a multi-item segment's formats can use six extra colors:
 
-To draw powerline caps between graded blocks, the formats of a multi-item
-segment may name six extra colours: `item_fg`/`item_bg` are the item's own
-final `$style` colours, `prev_*` and `next_*` those of its rendered
-neighbours. `separator` sees `prev_*` and `next_*` (the items on each side
-of it); `more_format` sees `prev_*` (the last rendered entry). A colour
-that does not exist — the first item's `prev`, the last rendered item's
-`next`, or a grade that never set that colour — carries nothing: that
-token sets nothing, whatever `$style` or an enclosing run already set
-stays, and where nothing set it the bar's own style shows through. That
-is what lets the last block's trailing wedge blend into the bar without
-the theme knowing how many entries there are, provided the wedge sits
-outside the graded background run (as below), not inside it.
+| Color | Meaning |
+|---|---|
+| `item_fg`, `item_bg` | This item's final `$style` colors. |
+| `prev_fg`, `prev_bg` | The previous rendered item's colors. |
+| `next_fg`, `next_bg` | The next rendered item's colors. |
 
-`attention`'s fold tail joins the run through `more_style`: a style
-string patched over the segment's `style`, like a grade. It is the tail's
-`$style` and its `item_*` colours, and the last rendered entry's `next_*`
-when the tail follows it — so that entry's trailing wedge points into the
-tail, and into the bar only when the entry really is last. Without
-`more_style` the tail has no colours of its own: `$style` there is empty,
-and the last entry's `next` is absent even when a tail follows. Like
-`styles`, it may not name the six colours.
+`separator` sees `prev_*` and `next_*`, and `more_format` sees `prev_*`. A missing color, such as the last item's `next_bg`, sets nothing, so the bar's style shows through. That lets the last block's wedge blend into the bar.
+
+`attention`'s `more_style` gives the fold tail its own colors, so the last entry's `next_*` points into the tail.
 
 ```toml
 [attention]
@@ -408,178 +320,45 @@ separator   = ""
 more_format = "[ +$count more ]($style)[\ue0b0](fg:item_bg)"
 ```
 
-Here each block, entry or tail, carries its own trailing wedge, coloured
-from its block into the next; the first block's leading cap belongs in
-the bar format, where `styles[0]` is known. The formats are TOML double-quoted strings so
-that `\ue0b0` decodes to the wedge glyph and `\\(` reaches the grammar as
-`\(`; in a single-quoted literal string `\ue0b0` would stay as typed and
-render as the five characters `ue0b0`. `styles` entries may not use the
-six names themselves (a grade cannot depend on the neighbours that depend
-on it), `wsx theme check` rejects `styles` and the six names on a
-single-item segment, and the six names are reserved: a `[palette]` entry
-by one of them is an error, since inside a multi-item segment it would be
-shadowed by the per-item colour.
-The bundled default sets `priority` on the segments that compete for room:
-`model_tokens` 10, `agents` 20, `procs` 30, `diff` 40, `pr` 50 (the
-attached chip row's right side); `tags` 40 (the same row's left side);
-`version` 50, the `funnel` module 60 (the dashboard footer's right side,
-and `usage` keeps its 60 for a theme that places it back); `sort` 30,
-`counts` 50 (the dashboard header). Every other segment is the unset
-default, 100, and so never drops.
+Rules `wsx theme check` enforces:
 
-| Segment | Variables | Notes |
-|---|---|---|
-| `brand` | `$symbol $name $mark $view` | The wordmark. `$name` is `workspace`, `$mark` is `x`, `$view` names the view (`dashboard`). Dashboard header only. |
-| `group` | `$label $tabs` | The `group:` mode tabs; `$tabs` is opaque, with the active mode highlighted. Dashboard header only. |
-| `sort` | `$label $tabs` | The `sort:` mode tabs, same shape as `group`. Dashboard header only. |
-| `filter` | `$needle` | The live filter echo, absent when no filter is active; `$needle` is capped at 24 characters. Dashboard header only. |
-| `counts` | `$repos $workspaces` | Registered repo and workspace counts. Dashboard header only. |
-| `keys` | `$key $label` | One pill per key hint. Clickable. |
-| `version` | `$version` | |
-| `usage` | `$label $spark` | The activity sparkline. Clickable. |
-| `agent_bar` | `$symbol` | `$style` includes the agent's identity color. `$symbol` is the focused agent's entry in `[agent_bar.symbols]` (keys `claude`, `pi`, `hermes`, `codex`, `omp`) when the theme sets one, else `symbol`. Attached, detail header, and detail reply rows. |
-| `workspace` | `$repo $name` | `$repo` is absent when there is no repo name, and always in the detail pane's rows. `$style` includes the PR-lifecycle tint (green open, purple merged, red closed), or the header style without a PR; the reply row always takes the header style. Attached, detail header, and detail reply rows. |
-| `branch` | `$symbol $branch` | The workspace's git branch; `symbol` defaults to `⎇`, `$style` is the muted `dim` hue. Detail header and reply rows. |
-| `prompt` | `$symbol $agent` | The reply row's prompt character; `symbol` defaults to `❯`, `$agent` is the kind's name (`claude`, `pi`, …). `$style` is the agent's colour, bold, while the row has focus, and the muted `dim` hue otherwise. Detail reply row only. |
-| `status` | `$glyph $label $ago` | The workspace's dashboard status as its row shows it; `$style` includes the status colour. `$ago` is how long it has held (`12s`, `4m`, `2h`), absent when unknown. Detail header only. |
-| `attention` | `$glyph $repo $name $age` | One item per workspace needing attention. `$glyph` is the entry's dashboard status glyph in its status color; `$style` is the name's PR-lifecycle tint (open, merged, …) or the muted `path` hue. Entries that don't fit fold into `more_format` (`$count`); the first entry always renders, and if it alone would push the tail off the bar its `$name` is shortened with an ellipsis (assuming one `$name` in the format; a format without `$name`, or a very long `$repo`, has nothing to yield and simply clips). Clickable: each entry, and the tail. |
-| `pins` | `$index $label` | One chip per pinned command. Clickable. |
-| `hosts` | `$index $name $dest` | One chip per shared host, sorted by name; `$dest` is its ssh destination. Dashboard footer only. Clickable: opens that host's workspace list, as `H` then Enter does. |
-| `tags` | `$index $label` | The three most-used prompt tags as chips, then the manager chip from `more_format` (`$count` = saved tags). Attached only. Clickable: each chip, and the manager. |
-| `agents` | `$symbol $icon $label $key` | One pill per agent (2+ agents). `$style` includes the agent color. `symbol` is ignored — `$symbol` is a filled/hollow dot showing which agent is focused (its label is also bold), replaced by the dashboard's braille spinner while that agent is working. `$icon` is the pill's kind's entry in `[agent_bar.symbols]`, absent for a kind without one. Clickable. |
-| `model_tokens` | `$model $tokens` | `$style` includes `ok`, or `warn` near the context limit. |
-| `procs` | `$symbol $count` | Hidden at zero. Clickable. |
-| `diff` | `$added $removed` | Hidden when clean. |
-| `pr` | `$symbol $number $label $mark` | `$style` includes the lifecycle tint; `$mark_style` supplies the review verdict style. Clickable — except over a remote (ssh) attach, where the chip still renders but isn't clickable (opening a PR keys off a local workspace id a remote attach doesn't have). |
+- `styles` and `more_style` can't use the six neighbor colors.
+- `styles` and the six colors are rejected on single-item segments.
+- The six names can't be `[palette]` entries.
 
-`pr`, `procs`, `usage`, `attention`, and `tags` may each be placed only
-once: `pr`, `procs`, and `usage` carry exactly one click target; `attention`
-and `tags`, though each records one hit per entry/chip like
-`pins`/`agents`/`keys`, also carry a single tail target — `… +N more` for
-`attention`, the manager chip (`more_format`) for `tags` — and each is
-fitted to the one bar that places it. Put one of these five in more than
-one place across the two attached bars' `format`/`right_format` (or twice
-within the dashboard footer's own `format`/`right_format`, or twice within
-the dashboard header's, or twice within any one of the dashboard detail
-pane's three rows) and only the last-routed placement would be clickable, so
-`wsx theme check` rejects it as a duplicate instead. These six scopes are
-independent: a
-singleton segment may appear once in each without conflicting with the
-others.
+### Recoloring one segment
 
-All segments are available in **either attached bar**, on either side;
-click targets follow them between bars as well as within a bar. `version`
-and `usage` work in all three bars, not just the dashboard footer — put
-`$usage` in an attached bar and its sparkline is the same graph, clickable
-the same way. `keys` uses the attached view's leader-key hints in both
-attached bars. On the dashboard footer, only `keys`, `version`, `usage`, and
-`hosts` produce output, and `hosts` produces output nowhere else; on the dashboard header, only `brand`, `group`, `sort`,
-`filter`, and `counts`; on the dashboard detail pane's pinned-chip row, only
-`pins`; on its reply row, only `prompt`, `agent_bar`, `workspace`,
-`branch`, `pins`, and `keys`;
-other segments render empty in each. Segments also render empty when their
-underlying data is absent.
-
-Two details of the **stock formats** are worth knowing before you override
-them:
-
-- `style` only reaches the output through `$style`. The stock formats of
-  `agent_bar`, `workspace`, `attention`, `agents`, `model_tokens`, `procs`,
-  and `pr` bind it (`[…]($style)`), so setting `style` on those works as
-  written. The stock formats of `keys`, `pins`, `version`, `usage`, and
-  `diff` style their parts directly instead, so a bare `style = …` on one
-  of those has no effect unless you also put `$style` in its `format`.
-- Bare parentheses are the conditional-group syntax, so a literal pair
-  must be escaped. The stock `attention` item format writes its age as
-  `[ \($age\)](fg:dim)` in a TOML literal string for exactly this reason;
-  an unescaped `($age)` renders the age without the parentheses.
-- Upgrading a theme written before `attention` became multi-item: its
-  old `[attention] format = "$items"` is now rejected as an unknown
-  variable — delete the table to take the stock item format, or rewrite it
-  with the variables above. There is no `$items` alias.
-- `symbol` is substituted into `format`, but the literal spacing around it
-  stays. Emptying one (`[pr]` `symbol = ""`) leaves the space that follows
-  `$symbol` in the stock format; delete that space in `format` too if you
-  want the glyph gone entirely.
-
-#### Overriding a segment's style
-
-A segment's `style` is merged over its state-derived default attribute by
-attribute and exposed as `$style` **inside style expressions in that
-segment's format**. For example, `style = "bg:second"` preserves the PR's
-state-derived foreground, while `style = "fg:rust"` replaces it. Use
-`[$name]($style)` in a custom segment format to apply that resolved style:
+A `[<segment>.palette]` table overrides color names inside that segment only, including the tokens behind its state-derived `$style`. Use it to darken lifecycle tints on a light block:
 
 ```toml
-[palette]
-rust = "#d75f00"
-
-[workspace]
-format = "[($repo/)$name]($style)"
-style = "fg:rust bold"
-```
-
-Here `rust` must be defined in `[palette]`, as in the example below. Setting
-a segment's `style` does not forcibly recolor every nested run: an explicit
-style on an inner run can override inherited attributes. Likewise, putting
-`[$workspace](fg:rust)` in a bar format supplies an inherited foreground,
-not an override of the segment's own foreground. For the PR review mark,
-use `[$mark]($mark_style)` to retain its separate verdict color rather than
-applying the lifecycle style to it.
-
-#### Recolouring one segment
-
-`[palette]` names shadow theme tokens everywhere in the file. A segment
-can carry its own `[<segment>.palette]` too, with the same value grammar
-(plus: a value may name a global `[palette]` entry, so `ok = "green"` is
-the theme's own green rather than ANSI's), that shadows both the global
-palette and the theme tokens **inside that segment only** — for colour names in its `format`, `style`, `styles`,
-`separator`, and `more_format`, and for the tokens behind its
-state-derived `$style`. This is how a theme darkens the lifecycle tints
-on a light block without changing them on a dark one: the same `ok` that
-tints an open PR green on the dark `attention` run is too pale on a bright
-"mode" block, so the segments that sit there take darker greens of their
-own.
-
-```toml
-[palette]
-orange = "#d75f00"
-
-[attached_bottom]
-right_format = "[$pr](bg:orange)"
-
 [pr.palette]
-ok     = "#008700"   # open, darker than the theme's `ok`
+ok     = "#008700"   # open
 merged = "#870087"
-err    = "#870000"
+err    = "#870000"   # closed
 warn   = "#878700"   # conflict
 
 [workspace.palette]
-ok     = "#008700"
-merged = "#870087"
-err    = "#870000"
-warn   = "#878700"
-header_fg = "black"  # the no-PR fallback keeps the block's black text
+ok        = "#008700"
+header_fg = "black"  # no PR
 ```
 
-The overlay is only a colour lookup: it cannot add attributes or change
-which token a state uses (`ok` for open, `merged`, `err` for closed,
-`warn` for conflict; `header_fg` for `workspace` without a PR or on a
-draft, `dim` for the `pr` chip on a draft; the six status tokens for
-`attention`'s `$glyph`; `selected_fg`/`selected_bg`/`path` for the
-`group`/`sort` tabs). This is the one place a palette reaches a
-state-derived `$style`: the global `[palette]` shadows tokens only where a
-format names them (`fg:ok`), never the colour a segment derives for its
-own state. A segment palette's values may reference `[palette]` names but
-not each other, so there are no local aliases. A name defined only in a
-segment's palette is unknown outside it, so `wsx theme check` reports a
-bar format that uses one. The six per-item names are reserved here as in
-`[palette]`.
+- Values may name global `[palette]` entries, but not each other.
+- A name defined only in a segment palette is unknown elsewhere.
+- It changes colors only, not attributes or which token a state uses.
 
-### Modules
+The tokens each state uses:
 
-A module is a segment you compose yourself. Declare it as a
-`[module.<name>]` table and place it in any bar as `$<name>`:
+| Segment | Tokens |
+|---|---|
+| `pr`, `workspace` | `ok` open, `merged`, `err` closed, `warn` conflict |
+| `workspace` | `header_fg` without a PR or on a draft |
+| `pr` | `dim` on a draft |
+| `attention` `$glyph` | The six status tokens |
+| `group`, `sort` | `selected_fg`, `selected_bg`, `path` |
+
+## Modules
+
+A module is a segment you compose from fleet-wide variables. Declare it as `[module.<name>]` and place it as `$<name>`:
 
 ```toml
 [module.funnel]
@@ -590,54 +369,38 @@ priority = 60
 right_format = "$funnel"
 ```
 
-A module table takes `format`, `style` (patched over the bar style to form
-`$style`), `priority`, and `disabled` — nothing else, since a module has no
-items. Its `format` may reference only the fleet variables below, which
-describe every workspace on the dashboard at once. A count renders empty
-when it is zero, so wrap each item in a `( … )` group to drop it along with
-its label and gap; `$workspaces` and `$repos` always render a number. The
-`tokens_*` variables are sums of context size rather than counts; they render
-abbreviated (`77k`, `1.2M`) and are likewise empty at zero.
-
-A module's name may not be the name of a built-in segment (`keys`, `usage`,
-`pr`, …). The bundled default defines two modules: `funnel`, placed where
-the usage graph used to be, and `tokens` — context fill per agent kind
-(`claude 1.2M  codex 340k`), defined but not placed. Set only the fields
-you want to change to restyle either, or define your own and put that in
-the bar instead. To show the token module, or bring the sparkline back,
-place `$tokens` or `$usage`:
+- A module takes `format`, `style`, `priority` and `disabled`. It has no click target.
+- A count renders empty at zero, so wrap each item in `( … )` to drop it with its label. `$workspaces` and `$repos` always render.
+- `tokens_*` values render abbreviated (`77k`, `1.2M`) and are empty at zero.
+- The bundled default defines `funnel` (placed) and `tokens` (not placed). Set only the fields you want to change.
 
 ```toml
 [dashboard_footer]
 right_format = "$tokens(  $funnel)(  $usage)"
 ```
 
-Modules carry no click target.
-
 | Variable | Counts |
 |---|---|
 | `working` `waiting` `blocked` `done` | workspaces whose last `wsx status set` is that state |
-| `busy` | workspaces parked on background work (hook-inferred) |
+| `busy` | workspaces parked on background work |
 | `unreported` | workspaces with no reported status |
 | `alerts` | workspaces with an unacknowledged attention alert |
 | `awaiting` `stalled` `active` `idle` | workspaces by live transcript classification |
-| `live_agents` | workspaces with a live (thinking or waiting) primary session |
+| `live_agents` | workspaces with a live primary session |
 | `pr_none` `pr_draft` `pr_open` `pr_conflicted` `pr_merged` `pr_closed` | workspaces by PR lifecycle |
 | `review_required` `changes_requested` `approved` | PRs by review verdict |
-| `unresolved` | unresolved review threads across the fleet |
+| `unresolved` | unresolved review threads |
 | `mergeable` | PRs that are open and approved |
 | `dirty` | workspaces with modified or untracked files |
 | `msgs_queued` | agent-to-agent messages not yet delivered |
 | `workspaces` `repos` | totals (always rendered) |
-| `tokens_total` | Σ latest reported context size (prompt-side tokens) across every agent instance whose transcript is still cached, primary and peers |
-| `tokens_claude` `tokens_pi` `tokens_hermes` `tokens_codex` `tokens_omp` | the same, per agent kind (hermes reports no usage, so it is always empty) |
-| `icon_claude` `icon_pi` `icon_hermes` `icon_codex` `icon_omp` | the kind's glyph from `[agent_bar.symbols]` — the theme's, not the fleet's; absent for a kind without an entry. A *label*: it renders beside a count but, like literal text, never keeps a `( … )` group alive by itself, so `([$icon_pi $tokens_pi])` drops with the count exactly as `[pi $tokens_pi]` does |
+| `tokens_total` | sum of the latest context size across every agent, primary and peers |
+| `tokens_claude` `tokens_pi` `tokens_hermes` `tokens_codex` `tokens_omp` | the same, per agent kind (`hermes` reports none) |
+| `icon_claude` `icon_pi` `icon_hermes` `icon_codex` `icon_omp` | the kind's glyph from `[agent_bar.symbols]`; like literal text, it never keeps a `( … )` group alive alone |
 
-### A powerline example
+## A powerline example
 
-These examples use the real rounded powerline caps `` and ``; your
-terminal font needs to include them. Conditional groups hide whole blocks,
-including their caps and spaces, when the enclosed segment is empty.
+The rounded caps `\ue0b6` and `\ue0b4` need a Nerd Font. Conditional groups hide whole blocks, caps included, when the segment inside is empty.
 
 ```toml
 [palette]
@@ -646,14 +409,14 @@ second = "#3a3a3a"
 rust   = "#d75f00"
 
 [attached_top]
-format = "[](fg:first)[ $workspace ](bg:first)[](fg:first)( [](fg:second)[ $attention ](bg:second)[](fg:second))"
+format = "[\ue0b6](fg:first)[ $workspace ](bg:first)[\ue0b4](fg:first)( [\ue0b6](fg:second)[ $attention ](bg:second)[\ue0b4](fg:second))"
 
 [attached_bottom]
-right_format = "([](fg:second)[ $agents ](bg:second)[](fg:second))(  [](fg:first)[ $pr ](bg:first)[](fg:first))"
+right_format = "([\ue0b6](fg:second)[ $agents ](bg:second)[\ue0b4](fg:second))(  [\ue0b6](fg:first)[ $pr ](bg:first)[\ue0b4](fg:first))"
 
 [workspace]
 format = "[($repo/)$name]($style)"
-style = "fg:rust bold"
+style  = "fg:rust bold"
 
 [pr]
 style = "fg:rust"

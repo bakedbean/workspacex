@@ -1,27 +1,68 @@
-Running wsx on one machine (e.g. your desktop) and attaching from another (e.g. a laptop) works cleanly with tmux + ssh — no wsx-specific networking required.
+# Remote access
 
-**On the host machine:**
+Reach wsx from another machine or your phone. Run the whole dashboard in tmux and attach over ssh, drive a single Claude Code session from claude.ai, or attach to one agent with [shared workspaces](shared-workspaces.md).
 
-```
+| You want | Use |
+| --- | --- |
+| The full dashboard from another computer | [tmux and ssh](#tmux-and-ssh) |
+| One reconnect command per machine | [Named remotes](#named-remotes) |
+| A Claude Code session from your phone or browser | [Remote control](#remote-control) |
+| One agent from another machine, or from the dashboard's host picker | [Shared workspaces](shared-workspaces.md) |
+
+## tmux and ssh
+
+On the host, start wsx inside tmux, or reattach if it's already running:
+
+```bash
 tmux new -As wsx 'wsx'
 ```
 
-This starts wsx inside a tmux session named `wsx` (or reattaches to it if one already exists).
+From any other machine:
 
-**From any other machine:**
-
-```
+```bash
 ssh desktop -t tmux attach -t wsx
 ```
 
-Workspaces — and the claude sessions running inside them — keep running while you're detached, so picking up where you left off from a different machine just works.
+Workspaces and their agents keep running while you're detached.
 
-**Notes:**
+- wsx's leader key is `Ctrl-x`, so it doesn't collide with tmux's `Ctrl-b` prefix.
+- On a flaky network, use mosh: `mosh desktop -- tmux attach -t wsx`.
+- Tailscale or another VPN makes the host reachable by name without port forwarding.
 
-- wsx's leader key is `Ctrl-x`, chosen specifically to not collide with tmux's default `Ctrl-b` prefix (or anyone's `Ctrl-a` customization). No tmux config needed.
-- **Mosh** drops in cleanly if your network is flaky: `mosh desktop -- tmux attach -t wsx`.
-- **Tailscale** (or any VPN) makes the host reachable from anywhere by a stable name without port-forwarding.
+## Named remotes
 
-**Saving the invocation**: once you've settled on a working `ssh … tmux attach …` command, save it as a named remote so reconnecting is just `wsx remote <name>`. See [Named remote shortcuts](named-remote-shortcuts.md).
+Save a reconnect command under a short name, then run it with `wsx remote`:
 
-This page covers running the whole wsx TUI over ssh + tmux. For per-workspace sharing — an individual agent session that survives wsx quitting and can be attached to directly, independent of wsx itself — see [Shared workspaces](shared-workspaces.md). For browsing and attaching to shared workspaces on a remote host directly from wsx's dashboard (press `H`), see the "Browsing another machine" section in [Shared workspaces](shared-workspaces.md).
+```bash
+wsx remote                 # list saved names
+wsx remote desktop         # run the saved command
+wsx config edit remotes    # edit the list in $EDITOR
+```
+
+The `remotes` setting holds one `name=command` per line:
+
+```
+desktop=ssh -t desktop 'tmux attach -t wsx'
+gpu=ssh gpu-box -t 'tmux -u attach -t main || tmux -u new -s main'
+```
+
+- There is no `wsx remote add`. Add a line in the editor, and keep the existing lines unless you mean to drop them.
+- Only the first `=` splits name from command, so the command can contain `=`.
+- The command runs with `sh -c` and replaces the wsx process. When it exits, you're back at your shell.
+- A duplicate name uses its last value.
+
+See [`wsx remote`](../cli-reference/other.md#wsx-remote).
+
+## Remote control
+
+wsx starts Claude Code with `--remote-control`, so each Claude session prints a URL and a QR code you can open on [claude.ai/code](https://claude.ai/code) or the Claude mobile apps. It applies to Claude Code agents only.
+
+| Setting | Effect |
+| --- | --- |
+| `remote_control` | Set to `false` to keep sessions local-only. |
+| `remote_control_sandbox` | Set to `true` to run remote-issued commands in Claude Code's `--sandbox`. |
+
+- The relay uses your claude.ai account. Signed out or offline, the local session still works.
+- Session state goes through Anthropic's relay, and anyone who can see your screen can see the session URL.
+
+See [Settings](../configuration/settings.md).

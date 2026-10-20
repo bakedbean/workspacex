@@ -29,7 +29,7 @@ wsx workspace tag list --all
 
 See [`wsx workspace tag`](../cli-reference/workspace.md#wsx-workspace-tag) for the full syntax.
 
-Tags show dimmed after the branch name: `⎇ wsx/my-slug #parked #ui`. They use only the space left in the branch column, and tags that don't fit collapse to a count like `+2`. To make room, widen the column with the `dashboard_branch_width` [setting](../configuration/settings.md).
+Tags show dimmed after the branch name: `⎇ wsx/my-slug #parked #ui`. They use only the space left in the branch column, and tags that don't fit collapse to a count like `+2`. To make room, widen the column with the `dashboard_branch_width` [setting](../configuration/settings.md). Attached to a workspace, its tags show after its name in the top bar.
 
 Workspace tags are unrelated to [prompt tags](../attached-view/prompt-tags.md).
 

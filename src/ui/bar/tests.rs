@@ -25,6 +25,7 @@ mod attention_budget_tests {
             attention: None,
             pinned: &[],
             tags: &[],
+            workspace_tags: &[],
             procs: 0,
             diff: None,
             pr: None,
@@ -235,6 +236,7 @@ mod attached_bars_tests {
                 attention: None,
                 pinned: &[],
                 tags: &[],
+                workspace_tags: &[],
                 procs: 0,
                 diff: None,
                 pr: None,
@@ -253,6 +255,55 @@ mod attached_bars_tests {
         );
         assert_eq!(bars.top.hits[0].start_col, 0);
         assert_eq!(bars.top.hits[0].hit, Hit::ArmLeader);
+    }
+
+    fn top_with_tags(tags: &[std::sync::Arc<str>], width: u16) -> Rendered {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        let inputs = AttachedInputs {
+            repo: "wsx",
+            name: "foo",
+            version: "0.1.0",
+            window_label: "24h",
+            activity: &[],
+            agent: None,
+            attention: None,
+            pinned: &[],
+            tags: &[],
+            workspace_tags: tags,
+            procs: 0,
+            diff: None,
+            pr: None,
+            model_tokens: None,
+            agents: &[],
+            active_agent: None,
+            fleet: crate::ui::bar::fleet::empty(),
+        };
+        attached_bars(&specs, &theme, inputs, width, width).top
+    }
+
+    #[test]
+    fn workspace_tags_render_dim_after_the_name() {
+        let top = top_with_tags(&["parked".into(), "ui".into()], 60);
+        let text = test_util::plain(&top.line);
+        assert!(text.starts_with("wsx/foo  #parked #ui"), "{text:?}");
+        let dim = Theme::wsx().dim_style().fg;
+        let tag = top.line.spans.iter().find(|s| s.content == "parked");
+        assert_eq!(tag.and_then(|s| s.style.fg), dim, "{:?}", top.line.spans);
+    }
+
+    #[test]
+    fn an_untagged_workspace_draws_no_tag_gap() {
+        let text = test_util::plain(&top_with_tags(&[], 60).line);
+        assert_eq!(text.trim_end(), "wsx/foo");
+    }
+
+    /// Tags drop before the name on a bar too narrow for both.
+    #[test]
+    fn workspace_tags_drop_on_a_narrow_bar() {
+        let text = test_util::plain(&top_with_tags(&["parked".into()], 10).line);
+        assert!(text.starts_with("wsx/foo"), "{text:?}");
+        assert!(!text.contains('#'), "{text:?}");
     }
 }
 
@@ -815,6 +866,7 @@ mod bottom_tests {
             attention: None,
             pinned,
             tags: &[],
+            workspace_tags: &[],
             procs: 3,
             diff: Some(crate::git::DiffStats {
                 added: 12,
@@ -1117,6 +1169,7 @@ mod bottom_tests {
             attention: None,
             pinned: &pinned,
             tags: &[],
+            workspace_tags: &[],
             procs: 0,
             diff: None,
             pr: pr(None),
@@ -1318,6 +1371,7 @@ mod segment_registry_drift_tests {
             attention,
             pinned: &pinned,
             tags: &tags,
+            workspace_tags: &["parked".into()],
             procs: 3,
             diff: Some(DiffStats {
                 added: 12,
@@ -1799,6 +1853,7 @@ mod attention_tests {
             attention: attention_input(entries, max_width),
             pinned: &[],
             tags: &[],
+            workspace_tags: &[],
             procs: 0,
             diff: None,
             pr: None,
@@ -2437,6 +2492,7 @@ mod example_theme_tests {
                 attention: None,
                 pinned: &[],
                 tags: &[],
+                workspace_tags: &[],
                 procs: 0,
                 diff: None,
                 pr,
@@ -2520,6 +2576,7 @@ mod example_theme_tests {
                 }),
                 pinned: &[],
                 tags: &[],
+                workspace_tags: &[],
                 procs: 0,
                 diff: None,
                 pr: None,
@@ -2682,6 +2739,7 @@ mod example_theme_tests {
                     attention: None,
                     pinned: &[],
                     tags: &[],
+                    workspace_tags: &[],
                     procs: 0,
                     diff: None,
                     pr: None,
@@ -2998,6 +3056,7 @@ mod module_tests {
                 attention: None,
                 pinned: &[],
                 tags: &[],
+                workspace_tags: &[],
                 procs: 0,
                 diff: None,
                 pr: None,
@@ -3033,6 +3092,7 @@ mod module_tests {
                 attention: None,
                 pinned: &[],
                 tags: &[],
+                workspace_tags: &[],
                 procs: 0,
                 diff: None,
                 pr: None,

@@ -127,6 +127,14 @@ pub const SEGMENTS: &[SegmentDef] = &[
         singleton: false,
     },
     SegmentDef {
+        name: "workspace_tags",
+        vars: &["tag"],
+        style_vars: STYLE,
+        more_vars: NO_TAIL,
+        items: true,
+        singleton: false,
+    },
+    SegmentDef {
         name: "branch",
         vars: &["symbol", "branch"],
         style_vars: STYLE,

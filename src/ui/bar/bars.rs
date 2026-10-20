@@ -544,6 +544,8 @@ pub(crate) struct AttachedInputs<'a> {
     /// `$tags`' chips, most-used first; the provider takes the first
     /// `CHIP_COUNT` and counts the rest into the manager chip.
     pub tags: &'a [crate::commands::tags::PromptTag],
+    /// `$workspace_tags`: the focused workspace's tags, sorted.
+    pub workspace_tags: &'a [std::sync::Arc<str>],
     pub procs: u32,
     pub diff: Option<crate::git::DiffStats>,
     pub pr: Option<crate::ui::attached::ChipPr>,
@@ -596,6 +598,16 @@ pub(super) fn attached_segments(
             inputs.repo,
             inputs.name,
             inputs.pr.map(|p| p.lifecycle),
+            theme,
+            resolver,
+        ),
+    );
+    put(
+        &mut segments,
+        "workspace_tags",
+        providers::workspace_tags(
+            cfg(specs, "workspace_tags"),
+            inputs.workspace_tags,
             theme,
             resolver,
         ),

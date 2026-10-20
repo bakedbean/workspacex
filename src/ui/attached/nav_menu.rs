@@ -71,6 +71,10 @@ pub fn nav_menu_items(multi_pane: bool) -> Vec<NavItem> {
             label: "prompt tag",
         },
         NavItem {
+            glyph: "#",
+            label: "workspace tags",
+        },
+        NavItem {
             glyph: "x",
             label: "send literal ^x",
         },

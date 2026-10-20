@@ -70,6 +70,7 @@ const ATTACHED: &[(Chord, Panel)] = &[
     (Chord::Leader('a'), Panel::Agents),
     (Chord::Leader('k'), Panel::ProcessList),
     (Chord::Leader('<'), Panel::PromptTag),
+    (Chord::Leader('#'), Panel::WorkspaceTags),
 ];
 
 impl Surface {

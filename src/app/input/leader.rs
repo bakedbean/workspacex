@@ -141,6 +141,7 @@ pub(in crate::app::input) async fn dispatch_leader_action(
         KeyCode::Char('k') => Panel::ProcessList.open(app, Surface::Attached(id)),
         // Prompt tag: pick an XML tag, type a body, insert it unsubmitted.
         KeyCode::Char('<') => Panel::PromptTag.open(app, Surface::Attached(id)),
+        KeyCode::Char('#') => Panel::WorkspaceTags.open(app, Surface::Attached(id)),
         KeyCode::Char(c @ '1'..='9') => {
             let idx = (c as u8 - b'1') as usize;
             if let Some(cmd) = app.pinned_commands_cache.get(idx) {

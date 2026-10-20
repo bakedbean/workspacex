@@ -4,7 +4,7 @@ Tags are short labels on workspaces, like `parked` or `spike`. Use them, and eac
 
 ## Tagging workspaces
 
-Press `#` on a workspace to open the tag editor:
+Press `#` on a workspace, or `Ctrl-x #` while attached to one, to open the tag editor:
 
 | Key                 | Action                                  |
 | ------------------- | --------------------------------------- |

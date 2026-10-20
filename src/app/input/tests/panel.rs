@@ -135,6 +135,12 @@ async fn leader_chords_swap_panels_over_an_attached_pane() {
         matches!(app.modal, Some(Modal::ProcessList { workspace_id, .. }) if workspace_id == ws)
     );
     ctrl_x(&mut app).await;
+    modal_char(&mut app, '#').await;
+    assert!(
+        matches!(app.modal, Some(Modal::WorkspaceTags { workspace_id, .. }) if workspace_id == ws)
+    );
+    // The tag editor takes text, but a chord still reaches past it.
+    ctrl_x(&mut app).await;
     modal_char(&mut app, '<').await;
     assert!(matches!(app.modal, Some(Modal::PromptTag(_))));
     // The prompt tag takes text, but a chord still reaches past it.

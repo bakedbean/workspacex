@@ -44,7 +44,7 @@ Hidden workspaces collapse into one dimmed row per rule:
 ▸ #parked  ·  2 hidden
 ```
 
-Press `enter` or `l` on that row to show its workspaces, and `h` to collapse it. Expanded rows stay open until wsx restarts.
+Press `enter` or `l` on that row to show its workspaces, and `h` to collapse it. An expanded group and its workspaces show at full brightness. Expanded rows stay open until wsx restarts.
 
 ### By PR state
 

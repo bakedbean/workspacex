@@ -236,9 +236,8 @@ pub fn render_list(
                         repo_name: repo_name.clone(),
                         row: w.clone(),
                     };
-                    items.push(ListItem::new(crate::ui::dashboard::hidden::dimmed(
-                        flat_row_line(&flat, widths, tick, theme, width),
-                        theme,
+                    items.push(ListItem::new(flat_row_line(
+                        &flat, widths, tick, theme, width,
                     )));
                 }
             }

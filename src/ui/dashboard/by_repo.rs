@@ -292,10 +292,7 @@ pub fn render_list(
             ));
             if g.expanded {
                 for w in &g.workspaces {
-                    items.push(ListItem::new(crate::ui::dashboard::hidden::dimmed(
-                        row::render(w, widths, tick, theme, width),
-                        theme,
-                    )));
+                    items.push(ListItem::new(row::render(w, widths, tick, theme, width)));
                 }
             }
         }

@@ -2,6 +2,8 @@
 
 **Date:** 2026-10-16
 **Status:** draft
+**Supersedes:** [#240](https://github.com/bakedbean/workspacex/issues/240)
+(`wsx serve`: mobile web view for shared workspaces)
 
 ## Goal
 
@@ -92,6 +94,9 @@ Settings, read at startup:
 | `remote_api` | `off` | Master switch. On-values: `true`/`on`/`1`/`yes` (same parser as `remote_control_sandbox`). |
 | `remote_api_listen` | *(unset)* | `ip:port` to bind. Unset with `remote_api` on → auto-detect the Tailscale IPv4 (`tailscale ip -4`) on port `7749`. |
 
+Both keys must be added to `known_setting_key()`
+(`src/cli/parse/config.rs:7`), or `wsx config get/set/edit` rejects them.
+
 Rules:
 
 - **Never bind a wildcard.** `0.0.0.0`, `::` and any non-tailnet address are
@@ -160,6 +165,14 @@ GET  /v1/events                                      (SSE, dashboard-level)
 
 Errors are `{"error": "<code>", "message": "..."}`. Codes include
 `unauthorized`, `not_found`, `agent_unsupported` and `not_serving`.
+
+**Target validation.** Every `{ws}` and `{agent}` is resolved against the
+store before anything else runs; an id with no row is `not_found`. Handlers
+reach a session only through the resolved instance row (transcript path
+from `agent_session_id`, writes through the TUI's own session for that
+instance), never through a client-supplied path, tmux session name or file
+name. The API therefore cannot touch a process or file wsx does not manage.
+This carries over #240's rule that only listed sessions are reachable.
 
 ### 4. Transcript read path
 
@@ -303,7 +316,8 @@ yolo agent can do anything that agent can. The controls, in order:
 2. Bound only to a tailnet or loopback address; wildcard binds are refused.
 3. Peer must be the same tailnet user (`tailscale whois`).
 4. Per-device bearer token, stored hashed, revocable from the CLI only.
-5. No endpoint runs shell commands, creates workspaces or changes settings.
+5. No endpoint runs shell commands, creates workspaces or changes settings,
+   and every target id is validated against the store (§3).
 6. Every mutating request is logged at `info` with device name, endpoint and
    target. Prompt bodies are not logged.
 
@@ -337,12 +351,39 @@ Phases 1 and 2 are the minimum useful product.
   QR, prompt round trip on Claude and Codex, interrupt, reconnect after
   network loss, revoked token rejected.
 
+## Alternatives considered
+
+**#240: a web page over tmux.** A standalone `wsx serve` serving one embedded
+HTML page: list shared workspaces, show `tmux capture-pane` text, send input
+with `tmux send-keys`, refresh by hand. It is much smaller and needs no
+running TUI. It was set aside for three reasons:
+
+- **Terminal text is not a chat.** A pane capture is terminal output cut to
+  the desktop pane's width, unreadable at phone size. The structured
+  transcript (§4) is what makes a mobile-first view possible, and a
+  capture-based client would be replaced, not extended.
+- **Shared workspaces only.** `send-keys` reaches only tmux-shared agents.
+  The message queue (§5) reaches any agent and cold-spawns a dormant one.
+- **Pull-only.** No live state, so "which agent needs me" still needs a
+  manual refresh.
+
+Kept from #240: the target-validation rule (§3), the `known_setting_key()`
+step (§1), and the case for a standalone server (Open questions 1).
+
+**A PWA instead of a native app.** It would remove the second repository and
+App Store friction, and the API is client-agnostic, so it stays possible.
+Native was chosen for the owner's primary use (smooth chat scrolling,
+Keychain token storage, a path to APNs).
+
 ## Open questions
 
 1. **Daemon vs TUI.** Embedding means "the TUI must be running at home",
-   which `agent send` already requires. A headless `wsx serve` that owns PTYs
-   is a bigger refactor that would also fix that for agents. Revisit after
-   phase 2.
+   which `agent send` already requires. #240 showed the cost: tmux-shared
+   agents keep running without the TUI, so a standalone `wsx serve` could
+   reach them with no dashboard open, and the embedded design gives that up.
+   A headless `wsx serve` that owns PTYs (or drives shared agents through
+   tmux and the rest through the queue) removes the requirement for every
+   agent. It is the priority follow-up after phase 2, not a someday item.
 2. **Do pi and omp accept type-ahead?** If not, `/prompt` while `working`
    needs a server-side hold until `idle` for those kinds. The same check
    should confirm each harness's interrupt key.

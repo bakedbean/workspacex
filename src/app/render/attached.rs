@@ -363,13 +363,13 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
     ) {
         None
     } else {
-        let max_width = crate::ui::bar::attention_width_budget(
+        crate::ui::bar::fit_attention(
             &app.bar_specs,
             &app.theme,
             data.inputs(None),
             info_area.width,
-        );
-        compute_attention_items(app, Some(focused_id), max_width)
+            |max_width| compute_attention_items(app, Some(focused_id), max_width),
+        )
     };
 
     let out = attached::render_panes(

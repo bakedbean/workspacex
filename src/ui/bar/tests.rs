@@ -229,17 +229,14 @@ mod attention_budget_tests {
         );
     }
 
-    /// End to end: with tags the bar drops, both attention entries draw in
-    /// full and keep their click targets.
-    #[test]
-    fn dropped_workspace_tags_leave_attention_unfolded() {
+    /// The attached top bar at width 80 after `fit_attention` budgets two
+    /// attention entries beside `tags`, under `specs`.
+    fn fitted_top(
+        specs: &crate::config::theme_file::BarSpecs,
+        tags: &[std::sync::Arc<str>],
+    ) -> Rendered {
         use crate::ui::updates_bar::{AttentionEntry, AttentionItems};
         let theme = Theme::wsx();
-        let specs = bundled_default(&theme);
-        let long: Vec<std::sync::Arc<str>> = ["a", "b", "c"]
-            .iter()
-            .map(|c| c.repeat(32).into())
-            .collect();
         let entry = |id: i64, name: &str| AttentionEntry {
             workspace_id: crate::data::store::WorkspaceId(id),
             repo_name: "r".into(),
@@ -249,26 +246,25 @@ mod attention_budget_tests {
             lifecycle: None,
         };
         let tagged = || AttachedInputs {
-            workspace_tags: &long,
+            workspace_tags: tags,
             ..inputs("wsx", "foo", None)
         };
-        let max_width = attention_width_budget(&specs, &theme, tagged(), 80);
-        let attention = Some(AttentionItems {
-            entries: vec![entry(1, "alpha"), entry(2, "beta")],
-            now_ms: 10_000,
-            max_width,
+        let attention = fit_attention(specs, &theme, tagged(), 80, |max_width| {
+            Some(AttentionItems {
+                entries: vec![entry(1, "alpha"), entry(2, "beta")],
+                now_ms: 10_000,
+                max_width,
+            })
         });
-        let top = attached_bars(
-            &specs,
-            &theme,
-            AttachedInputs {
-                attention,
-                ..tagged()
-            },
-            80,
-            80,
-        )
-        .top;
+        let inputs = AttachedInputs {
+            attention,
+            ..tagged()
+        };
+        attached_bars(specs, &theme, inputs, 80, 80).top
+    }
+
+    /// Both entries drawn in full, each clickable, and no tags or tail.
+    fn assert_attention_unfolded(top: &Rendered) {
         let text = test_util::plain(&top.line);
         assert!(
             text.contains("r/alpha") && text.contains("r/beta"),
@@ -281,6 +277,37 @@ mod attention_budget_tests {
             .filter(|h| matches!(h.hit, Hit::Attention(_)))
             .count();
         assert_eq!(entries, 2);
+    }
+
+    fn long_tags(len: usize, n: usize) -> Vec<std::sync::Arc<str>> {
+        ["a", "b", "c"][..n]
+            .iter()
+            .map(|c| c.repeat(len).into())
+            .collect()
+    }
+
+    /// Tags too wide even beside the one-cell probe.
+    #[test]
+    fn dropped_workspace_tags_leave_attention_unfolded() {
+        let specs = bundled_default(&Theme::wsx());
+        assert_attention_unfolded(&fitted_top(&specs, &long_tags(32, 3)));
+    }
+
+    /// Tags that fit beside the probe but not beside the folded attention
+    /// it budgets for (a shortened entry plus the `more` tail).
+    #[test]
+    fn tags_dropped_by_folded_attention_give_their_width_back() {
+        let specs = bundled_default(&Theme::wsx());
+        assert_attention_unfolded(&fitted_top(&specs, &long_tags(28, 2)));
+    }
+
+    /// The same boundary with attention placed in `right_format`.
+    #[test]
+    fn tags_dropped_by_right_side_attention_give_their_width_back() {
+        let mut specs = bundled_default(&Theme::wsx());
+        specs.attached_top.format = format::parse("$workspace(  $workspace_tags)").unwrap();
+        specs.attached_top.right_format = format::parse("( $attention)").unwrap();
+        assert_attention_unfolded(&fitted_top(&specs, &long_tags(28, 2)));
     }
 
     /// Tags that fit beside the probe stay, and their width comes off the

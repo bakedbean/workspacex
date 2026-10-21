@@ -208,6 +208,97 @@ mod attention_budget_tests {
         let budget = attention_width_budget(&specs, &theme, inputs("wsx", "foo", None), 80);
         assert_eq!(budget, 80);
     }
+
+    /// Tags too wide for the bar drop when it renders, so the budget must
+    /// not reserve their width: attention gets what the stock prefix leaves.
+    #[test]
+    fn workspace_tags_the_bar_will_drop_cost_attention_nothing() {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        let long: Vec<std::sync::Arc<str>> = ["a", "b", "c"]
+            .iter()
+            .map(|c| c.repeat(32).into())
+            .collect();
+        let tagged = AttachedInputs {
+            workspace_tags: &long,
+            ..inputs("wsx", "foo", None)
+        };
+        assert_eq!(
+            attention_width_budget(&specs, &theme, tagged, 80),
+            80 - stock_prefix("wsx/foo", None)
+        );
+    }
+
+    /// End to end: with tags the bar drops, both attention entries draw in
+    /// full and keep their click targets.
+    #[test]
+    fn dropped_workspace_tags_leave_attention_unfolded() {
+        use crate::ui::updates_bar::{AttentionEntry, AttentionItems};
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        let long: Vec<std::sync::Arc<str>> = ["a", "b", "c"]
+            .iter()
+            .map(|c| c.repeat(32).into())
+            .collect();
+        let entry = |id: i64, name: &str| AttentionEntry {
+            workspace_id: crate::data::store::WorkspaceId(id),
+            repo_name: "r".into(),
+            name: name.into(),
+            age_anchor_ms: 9_000,
+            status: crate::ui::dashboard::status::Status::Question,
+            lifecycle: None,
+        };
+        let tagged = || AttachedInputs {
+            workspace_tags: &long,
+            ..inputs("wsx", "foo", None)
+        };
+        let max_width = attention_width_budget(&specs, &theme, tagged(), 80);
+        let attention = Some(AttentionItems {
+            entries: vec![entry(1, "alpha"), entry(2, "beta")],
+            now_ms: 10_000,
+            max_width,
+        });
+        let top = attached_bars(
+            &specs,
+            &theme,
+            AttachedInputs {
+                attention,
+                ..tagged()
+            },
+            80,
+            80,
+        )
+        .top;
+        let text = test_util::plain(&top.line);
+        assert!(
+            text.contains("r/alpha") && text.contains("r/beta"),
+            "{text:?}"
+        );
+        assert!(!text.contains("more") && !text.contains('#'), "{text:?}");
+        let entries = top
+            .hits
+            .iter()
+            .filter(|h| matches!(h.hit, Hit::Attention(_)))
+            .count();
+        assert_eq!(entries, 2);
+    }
+
+    /// Tags that fit beside the probe stay, and their width comes off the
+    /// budget: `  #parked` is 9 cells.
+    #[test]
+    fn workspace_tags_that_fit_reduce_the_budget() {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        let tags: Vec<std::sync::Arc<str>> = vec!["parked".into()];
+        let tagged = AttachedInputs {
+            workspace_tags: &tags,
+            ..inputs("wsx", "foo", None)
+        };
+        assert_eq!(
+            attention_width_budget(&specs, &theme, tagged, 80),
+            80 - stock_prefix("wsx/foo", None) - 9
+        );
+    }
 }
 
 #[cfg(test)]

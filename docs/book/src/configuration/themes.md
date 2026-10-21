@@ -232,7 +232,7 @@ Each segment has its own table, such as `[workspace]`, with these keys:
 | `usage` | `$label $spark` | The activity sparkline. Clickable. |
 | `agent_bar` | `$symbol` | The agent's glyph in its identity color. |
 | `workspace` | `$repo $name` | `$style` carries the PR-lifecycle tint (green open, purple merged, red closed). `$repo` is absent in the detail pane. |
-| `workspace_tags` | `$tag` | One item per [workspace tag](../dashboard/tags-and-hiding.md), dimmed. Attached view only. |
+| `workspace_tags` | `$tag` | One item per [workspace tag](../dashboard/tags-and-hiding.md), dimmed. Attached view only; empty over a remote attach. A custom `attached_top` must place it to show tags. |
 | `branch` | `$symbol $branch` | The git branch. `symbol` defaults to `⎇`. |
 | `prompt` | `$symbol $agent` | The reply row's prompt character. `symbol` defaults to `❯`. Bold in the agent's color while the row has focus. |
 | `status` | `$glyph $label $ago` | The workspace's status as its row shows it. `$ago` is how long it has held. Detail header only. |

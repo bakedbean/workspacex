@@ -768,6 +768,12 @@ pub(crate) fn attention_width_budget(
     let Some((spec, in_format)) = placement else {
         return usize::from(width);
     };
+    // Measure without what the bar will drop for width, or attention folds
+    // to make room for segments that never draw.
+    for name in super::render::dropped_segments(spec, &segments, &specs.segments, width, &resolver)
+    {
+        segments.remove(name);
+    }
 
     let base = resolver.resolve(&spec.style).unwrap_or_default();
     let (left, _) = eval(&spec.format, &segments, &resolver, base);

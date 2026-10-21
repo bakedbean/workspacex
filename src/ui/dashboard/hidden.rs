@@ -37,9 +37,7 @@ pub fn hidden_group_line(
     if lc.is_some() {
         spans.push(Span::styled(
             format!("{} ", crate::ui::theme::branch_glyph(lc, nerd_fonts)),
-            theme
-                .lifecycle_style(lc)
-                .unwrap_or_else(|| theme.dim_style()),
+            theme.lifecycle_style(lc).unwrap_or(text),
         ));
     }
     spans.push(Span::styled(
@@ -52,10 +50,15 @@ pub fn hidden_group_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::hide_rules::PrCriterion;
 
     fn group(expanded: bool) -> HiddenGroupView {
+        group_for(HideRule::Tag("parked".into()), expanded)
+    }
+
+    fn group_for(rule: HideRule, expanded: bool) -> HiddenGroupView {
         HiddenGroupView {
-            rule: HideRule::Tag("parked".into()),
+            rule,
             expanded,
             workspaces: Vec::new(),
         }
@@ -77,5 +80,14 @@ mod tests {
         assert_eq!(line.spans[0].style, Style::default());
         assert_eq!(line.spans[1].style, Style::default());
         assert_eq!(line.spans.last().unwrap().style, Style::default());
+    }
+
+    #[test]
+    fn expanded_uncolored_lifecycle_glyph_is_not_dim() {
+        let theme = Theme::default();
+        for pr in [PrCriterion::NoPr, PrCriterion::Draft] {
+            let line = hidden_group_line(&group_for(HideRule::Pr(pr), true), None, false, &theme);
+            assert_eq!(line.spans[1].style, Style::default(), "{pr:?}");
+        }
     }
 }

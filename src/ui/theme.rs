@@ -32,8 +32,8 @@ pub struct Theme {
     pub selected_bg: Color,
     /// Sub-lines, empty hints, dashboard footer.
     pub dim: Color,
-    /// Muted columns (recap, age, tags) on active dashboard rows — one tone
-    /// lighter than `dim`, which expanded hidden rows fall back to.
+    /// Muted columns (recap, age, tags) on dashboard rows — one tone
+    /// lighter than `dim`.
     pub row_dim: Color,
     /// Repo header's path/count tail — distinct muted tone so the path
     /// doesn't blur into the workspace sub-lines (which use `dim`).

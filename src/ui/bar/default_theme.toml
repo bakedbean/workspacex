@@ -44,7 +44,7 @@ right_format = "$counts"
 fill         = " "
 
 [attached_top]
-format = "($agent_bar )$workspace(   $attention)"
+format = "($agent_bar )$workspace(  $workspace_tags)(   $attention)"
 
 [attached_bottom]
 format       = "$keys  ($pins  )($tags  )"
@@ -146,6 +146,13 @@ format = "[$symbol]($style)"
 # Focused workspace. Variables: $repo $name
 [workspace]
 format = "[($repo/)$name]($style)"
+
+# The focused workspace's tags, one item per tag, dimmed as on the
+# dashboard row (attached bars). Variables: $tag
+[workspace_tags]
+format    = "[#$tag]($style)"
+separator = " "
+priority  = 60
 
 # The workspace's git branch (dashboard detail header). $style is the muted
 # `dim` hue. Variables: $symbol $branch

@@ -25,6 +25,7 @@ mod attention_budget_tests {
             attention: None,
             pinned: &[],
             tags: &[],
+            workspace_tags: &[],
             procs: 0,
             diff: None,
             pr: None,
@@ -207,6 +208,124 @@ mod attention_budget_tests {
         let budget = attention_width_budget(&specs, &theme, inputs("wsx", "foo", None), 80);
         assert_eq!(budget, 80);
     }
+
+    /// Tags too wide for the bar drop when it renders, so the budget must
+    /// not reserve their width: attention gets what the stock prefix leaves.
+    #[test]
+    fn workspace_tags_the_bar_will_drop_cost_attention_nothing() {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        let long: Vec<std::sync::Arc<str>> = ["a", "b", "c"]
+            .iter()
+            .map(|c| c.repeat(32).into())
+            .collect();
+        let tagged = AttachedInputs {
+            workspace_tags: &long,
+            ..inputs("wsx", "foo", None)
+        };
+        assert_eq!(
+            attention_width_budget(&specs, &theme, tagged, 80),
+            80 - stock_prefix("wsx/foo", None)
+        );
+    }
+
+    /// The attached top bar at width 80 after `fit_attention` budgets two
+    /// attention entries beside `tags`, under `specs`.
+    fn fitted_top(
+        specs: &crate::config::theme_file::BarSpecs,
+        tags: &[std::sync::Arc<str>],
+    ) -> Rendered {
+        use crate::ui::updates_bar::{AttentionEntry, AttentionItems};
+        let theme = Theme::wsx();
+        let entry = |id: i64, name: &str| AttentionEntry {
+            workspace_id: crate::data::store::WorkspaceId(id),
+            repo_name: "r".into(),
+            name: name.into(),
+            age_anchor_ms: 9_000,
+            status: crate::ui::dashboard::status::Status::Question,
+            lifecycle: None,
+        };
+        let tagged = || AttachedInputs {
+            workspace_tags: tags,
+            ..inputs("wsx", "foo", None)
+        };
+        let attention = fit_attention(specs, &theme, tagged(), 80, |max_width| {
+            Some(AttentionItems {
+                entries: vec![entry(1, "alpha"), entry(2, "beta")],
+                now_ms: 10_000,
+                max_width,
+            })
+        });
+        let inputs = AttachedInputs {
+            attention,
+            ..tagged()
+        };
+        attached_bars(specs, &theme, inputs, 80, 80).top
+    }
+
+    /// Both entries drawn in full, each clickable, and no tags or tail.
+    fn assert_attention_unfolded(top: &Rendered) {
+        let text = test_util::plain(&top.line);
+        assert!(
+            text.contains("r/alpha") && text.contains("r/beta"),
+            "{text:?}"
+        );
+        assert!(!text.contains("more") && !text.contains('#'), "{text:?}");
+        let entries = top
+            .hits
+            .iter()
+            .filter(|h| matches!(h.hit, Hit::Attention(_)))
+            .count();
+        assert_eq!(entries, 2);
+    }
+
+    fn long_tags(len: usize, n: usize) -> Vec<std::sync::Arc<str>> {
+        ["a", "b", "c"][..n]
+            .iter()
+            .map(|c| c.repeat(len).into())
+            .collect()
+    }
+
+    /// Tags too wide even beside the one-cell probe.
+    #[test]
+    fn dropped_workspace_tags_leave_attention_unfolded() {
+        let specs = bundled_default(&Theme::wsx());
+        assert_attention_unfolded(&fitted_top(&specs, &long_tags(32, 3)));
+    }
+
+    /// Tags that fit beside the probe but not beside the folded attention
+    /// it budgets for (a shortened entry plus the `more` tail).
+    #[test]
+    fn tags_dropped_by_folded_attention_give_their_width_back() {
+        let specs = bundled_default(&Theme::wsx());
+        assert_attention_unfolded(&fitted_top(&specs, &long_tags(28, 2)));
+    }
+
+    /// The same boundary with attention placed in `right_format`.
+    #[test]
+    fn tags_dropped_by_right_side_attention_give_their_width_back() {
+        let mut specs = bundled_default(&Theme::wsx());
+        specs.attached_top.format = format::parse("$workspace(  $workspace_tags)").unwrap();
+        specs.attached_top.right_format = format::parse("( $attention)").unwrap();
+        assert_attention_unfolded(&fitted_top(&specs, &long_tags(28, 2)));
+    }
+
+    /// Tags that fit beside the probe stay, and their width comes off the
+    /// budget: `  #parked` is 9 cells.
+    #[test]
+    fn workspace_tags_that_fit_reduce_the_budget() {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        let tags: Vec<std::sync::Arc<str>> = vec!["parked".into()];
+        let tagged = AttachedInputs {
+            workspace_tags: &tags,
+            ..inputs("wsx", "foo", None)
+        };
+        assert_eq!(
+            attention_width_budget(&specs, &theme, tagged, 80),
+            80 - stock_prefix("wsx/foo", None) - 9
+        );
+    }
 }
 
 #[cfg(test)]
@@ -235,6 +354,7 @@ mod attached_bars_tests {
                 attention: None,
                 pinned: &[],
                 tags: &[],
+                workspace_tags: &[],
                 procs: 0,
                 diff: None,
                 pr: None,
@@ -253,6 +373,55 @@ mod attached_bars_tests {
         );
         assert_eq!(bars.top.hits[0].start_col, 0);
         assert_eq!(bars.top.hits[0].hit, Hit::ArmLeader);
+    }
+
+    fn top_with_tags(tags: &[std::sync::Arc<str>], width: u16) -> Rendered {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        let inputs = AttachedInputs {
+            repo: "wsx",
+            name: "foo",
+            version: "0.1.0",
+            window_label: "24h",
+            activity: &[],
+            agent: None,
+            attention: None,
+            pinned: &[],
+            tags: &[],
+            workspace_tags: tags,
+            procs: 0,
+            diff: None,
+            pr: None,
+            model_tokens: None,
+            agents: &[],
+            active_agent: None,
+            fleet: crate::ui::bar::fleet::empty(),
+        };
+        attached_bars(&specs, &theme, inputs, width, width).top
+    }
+
+    #[test]
+    fn workspace_tags_render_dim_after_the_name() {
+        let top = top_with_tags(&["parked".into(), "ui".into()], 60);
+        let text = test_util::plain(&top.line);
+        assert!(text.starts_with("wsx/foo  #parked #ui"), "{text:?}");
+        let dim = Theme::wsx().dim_style().fg;
+        let tag = top.line.spans.iter().find(|s| s.content == "parked");
+        assert_eq!(tag.and_then(|s| s.style.fg), dim, "{:?}", top.line.spans);
+    }
+
+    #[test]
+    fn an_untagged_workspace_draws_no_tag_gap() {
+        let text = test_util::plain(&top_with_tags(&[], 60).line);
+        assert_eq!(text.trim_end(), "wsx/foo");
+    }
+
+    /// Tags drop before the name on a bar too narrow for both.
+    #[test]
+    fn workspace_tags_drop_on_a_narrow_bar() {
+        let text = test_util::plain(&top_with_tags(&["parked".into()], 10).line);
+        assert!(text.starts_with("wsx/foo"), "{text:?}");
+        assert!(!text.contains('#'), "{text:?}");
     }
 }
 
@@ -815,6 +984,7 @@ mod bottom_tests {
             attention: None,
             pinned,
             tags: &[],
+            workspace_tags: &[],
             procs: 3,
             diff: Some(crate::git::DiffStats {
                 added: 12,
@@ -1117,6 +1287,7 @@ mod bottom_tests {
             attention: None,
             pinned: &pinned,
             tags: &[],
+            workspace_tags: &[],
             procs: 0,
             diff: None,
             pr: pr(None),
@@ -1318,6 +1489,7 @@ mod segment_registry_drift_tests {
             attention,
             pinned: &pinned,
             tags: &tags,
+            workspace_tags: &["parked".into()],
             procs: 3,
             diff: Some(DiffStats {
                 added: 12,
@@ -1799,6 +1971,7 @@ mod attention_tests {
             attention: attention_input(entries, max_width),
             pinned: &[],
             tags: &[],
+            workspace_tags: &[],
             procs: 0,
             diff: None,
             pr: None,
@@ -2437,6 +2610,7 @@ mod example_theme_tests {
                 attention: None,
                 pinned: &[],
                 tags: &[],
+                workspace_tags: &[],
                 procs: 0,
                 diff: None,
                 pr,
@@ -2520,6 +2694,7 @@ mod example_theme_tests {
                 }),
                 pinned: &[],
                 tags: &[],
+                workspace_tags: &[],
                 procs: 0,
                 diff: None,
                 pr: None,
@@ -2682,6 +2857,7 @@ mod example_theme_tests {
                     attention: None,
                     pinned: &[],
                     tags: &[],
+                    workspace_tags: &[],
                     procs: 0,
                     diff: None,
                     pr: None,
@@ -2998,6 +3174,7 @@ mod module_tests {
                 attention: None,
                 pinned: &[],
                 tags: &[],
+                workspace_tags: &[],
                 procs: 0,
                 diff: None,
                 pr: None,
@@ -3033,6 +3210,7 @@ mod module_tests {
                 attention: None,
                 pinned: &[],
                 tags: &[],
+                workspace_tags: &[],
                 procs: 0,
                 diff: None,
                 pr: None,

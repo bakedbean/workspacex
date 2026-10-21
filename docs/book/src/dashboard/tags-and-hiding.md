@@ -4,7 +4,7 @@ Tags are short labels on workspaces, like `parked` or `spike`. Use them, and eac
 
 ## Tagging workspaces
 
-Press `#` on a workspace to open the tag editor:
+Press `#` on a workspace, or `Ctrl-x #` while attached to one, to open the tag editor:
 
 | Key                 | Action                                  |
 | ------------------- | --------------------------------------- |
@@ -29,7 +29,7 @@ wsx workspace tag list --all
 
 See [`wsx workspace tag`](../cli-reference/workspace.md#wsx-workspace-tag) for the full syntax.
 
-Tags show dimmed after the branch name: `⎇ wsx/my-slug #parked #ui`. They use only the space left in the branch column, and tags that don't fit collapse to a count like `+2`. To make room, widen the column with the `dashboard_branch_width` [setting](../configuration/settings.md).
+Tags show dimmed after the branch name: `⎇ wsx/my-slug #parked #ui`. They use only the space left in the branch column, and tags that don't fit collapse to a count like `+2`. To make room, widen the column with the `dashboard_branch_width` [setting](../configuration/settings.md). Attached to a local workspace, its tags show after its name in the top bar; when the bar is too narrow they drop as a group rather than folding to a count.
 
 Workspace tags are unrelated to [prompt tags](../attached-view/prompt-tags.md).
 

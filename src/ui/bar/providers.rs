@@ -388,6 +388,22 @@ pub fn workspace(
     eval_segment(cfg, &v, style, &[], resolver)
 }
 
+/// The workspace's tags, one item each; `$style` is the muted `dim` hue,
+/// as on the dashboard row. Absent for an untagged workspace.
+pub fn workspace_tags(
+    cfg: &SegmentConfig,
+    tags: &[std::sync::Arc<str>],
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let style = cfg.theme(theme).dim_style();
+    let items: Vec<(SegmentMap, Style, Option<Hit>)> = tags
+        .iter()
+        .map(|t| (vars(vec![("tag", var(&**t))]), style, None))
+        .collect();
+    eval_items(cfg, &items, resolver)
+}
+
 /// The workspace's git branch. `$symbol` is `symbol`, else `⎇`; `$style`
 /// is the muted `dim` hue. Absent for an empty branch name.
 pub fn branch(

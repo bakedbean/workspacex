@@ -18,9 +18,11 @@ pub mod test_util;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub(crate) use bars::attention_width_budget;
 pub(crate) use bars::{
-    AttachedInputs, DetailHeaderInputs, DetailReplyInputs, attached_bars, attention_width_budget,
-    dashboard_detail_header, dashboard_detail_reply,
+    AttachedInputs, DetailHeaderInputs, DetailReplyInputs, attached_bars, dashboard_detail_header,
+    dashboard_detail_reply, fit_attention,
 };
 pub use bars::{
     DashboardFooterInputs, DashboardHeaderInputs, cfg, dashboard_detail, dashboard_footer,

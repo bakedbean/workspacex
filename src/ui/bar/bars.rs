@@ -544,6 +544,8 @@ pub(crate) struct AttachedInputs<'a> {
     /// `$tags`' chips, most-used first; the provider takes the first
     /// `CHIP_COUNT` and counts the rest into the manager chip.
     pub tags: &'a [crate::commands::tags::PromptTag],
+    /// `$workspace_tags`: the focused workspace's tags, sorted.
+    pub workspace_tags: &'a [std::sync::Arc<str>],
     pub procs: u32,
     pub diff: Option<crate::git::DiffStats>,
     pub pr: Option<crate::ui::attached::ChipPr>,
@@ -596,6 +598,16 @@ pub(super) fn attached_segments(
             inputs.repo,
             inputs.name,
             inputs.pr.map(|p| p.lifecycle),
+            theme,
+            resolver,
+        ),
+    );
+    put(
+        &mut segments,
+        "workspace_tags",
+        providers::workspace_tags(
+            cfg(specs, "workspace_tags"),
+            inputs.workspace_tags,
             theme,
             resolver,
         ),
@@ -722,6 +734,7 @@ pub(crate) fn attached_bars(
 /// cell, plus — when the OTHER side of that same bar is nonempty — that
 /// side's full width plus the mandatory blank column between them (mirrors
 /// `render_bar`'s own accounting for a nonempty pair of sides).
+#[cfg(test)]
 pub(crate) fn attention_width_budget(
     specs: &BarSpecs,
     theme: &Theme,
@@ -733,16 +746,55 @@ pub(crate) fn attention_width_budget(
         ..inputs
     };
     let resolver = specs.resolver(theme);
-    let mut segments = attached_segments(specs, theme, inputs, &resolver);
-    if !cfg(specs, "attention").disabled {
-        segments.insert(
-            "attention".to_string(),
-            Segment::text("x", ratatui::style::Style::default()),
-        );
-    }
+    let segments = attached_segments(specs, theme, inputs, &resolver);
+    budget_for(specs, segments, width, &resolver)
+}
 
+/// The attention items for `inputs`' bars, built by `items_for` at a budget
+/// that matches what the bar draws. The real items can be wider than the
+/// probe (a shortened entry plus the `more` tail), making the bar drop more
+/// segments; their width goes back to attention, until nothing new drops.
+pub(crate) fn fit_attention(
+    specs: &BarSpecs,
+    theme: &Theme,
+    inputs: AttachedInputs<'_>,
+    width: u16,
+    items_for: impl Fn(usize) -> Option<crate::ui::updates_bar::AttentionItems>,
+) -> Option<crate::ui::updates_bar::AttentionItems> {
+    let inputs = AttachedInputs {
+        attention: None,
+        ..inputs
+    };
+    let resolver = specs.resolver(theme);
+    let mut segments = attached_segments(specs, theme, inputs, &resolver);
+    let Some((spec, _)) = attention_bar(specs) else {
+        return items_for(usize::from(width));
+    };
+    loop {
+        let items = items_for(budget_for(specs, segments.clone(), width, &resolver));
+        let mut drawn = segments.clone();
+        put(
+            &mut drawn,
+            "attention",
+            providers::attention(cfg(specs, "attention"), items.as_ref(), theme, &resolver),
+        );
+        let dropped =
+            super::render::dropped_segments(spec, &drawn, &specs.segments, width, &resolver);
+        let before = segments.len();
+        for name in dropped {
+            segments.remove(name);
+        }
+        if segments.len() == before {
+            return items;
+        }
+    }
+}
+
+/// The attached bar that places `$attention`, and whether in its `format`
+/// (rather than `right_format`). The loader allows at most one placement.
+fn attention_bar(specs: &BarSpecs) -> Option<(&super::render::BarSpec, bool)> {
     let has_attention = |nodes: &[format::Node]| format::vars(nodes).contains(&"attention");
-    let placement = if has_attention(&specs.attached_top.format) {
+    if has_attention(&specs.attached_top.format) {
         Some((&specs.attached_top, true))
     } else if has_attention(&specs.attached_top.right_format) {
         Some((&specs.attached_top, false))
@@ -752,14 +804,35 @@ pub(crate) fn attention_width_budget(
         Some((&specs.attached_bottom, false))
     } else {
         None
-    };
-    let Some((spec, in_format)) = placement else {
+    }
+}
+
+/// `attention_width_budget` over prebuilt `segments`, which must not hold
+/// `attention`.
+fn budget_for(
+    specs: &BarSpecs,
+    mut segments: SegmentMap,
+    width: u16,
+    resolver: &style::Resolver<'_>,
+) -> usize {
+    if !cfg(specs, "attention").disabled {
+        segments.insert(
+            "attention".to_string(),
+            Segment::text("x", ratatui::style::Style::default()),
+        );
+    }
+    let Some((spec, in_format)) = attention_bar(specs) else {
         return usize::from(width);
     };
+    // Measure without what the bar will drop for width, or attention folds
+    // to make room for segments that never draw.
+    for name in super::render::dropped_segments(spec, &segments, &specs.segments, width, resolver) {
+        segments.remove(name);
+    }
 
     let base = resolver.resolve(&spec.style).unwrap_or_default();
-    let (left, _) = eval(&spec.format, &segments, &resolver, base);
-    let (right, _) = eval(&spec.right_format, &segments, &resolver, base);
+    let (left, _) = eval(&spec.format, &segments, resolver, base);
+    let (right, _) = eval(&spec.right_format, &segments, resolver, base);
 
     let chrome = if in_format {
         usize::from(left.width).saturating_sub(1)

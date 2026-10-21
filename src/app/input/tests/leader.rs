@@ -1374,3 +1374,38 @@ async fn leader_less_than_opens_the_prompt_tag_modal() {
         app.modal
     );
 }
+
+/// `^x #` opens the focused workspace's tag editor, as `#` does on the dashboard.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn leader_hash_opens_the_workspace_tag_editor() {
+    use crossterm::event::{KeyCode, KeyEvent};
+    let store = Store::open_in_memory().unwrap();
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    let ws_id = spawn_attached_workspace(&mut app);
+    app.store.add_workspace_tag(ws_id, "parked").unwrap();
+    let target = test_target(&app, ws_id);
+    handle_key_attached(
+        &mut app,
+        target,
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+    )
+    .await
+    .unwrap();
+    handle_key_attached(
+        &mut app,
+        target,
+        KeyEvent::new(KeyCode::Char('#'), KeyModifiers::SHIFT),
+    )
+    .await
+    .unwrap();
+    assert!(!app.leader_pending);
+    assert!(
+        matches!(
+            &app.modal,
+            Some(crate::ui::modal::Modal::WorkspaceTags { workspace_id, tags, .. })
+                if *workspace_id == ws_id && tags == &["parked".to_string()]
+        ),
+        "{:?}",
+        app.modal
+    );
+}

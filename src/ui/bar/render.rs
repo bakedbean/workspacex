@@ -172,39 +172,9 @@ pub fn render_bar(
     resolver: &Resolver,
 ) -> Rendered {
     let base = resolver.resolve(&spec.style).unwrap_or_default();
-    let (mut left, _) = eval(&spec.format, segments, resolver, base);
-    let (mut right, _) = eval(&spec.right_format, segments, resolver, base);
-    let fits = |left: &Segment, right: &Segment| {
-        usize::from(left.width)
-            + usize::from(right.width)
-            + usize::from(!left.is_empty() && !right.is_empty())
-            <= usize::from(width)
-    };
-    if !fits(&left, &right) {
-        // `format` before `right_format` — the tie-break order.
-        let mut names = format::vars(&spec.format);
-        names.extend(format::vars(&spec.right_format));
-        let mut excluded: Vec<&str> = Vec::new();
-        while !fits(&left, &right) {
-            let victim = names
-                .iter()
-                .copied()
-                .filter(|name| {
-                    !excluded.contains(name)
-                        && priority(configs, name) < DEFAULT_PRIORITY
-                        && segments
-                            .get(*name)
-                            .is_some_and(|segment| !segment.is_empty())
-                })
-                .min_by_key(|name| priority(configs, name));
-            let Some(victim) = victim else { break };
-            excluded.push(victim);
-            left = eval_excluding(&spec.format, segments, resolver, base, &excluded).0;
-            right = eval_excluding(&spec.right_format, segments, resolver, base, &excluded).0;
-        }
-        if !right.is_empty() && !fits(&left, &right) {
-            right = Segment::default();
-        }
+    let (left, mut right, _) = fit_sides(spec, segments, configs, width, resolver, base);
+    if !right.is_empty() && !fits(&left, &right, width) {
+        right = Segment::default();
     }
 
     let gap = width.saturating_sub(left.width.saturating_add(right.width));
@@ -220,6 +190,71 @@ pub fn render_bar(
         line: Line::from(out.spans),
         hits: out.hits,
     }
+}
+
+fn fits(left: &Segment, right: &Segment, width: u16) -> bool {
+    usize::from(left.width)
+        + usize::from(right.width)
+        + usize::from(!left.is_empty() && !right.is_empty())
+        <= usize::from(width)
+}
+
+/// Both sides of `spec` with droppable segments removed, lowest priority
+/// first, until they fit `width` or nothing droppable is left; also returns
+/// the dropped names. The sides may still overflow.
+fn fit_sides<'a>(
+    spec: &'a BarSpec,
+    segments: &SegmentMap,
+    configs: &HashMap<String, SegmentConfig>,
+    width: u16,
+    resolver: &Resolver,
+    base: Style,
+) -> (Segment, Segment, Vec<&'a str>) {
+    let (mut left, _) = eval(&spec.format, segments, resolver, base);
+    let (mut right, _) = eval(&spec.right_format, segments, resolver, base);
+    let mut excluded: Vec<&str> = Vec::new();
+    if fits(&left, &right, width) {
+        return (left, right, excluded);
+    }
+    // `format` before `right_format` — the tie-break order.
+    let mut names = format::vars(&spec.format);
+    names.extend(format::vars(&spec.right_format));
+    while !fits(&left, &right, width) {
+        let victim = names
+            .iter()
+            .copied()
+            .filter(|name| {
+                !excluded.contains(name)
+                    && priority(configs, name) < DEFAULT_PRIORITY
+                    && segments
+                        .get(*name)
+                        .is_some_and(|segment| !segment.is_empty())
+            })
+            .min_by_key(|name| priority(configs, name));
+        let Some(victim) = victim else { break };
+        excluded.push(victim);
+        left = eval_excluding(&spec.format, segments, resolver, base, &excluded).0;
+        right = eval_excluding(&spec.right_format, segments, resolver, base, &excluded).0;
+    }
+    (left, right, excluded)
+}
+
+/// The segments `render_bar` would leave undrawn to fit `segments` into
+/// `width`: those dropped by priority, plus the whole right side when it
+/// still doesn't fit.
+pub(super) fn dropped_segments<'a>(
+    spec: &'a BarSpec,
+    segments: &SegmentMap,
+    configs: &HashMap<String, SegmentConfig>,
+    width: u16,
+    resolver: &Resolver,
+) -> Vec<&'a str> {
+    let base = resolver.resolve(&spec.style).unwrap_or_default();
+    let (left, right, mut dropped) = fit_sides(spec, segments, configs, width, resolver, base);
+    if !right.is_empty() && !fits(&left, &right, width) {
+        dropped.extend(format::vars(&spec.right_format));
+    }
+    dropped
 }
 
 /// Evaluate one side on its own, dropping droppable segments — `priority`

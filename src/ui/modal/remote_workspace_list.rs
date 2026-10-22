@@ -77,7 +77,7 @@ pub fn render_remote_workspace_list(
         };
         f.render_widget(Paragraph::new(msg).style(theme.dim_style()), body_area);
     } else {
-        // Three aligned columns: agent | <glyph> #<num> branch #tags | repo/workspace.
+        // Four aligned columns: agent | <glyph> #<num> branch | repo/workspace | #tags.
         // The branch cell keeps the dashboard's lifecycle glyph + color (dim when
         // status is unknown / no PR) and gains the PR number when known. A
         // dormant row (no live session; Enter shares it) names its state in the
@@ -85,8 +85,9 @@ pub fn render_remote_workspace_list(
         //
         // The branch prefix (glyph + `#<num>`) is kept separate from the branch
         // name so truncation trims the *name* first; the prefix is cut only
-        // when the column is narrower than the prefix itself. Tags follow the
-        // name, dim, as on the dashboard row: only in room the whole name leaves.
+        // when the column is narrower than the prefix itself. Tags are dim, as on
+        // the dashboard row, and rightmost so dropping them on a narrow panel never
+        // shifts another column; with no tags on any row the column is omitted.
         let prefixes: Vec<String> = rows
             .iter()
             .map(|r| {
@@ -104,7 +105,7 @@ pub fn render_remote_workspace_list(
 
         // Desired column widths derive from content (capped) so rows line up,
         // then shrink to fit the panel. Layout per row:
-        // indent(1) + agent + gap(2) + branch + gap(2) + ws.
+        // indent(1) + agent + gap(2) + branch + gap(2) + ws [+ gap(2) + tags].
         let agent_cells: Vec<&str> = rows
             .iter()
             .map(|r| match (r.attach_session(), r.shared) {
@@ -131,22 +132,29 @@ pub fn render_remote_workspace_list(
             .map(|(r, p)| display_width(p) + display_width(r.branch))
             .max()
             .unwrap_or(1);
-        let budget = (body_area.width as usize).saturating_sub(1 + 2 + 2);
-        let (agent_w, branch_w, ws_w) =
-            fit_columns(budget, agent_desired, branch_desired, ws_desired);
-        // Tags are the least important cell: the branch column grows for them
-        // only into room no other column wanted.
-        let tagged_desired = rows
+        // `fit_tags`' own measure, less the leading space the gap replaces.
+        let tags_desired = rows
             .iter()
-            .zip(&prefixes)
-            .map(|(r, p)| {
-                let tags: usize = r.tags.iter().map(|t| 2 + display_width(t)).sum();
-                display_width(p) + display_width(r.branch) + tags
+            .map(|r| {
+                let w: usize = r.tags.iter().map(|t| 2 + display_width(t)).sum();
+                w.saturating_sub(1)
             })
             .max()
-            .unwrap_or(1);
-        let spare = budget.saturating_sub(agent_w + branch_w + ws_w);
-        let branch_w = branch_w + tagged_desired.saturating_sub(branch_w).min(spare);
+            .unwrap_or(0)
+            .min(24);
+        let budget = (body_area.width as usize).saturating_sub(1 + 2 + 2);
+        let desired = [agent_desired, branch_desired, ws_desired, tags_desired];
+        // The tags column brings its own gap; once squeezed too narrow to show
+        // any row's tags it gives that room back, so the other columns lay out
+        // as on an untagged host.
+        let mut widths = fit_columns(budget.saturating_sub(2), desired);
+        if rows
+            .iter()
+            .all(|r| fit_tags(r.tags, widths[3] + 1).is_empty())
+        {
+            widths = fit_columns(budget, [agent_desired, branch_desired, ws_desired, 0]);
+        }
+        let [agent_w, branch_w, ws_w, tags_w] = widths;
 
         let mut lines: Vec<Line> = Vec::new();
         for (i, row) in rows.iter().enumerate() {
@@ -171,14 +179,7 @@ pub fn render_remote_workspace_list(
             // glyph and `#<num>` survive unless the column can't fit even them.
             let prefix = truncate(&prefixes[i], branch_w);
             let name_room = branch_w.saturating_sub(display_width(&prefix));
-            let name = truncate(row.branch, name_room);
-            let name_w = display_width(&name);
-            let tags = if display_width(row.branch) <= name_room {
-                fit_tags(row.tags, name_room - name_w)
-            } else {
-                String::new()
-            };
-            let pad = " ".repeat(name_room - name_w - display_width(&tags));
+            let name = truncate_pad(row.branch, name_room);
             let mut spans = vec![
                 Span::styled(
                     format!(" {}  ", truncate_pad(agent_cells[i], agent_w)),
@@ -186,12 +187,20 @@ pub fn render_remote_workspace_list(
                 ),
                 Span::styled(prefix, prefix_style),
                 Span::styled(name, name_style),
-                Span::styled(tags, theme.row_dim_style()),
                 Span::styled(
-                    format!("{pad}  {}", truncate_pad(&ws_cells[i], ws_w)),
+                    format!("  {}", truncate_pad(&ws_cells[i], ws_w)),
                     rest_style,
                 ),
             ];
+            if tags_w > 0 {
+                // `fit_tags` leads with a space; the gap already separates.
+                let tags = fit_tags(row.tags, tags_w + 1);
+                let tags = tags.strip_prefix(' ').unwrap_or(&tags);
+                spans.push(Span::styled(
+                    format!("  {}", truncate_pad(tags, tags_w)),
+                    theme.row_dim_style(),
+                ));
+            }
             // Selected row: tint only the background so the lifecycle color and
             // the neutral spans stay readable — the same `selected_bg_style`
             // patch the dashboard list uses (a full `selected_style` would flatten
@@ -243,25 +252,25 @@ pub fn render_remote_workspace_list(
     );
 }
 
-/// Shrink desired column widths so the composed row fits `budget` (the panel's
-/// inner width minus the fixed indent + gaps). Sacrifices workspace first, then
-/// the branch, then the agent — keeping the agent (row identifier) and branch
-/// (primary data, carrying the PR #) legible longest. Guarantees the returned
-/// widths sum to at most `budget`, so the row never overflows and gets clipped
-/// by Ratatui. In the common wide-panel case everything fits and the desired
-/// widths pass through unchanged.
-fn fit_columns(budget: usize, agent: usize, branch: usize, ws: usize) -> (usize, usize, usize) {
-    // Indexed [agent, branch, ws].
-    let mut w = [agent, branch, ws];
+/// Shrink desired column widths `[agent, branch, ws, tags]` so the composed row
+/// fits `budget` (the panel's inner width minus the fixed indent + gaps).
+/// Sacrifices tags first — down to nothing, as the least important cell — then
+/// workspace, then the branch, then the agent, keeping the agent (row
+/// identifier) and branch (primary data, carrying the PR #) legible longest.
+/// Guarantees the returned widths sum to at most `budget`, so the row never
+/// overflows and gets clipped by Ratatui. In the common wide-panel case
+/// everything fits and the desired widths pass through unchanged.
+fn fit_columns(budget: usize, desired: [usize; 4]) -> [usize; 4] {
+    let mut w = desired;
     let mut total: usize = w.iter().sum();
     if total <= budget {
-        return (w[0], w[1], w[2]);
+        return w;
     }
     // Sacrifice order and per-column soft floors that keep each column
     // meaningful. Trim to the floors first; if a very narrow panel still
     // overflows, trim below them in the same order so the row always fits.
-    let order = [2usize, 1, 0]; // ws, then branch, then agent
-    let floors = [3usize, 6, 4]; // agent, branch, ws
+    let order = [3usize, 2, 1, 0]; // tags, ws, branch, then agent
+    let floors = [3usize, 6, 4, 0]; // agent, branch, ws, tags
     for &i in &order {
         if total <= budget {
             break;
@@ -278,7 +287,7 @@ fn fit_columns(budget: usize, agent: usize, branch: usize, ws: usize) -> (usize,
         w[i] -= give;
         total -= give;
     }
-    (w[0], w[1], w[2])
+    w
 }
 
 #[cfg(test)]
@@ -678,15 +687,30 @@ mod tests {
         );
     }
 
-    /// `layout_list` with tags on its short-branch row.
+    /// `layout_list` with tags on both rows, of different total widths.
     fn tagged_layout_list() -> RemoteList {
         let mut list = layout_list();
         list.records[0].tags = vec!["infra".into(), "wip".into()];
+        list.records[1].tags = vec!["x".into()];
         list
     }
 
+    /// Render `list` at `width` cells, unselected, one string per row.
+    fn render_lines(list: &RemoteList, width: u16) -> Vec<String> {
+        let theme = Theme::wsx();
+        let mut term = Terminal::new(TestBackend::new(width, 12)).unwrap();
+        term.draw(|f| {
+            render_remote_workspace_list(f, f.area(), list, usize::MAX, None, &theme, false);
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        (0..buf.area.height)
+            .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect())
+            .collect()
+    }
+
     #[test]
-    fn tags_render_dim_after_the_branch_name() {
+    fn tags_get_their_own_aligned_column_after_the_workspace() {
         let list = tagged_layout_list();
         let theme = Theme::wsx();
         let mut term = Terminal::new(TestBackend::new(80, 20)).unwrap();
@@ -695,57 +719,90 @@ mod tests {
         })
         .unwrap();
         let buf = term.backend().buffer();
-        let (x, y) = (0..buf.area.height)
-            .find_map(|y| {
-                let line: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
-                line.find("short #infra #wip")
-                    .map(|col| (line[..col].chars().count() as u16 + 6, y))
-            })
-            .expect("tags not drawn after the branch");
-        let cell = &buf[(x, y)];
-        assert_eq!(cell.symbol(), "#");
+        let find = |needle: &str| {
+            (0..buf.area.height)
+                .find_map(|y| {
+                    let line: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+                    line.find(needle)
+                        .map(|col| (line[..col].chars().count() as u16, y))
+                })
+                .unwrap_or_else(|| panic!("{needle:?} not drawn"))
+        };
+        let (infra_x, y) = find("#infra #wip");
+        let (x_x, _) = find("#x");
+        assert_eq!(infra_x, x_x, "tags column not aligned");
+        // The column sits past the workspace one, not inside the branch cell.
+        assert!(infra_x > find("repo/alpha").0);
+        let cell = &buf[(infra_x, y)];
         assert_eq!(cell.style().fg, theme.row_dim_style().fg);
         // Selected row: the tags take the selection bg like every other span.
         assert_eq!(cell.style().bg, theme.selected_bg_style().bg);
     }
 
     #[test]
-    fn tags_never_squeeze_another_column() {
-        // Tags past the panel's spare room collapse to `+N` rather than cut
-        // the workspace column or the other row's branch name.
+    fn no_tags_on_any_row_means_no_tags_column() {
+        // An untagged host lays out exactly as before tags existed: each row
+        // ends at its workspace cell, with nothing reserved after it.
+        let lines = render_lines(&layout_list(), 80);
+        for ws in ["repo/alpha", "repo/beta"] {
+            let line = lines.iter().find(|l| l.contains(ws)).unwrap();
+            let end = line.find(ws).unwrap() + ws.len();
+            let tail = line[end..].trim_end_matches(['│', ' ']);
+            assert!(tail.is_empty(), "unexpected cells after {ws}: {line}");
+        }
+    }
+
+    #[test]
+    fn remote_tags_are_sanitized_and_measured_in_cells() {
+        // A host's tags arrive unvalidated: control characters must not reach
+        // the terminal, and wide tags must not push the column out of line.
+        let mut list = tagged_layout_list();
+        list.records[0].tags = vec!["a\x1b[2J".into(), "タグ".into()];
+        let lines = render_lines(&list, 80);
+        let joined = lines.join("\n");
+        assert!(!joined.contains('\x1b'), "{joined}");
+        let r1 = lines.iter().find(|l| l.contains("repo/alpha")).unwrap();
+        let r2 = lines.iter().find(|l| l.contains("repo/beta")).unwrap();
+        assert!(r1.contains("#a"), "{joined}");
+        let col = |l: &str, needle: &str| l[..l.find(needle).unwrap()].chars().count();
+        assert_eq!(col(r1, "#a"), col(r2, "#x"), "{joined}");
+    }
+
+    #[test]
+    fn many_tags_collapse_within_the_capped_column() {
+        // Tags past the column's cap collapse to `+N` rather than cut the
+        // workspace column or another row's branch name.
         let mut list = tagged_layout_list();
         list.records[0].tags = (1..=9).map(|n| format!("tag-number-{n}")).collect();
         let text = render_to_string(&list, usize::MAX, None);
-        assert!(text.contains("short #tag-number-1"), "{text}");
+        assert!(text.contains("#tag-number-1"), "{text}");
         assert!(text.contains(" +"), "overflow count missing:\n{text}");
-        assert!(
-            text.contains("repo/alpha") && text.contains("repo/beta"),
-            "{text}"
-        );
         assert!(text.contains("a-much-longer-branch-name"), "{text}");
         let lines: Vec<&str> = text.lines().collect();
         let r1 = lines.iter().find(|l| l.contains("repo/alpha")).unwrap();
         let r2 = lines.iter().find(|l| l.contains("repo/beta")).unwrap();
         assert_eq!(r1.find("repo/alpha"), r2.find("repo/beta"), "{text}");
+        assert_eq!(r1.find("#tag-number-1"), r2.find("#x"), "{text}");
     }
 
     #[test]
-    fn a_truncated_branch_shows_no_tags() {
-        let mut list = tagged_layout_list();
-        list.records[0].branch = "a-branch-name-too-long-for-the-narrow-panel".into();
-        let theme = Theme::wsx();
-        let mut term = Terminal::new(TestBackend::new(44, 12)).unwrap();
-        term.draw(|f| {
-            render_remote_workspace_list(f, f.area(), &list, usize::MAX, None, &theme, false);
-        })
-        .unwrap();
-        let buf = term.backend().buffer();
-        let text: String = (0..buf.area.height)
-            .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
-            .map(|p| buf[p].symbol().to_string())
-            .collect();
-        assert!(text.contains('…'), "{text}");
-        assert!(!text.contains("#infra"), "{text}");
+    fn tags_give_way_first_on_a_narrow_panel() {
+        // Squeezed out entirely, the tags column takes its gap with it: the
+        // other columns lay out exactly as they would with no tags at all.
+        let narrow = 44;
+        assert_eq!(
+            render_lines(&tagged_layout_list(), narrow),
+            render_lines(&layout_list(), narrow)
+        );
+        // Each panel width shrinks the tags before anything else: while the
+        // workspace column is cut, no tag is drawn.
+        for width in 44..=80 {
+            let lines = render_lines(&tagged_layout_list(), width);
+            let joined = lines.join("\n");
+            if !joined.contains("repo/alpha") {
+                assert!(!joined.contains("#infra"), "width {width}:\n{joined}");
+            }
+        }
     }
 
     #[test]
@@ -824,21 +881,25 @@ mod tests {
     #[test]
     fn fit_columns_passes_through_when_it_fits() {
         // Wide budget: desired widths are returned unchanged.
-        assert_eq!(fit_columns(100, 6, 33, 10), (6, 33, 10));
+        assert_eq!(fit_columns(100, [6, 33, 10, 12]), [6, 33, 10, 12]);
     }
 
     #[test]
-    fn fit_columns_sacrifices_ws_then_branch_then_agent_and_always_fits() {
+    fn fit_columns_sacrifices_tags_ws_branch_then_agent_and_always_fits() {
         // Progressively tighter budgets. The sum must never exceed the budget,
-        // and columns shrink in order: ws first, then branch, then agent.
-        for budget in 0..=60 {
-            let (a, b, w) = fit_columns(budget, 6, 33, 10);
+        // and columns shrink in order: tags (to nothing), ws, branch, agent.
+        for budget in 0..=70 {
+            let [a, b, w, t] = fit_columns(budget, [6, 33, 10, 12]);
             assert!(
-                a + b + w <= budget || budget == 0,
-                "overflow at budget={budget}: {a}+{b}+{w}"
+                a + b + w + t <= budget,
+                "overflow at budget={budget}: {a}+{b}+{w}+{t}"
             );
-            // ws never grows past agent's territory: once ws is at its floor,
-            // the branch takes the next cut before agent does.
+            if w < 10 {
+                assert_eq!(t, 0, "ws shrank before tags at budget={budget}");
+            }
+            if b < 33 {
+                assert!(w <= 4, "branch shrank before ws at budget={budget}: w={w}");
+            }
             if a < 6 {
                 // agent only shrinks after branch has hit its floor (6).
                 assert!(
@@ -847,6 +908,8 @@ mod tests {
                 );
             }
         }
+        // Tags have no floor: they vanish before ws loses a cell.
+        assert_eq!(fit_columns(49, [6, 33, 10, 12]), [6, 33, 10, 0]);
     }
 
     #[test]

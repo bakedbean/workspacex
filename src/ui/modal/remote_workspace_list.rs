@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::app::{RemoteList, remote_rows};
-use crate::ui::text::{display_width, truncate, truncate_pad};
+use crate::ui::text::{display_width, fit_tags, truncate, truncate_pad};
 
 /// Render the floating remote-workspace-list modal. Rows are flattened per
 /// agent instance by `crate::app::remote_rows` — the same helper the key
@@ -77,7 +77,7 @@ pub fn render_remote_workspace_list(
         };
         f.render_widget(Paragraph::new(msg).style(theme.dim_style()), body_area);
     } else {
-        // Three aligned columns: agent | <glyph> #<num> branch | repo/workspace.
+        // Three aligned columns: agent | <glyph> #<num> branch #tags | repo/workspace.
         // The branch cell keeps the dashboard's lifecycle glyph + color (dim when
         // status is unknown / no PR) and gains the PR number when known. A
         // dormant row (no live session; Enter shares it) names its state in the
@@ -85,7 +85,8 @@ pub fn render_remote_workspace_list(
         //
         // The branch prefix (glyph + `#<num>`) is kept separate from the branch
         // name so truncation trims the *name* first; the prefix is cut only
-        // when the column is narrower than the prefix itself.
+        // when the column is narrower than the prefix itself. Tags follow the
+        // name, dim, as on the dashboard row: only in room the whole name leaves.
         let prefixes: Vec<String> = rows
             .iter()
             .map(|r| {
@@ -133,6 +134,20 @@ pub fn render_remote_workspace_list(
         let budget = (body_area.width as usize).saturating_sub(1 + 2 + 2);
         let (agent_w, branch_w, ws_w) =
             fit_columns(budget, agent_desired, branch_desired, ws_desired);
+        // Tags are the least important cell: the branch column grows for them
+        // only into room no other column wanted.
+        let tagged_desired = rows
+            .iter()
+            .zip(&prefixes)
+            .map(|(r, p)| {
+                display_width(p)
+                    + display_width(r.branch)
+                    + display_width(&fit_tags(r.tags, usize::MAX))
+            })
+            .max()
+            .unwrap_or(1);
+        let spare = budget.saturating_sub(agent_w + branch_w + ws_w);
+        let branch_w = branch_w + tagged_desired.saturating_sub(branch_w).min(spare);
 
         let mut lines: Vec<Line> = Vec::new();
         for (i, row) in rows.iter().enumerate() {
@@ -156,7 +171,15 @@ pub fn render_remote_workspace_list(
             // Truncate the branch *name* to the room left after the prefix, so the
             // glyph and `#<num>` survive unless the column can't fit even them.
             let prefix = truncate(&prefixes[i], branch_w);
-            let name = truncate_pad(row.branch, branch_w.saturating_sub(display_width(&prefix)));
+            let name_room = branch_w.saturating_sub(display_width(&prefix));
+            let name = truncate(row.branch, name_room);
+            let name_w = display_width(&name);
+            let tags = if display_width(row.branch) <= name_room {
+                fit_tags(row.tags, name_room - name_w)
+            } else {
+                String::new()
+            };
+            let pad = " ".repeat(name_room - name_w - display_width(&tags));
             let mut spans = vec![
                 Span::styled(
                     format!(" {}  ", truncate_pad(agent_cells[i], agent_w)),
@@ -164,8 +187,9 @@ pub fn render_remote_workspace_list(
                 ),
                 Span::styled(prefix, prefix_style),
                 Span::styled(name, name_style),
+                Span::styled(tags, theme.row_dim_style()),
                 Span::styled(
-                    format!("  {}", truncate_pad(&ws_cells[i], ws_w)),
+                    format!("{pad}  {}", truncate_pad(&ws_cells[i], ws_w)),
                     rest_style,
                 ),
             ];
@@ -653,6 +677,76 @@ mod tests {
             !text.contains('#'),
             "no #num when pr_number is None:\n{text}"
         );
+    }
+
+    /// `layout_list` with tags on its short-branch row.
+    fn tagged_layout_list() -> RemoteList {
+        let mut list = layout_list();
+        list.records[0].tags = vec!["infra".into(), "wip".into()];
+        list
+    }
+
+    #[test]
+    fn tags_render_dim_after_the_branch_name() {
+        let list = tagged_layout_list();
+        let theme = Theme::wsx();
+        let mut term = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        term.draw(|f| {
+            render_remote_workspace_list(f, f.area(), &list, 0, None, &theme, false);
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        let (x, y) = (0..buf.area.height)
+            .find_map(|y| {
+                let line: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+                line.find("short #infra #wip")
+                    .map(|col| (line[..col].chars().count() as u16 + 6, y))
+            })
+            .expect("tags not drawn after the branch");
+        let cell = &buf[(x, y)];
+        assert_eq!(cell.symbol(), "#");
+        assert_eq!(cell.style().fg, theme.row_dim_style().fg);
+        // Selected row: the tags take the selection bg like every other span.
+        assert_eq!(cell.style().bg, theme.selected_bg_style().bg);
+    }
+
+    #[test]
+    fn tags_never_squeeze_another_column() {
+        // Tags past the panel's spare room collapse to `+N` rather than cut
+        // the workspace column or the other row's branch name.
+        let mut list = tagged_layout_list();
+        list.records[0].tags = (1..=9).map(|n| format!("tag-number-{n}")).collect();
+        let text = render_to_string(&list, usize::MAX, None);
+        assert!(text.contains("short #tag-number-1"), "{text}");
+        assert!(text.contains(" +"), "overflow count missing:\n{text}");
+        assert!(
+            text.contains("repo/alpha") && text.contains("repo/beta"),
+            "{text}"
+        );
+        assert!(text.contains("a-much-longer-branch-name"), "{text}");
+        let lines: Vec<&str> = text.lines().collect();
+        let r1 = lines.iter().find(|l| l.contains("repo/alpha")).unwrap();
+        let r2 = lines.iter().find(|l| l.contains("repo/beta")).unwrap();
+        assert_eq!(r1.find("repo/alpha"), r2.find("repo/beta"), "{text}");
+    }
+
+    #[test]
+    fn a_truncated_branch_shows_no_tags() {
+        let mut list = tagged_layout_list();
+        list.records[0].branch = "a-branch-name-too-long-for-the-narrow-panel".into();
+        let theme = Theme::wsx();
+        let mut term = Terminal::new(TestBackend::new(44, 12)).unwrap();
+        term.draw(|f| {
+            render_remote_workspace_list(f, f.area(), &list, usize::MAX, None, &theme, false);
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        let text: String = (0..buf.area.height)
+            .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
+            .map(|p| buf[p].symbol().to_string())
+            .collect();
+        assert!(text.contains('…'), "{text}");
+        assert!(!text.contains("#infra"), "{text}");
     }
 
     #[test]

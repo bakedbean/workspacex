@@ -56,6 +56,9 @@ pub(crate) struct RemoteRow<'a> {
     /// per-workspace like `lifecycle`. `None` when there is no PR or `gh`
     /// couldn't answer → the renderer omits the `#<num>` prefix.
     pub pr_number: Option<u32>,
+    /// The workspace's tags (see `SharedWorkspaceRecord::tags`), drawn dim
+    /// after the branch name when there's room.
+    pub tags: &'a [String],
 }
 
 impl RemoteRow<'_> {
@@ -86,6 +89,7 @@ pub(crate) fn remote_rows(list: &RemoteList) -> Vec<RemoteRow<'_>> {
             shared: rec.shared,
             lifecycle: rec.lifecycle,
             pr_number: rec.pr_number,
+            tags: &rec.tags,
         };
         let before = live.len();
         for agent in &rec.agents {

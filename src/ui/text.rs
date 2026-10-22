@@ -111,25 +111,31 @@ pub(crate) fn truncate_pad(s: &str, target: usize) -> String {
 }
 
 /// ` #a #b` within `room` cells; trailing tags that don't fit become ` +N`.
+/// Tags pass through the same control-character replacement as [`truncate`],
+/// since a remote host's tags reach here unvalidated.
 pub(crate) fn fit_tags(tags: &[impl AsRef<str>], room: usize) -> String {
     let mut out = String::new();
+    // Running cell count, as in `truncate_words`: this runs per drawn row.
+    let mut out_width = 0usize;
     for (i, t) in tags.iter().enumerate() {
-        let next = format!(" #{}", t.as_ref());
+        let width = 2 + display_width(t.as_ref());
         let rest = tags.len() - i - 1;
         let tail = if rest > 0 {
             format!(" +{rest}").len()
         } else {
             0
         };
-        if display_width(&out) + display_width(&next) + tail > room {
+        if out_width + width + tail > room {
             let more = format!(" +{}", tags.len() - i);
-            return if display_width(&out) + more.len() <= room {
+            return if out_width + more.len() <= room {
                 out + &more
             } else {
                 String::new()
             };
         }
-        out.push_str(&next);
+        out.push_str(" #");
+        out.extend(cells(t.as_ref()).map(|(g, _)| g));
+        out_width += width;
     }
     out
 }
@@ -164,6 +170,7 @@ mod tests {
         assert_eq!(fit_tags(&t, 3), " +3");
         assert_eq!(fit_tags(&t, 2), "");
         assert_eq!(fit_tags(&[] as &[&str], 100), "");
+        assert_eq!(fit_tags(&["a\x1b[2J"], 100), " #a [2J");
     }
 
     #[test]

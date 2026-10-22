@@ -140,9 +140,8 @@ pub fn render_remote_workspace_list(
             .iter()
             .zip(&prefixes)
             .map(|(r, p)| {
-                display_width(p)
-                    + display_width(r.branch)
-                    + display_width(&fit_tags(r.tags, usize::MAX))
+                let tags: usize = r.tags.iter().map(|t| 2 + display_width(t)).sum();
+                display_width(p) + display_width(r.branch) + tags
             })
             .max()
             .unwrap_or(1);

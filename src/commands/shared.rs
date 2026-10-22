@@ -43,6 +43,11 @@ pub struct SharedWorkspaceRecord {
     /// the `#<num>` prefix in those cases.
     #[serde(default)]
     pub pr_number: Option<u32>,
+    /// The workspace's tags, sorted. `#[serde(default)]` keeps the wire
+    /// contract additive: an older host that never sends the key decodes as
+    /// no tags.
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// What `wsx workspace create --start --json` prints: the new workspace's
@@ -127,6 +132,7 @@ pub fn shared_list_records(
                 // over the wire.
                 lifecycle: None,
                 pr_number: None,
+                tags: w.tags.iter().map(|t| t.to_string()).collect(),
             });
         }
     }
@@ -498,6 +504,25 @@ mod tests {
     }
 
     #[test]
+    fn shared_list_records_carries_the_workspace_tags_sorted() {
+        let store = Store::open_in_memory().unwrap();
+        seed(&store);
+        let ws = direct_ws(&store);
+        store.add_workspace_tag(ws.id, "wip").unwrap();
+        store.add_workspace_tag(ws.id, "infra").unwrap();
+
+        let records = shared_list_records(&store, true, |_| true).unwrap();
+        let tags = |name: &str| &records.iter().find(|r| r.workspace == name).unwrap().tags;
+        assert_eq!(tags("direct"), &["infra", "wip"]);
+        assert!(tags("w").is_empty());
+        let json = serde_json::to_string(&records).unwrap();
+        assert!(
+            json.contains(r#""tags":["infra","wip"]"#),
+            "json was: {json}"
+        );
+    }
+
+    #[test]
     fn json_shape_contains_tmux_session_field() {
         let store = Store::open_in_memory().unwrap();
         seed(&store);
@@ -530,11 +555,14 @@ mod tests {
         // decodes as `None` (unknown → uncolored, no #num), via `#[serde(default)]`.
         assert_eq!(recs[0].lifecycle, None);
         assert_eq!(recs[0].pr_number, None);
+        // ...and with no `tags` key, as no tags.
+        assert!(recs[0].tags.is_empty());
 
         // A populated lifecycle + PR number survive a serialize → deserialize
         // round-trip, so what the remote computes reaches the local picker intact.
         recs[0].lifecycle = Some(crate::git::forge::BranchLifecycle::PrOpen);
         recs[0].pr_number = Some(2087);
+        recs[0].tags = vec!["infra".into(), "wip".into()];
         let back: Vec<SharedWorkspaceRecord> =
             serde_json::from_str(&serde_json::to_string(&recs).unwrap()).unwrap();
         assert_eq!(back[0].agents[0].label, "claude");
@@ -543,6 +571,7 @@ mod tests {
             Some(crate::git::forge::BranchLifecycle::PrOpen)
         );
         assert_eq!(back[0].pr_number, Some(2087));
+        assert_eq!(back[0].tags, ["infra", "wip"]);
     }
 
     fn quick_waits() -> ShareWaits {
@@ -614,6 +643,7 @@ mod tests {
                 agents: vec![],
                 lifecycle: None,
                 pr_number: None,
+                tags: vec![],
             },
             setup_exit_code: None,
             setup_log: None,
@@ -712,6 +742,7 @@ mod tests {
             agents: vec![],
             lifecycle: None,
             pr_number: None,
+            tags: vec![],
         }];
         enrich_with_pr_status(&mut records).await;
         assert_eq!(records[0].lifecycle, None);

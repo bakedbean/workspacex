@@ -81,7 +81,7 @@ pub fn render_remote_workspace_list(
         // The branch cell keeps the dashboard's lifecycle glyph + color (dim when
         // status is unknown / no PR) and gains the PR number when known. A
         // dormant row (no live session; Enter shares it) names its state in the
-        // agent column instead and is drawn dim throughout.
+        // agent column instead and is drawn dim, all but its status prefix.
         //
         // The branch prefix (glyph + `#<num>`) is kept separate from the branch
         // name so truncation trims the *name*, never the status prefix.
@@ -136,10 +136,17 @@ pub fn render_remote_workspace_list(
         let mut lines: Vec<Line> = Vec::new();
         for (i, row) in rows.iter().enumerate() {
             let dormant = row.attach_session().is_none();
-            let branch_style = theme
+            // The glyph + `#<num>` prefix keeps its PR-status color even on a
+            // dormant row, so a stopped workspace's PR still reads at a glance;
+            // only the branch name dims with the rest of the row.
+            let prefix_style = theme
                 .lifecycle_style(row.lifecycle)
-                .filter(|_| !dormant)
                 .unwrap_or_else(|| theme.dim_style());
+            let name_style = if dormant {
+                theme.dim_style()
+            } else {
+                prefix_style
+            };
             let rest_style = if dormant {
                 theme.dim_style()
             } else {
@@ -147,15 +154,15 @@ pub fn render_remote_workspace_list(
             };
             // Truncate the branch *name* to the room left after the prefix, so the
             // glyph and `#<num>` always survive even in a narrow panel.
-            let prefix_w = display_width(&prefixes[i]);
-            let name = truncate(row.branch, branch_w.saturating_sub(prefix_w));
-            let branch_cell = truncate_pad(&format!("{}{name}", prefixes[i]), branch_w);
+            let prefix = truncate(&prefixes[i], branch_w);
+            let name = truncate_pad(row.branch, branch_w.saturating_sub(display_width(&prefix)));
             let mut spans = vec![
                 Span::styled(
                     format!(" {}  ", truncate_pad(agent_cells[i], agent_w)),
                     rest_style,
                 ),
-                Span::styled(branch_cell, branch_style),
+                Span::styled(prefix, prefix_style),
+                Span::styled(name, name_style),
                 Span::styled(
                     format!("  {}", truncate_pad(&ws_cells[i], ws_w)),
                     rest_style,
@@ -512,6 +519,53 @@ mod tests {
         assert_eq!(branch_glyph_color(None, false), dim);
         assert_eq!(branch_glyph_color(Some(NoPr), false), dim);
         assert_eq!(branch_glyph_color(Some(PrDraft), true), dim);
+    }
+
+    #[test]
+    fn dormant_rows_keep_the_pr_status_color_on_the_number() {
+        use crate::commands::shared::{SharedAgentRecord, SharedWorkspaceRecord};
+        use crate::git::forge::BranchLifecycle::PrOpen;
+        let theme = Theme::wsx();
+        let list = RemoteList {
+            host_name: "mini".into(),
+            dest: "mini:".into(),
+            can_share: true,
+            records: vec![SharedWorkspaceRecord {
+                repo: "r".into(),
+                workspace: "w".into(),
+                branch: "feature".into(),
+                worktree_path: "/x".into(),
+                shared: false,
+                agents: vec![SharedAgentRecord {
+                    label: "claude".into(),
+                    agent: "claude".into(),
+                    tmux_session: None,
+                    alive: false,
+                }],
+                lifecycle: Some(PrOpen),
+                pr_number: Some(42),
+            }],
+        };
+        let mut term = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        term.draw(|f| {
+            render_remote_workspace_list(f, f.area(), &list, usize::MAX, None, &theme, false);
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        let fg_of = |needle: &str| {
+            let first = needle.chars().next().unwrap().to_string();
+            for y in 0..buf.area.height {
+                let line: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect();
+                if let Some(col) = line.find(needle) {
+                    let x = line[..col].chars().count() as u16;
+                    assert_eq!(buf[(x, y)].symbol(), first);
+                    return buf[(x, y)].style().fg.unwrap();
+                }
+            }
+            panic!("{needle:?} not found in render");
+        };
+        assert_eq!(fg_of("#42"), theme.ok_style().fg.unwrap());
+        assert_eq!(fg_of("feature"), theme.dim_style().fg.unwrap());
     }
 
     /// Build a list of shared workspaces with varying branch lengths / PR

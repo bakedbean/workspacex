@@ -73,7 +73,7 @@ lab=user@lab.example.com
 
 Press `H` on the dashboard to pick a host. For one-click access, add the `$hosts` segment to your dashboard footer (see [Themes](../configuration/themes.md)).
 
-wsx lists the host's workspaces: live agents first (agent, branch with PR number, repo/workspace), then dimmed rows marked `not shared` or `stopped`.
+wsx lists the host's workspaces: live agents first (agent, branch with PR number and tags, repo/workspace), then dimmed rows marked `not shared` or `stopped`.
 
 | Key | Action |
 | --- | --- |

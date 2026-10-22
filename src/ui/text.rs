@@ -110,6 +110,30 @@ pub(crate) fn truncate_pad(s: &str, target: usize) -> String {
     out
 }
 
+/// ` #a #b` within `room` cells; trailing tags that don't fit become ` +N`.
+pub(crate) fn fit_tags(tags: &[impl AsRef<str>], room: usize) -> String {
+    let mut out = String::new();
+    for (i, t) in tags.iter().enumerate() {
+        let next = format!(" #{}", t.as_ref());
+        let rest = tags.len() - i - 1;
+        let tail = if rest > 0 {
+            format!(" +{rest}").len()
+        } else {
+            0
+        };
+        if display_width(&out) + display_width(&next) + tail > room {
+            let more = format!(" +{}", tags.len() - i);
+            return if display_width(&out) + more.len() <= room {
+                out + &more
+            } else {
+                String::new()
+            };
+        }
+        out.push_str(&next);
+    }
+    out
+}
+
 /// Abbreviate a token count as `950` / `77k` / `1M` / `1.2M`. The `k` form
 /// floors (77_999 → "77k"); exact precision is meaningless for a fill gauge.
 pub(crate) fn abbreviate_tokens(n: u64) -> String {
@@ -130,6 +154,17 @@ pub(crate) fn abbreviate_tokens(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fit_tags_keeps_whole_tags_and_counts_the_rest() {
+        let t = ["a", "bb", "ccc"];
+        assert_eq!(fit_tags(&t, 100), " #a #bb #ccc");
+        assert_eq!(fit_tags(&t, 10), " #a #bb +1");
+        assert_eq!(fit_tags(&t, 9), " #a +2");
+        assert_eq!(fit_tags(&t, 3), " +3");
+        assert_eq!(fit_tags(&t, 2), "");
+        assert_eq!(fit_tags(&[] as &[&str], 100), "");
+    }
 
     #[test]
     fn truncate_replaces_overflow_tail_with_ellipsis() {

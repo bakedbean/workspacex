@@ -21,7 +21,7 @@ use crate::pty::session::AgentKind;
 use crate::ui::dashboard::column_content::{ColumnBody, ColumnEmphasis, RecapSegment, RowColumn};
 use crate::ui::dashboard::spinner;
 use crate::ui::dashboard::status::Status;
-use crate::ui::text::{display_width, truncate, truncate_pad, truncate_words};
+use crate::ui::text::{display_width, fit_tags, truncate, truncate_pad, truncate_words};
 use crate::ui::theme::Theme;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -658,30 +658,6 @@ pub fn pr_chip_hit_span(inputs: &RowInputs, widths: ColumnWidths) -> Option<(u16
     Some((x as u16, width as u16))
 }
 
-/// ` #a #b` within `room` cells; trailing tags that don't fit become ` +N`.
-fn fit_tags(tags: &[std::sync::Arc<str>], room: usize) -> String {
-    let mut out = String::new();
-    for (i, t) in tags.iter().enumerate() {
-        let next = format!(" #{t}");
-        let rest = tags.len() - i - 1;
-        let tail = if rest > 0 {
-            format!(" +{rest}").len()
-        } else {
-            0
-        };
-        if display_width(&out) + display_width(&next) + tail > room {
-            let more = format!(" +{}", tags.len() - i);
-            return if display_width(&out) + more.len() <= room {
-                out + &more
-            } else {
-                String::new()
-            };
-        }
-        out.push_str(&next);
-    }
-    out
-}
-
 /// A line count for the diff cell: plain up to four digits, then
 /// thousands (`12k`) and millions (`2M`), truncated rather than rounded so
 /// `9999` never reads as `10k`.
@@ -874,17 +850,6 @@ mod tests {
         let mut i = base();
         i.tags = tags.iter().map(|t| std::sync::Arc::from(*t)).collect();
         i
-    }
-
-    #[test]
-    fn fit_tags_keeps_whole_tags_and_counts_the_rest() {
-        let t: Vec<std::sync::Arc<str>> = ["a", "bb", "ccc"].iter().map(|s| (*s).into()).collect();
-        assert_eq!(fit_tags(&t, 100), " #a #bb #ccc");
-        assert_eq!(fit_tags(&t, 10), " #a #bb +1");
-        assert_eq!(fit_tags(&t, 9), " #a +2");
-        assert_eq!(fit_tags(&t, 3), " +3");
-        assert_eq!(fit_tags(&t, 2), "");
-        assert_eq!(fit_tags(&[], 100), "");
     }
 
     fn wide() -> ColumnWidths {

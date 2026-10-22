@@ -144,10 +144,14 @@ pub fn render_remote_workspace_list(
             .min(24);
         let budget = (body_area.width as usize).saturating_sub(1 + 2 + 2);
         let desired = [agent_desired, branch_desired, ws_desired, tags_desired];
-        // The tags column brings its own gap; once squeezed to nothing it gives
-        // that gap back, so the other columns lay out as on an untagged host.
+        // The tags column brings its own gap; once squeezed too narrow to show
+        // any row's tags it gives that room back, so the other columns lay out
+        // as on an untagged host.
         let mut widths = fit_columns(budget.saturating_sub(2), desired);
-        if widths[3] == 0 {
+        if rows
+            .iter()
+            .all(|r| fit_tags(r.tags, widths[3] + 1).is_empty())
+        {
             widths = fit_columns(budget, [agent_desired, branch_desired, ws_desired, 0]);
         }
         let [agent_w, branch_w, ws_w, tags_w] = widths;
@@ -746,6 +750,22 @@ mod tests {
             let tail = line[end..].trim_end_matches(['│', ' ']);
             assert!(tail.is_empty(), "unexpected cells after {ws}: {line}");
         }
+    }
+
+    #[test]
+    fn remote_tags_are_sanitized_and_measured_in_cells() {
+        // A host's tags arrive unvalidated: control characters must not reach
+        // the terminal, and wide tags must not push the column out of line.
+        let mut list = tagged_layout_list();
+        list.records[0].tags = vec!["a\x1b[2J".into(), "タグ".into()];
+        let lines = render_lines(&list, 80);
+        let joined = lines.join("\n");
+        assert!(!joined.contains('\x1b'), "{joined}");
+        let r1 = lines.iter().find(|l| l.contains("repo/alpha")).unwrap();
+        let r2 = lines.iter().find(|l| l.contains("repo/beta")).unwrap();
+        assert!(r1.contains("#a"), "{joined}");
+        let col = |l: &str, needle: &str| l[..l.find(needle).unwrap()].chars().count();
+        assert_eq!(col(r1, "#a"), col(r2, "#x"), "{joined}");
     }
 
     #[test]

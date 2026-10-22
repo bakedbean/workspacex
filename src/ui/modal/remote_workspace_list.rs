@@ -292,6 +292,7 @@ mod tests {
                 ],
                 lifecycle: None,
                 pr_number: None,
+                tags: vec![],
             }],
         }
     }
@@ -332,6 +333,7 @@ mod tests {
             }],
             lifecycle: None,
             pr_number: None,
+            tags: vec![],
         };
         list.records.push(dormant("direct", false));
         list.records.push(dormant("idle", true));
@@ -377,6 +379,7 @@ mod tests {
                 }],
                 lifecycle,
                 pr_number: None,
+                tags: vec![],
             }],
         };
         let mut term = Terminal::new(TestBackend::new(80, 20)).unwrap();
@@ -444,6 +447,7 @@ mod tests {
                 }],
                 lifecycle: None,
                 pr_number: None,
+                tags: vec![],
             }],
         };
         let text = render_to_string(&list, 0, None);
@@ -545,6 +549,7 @@ mod tests {
                 }],
                 lifecycle: Some(PrOpen),
                 pr_number: Some(42),
+                tags: vec![],
             }],
         };
         // Selected, so the row also carries the selection background: it must
@@ -595,6 +600,7 @@ mod tests {
             }],
             lifecycle: Some(crate::git::forge::BranchLifecycle::PrOpen),
             pr_number: num,
+            tags: vec![],
         };
         RemoteList {
             host_name: "mini".into(),
@@ -638,6 +644,7 @@ mod tests {
                 }],
                 lifecycle: None,
                 pr_number: None,
+                tags: vec![],
             }],
         };
         let text = render_to_string(&list, usize::MAX, None);
@@ -692,6 +699,7 @@ mod tests {
                 }],
                 lifecycle: None,
                 pr_number: None,
+                tags: vec![],
             }],
         };
         let theme = Theme::wsx();

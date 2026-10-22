@@ -405,6 +405,7 @@ async fn remote_bottom_bar_shows_global_pinned_and_pr_chip() {
                 }],
                 lifecycle: Some(crate::git::forge::BranchLifecycle::PrOpen),
                 pr_number: Some(142),
+                tags: vec![],
             }],
         }
     });
@@ -694,6 +695,7 @@ fn shareable_remote_list() -> crate::app::RemoteList {
             }],
             lifecycle: None,
             pr_number: None,
+            tags: vec![],
         }],
     }
 }

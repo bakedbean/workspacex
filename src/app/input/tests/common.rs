@@ -223,6 +223,7 @@ pub(super) fn mixed_liveness_remote_list() -> crate::app::RemoteList {
             ],
             lifecycle: None,
             pr_number: None,
+            tags: vec![],
         }],
     }
 }
@@ -248,6 +249,7 @@ pub(super) fn all_dead_remote_list() -> crate::app::RemoteList {
             }],
             lifecycle: None,
             pr_number: None,
+            tags: vec![],
         }],
     }
 }

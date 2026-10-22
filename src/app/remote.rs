@@ -139,6 +139,7 @@ mod remote_rows_tests {
                 ],
                 lifecycle: None,
                 pr_number: None,
+                tags: vec![],
             }],
         };
         let rows = remote_rows(&list);
@@ -169,6 +170,7 @@ mod remote_rows_tests {
                 }],
                 lifecycle: None,
                 pr_number: None,
+                tags: vec![],
             }],
         };
         assert!(remote_rows(&list).is_empty());
@@ -194,6 +196,7 @@ mod remote_rows_tests {
                 }],
                 lifecycle: None,
                 pr_number: None,
+                tags: vec![],
             }],
         };
         assert!(remote_rows(&list).is_empty());
@@ -220,6 +223,7 @@ mod remote_rows_tests {
             agents,
             lifecycle: None,
             pr_number: None,
+            tags: vec![],
         }
     }
 
@@ -638,6 +642,7 @@ mod reconcile_remote_tests {
             agents: vec![],
             lifecycle: None,
             pr_number: None,
+            tags: vec![],
         };
         // Stale gen: ignored entirely.
         reconcile_remote_list(
@@ -711,6 +716,7 @@ mod reconcile_remote_tests {
             agents: vec![],
             lifecycle: None,
             pr_number: None,
+            tags: vec![],
         };
         reconcile_remote_list(
             shared.clone(),

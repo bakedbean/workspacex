@@ -84,7 +84,8 @@ pub fn render_remote_workspace_list(
         // agent column instead and is drawn dim, all but its status prefix.
         //
         // The branch prefix (glyph + `#<num>`) is kept separate from the branch
-        // name so truncation trims the *name*, never the status prefix.
+        // name so truncation trims the *name* first; the prefix is cut only
+        // when the column is narrower than the prefix itself.
         let prefixes: Vec<String> = rows
             .iter()
             .map(|r| {
@@ -153,7 +154,7 @@ pub fn render_remote_workspace_list(
                 Style::default()
             };
             // Truncate the branch *name* to the room left after the prefix, so the
-            // glyph and `#<num>` always survive even in a narrow panel.
+            // glyph and `#<num>` survive unless the column can't fit even them.
             let prefix = truncate(&prefixes[i], branch_w);
             let name = truncate_pad(row.branch, branch_w.saturating_sub(display_width(&prefix)));
             let mut spans = vec![
@@ -546,12 +547,15 @@ mod tests {
                 pr_number: Some(42),
             }],
         };
+        // Selected, so the row also carries the selection background: it must
+        // tint without flattening either foreground.
         let mut term = Terminal::new(TestBackend::new(80, 20)).unwrap();
         term.draw(|f| {
-            render_remote_workspace_list(f, f.area(), &list, usize::MAX, None, &theme, false);
+            render_remote_workspace_list(f, f.area(), &list, 0, None, &theme, false);
         })
         .unwrap();
         let buf = term.backend().buffer();
+        let bg = theme.selected_bg_style().bg;
         let fg_of = |needle: &str| {
             let first = needle.chars().next().unwrap().to_string();
             for y in 0..buf.area.height {
@@ -559,6 +563,11 @@ mod tests {
                 if let Some(col) = line.find(needle) {
                     let x = line[..col].chars().count() as u16;
                     assert_eq!(buf[(x, y)].symbol(), first);
+                    assert_eq!(
+                        buf[(x, y)].style().bg,
+                        bg,
+                        "{needle:?} lost the selection bg"
+                    );
                     return buf[(x, y)].style().fg.unwrap();
                 }
             }

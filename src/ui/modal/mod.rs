@@ -37,6 +37,18 @@ pub use updates_panel::{
 };
 pub use usage_picker::render_usage_window_picker;
 
+/// Whose tags the `#` editor writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TagTarget {
+    Local(crate::data::store::WorkspaceId),
+    /// A workspace on a shared host, written over ssh while attached to it.
+    Remote {
+        dest: String,
+        repo: String,
+        workspace: String,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub enum Modal {
     NewWorkspace {
@@ -173,7 +185,7 @@ pub enum Modal {
     /// The `#` tag editor. `known`/`tags` are snapshots refreshed after each
     /// write; `selected` indexes `workspace_tags::tag_items(..)`.
     WorkspaceTags {
-        workspace_id: crate::data::store::WorkspaceId,
+        target: TagTarget,
         name: String,
         known: Vec<String>,
         tags: Vec<String>,
@@ -830,7 +842,7 @@ mod tests {
     fn long_tag_editor_keeps_footer_and_cursor_visible() {
         let known: Vec<String> = (0..20).map(|i| format!("t{i:02}")).collect();
         let text = render_to_text(&Modal::WorkspaceTags {
-            workspace_id: crate::data::store::WorkspaceId(1),
+            target: TagTarget::Local(crate::data::store::WorkspaceId(1)),
             name: "ws".into(),
             known,
             tags: Vec::new(),

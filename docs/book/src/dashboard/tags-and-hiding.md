@@ -14,6 +14,8 @@ Press `#` on a workspace, or `Ctrl-x #` while attached to one, to open the tag e
 
 Typing filters the list, which offers every tag used in wsx. Changes save as you make them.
 
+Attached to a workspace on a [shared host](../integrations/remote-access.md), `Ctrl-x #` edits its tags on that host. The editor offers the tags used by that host's listed workspaces, and each change runs `wsx workspace tag` there over ssh. If the host refuses a change, the editor rolls it back and shows why.
+
 Tag rules:
 
 - Lowercase `a-z`, `0-9`, `-`, and `_`, starting with a letter or digit.
@@ -29,7 +31,7 @@ wsx workspace tag list --all
 
 See [`wsx workspace tag`](../cli-reference/workspace.md#wsx-workspace-tag) for the full syntax.
 
-Tags show dimmed after the branch name: `⎇ wsx/my-slug #parked #ui`. They use only the space left in the branch column, and tags that don't fit collapse to a count like `+2`. To make room, widen the column with the `dashboard_branch_width` [setting](../configuration/settings.md). Attached to a local workspace, its tags show after its name in the top bar; when the bar is too narrow they drop as a group rather than folding to a count.
+Tags show dimmed after the branch name: `⎇ wsx/my-slug #parked #ui`. They use only the space left in the branch column, and tags that don't fit collapse to a count like `+2`. To make room, widen the column with the `dashboard_branch_width` [setting](../configuration/settings.md). Attached to a workspace, local or remote, its tags show after its name in the top bar; when the bar is too narrow they drop as a group rather than folding to a count.
 
 Workspace tags are unrelated to [prompt tags](../attached-view/prompt-tags.md).
 

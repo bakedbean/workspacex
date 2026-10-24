@@ -1263,3 +1263,130 @@ async fn force_share_finds_a_workspace_created_after_the_last_refresh() {
         .to_string();
     assert!(err.contains("tmux"), "{err}");
 }
+
+/// `^x #` while attached to a remote workspace edits its tags on the host:
+/// each change runs `wsx workspace tag` over ssh and shows at once, and a
+/// write the host refuses is rolled back with the reason on the editor.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_leader_hash_tags_the_workspace_on_the_host() {
+    use crate::commands::shared::{SharedAgentRecord, SharedWorkspaceRecord};
+    use crate::ui::modal::{Modal, TagTarget};
+    let dir = tempfile::tempdir().unwrap();
+    let mut env = EnvGuard::new();
+    let log = dir.path().join("tag-args.log");
+    let fake = dir.path().join("fake-ssh.sh");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\ncase \"$*\" in *'workspace tag'*) echo \"$*\" >> {}; \
+             case \"$*\" in *' bad '*) echo nope >&2; exit 1;; esac; exit 0;; esac\ncat\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    env.set("WSX_SSH_BIN", fake.to_str().unwrap());
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let app = Arc::new(Mutex::new(
+        App::new(Store::open_in_memory().unwrap(), tmp.path().to_path_buf()).unwrap(),
+    ));
+    {
+        let mut g = app.lock().await;
+        g.remote_list = Some(crate::app::RemoteList {
+            host_name: "mini".into(),
+            dest: "eben@mini".into(),
+            can_share: true,
+            records: vec![SharedWorkspaceRecord {
+                repo: "r".into(),
+                workspace: "w".into(),
+                branch: "b".into(),
+                worktree_path: "/x".into(),
+                shared: true,
+                agents: vec![SharedAgentRecord {
+                    label: "claude".into(),
+                    agent: "claude".into(),
+                    tmux_session: Some("wsx-r-w".into()),
+                    alive: true,
+                }],
+                lifecycle: None,
+                pr_number: None,
+                tags: vec!["infra".into()],
+            }],
+        });
+        crate::app::attach_remote(
+            &mut g,
+            crate::app::RemoteTarget {
+                host_name: "mini".into(),
+                dest: "eben@mini".into(),
+                tmux: "wsx-r-w".into(),
+            },
+            80,
+            24,
+        )
+        .unwrap();
+    }
+    let send = |code, mods| CtEvent::Key(crossterm::event::KeyEvent::new(code, mods));
+    let type_line = async |text: &str| {
+        for c in text.chars() {
+            let mut g = app.lock().await;
+            handle_event(&mut g, &app, send(KeyCode::Char(c), KeyModifiers::empty()))
+                .await
+                .unwrap();
+        }
+        let mut g = app.lock().await;
+        handle_event(&mut g, &app, send(KeyCode::Enter, KeyModifiers::empty()))
+            .await
+            .unwrap();
+    };
+    let record_tags = |g: &App| g.remote_list.as_ref().unwrap().records[0].tags.clone();
+
+    {
+        let mut g = app.lock().await;
+        handle_event(
+            &mut g,
+            &app,
+            send(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        )
+        .await
+        .unwrap();
+        handle_event(&mut g, &app, send(KeyCode::Char('#'), KeyModifiers::SHIFT))
+            .await
+            .unwrap();
+        let Some(Modal::WorkspaceTags { target, tags, .. }) = &g.modal else {
+            panic!("{:?}", g.modal);
+        };
+        assert_eq!(
+            *target,
+            TagTarget::Remote {
+                dest: "eben@mini".into(),
+                repo: "r".into(),
+                workspace: "w".into(),
+            }
+        );
+        assert_eq!(tags, &["infra"]);
+    }
+
+    type_line("wip").await;
+    assert_eq!(
+        record_tags(&*app.lock().await),
+        ["infra", "wip"],
+        "shown at once"
+    );
+    wait_until(&app, "tag add to reach the host", |_| {
+        std::fs::read_to_string(&log)
+            .is_ok_and(|s| s.contains("sh -lc 'wsx workspace tag add wip --workspace r/w'"))
+    })
+    .await;
+
+    type_line("bad").await;
+    wait_until(&app, "refused write to roll back", |g| {
+        record_tags(g) == ["infra", "wip"]
+            && matches!(&g.modal, Some(Modal::WorkspaceTags { tags, notice: Some(n), .. })
+                if n.contains("nope") && tags == &["infra", "wip"])
+    })
+    .await;
+
+    let mut g = app.lock().await;
+    crate::app::detach_remote(&mut g);
+}

@@ -137,7 +137,7 @@ async fn leader_chords_swap_panels_over_an_attached_pane() {
     ctrl_x(&mut app).await;
     modal_char(&mut app, '#').await;
     assert!(
-        matches!(app.modal, Some(Modal::WorkspaceTags { workspace_id, .. }) if workspace_id == ws)
+        matches!(&app.modal, Some(Modal::WorkspaceTags { target, .. }) if *target == crate::ui::modal::TagTarget::Local(ws))
     );
     // The tag editor takes text, but a chord still reaches past it.
     ctrl_x(&mut app).await;

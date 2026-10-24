@@ -95,6 +95,10 @@ pub fn remote_nav_menu_items() -> Vec<NavItem> {
             label: "prompt tag",
         },
         NavItem {
+            glyph: "#",
+            label: "workspace tags",
+        },
+        NavItem {
             glyph: "x",
             label: "send literal ^x",
         },

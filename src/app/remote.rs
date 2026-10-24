@@ -28,6 +28,19 @@ pub struct RemoteTarget {
     pub tmux: String,
 }
 
+/// The listed record of the remote workspace currently attached: the one
+/// whose agent owns the tmux session `remote_target` names.
+pub(crate) fn attached_remote_record(
+    app: &crate::app::App,
+) -> Option<&crate::commands::shared::SharedWorkspaceRecord> {
+    let tmux = app.remote_target.as_ref()?.tmux.as_str();
+    app.remote_list.as_ref()?.records.iter().find(|rec| {
+        rec.agents
+            .iter()
+            .any(|a| a.tmux_session.as_deref() == Some(tmux))
+    })
+}
+
 /// One row of the remote list. A *live* row is one agent session to attach
 /// to (`alive`, with a `tmux_session`); multiple agent instances on the same
 /// workspace flatten into separate live rows. A *dormant* row stands for a

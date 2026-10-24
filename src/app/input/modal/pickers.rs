@@ -4,8 +4,8 @@
 use super::*;
 use crate::app::{App, SharedApp};
 use crate::error::Result;
-use crate::ui::modal::Modal;
 use crate::ui::modal::move_selection;
+use crate::ui::modal::{Modal, TagTarget};
 use crossterm::event::{KeyCode, KeyModifiers};
 // Test-only imports: the moved test modules access `draw_for_test`,
 // `AttachedState`, `Arc`, and `Mutex` through `super::*` glob imports
@@ -216,7 +216,7 @@ pub(crate) fn open_workspace_tags(
     known.sort();
     known.dedup();
     app.modal = Some(Modal::WorkspaceTags {
-        workspace_id: ws,
+        target: TagTarget::Local(ws),
         name: w.name,
         known,
         tags: w.tags.iter().map(|t| t.to_string()).collect(),
@@ -228,12 +228,150 @@ pub(crate) fn open_workspace_tags(
     Ok(())
 }
 
+/// Open the `#` editor for the attached remote workspace, from its listed
+/// record. Known tags are every tag on the host's listed workspaces.
+pub(crate) fn open_remote_workspace_tags(app: &mut App) {
+    let (Some(list), Some(rec)) = (
+        app.remote_list.as_ref(),
+        crate::app::attached_remote_record(app),
+    ) else {
+        app.modal = Some(Modal::Error {
+            message: "can't tag this remote workspace: it isn't in the host's listing".into(),
+        });
+        return;
+    };
+    let target = TagTarget::Remote {
+        dest: list.dest.clone(),
+        repo: rec.repo.clone(),
+        workspace: rec.workspace.clone(),
+    };
+    reopen_tags_editor(app, &target, String::new(), 0, &[]);
+}
+
+/// The listed record a remote tag target names.
+fn remote_record_mut<'a>(
+    app: &'a mut App,
+    repo: &str,
+    workspace: &str,
+) -> Option<&'a mut crate::commands::shared::SharedWorkspaceRecord> {
+    app.remote_list
+        .as_mut()?
+        .records
+        .iter_mut()
+        .find(|r| r.repo == repo && r.workspace == workspace)
+}
+
+/// Reopen the `#` editor on `target` with fresh snapshots; see
+/// `open_workspace_tags` for `seen`.
+fn reopen_tags_editor(
+    app: &mut App,
+    target: &TagTarget,
+    input: String,
+    selected: usize,
+    seen: &[String],
+) {
+    let (repo, workspace) = match target {
+        TagTarget::Local(ws) => {
+            if let Err(e) = open_workspace_tags(app, *ws, input, selected, seen) {
+                app.modal = Some(Modal::Error {
+                    message: format!("could not load tags: {e}"),
+                });
+            }
+            return;
+        }
+        TagTarget::Remote {
+            repo, workspace, ..
+        } => (repo, workspace),
+    };
+    let mut known: Vec<String> = app
+        .remote_list
+        .iter()
+        .flat_map(|l| l.records.iter().flat_map(|r| r.tags.iter().cloned()))
+        .chain(seen.iter().cloned())
+        .collect();
+    known.sort();
+    known.dedup();
+    let tags = remote_record_mut(app, repo, workspace)
+        .map(|r| r.tags.clone())
+        .unwrap_or_default();
+    app.modal = Some(Modal::WorkspaceTags {
+        target: target.clone(),
+        name: workspace.clone(),
+        known,
+        tags,
+        input,
+        selected,
+        browsing: false,
+        notice: None,
+    });
+}
+
+/// Serializes remote tag writes so a quick add-then-remove of one tag lands
+/// on the host in the order it was typed.
+static REMOTE_TAG_WRITES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Write one tag change to the host in the background. The listed record is
+/// updated up front so the editor and bar reflect it at once; a failed write
+/// rolls it back and says why on the editor (or in an error modal).
+fn write_remote_tag(app: &mut App, shared: &SharedApp, target: &TagTarget, tag: &str, add: bool) {
+    let TagTarget::Remote {
+        dest,
+        repo,
+        workspace,
+    } = target.clone()
+    else {
+        return;
+    };
+    if let Some(rec) = remote_record_mut(app, &repo, &workspace) {
+        set_tag(&mut rec.tags, tag, add);
+    }
+    let shared = shared.clone();
+    let tag = tag.to_string();
+    let target = target.clone();
+    tokio::spawn(async move {
+        let _order = REMOTE_TAG_WRITES.lock().await;
+        let result =
+            crate::commands::shared_hosts::tag_remote(&dest, &repo, &workspace, &tag, add).await;
+        let Err(e) = result else {
+            return;
+        };
+        let mut g = shared.lock().await;
+        if let Some(rec) = remote_record_mut(&mut g, &repo, &workspace) {
+            set_tag(&mut rec.tags, &tag, !add);
+        }
+        let message = format!("could not save tags: {e}");
+        match g.modal.as_mut() {
+            Some(Modal::WorkspaceTags {
+                target: t,
+                tags,
+                notice,
+                ..
+            }) if *t == target => {
+                set_tag(tags, &tag, !add);
+                *notice = Some(message);
+            }
+            None => g.modal = Some(Modal::Error { message }),
+            Some(_) => tracing::warn!(%message, "remote tag write failed"),
+        }
+    });
+}
+
+/// Add or drop `tag` in a sorted tag list.
+fn set_tag(tags: &mut Vec<String>, tag: &str, add: bool) {
+    tags.retain(|t| t != tag);
+    if add {
+        tags.push(tag.to_string());
+        tags.sort();
+    }
+}
+
 /// Every edit writes through immediately; `Esc` (or `Enter` on empty input) closes.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn workspace_tags_editor(
     app: &mut App,
+    shared: &SharedApp,
     k: crossterm::event::KeyEvent,
-    workspace_id: crate::data::store::WorkspaceId,
+    target: TagTarget,
     name: String,
     known: Vec<String>,
     tags: Vec<String>,
@@ -245,7 +383,7 @@ pub(super) async fn workspace_tags_editor(
     let items = crate::ui::modal::workspace_tags::tag_items(&known, &tags, &input);
     let reopen = |app: &mut App, input: String, selected: usize, browsing: bool, notice| {
         app.modal = Some(Modal::WorkspaceTags {
-            workspace_id,
+            target: target.clone(),
             name: name.clone(),
             known: known.clone(),
             tags: tags.clone(),
@@ -256,6 +394,13 @@ pub(super) async fn workspace_tags_editor(
         });
     };
     let write = |app: &mut App, tag: &str, add: bool| -> Result<bool> {
+        let workspace_id = match &target {
+            TagTarget::Local(ws) => *ws,
+            TagTarget::Remote { .. } => {
+                write_remote_tag(app, shared, &target, tag, add);
+                return Ok(true);
+            }
+        };
         let r = if add {
             app.store.add_workspace_tag(workspace_id, tag)
         } else {
@@ -275,7 +420,7 @@ pub(super) async fn workspace_tags_editor(
         if let Some(it) = items.get(selected)
             && write(app, &it.name, !it.checked)?
         {
-            open_workspace_tags(app, workspace_id, input, selected, &known)?;
+            reopen_tags_editor(app, &target, input, selected, &known);
             if let Some(Modal::WorkspaceTags { browsing: b, .. }) = app.modal.as_mut() {
                 *b = browsing;
             }
@@ -289,7 +434,7 @@ pub(super) async fn workspace_tags_editor(
         KeyCode::Enter => match normalize_tag(&input) {
             Some(t) => {
                 if write(app, &t, true)? {
-                    open_workspace_tags(app, workspace_id, String::new(), 0, &known)?;
+                    reopen_tags_editor(app, &target, String::new(), 0, &known);
                 }
             }
             None => {

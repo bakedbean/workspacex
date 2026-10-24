@@ -65,8 +65,8 @@ pub use types::{AppEvent, AttachReady, PendingEdit, SelectionTarget, StoppedKind
 
 pub(crate) use reconcile::{reconcile_archive_result, reconcile_create_result};
 pub(crate) use remote::{
-    attach_remote, detach_remote, reconcile_remote_create, reconcile_remote_list,
-    reconcile_remote_repos, reconcile_remote_share, remote_rows,
+    attach_remote, attached_remote_record, detach_remote, reconcile_remote_create,
+    reconcile_remote_list, reconcile_remote_repos, reconcile_remote_share, remote_rows,
 };
 pub(crate) use repo_setting::apply_repo_setting;
 pub(crate) use run::rescan_processes;

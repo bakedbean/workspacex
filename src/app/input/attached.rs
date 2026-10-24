@@ -345,6 +345,8 @@ async fn dispatch_remote_leader_action(
                 crate::ui::modal::PromptTagModal::pick(),
             ));
         }
+        // Written on the host over ssh; see `open_remote_workspace_tags`.
+        KeyCode::Char('#') => crate::app::input::modal::pickers::open_remote_workspace_tags(app),
         KeyCode::Char('x') => {
             // Send a literal Ctrl-x (0x18) to the remote agent.
             session.scroll_to_live();

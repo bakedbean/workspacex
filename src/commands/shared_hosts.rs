@@ -125,6 +125,33 @@ pub async fn share_remote(
     })
 }
 
+/// Run `wsx workspace tag add|rm <tag> --workspace <repo>/<workspace>` on the
+/// host. `tag` must already be normalized (`data::tags::normalize_tag`).
+pub async fn tag_remote(
+    dest: &str,
+    repo: &str,
+    workspace: &str,
+    tag: &str,
+    add: bool,
+) -> crate::error::Result<()> {
+    for name in [repo, workspace, tag] {
+        if !shell_safe(name) {
+            return Err(crate::error::Error::UserInput(format!(
+                "can't tag {name:?} remotely: the name has characters that \
+                 would need shell quoting"
+            )));
+        }
+    }
+    let op = if add { "add" } else { "rm" };
+    run_remote_wsx(
+        dest,
+        &format!("workspace tag {op} {tag} --workspace {repo}/{workspace}"),
+        REMOTE_TIMEOUT,
+    )
+    .await
+    .map(|_| ())
+}
+
 /// Run `wsx repo list --json` on the host: the repos a workspace can be
 /// created in there, by name.
 pub async fn fetch_remote_repos(dest: &str) -> crate::error::Result<Vec<String>> {

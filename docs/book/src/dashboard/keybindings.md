@@ -146,7 +146,7 @@ Keys go to the agent, except chords after `Ctrl-x`. Pressing `Ctrl-x` alone show
 | `Ctrl-x esc`         | Dismiss the menu                                        |
 | `Ctrl-x q` `w` `r` `y` `i` `o` `p` `s` `h` `j` | Switch the pane to another agent (multi-agent workspaces) |
 
-A workspace attached from a remote host takes only `Ctrl-x d`, `Ctrl-x <`, and `Ctrl-x 1`–`9`.
+A workspace attached from a remote host takes only `Ctrl-x d`, `Ctrl-x <`, `Ctrl-x x`, and `Ctrl-x 1`–`9`; `Ctrl-x` alone shows a menu of those.
 
 ## Panels opened from the attached view
 

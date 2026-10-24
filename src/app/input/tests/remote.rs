@@ -518,6 +518,86 @@ async fn remote_leader_digit_fires_pinned_command_into_ssh() {
     crate::app::detach_remote(&mut g);
 }
 
+/// `^x` in the remote view arms the leader menu: Esc dismisses it without
+/// detaching, and ↓ + Enter runs the highlighted row (`<` prompt tag).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_leader_menu_navigates_and_dispatches() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut env = EnvGuard::new();
+    let fake = dir.path().join("fake-ssh-cat.sh");
+    std::fs::write(&fake, "#!/bin/sh\ncat\n").unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    env.set("WSX_SSH_BIN", fake.to_str().unwrap());
+
+    let store = Store::open_in_memory().unwrap();
+    let tmp = tempfile::TempDir::new().unwrap();
+    let app = Arc::new(Mutex::new(
+        App::new(store, tmp.path().to_path_buf()).unwrap(),
+    ));
+    {
+        let mut g = app.lock().await;
+        crate::app::attach_remote(
+            &mut g,
+            crate::app::RemoteTarget {
+                host_name: "mini".into(),
+                dest: "eben@mini".into(),
+                tmux: "wsx-r-w".into(),
+            },
+            80,
+            24,
+        )
+        .unwrap();
+    }
+    let ctrl_x = crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('x'),
+        KeyModifiers::CONTROL,
+    );
+    let plain = |code| crossterm::event::KeyEvent::new(code, KeyModifiers::empty());
+    let mut g = app.lock().await;
+
+    handle_event(&mut g, &app, CtEvent::Key(ctrl_x))
+        .await
+        .unwrap();
+    assert!(g.leader_pending, "Ctrl-x must arm the remote menu");
+    handle_event(
+        &mut g,
+        &app,
+        CtEvent::Key(plain(crossterm::event::KeyCode::Esc)),
+    )
+    .await
+    .unwrap();
+    assert!(!g.leader_pending);
+    assert!(
+        matches!(g.view, crate::ui::View::AttachedRemote),
+        "Esc must not detach"
+    );
+
+    handle_event(&mut g, &app, CtEvent::Key(ctrl_x))
+        .await
+        .unwrap();
+    handle_event(
+        &mut g,
+        &app,
+        CtEvent::Key(plain(crossterm::event::KeyCode::Down)),
+    )
+    .await
+    .unwrap();
+    assert!(g.leader_pending, "arrows keep the menu open");
+    handle_event(
+        &mut g,
+        &app,
+        CtEvent::Key(plain(crossterm::event::KeyCode::Enter)),
+    )
+    .await
+    .unwrap();
+    assert!(!g.leader_pending);
+    assert!(
+        matches!(g.modal, Some(crate::ui::modal::Modal::PromptTag(_))),
+        "Enter on the second row opens the prompt tag picker"
+    );
+    crate::app::detach_remote(&mut g);
+}
+
 #[tokio::test]
 async fn esc_during_remote_list_loading_clears_pending_gen_and_stale_fetch_no_ops() {
     // Esc while RemoteListLoading is up must close the modal AND clear

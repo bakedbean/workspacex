@@ -82,6 +82,25 @@ pub fn nav_menu_items(multi_pane: bool) -> Vec<NavItem> {
     items
 }
 
+/// The remote-attach action list. A remote workspace has no local worktree or
+/// session tree, so only the chords `handle_key_attached_remote` handles show.
+pub fn remote_nav_menu_items() -> Vec<NavItem> {
+    vec![
+        NavItem {
+            glyph: "d",
+            label: "detach",
+        },
+        NavItem {
+            glyph: "<",
+            label: "prompt tag",
+        },
+        NavItem {
+            glyph: "x",
+            label: "send literal ^x",
+        },
+    ]
+}
+
 /// Resolve a highlighted index to the key press it fires, reusing the footer's
 /// glyph→key map (`"←→"` → Right, single chars → that char). `None` when the
 /// index is out of range or the glyph has no single-key mapping.

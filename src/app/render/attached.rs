@@ -516,7 +516,11 @@ pub(super) fn draw_attached_nav_overlay(
             crate::ui::attached::nav_menu_items(state.leaf_count() > 1),
             !app.pinned_commands_cache.is_empty(),
         ),
-        _ => return,
+        crate::ui::View::AttachedRemote => (
+            crate::ui::attached::remote_nav_menu_items(),
+            !app.pinned_commands_cache.is_empty(),
+        ),
+        crate::ui::View::Dashboard => return,
     };
     crate::ui::attached::render_nav_overlay(
         f,

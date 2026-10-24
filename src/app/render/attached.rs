@@ -216,35 +216,34 @@ fn gather_local(app: &App, focused: crate::ui::split::AttachTarget) -> AttachedD
 ///     is the ssh hop into the remote tmux, so they drive the
 ///     remote agent just like a local pane. Repo-scoped pins are
 ///     skipped — we don't know the remote workspace's repo config.
-///   - the PR chip, recovered from the retained `remote_list`
-///     record whose agent owns the tmux session we attached to
-///     (the same `lifecycle`/`pr_number` the H picker colors by).
+///   - the PR chip and workspace tags, recovered from the retained
+///     `remote_list` record whose agent owns the tmux session we attached
+///     to (the same `lifecycle`/`pr_number` the H picker colors by).
 fn gather_remote(app: &App, label: &str) -> AttachedData {
     let global_pinned = app.store.get_setting("pinned_commands").ok().flatten();
     let pinned = crate::commands::pinned::resolve(global_pinned.as_deref(), None);
-    let pr = app.remote_list.as_ref().and_then(|list| {
-        let tmux = app.remote_target.as_ref()?.tmux.as_str();
-        list.records
-            .iter()
-            .find(|rec| {
-                rec.agents
-                    .iter()
-                    .any(|a| a.tmux_session.as_deref() == Some(tmux))
+    let record = crate::app::attached_remote_record(app);
+    let pr = record.and_then(|rec| {
+        // The shared-workspace wire contract carries no
+        // review verdict, so a remote pane's chip stays
+        // unmarked rather than claiming "not gated".
+        rec.pr_number.and_then(|n| {
+            rec.lifecycle.map(|lc| ChipPr {
+                lifecycle: lc,
+                number: n,
+                review: None,
+                unresolved: None,
             })
-            .and_then(|rec| {
-                // The shared-workspace wire contract carries no
-                // review verdict, so a remote pane's chip stays
-                // unmarked rather than claiming "not gated".
-                rec.pr_number.and_then(|n| {
-                    rec.lifecycle.map(|lc| ChipPr {
-                        lifecycle: lc,
-                        number: n,
-                        review: None,
-                        unresolved: None,
-                    })
-                })
-            })
+        })
     });
+    let workspace_tags = record
+        .map(|rec| {
+            rec.tags
+                .iter()
+                .map(|t| std::sync::Arc::from(t.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
     let (usage_window, usage_activity) = super::dashboard::usage_sparkline(app);
     AttachedData {
         repo: String::new(),
@@ -252,7 +251,7 @@ fn gather_remote(app: &App, label: &str) -> AttachedData {
         agent: None,
         pinned,
         tags: crate::commands::tags::load(&app.store).unwrap_or_default(),
-        workspace_tags: Vec::new(),
+        workspace_tags,
         procs: 0,
         diff: None,
         pr,
@@ -516,7 +515,11 @@ pub(super) fn draw_attached_nav_overlay(
             crate::ui::attached::nav_menu_items(state.leaf_count() > 1),
             !app.pinned_commands_cache.is_empty(),
         ),
-        _ => return,
+        crate::ui::View::AttachedRemote => (
+            crate::ui::attached::remote_nav_menu_items(),
+            !app.pinned_commands_cache.is_empty(),
+        ),
+        crate::ui::View::Dashboard => return,
     };
     crate::ui::attached::render_nav_overlay(
         f,

@@ -28,6 +28,114 @@ pub struct RemoteTarget {
     pub tmux: String,
 }
 
+/// The listed record of the remote workspace currently attached: the one
+/// whose agent owns the tmux session `remote_target` names.
+pub(crate) fn attached_remote_record(
+    app: &crate::app::App,
+) -> Option<&crate::commands::shared::SharedWorkspaceRecord> {
+    let tmux = app.remote_target.as_ref()?.tmux.as_str();
+    app.remote_list.as_ref()?.records.iter().find(|rec| {
+        rec.agents
+            .iter()
+            .any(|a| a.tmux_session.as_deref() == Some(tmux))
+    })
+}
+
+/// The listed record for `repo`/`workspace` on the host at `dest`, if that
+/// host's listing is the one loaded.
+pub(crate) fn remote_record_mut<'a>(
+    app: &'a mut App,
+    dest: &str,
+    repo: &str,
+    workspace: &str,
+) -> Option<&'a mut crate::commands::shared::SharedWorkspaceRecord> {
+    app.remote_list
+        .as_mut()
+        .filter(|l| l.dest == dest)?
+        .records
+        .iter_mut()
+        .find(|r| r.repo == repo && r.workspace == workspace)
+}
+
+/// One tag edit on a shared host's workspace.
+#[derive(Debug, Clone)]
+pub struct RemoteTagWrite {
+    pub dest: String,
+    pub repo: String,
+    pub workspace: String,
+    pub tag: String,
+    pub add: bool,
+}
+
+/// Queue `w` for the host. Called under the app lock from the key handler, so
+/// writes reach the worker, and the host, in the order they were made.
+pub(crate) fn queue_remote_tag(app: &mut App, shared: &SharedApp, w: RemoteTagWrite) {
+    let tx = app.remote_tag_writes.get_or_insert_with(|| {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(run_remote_tag_writes(Arc::downgrade(shared), rx));
+        tx
+    });
+    let _ = tx.send(w);
+}
+
+/// Write queued tag edits one at a time. The editor already shows each edit;
+/// once the queue drains, the host's answer replaces that guess. A failed
+/// write may still have landed (a timeout after the host committed), so it is
+/// followed by asking the host for the workspace's tags rather than undone.
+async fn run_remote_tag_writes(
+    app: std::sync::Weak<tokio::sync::Mutex<App>>,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<RemoteTagWrite>,
+) {
+    use crate::commands::shared_hosts::{fetch_remote_tags, tag_remote};
+    while let Some(w) = rx.recv().await {
+        let mut host_tags = tag_remote(&w.dest, &w.repo, &w.workspace, &w.tag, w.add).await;
+        let failed = host_tags
+            .as_ref()
+            .err()
+            .map(|e| format!("could not save tags: {e}"));
+        if failed.is_some() && rx.is_empty() {
+            host_tags = fetch_remote_tags(&w.dest, &w.repo, &w.workspace).await;
+        }
+        let Some(app) = app.upgrade() else {
+            return;
+        };
+        let mut g = app.lock().await;
+        // Edits are queued under this lock, so an empty queue here means no
+        // newer edit is showing that the host's answer would wipe out.
+        let target = crate::ui::modal::TagTarget::Remote {
+            dest: w.dest.clone(),
+            repo: w.repo.clone(),
+            workspace: w.workspace.clone(),
+        };
+        if rx.is_empty()
+            && let Ok(tags) = host_tags
+        {
+            if let Some(rec) = remote_record_mut(&mut g, &w.dest, &w.repo, &w.workspace) {
+                rec.tags = tags.clone();
+            }
+            if let Some(crate::ui::modal::Modal::WorkspaceTags {
+                target: t,
+                tags: shown,
+                ..
+            }) = g.modal.as_mut()
+                && *t == target
+            {
+                *shown = tags;
+            }
+        }
+        let Some(message) = failed else {
+            continue;
+        };
+        match g.modal.as_mut() {
+            Some(crate::ui::modal::Modal::WorkspaceTags {
+                target: t, notice, ..
+            }) if *t == target => *notice = Some(message),
+            None => g.modal = Some(crate::ui::modal::Modal::Error { message }),
+            Some(_) => tracing::warn!(%message, "remote tag write failed"),
+        }
+    }
+}
+
 /// One row of the remote list. A *live* row is one agent session to attach
 /// to (`alive`, with a `tmux_session`); multiple agent instances on the same
 /// workspace flatten into separate live rows. A *dormant* row stands for a

@@ -245,9 +245,11 @@ pub(in crate::app::input) async fn handle_key_attached(
     Ok(())
 }
 
-/// Full-screen remote-attach key handler. No leader menu:
-/// `Ctrl-x d` detaches (severing only the local ssh
-/// client), everything else is forwarded verbatim to the remote agent's PTY.
+/// Full-screen remote-attach key handler. The leader menu offers the subset of
+/// chords that make sense without a local worktree
+/// ([`crate::ui::attached::remote_nav_menu_items`]): `Ctrl-x d` detaches
+/// (severing only the local ssh client); everything else is forwarded
+/// verbatim to the remote agent's PTY.
 /// If the ssh child has already exited (e.g. tmux printed `can't find session`
 /// for a stale name, then the client quit), any key bounces to the dashboard
 /// with an error modal instead of writing into a dead PTY.
@@ -281,34 +283,37 @@ pub(in crate::app::input) async fn handle_key_attached_remote(
         });
         return Ok(());
     }
+    // Leader armed: same overlay contract as the local attached view.
     if app.leader_pending {
-        app.leader_pending = false;
-        if k.code == KeyCode::Char('d') {
-            crate::app::detach_remote(app);
-            return Ok(());
-        }
-        if k.code == KeyCode::Char('<') {
-            app.modal = Some(crate::ui::modal::Modal::PromptTag(
-                crate::ui::modal::PromptTagModal::pick(),
-            ));
-            return Ok(());
-        }
-        // `^x <digit>` fires the matching global pinned command into the remote
-        // session, mirroring the local attached chord (`handle_leader_key`).
-        if let KeyCode::Char(c @ '1'..='9') = k.code {
-            let idx = (c as u8 - b'1') as usize;
-            if let Some(cmd) = app.pinned_commands_cache.get(idx) {
-                let bytes = cmd.pty_bytes(session.agent);
-                session.scroll_to_live();
-                let _ = session
-                    .writer
-                    .send(crate::pty::session::WriteReq::Bytes(bytes))
-                    .await;
+        let items = crate::ui::attached::remote_nav_menu_items();
+        match k.code {
+            KeyCode::Up => {
+                let n = items.len();
+                app.leader_selected = (app.leader_selected + n - 1) % n;
+                return Ok(());
             }
-            return Ok(());
+            KeyCode::Down => {
+                let n = items.len();
+                app.leader_selected = (app.leader_selected + 1) % n;
+                return Ok(());
+            }
+            KeyCode::Esc => {
+                app.leader_pending = false;
+                return Ok(());
+            }
+            KeyCode::Enter => {
+                app.leader_pending = false;
+                if let Some(key) = crate::ui::attached::nav_item_key(&items, app.leader_selected) {
+                    dispatch_remote_leader_action(app, &session, key).await;
+                }
+                return Ok(());
+            }
+            _ => {
+                app.leader_pending = false;
+                dispatch_remote_leader_action(app, &session, k).await;
+                return Ok(());
+            }
         }
-        // Any other key after the leader is a no-op (no remote leader menu).
-        return Ok(());
     }
     if k.code == LEADER_KEY && k.modifiers.contains(KeyModifiers::CONTROL) {
         app.leader_pending = true;
@@ -324,4 +329,45 @@ pub(in crate::app::input) async fn handle_key_attached_remote(
             .await;
     }
     Ok(())
+}
+
+/// Fire one remote leader action for `k`. Keys outside the remote menu (and
+/// the digit chords) are no-ops. Caller clears `leader_pending` first.
+async fn dispatch_remote_leader_action(
+    app: &mut App,
+    session: &crate::pty::session::Session,
+    k: crossterm::event::KeyEvent,
+) {
+    match k.code {
+        KeyCode::Char('d') => crate::app::detach_remote(app),
+        KeyCode::Char('<') => {
+            app.modal = Some(crate::ui::modal::Modal::PromptTag(
+                crate::ui::modal::PromptTagModal::pick(),
+            ));
+        }
+        // Written on the host over ssh; see `open_remote_workspace_tags`.
+        KeyCode::Char('#') => crate::app::input::modal::pickers::open_remote_workspace_tags(app),
+        KeyCode::Char('x') => {
+            // Send a literal Ctrl-x (0x18) to the remote agent.
+            session.scroll_to_live();
+            let _ = session
+                .writer
+                .send(crate::pty::session::WriteReq::Bytes(vec![0x18]))
+                .await;
+        }
+        // `^x <digit>` fires the matching global pinned command into the remote
+        // session, mirroring the local attached chord (`handle_leader_key`).
+        KeyCode::Char(c @ '1'..='9') => {
+            let idx = (c as u8 - b'1') as usize;
+            if let Some(cmd) = app.pinned_commands_cache.get(idx) {
+                let bytes = cmd.pty_bytes(session.agent);
+                session.scroll_to_live();
+                let _ = session
+                    .writer
+                    .send(crate::pty::session::WriteReq::Bytes(bytes))
+                    .await;
+            }
+        }
+        _ => {}
+    }
 }

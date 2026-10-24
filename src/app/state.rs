@@ -106,6 +106,7 @@ impl App {
             remote_list: None,
             remote: None,
             remote_target: None,
+            remote_tag_writes: None,
             next_remote_gen: 0,
             pending_remote_gen: None,
             // Look once on the first tick: a request queued before this
@@ -618,6 +619,9 @@ pub struct App {
     /// The target backing `app.remote`, kept for the `AttachedRemote` header
     /// label and the "session ended" error message. Cleared alongside `remote`.
     pub remote_target: Option<RemoteTarget>,
+    /// Feeds the one task that writes remote tag edits to their hosts in the
+    /// order they were made. Spawned on the first edit.
+    pub remote_tag_writes: Option<tokio::sync::mpsc::UnboundedSender<RemoteTagWrite>>,
     /// Monotonic counter handed out to in-flight remote-list fetch tasks.
     pub next_remote_gen: u64,
     /// Generation id of the currently in-flight remote-list fetch, if any.

@@ -1402,8 +1402,8 @@ async fn leader_hash_opens_the_workspace_tag_editor() {
     assert!(
         matches!(
             &app.modal,
-            Some(crate::ui::modal::Modal::WorkspaceTags { workspace_id, tags, .. })
-                if *workspace_id == ws_id && tags == &["parked".to_string()]
+            Some(crate::ui::modal::Modal::WorkspaceTags { target, tags, .. })
+                if *target == crate::ui::modal::TagTarget::Local(ws_id) && tags == &["parked".to_string()]
         ),
         "{:?}",
         app.modal

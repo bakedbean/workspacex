@@ -14,7 +14,7 @@ Press `#` on a workspace, or `Ctrl-x #` while attached to one, to open the tag e
 
 Typing filters the list, which offers every tag used in wsx. Changes save as you make them.
 
-Attached to a workspace on a [shared host](../integrations/remote-access.md), `Ctrl-x #` edits its tags on that host. The editor offers the tags used by that host's listed workspaces, and each change runs `wsx workspace tag` there over ssh. If the host refuses a change, the editor rolls it back and shows why.
+Attached to a workspace on a [shared host](../integrations/remote-access.md), `Ctrl-x #` edits its tags on that host. The editor offers the tags used by that host's listed workspaces. Each change shows at once and runs `wsx workspace tag` there over ssh, one at a time in the order you made them; they finish even if you close the editor or detach. If a change fails, the editor shows the host's actual tags and why it failed.
 
 Tag rules:
 

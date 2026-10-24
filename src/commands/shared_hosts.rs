@@ -127,14 +127,49 @@ pub async fn share_remote(
 
 /// Run `wsx workspace tag add|rm <tag> --workspace <repo>/<workspace>` on the
 /// host. `tag` must already be normalized (`data::tags::normalize_tag`).
+/// Returns the workspace's tags on the host afterwards, which the command
+/// prints one per line.
 pub async fn tag_remote(
     dest: &str,
     repo: &str,
     workspace: &str,
     tag: &str,
     add: bool,
-) -> crate::error::Result<()> {
-    for name in [repo, workspace, tag] {
+) -> crate::error::Result<Vec<String>> {
+    let op = if add { "add" } else { "rm" };
+    let stdout = run_remote_tag(dest, repo, workspace, &format!("{op} {tag}")).await?;
+    Ok(stdout
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect())
+}
+
+/// Run `wsx workspace tag list --workspace <repo>/<workspace> --json` on the
+/// host: the workspace's tags there.
+pub async fn fetch_remote_tags(
+    dest: &str,
+    repo: &str,
+    workspace: &str,
+) -> crate::error::Result<Vec<String>> {
+    let stdout = run_remote_tag(dest, repo, workspace, "list").await?;
+    serde_json::from_str(&stdout)
+        .map_err(|e| crate::error::Error::UserInput(format!("bad tag-list JSON from host: {e}")))
+}
+
+/// `wsx workspace tag <op_args> --workspace <repo>/<workspace>`, with `--json`
+/// for `list`. Every name is checked by `shell_safe` first.
+async fn run_remote_tag(
+    dest: &str,
+    repo: &str,
+    workspace: &str,
+    op_args: &str,
+) -> crate::error::Result<String> {
+    for name in [repo, workspace]
+        .into_iter()
+        .chain(op_args.split(' ').skip(1))
+    {
         if !shell_safe(name) {
             return Err(crate::error::Error::UserInput(format!(
                 "can't tag {name:?} remotely: the name has characters that \
@@ -142,14 +177,13 @@ pub async fn tag_remote(
             )));
         }
     }
-    let op = if add { "add" } else { "rm" };
+    let json = if op_args == "list" { " --json" } else { "" };
     run_remote_wsx(
         dest,
-        &format!("workspace tag {op} {tag} --workspace {repo}/{workspace}"),
+        &format!("workspace tag {op_args} --workspace {repo}/{workspace}{json}"),
         REMOTE_TIMEOUT,
     )
     .await
-    .map(|_| ())
 }
 
 /// Run `wsx repo list --json` on the host: the repos a workspace can be

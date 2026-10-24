@@ -248,19 +248,6 @@ pub(crate) fn open_remote_workspace_tags(app: &mut App) {
     reopen_tags_editor(app, &target, String::new(), 0, &[]);
 }
 
-/// The listed record a remote tag target names.
-fn remote_record_mut<'a>(
-    app: &'a mut App,
-    repo: &str,
-    workspace: &str,
-) -> Option<&'a mut crate::commands::shared::SharedWorkspaceRecord> {
-    app.remote_list
-        .as_mut()?
-        .records
-        .iter_mut()
-        .find(|r| r.repo == repo && r.workspace == workspace)
-}
-
 /// Reopen the `#` editor on `target` with fresh snapshots; see
 /// `open_workspace_tags` for `seen`.
 fn reopen_tags_editor(
@@ -270,7 +257,7 @@ fn reopen_tags_editor(
     selected: usize,
     seen: &[String],
 ) {
-    let (repo, workspace) = match target {
+    let (dest, repo, workspace) = match target {
         TagTarget::Local(ws) => {
             if let Err(e) = open_workspace_tags(app, *ws, input, selected, seen) {
                 app.modal = Some(Modal::Error {
@@ -280,8 +267,10 @@ fn reopen_tags_editor(
             return;
         }
         TagTarget::Remote {
-            repo, workspace, ..
-        } => (repo, workspace),
+            dest,
+            repo,
+            workspace,
+        } => (dest, repo, workspace),
     };
     let mut known: Vec<String> = app
         .remote_list
@@ -291,7 +280,7 @@ fn reopen_tags_editor(
         .collect();
     known.sort();
     known.dedup();
-    let tags = remote_record_mut(app, repo, workspace)
+    let tags = crate::app::remote_record_mut(app, dest, repo, workspace)
         .map(|r| r.tags.clone())
         .unwrap_or_default();
     app.modal = Some(Modal::WorkspaceTags {
@@ -306,13 +295,8 @@ fn reopen_tags_editor(
     });
 }
 
-/// Serializes remote tag writes so a quick add-then-remove of one tag lands
-/// on the host in the order it was typed.
-static REMOTE_TAG_WRITES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-/// Write one tag change to the host in the background. The listed record is
-/// updated up front so the editor and bar reflect it at once; a failed write
-/// rolls it back and says why on the editor (or in an error modal).
+/// Show one tag edit on the listed record at once and queue it for the host
+/// (`app::queue_remote_tag`).
 fn write_remote_tag(app: &mut App, shared: &SharedApp, target: &TagTarget, tag: &str, add: bool) {
     let TagTarget::Remote {
         dest,
@@ -322,38 +306,17 @@ fn write_remote_tag(app: &mut App, shared: &SharedApp, target: &TagTarget, tag: 
     else {
         return;
     };
-    if let Some(rec) = remote_record_mut(app, &repo, &workspace) {
+    if let Some(rec) = crate::app::remote_record_mut(app, &dest, &repo, &workspace) {
         set_tag(&mut rec.tags, tag, add);
     }
-    let shared = shared.clone();
-    let tag = tag.to_string();
-    let target = target.clone();
-    tokio::spawn(async move {
-        let _order = REMOTE_TAG_WRITES.lock().await;
-        let result =
-            crate::commands::shared_hosts::tag_remote(&dest, &repo, &workspace, &tag, add).await;
-        let Err(e) = result else {
-            return;
-        };
-        let mut g = shared.lock().await;
-        if let Some(rec) = remote_record_mut(&mut g, &repo, &workspace) {
-            set_tag(&mut rec.tags, &tag, !add);
-        }
-        let message = format!("could not save tags: {e}");
-        match g.modal.as_mut() {
-            Some(Modal::WorkspaceTags {
-                target: t,
-                tags,
-                notice,
-                ..
-            }) if *t == target => {
-                set_tag(tags, &tag, !add);
-                *notice = Some(message);
-            }
-            None => g.modal = Some(Modal::Error { message }),
-            Some(_) => tracing::warn!(%message, "remote tag write failed"),
-        }
-    });
+    let w = crate::app::RemoteTagWrite {
+        dest,
+        repo,
+        workspace,
+        tag: tag.to_string(),
+        add,
+    };
+    crate::app::queue_remote_tag(app, shared, w);
 }
 
 /// Add or drop `tag` in a sorted tag list.

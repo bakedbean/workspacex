@@ -576,7 +576,9 @@ pub(crate) fn drain_share_requests(app: &mut App) {
                 })
             })
         };
-        store.claim_share_requests(owns)
+        // This runs on the event loop: waiting out another process's write
+        // lock here would freeze input, so fail fast and retry next tick.
+        store.without_busy_wait(|| store.claim_share_requests(owns))
     };
     let requests = match claim {
         Ok(c) => {
@@ -584,7 +586,11 @@ pub(crate) fn drain_share_requests(app: &mut App) {
             c.claimed
         }
         Err(e) => {
-            tracing::warn!(error = %e, "failed to claim share requests");
+            if e.is_busy() {
+                tracing::debug!(error = %e, "share requests busy; retrying next tick");
+            } else {
+                tracing::warn!(error = %e, "failed to claim share requests");
+            }
             app.share_drain_pending = true;
             return;
         }

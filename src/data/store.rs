@@ -197,7 +197,7 @@ impl Store {
         // Writers (the TUI and a sibling `wsx status` CLI process) contend for
         // the single WAL writer slot; wait up to 3s rather than erroring out
         // immediately with SQLITE_BUSY.
-        conn.pragma_update(None, "busy_timeout", 3000)?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
         let store = Self {
             conn,
             settings_cache: std::sync::RwLock::new(HashMap::new()),
@@ -417,6 +417,21 @@ impl Store {
         &self.conn
     }
 
+    /// Run `f` with the busy wait off, so a write lock another process holds
+    /// fails fast with SQLITE_BUSY (see `Error::is_busy`) instead of blocking
+    /// for up to `BUSY_TIMEOUT`. For writes on the dashboard's event loop,
+    /// where that wait would freeze input; the caller retries later.
+    pub(crate) fn without_busy_wait<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        let prev: i64 = self
+            .conn
+            .pragma_query_value(None, "busy_timeout", |r| r.get(0))?;
+        self.conn.busy_timeout(std::time::Duration::ZERO)?;
+        let out = f();
+        self.conn
+            .busy_timeout(std::time::Duration::from_millis(prev.max(0) as u64))?;
+        out
+    }
+
     /// Rewind `user_version` to `version` and migrate, re-running every step
     /// past it — as a racing process, or one that crashed before a step's
     /// version bump, would.
@@ -427,6 +442,10 @@ impl Store {
         self.migrate()
     }
 }
+
+/// How long an on-disk store waits for another connection's write lock
+/// before failing with SQLITE_BUSY.
+pub const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// How old a `Pending` row must be before it is taken to belong to a create
 /// that died: the cutoff `App::new` passes to `sweep_stale_pending`, and the

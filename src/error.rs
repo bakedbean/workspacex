@@ -31,6 +31,21 @@ pub enum Error {
     Cancelled,
 }
 
+impl Error {
+    /// SQLite gave up on a lock another connection holds (`SQLITE_BUSY` /
+    /// `SQLITE_LOCKED`): retrying later can succeed.
+    pub fn is_busy(&self) -> bool {
+        matches!(
+            self,
+            Error::Store(rusqlite::Error::SqliteFailure(e, _))
+                if matches!(
+                    e.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                )
+        )
+    }
+}
+
 /// Adapt the `sessionx` parsing crate's error into wsx's, preserving the
 /// underlying io/serde cause so `?` works across the boundary.
 impl From<sessionx::Error> for Error {

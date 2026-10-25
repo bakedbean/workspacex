@@ -70,9 +70,20 @@ impl Store {
     /// workspace it `owns` (runs a direct agent of) at once, any other once it
     /// is `DEFER_MS` old. Also discards stale and purges old finished rows.
     /// One IMMEDIATE transaction, so two dashboards on the same database
-    /// never both act on a request.
+    /// never both act on a request — taken only when a read finds something
+    /// to claim or purge, since the dashboard calls this on every sibling
+    /// commit and the write lock is contended.
     pub fn claim_share_requests(&self, owns: impl Fn(WorkspaceId) -> bool) -> Result<ShareClaim> {
         let now = now_ms();
+        let has_work: bool = self.conn().query_row(
+            "SELECT EXISTS (SELECT 1 FROM share_requests WHERE claimed_at IS NULL \
+             OR finished_at < ?1 OR (finished_at IS NULL AND claimed_at < ?1))",
+            [now - PURGE_FINISHED_AFTER_MS],
+            |r| r.get(0),
+        )?;
+        if !has_work {
+            return Ok(ShareClaim::default());
+        }
         let tx = rusqlite::Transaction::new_unchecked(
             self.conn(),
             rusqlite::TransactionBehavior::Immediate,
@@ -171,6 +182,59 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A store on disk plus a second connection holding its write lock, as a
+    /// sibling `wsx` process mid-commit would.
+    fn store_with_lock_held() -> (Store, rusqlite::Connection, tempfile::TempDir) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = dir.path().join("wsx.db");
+        let store = Store::open(&db).unwrap();
+        let other = rusqlite::Connection::open(&db).unwrap();
+        other.execute_batch("BEGIN IMMEDIATE").unwrap();
+        (store, other, dir)
+    }
+
+    #[test]
+    fn claiming_nothing_does_not_take_the_write_lock() {
+        let (store, _other, _dir) = store_with_lock_held();
+        let started = std::time::Instant::now();
+        assert_eq!(
+            store.claim_share_requests(|_| true).unwrap(),
+            ShareClaim::default()
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_claim_without_busy_wait_fails_fast_while_another_writer_holds_the_lock() {
+        let (store, other, _dir) = store_with_lock_held();
+        other
+            .execute(
+                "INSERT INTO share_requests (workspace_id, created_at) VALUES (7, ?1)",
+                [now_ms()],
+            )
+            .unwrap();
+        other.execute_batch("COMMIT; BEGIN IMMEDIATE").unwrap();
+        let started = std::time::Instant::now();
+        let err = store
+            .without_busy_wait(|| store.claim_share_requests(|_| true))
+            .unwrap_err();
+        assert!(err.is_busy(), "{err}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+
+        // The wait comes back afterwards, and the claim succeeds once the
+        // other writer is done.
+        let wait: i64 = store
+            .conn()
+            .pragma_query_value(None, "busy_timeout", |r| r.get(0))
+            .unwrap();
+        assert_eq!(wait, crate::data::store::BUSY_TIMEOUT.as_millis() as i64);
+        other.execute_batch("COMMIT").unwrap();
+        assert_eq!(
+            store.claim_share_requests(|_| true).unwrap().claimed.len(),
+            1
+        );
+    }
 
     #[test]
     fn request_lifecycle_pending_claimed_finished() {

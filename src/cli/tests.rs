@@ -2614,6 +2614,9 @@ async fn status_hooks_succeed_when_the_store_cannot_be_opened() {
     // A directory where the database file belongs makes every open fail.
     std::fs::create_dir_all(dirs.db_path()).unwrap();
 
+    run_cli(CliAction::StatusFromHook { agent: None }, &dirs)
+        .await
+        .unwrap();
     run_cli(
         CliAction::StatusFromNotify {
             agent: Some("codex".into()),

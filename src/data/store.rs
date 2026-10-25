@@ -191,7 +191,10 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         // The usual pairing with WAL: commits stop waiting on fsync (only
         // checkpoints sync), so a slow disk no longer stretches every write
-        // lock. Still crash-safe; a power loss can drop the last few commits.
+        // lock. The database stays consistent through any crash, and a crash
+        // of wsx itself loses nothing; an OS crash or power loss can roll
+        // back every commit since the last checkpoint. This is state wsx
+        // rebuilds or agents re-report, not data worth an fsync per write.
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         // Writers (the TUI and a sibling `wsx status` CLI process) contend for
@@ -422,14 +425,25 @@ impl Store {
     /// for up to `BUSY_TIMEOUT`. For writes on the dashboard's event loop,
     /// where that wait would freeze input; the caller retries later.
     pub(crate) fn without_busy_wait<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        /// Restores the wait on drop, so a panicking `f` can't leave the
+        /// connection failing fast for every later caller.
+        struct Restore<'a>(&'a Connection, std::time::Duration);
+        impl Drop for Restore<'_> {
+            fn drop(&mut self) {
+                if let Err(e) = self.0.busy_timeout(self.1) {
+                    tracing::warn!(error = %e, "failed to restore busy_timeout");
+                }
+            }
+        }
         let prev: i64 = self
             .conn
             .pragma_query_value(None, "busy_timeout", |r| r.get(0))?;
+        let _restore = Restore(
+            &self.conn,
+            std::time::Duration::from_millis(prev.max(0) as u64),
+        );
         self.conn.busy_timeout(std::time::Duration::ZERO)?;
-        let out = f();
-        self.conn
-            .busy_timeout(std::time::Duration::from_millis(prev.max(0) as u64))?;
-        out
+        f()
     }
 
     /// Rewind `user_version` to `version` and migrate, re-running every step
@@ -2120,6 +2134,46 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert!(v >= 30, "{v}");
+    }
+
+    #[test]
+    fn without_busy_wait_restores_the_previous_wait() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Store::open(&dir.path().join("wsx.db")).unwrap();
+        let wait = |s: &Store| -> i64 {
+            s.conn
+                .pragma_query_value(None, "busy_timeout", |r| r.get(0))
+                .unwrap()
+        };
+        store
+            .conn
+            .busy_timeout(std::time::Duration::from_millis(1234))
+            .unwrap();
+        let inside = store.without_busy_wait(|| Ok(wait(&store))).unwrap();
+        assert_eq!(inside, 0);
+        assert_eq!(wait(&store), 1234);
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = store.without_busy_wait(|| -> Result<()> { panic!("boom") });
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(wait(&store), 1234, "restored even when f panics");
+    }
+
+    #[test]
+    fn on_disk_store_uses_wal_with_normal_sync() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Store::open(&dir.path().join("wsx.db")).unwrap();
+        let mode: String = store
+            .conn
+            .pragma_query_value(None, "journal_mode", |r| r.get(0))
+            .unwrap();
+        // 1 = NORMAL.
+        let sync: i64 = store
+            .conn
+            .pragma_query_value(None, "synchronous", |r| r.get(0))
+            .unwrap();
+        assert_eq!((mode.as_str(), sync), ("wal", 1));
     }
 
     /// Every hook call and widget poll opens the store, so an open of a

@@ -189,11 +189,18 @@ impl Store {
         }
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        // The usual pairing with WAL: commits stop waiting on fsync (only
+        // checkpoints sync), so a slow disk no longer stretches every write
+        // lock. The database stays consistent through any crash, and a crash
+        // of wsx itself loses nothing; an OS crash or power loss can roll
+        // back every commit since the last checkpoint. This is state wsx
+        // rebuilds or agents re-report, not data worth an fsync per write.
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         // Writers (the TUI and a sibling `wsx status` CLI process) contend for
         // the single WAL writer slot; wait up to 3s rather than erroring out
         // immediately with SQLITE_BUSY.
-        conn.pragma_update(None, "busy_timeout", 3000)?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
         let store = Self {
             conn,
             settings_cache: std::sync::RwLock::new(HashMap::new()),
@@ -413,11 +420,46 @@ impl Store {
         &self.conn
     }
 
+    /// Run `f` with the busy wait off, so a write lock another process holds
+    /// fails fast with SQLITE_BUSY (see `Error::is_busy`) instead of blocking
+    /// for up to `BUSY_TIMEOUT`. For writes on the dashboard's event loop,
+    /// where that wait would freeze input; the caller retries later.
+    pub(crate) fn without_busy_wait<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        /// Restores the wait on drop, so a panicking `f` can't leave the
+        /// connection failing fast for every later caller.
+        struct Restore<'a>(&'a Connection, std::time::Duration);
+        impl Drop for Restore<'_> {
+            fn drop(&mut self) {
+                if let Err(e) = self.0.busy_timeout(self.1) {
+                    tracing::warn!(error = %e, "failed to restore busy_timeout");
+                }
+            }
+        }
+        let prev: i64 = self
+            .conn
+            .pragma_query_value(None, "busy_timeout", |r| r.get(0))?;
+        let _restore = Restore(
+            &self.conn,
+            std::time::Duration::from_millis(prev.max(0) as u64),
+        );
+        self.conn.busy_timeout(std::time::Duration::ZERO)?;
+        f()
+    }
+
+    /// Rewind `user_version` to `version` and migrate, re-running every step
+    /// past it — as a racing process, or one that crashed before a step's
+    /// version bump, would.
     #[cfg(test)]
-    pub(crate) fn migrate_for_test(&self) -> Result<()> {
+    pub(crate) fn remigrate_from(&self, version: i64) -> Result<()> {
+        self.conn
+            .execute(&format!("PRAGMA user_version = {version}"), [])?;
         self.migrate()
     }
 }
+
+/// How long an on-disk store waits for another connection's write lock
+/// before failing with SQLITE_BUSY.
+pub const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// How old a `Pending` row must be before it is taken to belong to a create
 /// that died: the cutoff `App::new` passes to `sweep_stale_pending`, and the
@@ -519,8 +561,8 @@ mod tests {
     #[test]
     fn open_in_memory_runs_migrations_idempotently() {
         let store = Store::open_in_memory().unwrap();
-        // Calling migrate again should not fail.
-        store.migrate().unwrap();
+        // Re-running the ladder should not fail.
+        store.remigrate_from(1).unwrap();
         // Tables exist by querying their count.
         let count: i64 = store
             .conn
@@ -609,7 +651,7 @@ mod tests {
     #[test]
     fn migrate_v16_is_idempotent() {
         let store = Store::open_in_memory().unwrap();
-        store.migrate_for_test().unwrap(); // second run must not error
+        store.remigrate_from(1).unwrap(); // second run must not error
         let v: i64 = store
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -620,7 +662,7 @@ mod tests {
     #[test]
     fn migrate_v20_recap_short_columns_idempotent() {
         let store = Store::open_in_memory().unwrap();
-        store.migrate_for_test().unwrap(); // re-run must not error
+        store.remigrate_from(1).unwrap(); // re-run must not error
         let n: i64 = store
             .conn()
             .query_row(
@@ -636,7 +678,7 @@ mod tests {
     #[test]
     fn migrate_v21_scm_pr_review_column_idempotent() {
         let store = Store::open_in_memory().unwrap();
-        store.migrate_for_test().unwrap(); // re-run must not error
+        store.remigrate_from(1).unwrap(); // re-run must not error
         let n: i64 = store
             .conn()
             .query_row(
@@ -652,7 +694,7 @@ mod tests {
     #[test]
     fn migrate_v23_scm_pr_unresolved_column_idempotent() {
         let store = Store::open_in_memory().unwrap();
-        store.migrate_for_test().unwrap(); // re-run must not error
+        store.remigrate_from(1).unwrap(); // re-run must not error
         let n: i64 = store
             .conn()
             .query_row(
@@ -777,7 +819,7 @@ mod tests {
     #[test]
     fn migrate_v29_repo_hide_rules_column_idempotent() {
         let store = Store::open_in_memory().unwrap();
-        store.migrate_for_test().unwrap();
+        store.remigrate_from(1).unwrap();
         let n: i64 = store
             .conn()
             .query_row(
@@ -1444,8 +1486,8 @@ mod tests {
 
     #[test]
     fn workspace_name_color_survives_a_migrate_rerun() {
-        // `migrate()` re-runs on every startup (SCHEMA_V1 resets user_version),
-        // so the column-add must not clobber a stored color.
+        // A step re-runs when a racing process or a crash leaves the version
+        // behind, so the column-add must not clobber a stored color.
         let store = Store::open_in_memory().unwrap();
         let repo = store.add_repo(Path::new("/r"), "r", "").unwrap();
         let id = store
@@ -1461,7 +1503,7 @@ mod tests {
             .unwrap();
         store.set_workspace_name_color(id, Some(42)).unwrap();
 
-        store.migrate().unwrap();
+        store.remigrate_from(21).unwrap();
 
         assert_eq!(
             store.workspace_by_id(id).unwrap().unwrap().name_color,
@@ -1628,11 +1670,7 @@ mod tests {
             .conn()
             .execute("DELETE FROM workspace_agents", [])
             .unwrap();
-        store
-            .conn()
-            .execute("PRAGMA user_version = 11", [])
-            .unwrap();
-        store.migrate_for_test().unwrap();
+        store.remigrate_from(11).unwrap();
 
         let count: i64 = store
             .conn()
@@ -1657,11 +1695,7 @@ mod tests {
         // Simulate a crash between the DDL and the version bump: re-enter the
         // `v < 12` block with the backfilled rows already present. `INSERT OR
         // IGNORE` must keep this idempotent (count stays 1, not 2).
-        store
-            .conn()
-            .execute("PRAGMA user_version = 11", [])
-            .unwrap();
-        store.migrate_for_test().unwrap();
+        store.remigrate_from(11).unwrap();
         let count_after_reentry: i64 = store
             .conn()
             .query_row(
@@ -1676,7 +1710,7 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 30);
+        assert_eq!(v, crate::data::schema::SCHEMA_VERSION);
     }
 
     #[test]
@@ -1703,9 +1737,8 @@ mod tests {
     fn migration_seeds_on_upgrade_then_preserves_custom_order() {
         let store = Store::open_in_memory().unwrap();
         // Simulate a genuine pre-v14 database where the column does not exist.
-        // (`migrate()` resets user_version to 1 via SCHEMA_V1 on every call, so
-        // all blocks re-run regardless of version — dropping the column is what
-        // forces the v14 ALTER + one-time seed path.)
+        // Dropping the column is what forces the v14 ALTER + one-time seed
+        // path; rewinding to v13 is what re-enters the step.
         store
             .conn()
             .execute("ALTER TABLE repos DROP COLUMN sort_order", [])
@@ -1722,7 +1755,7 @@ mod tests {
             .unwrap();
 
         // Upgrade migration: adds the column and seeds alphabetical ranks once.
-        store.migrate_for_test().unwrap();
+        store.remigrate_from(13).unwrap();
         let repos = store.repos().unwrap();
         assert_eq!(
             repos.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
@@ -1734,18 +1767,19 @@ mod tests {
             "pre-existing repos seeded with unique 0-based alphabetical ranks"
         );
 
-        // The user reorders, then the app restarts (migrate runs again). The
-        // seed must NOT re-run and clobber the manual order.
+        // The user reorders, then the step re-runs (a racing process, or a
+        // crash before its version bump). The seed must NOT re-run and clobber
+        // the manual order.
         let id = |n: &str| repos.iter().find(|r| r.name == n).unwrap().id;
         store
             .swap_repo_sort_order(id("charlie"), id("alpha"))
             .unwrap();
-        store.migrate_for_test().unwrap();
+        store.remigrate_from(13).unwrap();
         let names: Vec<String> = store.repos().unwrap().into_iter().map(|r| r.name).collect();
         assert_eq!(
             names,
             vec!["charlie", "bravo", "alpha"],
-            "manual order must survive a re-run of migrate (restart)"
+            "manual order must survive a re-run of the v14 step"
         );
     }
 
@@ -2093,12 +2127,69 @@ mod tests {
     #[test]
     fn v30_migration_reruns_cleanly() {
         let store = Store::open_in_memory().unwrap();
-        store.migrate().unwrap();
-        store.migrate().unwrap();
+        store.remigrate_from(29).unwrap();
+        store.remigrate_from(29).unwrap();
         let v: i64 = store
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert!(v >= 30, "{v}");
+    }
+
+    #[test]
+    fn without_busy_wait_restores_the_previous_wait() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Store::open(&dir.path().join("wsx.db")).unwrap();
+        let wait = |s: &Store| -> i64 {
+            s.conn
+                .pragma_query_value(None, "busy_timeout", |r| r.get(0))
+                .unwrap()
+        };
+        store
+            .conn
+            .busy_timeout(std::time::Duration::from_millis(1234))
+            .unwrap();
+        let inside = store.without_busy_wait(|| Ok(wait(&store))).unwrap();
+        assert_eq!(inside, 0);
+        assert_eq!(wait(&store), 1234);
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = store.without_busy_wait(|| -> Result<()> { panic!("boom") });
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(wait(&store), 1234, "restored even when f panics");
+    }
+
+    #[test]
+    fn on_disk_store_uses_wal_with_normal_sync() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Store::open(&dir.path().join("wsx.db")).unwrap();
+        let mode: String = store
+            .conn
+            .pragma_query_value(None, "journal_mode", |r| r.get(0))
+            .unwrap();
+        // 1 = NORMAL.
+        let sync: i64 = store
+            .conn
+            .pragma_query_value(None, "synchronous", |r| r.get(0))
+            .unwrap();
+        assert_eq!((mode.as_str(), sync), ("wal", 1));
+    }
+
+    /// Every hook call and widget poll opens the store, so an open of a
+    /// database that is already current must not commit anything: on a slow
+    /// disk each commit holds the write lock the dashboard is waiting on.
+    #[test]
+    fn opening_a_current_database_commits_nothing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = dir.path().join("wsx.db");
+        let first = Store::open(&db).unwrap();
+        let v0 = first.data_version().unwrap();
+        let _second = Store::open(&db).unwrap();
+        assert_eq!(
+            first.data_version().unwrap(),
+            v0,
+            "a second open must not commit"
+        );
     }
 }

@@ -1006,11 +1006,11 @@ mod tests {
     }
 
     #[test]
-    fn an_upgrade_that_lost_the_race_does_not_backfill_again() {
-        // Two processes open a pre-v26 database at once and both see no
-        // agent_status table. The first creates + backfills; the second must
-        // re-check under the lock rather than backfill again (which failed
-        // Store::open with a UNIQUE conflict).
+    fn concurrent_upgrades_take_turns() {
+        // Several processes open a pre-v26 database at once (the TUI and a
+        // few hooks). Each step runs once: no duplicate-column ALTER fails an
+        // open, and the backfill doesn't copy the row twice (a UNIQUE
+        // conflict).
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("state.db");
         {
@@ -1035,14 +1035,29 @@ mod tests {
                 .unwrap();
             store
                 .conn()
-                .execute_batch("DROP TABLE agent_status")
+                .execute_batch(
+                    "DROP TABLE agent_status; \
+                     ALTER TABLE repos DROP COLUMN hide_rules; \
+                     PRAGMA user_version = 25;",
+                )
                 .unwrap();
         }
-        let first = rusqlite::Connection::open(&db).unwrap();
-        let second = rusqlite::Connection::open(&db).unwrap();
-        crate::data::schema::create_agent_status_locked(&first).unwrap();
-        crate::data::schema::create_agent_status_locked(&second).unwrap();
-        let n: i64 = second
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let opens: Vec<_> = (0..4)
+            .map(|_| {
+                let (db, barrier) = (db.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    Store::open(&db).map(|_| ())
+                })
+            })
+            .collect();
+        for open in opens {
+            open.join().unwrap().unwrap();
+        }
+        let store = Store::open(&db).unwrap();
+        let n: i64 = store
+            .conn()
             .query_row("SELECT count(*) FROM agent_status", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
@@ -1098,8 +1113,8 @@ mod tests {
     fn migration_backfills_the_primary_once() {
         // Simulate a pre-v26 database: a workspace_status row and no
         // agent_status table. Reopening must copy the row onto the primary
-        // exactly once, and later reopens (the ladder re-runs every open)
-        // must not re-copy a derived row onto a primary that never reported.
+        // exactly once, and a re-run of the step (a racing process, or a
+        // crash before the version bump) must not re-copy a derived row onto a primary that never reported.
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("state.db");
         let (ws, peer) = {
@@ -1122,7 +1137,7 @@ mod tests {
             let peer = store.add_workspace_agent(ws, AgentKind::Claude).unwrap().id;
             store
                 .conn()
-                .execute_batch("DROP TABLE agent_status")
+                .execute_batch("DROP TABLE agent_status; PRAGMA user_version = 25;")
                 .unwrap();
             store
                 .conn()
@@ -1144,6 +1159,10 @@ mod tests {
         store.clear_agent_status(ws, primary).unwrap();
         store
             .set_agent_status(ws, Some(peer), ReportedState::Working, None, "model")
+            .unwrap();
+        store
+            .conn()
+            .execute("PRAGMA user_version = 25", [])
             .unwrap();
         drop(store);
         let store = Store::open(&db).unwrap();

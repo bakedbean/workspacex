@@ -2604,6 +2604,32 @@ fn parse_status_from_notify_with_no_args_is_all_none() {
     }
 }
 
+/// A status hook exits 0 even when the store cannot be opened (on a slow
+/// disk: "database is locked"), so it never shows as an error in the agent's
+/// chat. Any other command still reports the failure.
+#[tokio::test]
+async fn status_hooks_succeed_when_the_store_cannot_be_opened() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dirs = crate::config::Dirs::for_test(tmp.path());
+    // A directory where the database file belongs makes every open fail.
+    std::fs::create_dir_all(dirs.db_path()).unwrap();
+
+    run_cli(
+        CliAction::StatusFromNotify {
+            agent: Some("codex".into()),
+            payload: Some(r#"{"type":"agent-turn-complete"}"#.into()),
+        },
+        &dirs,
+    )
+    .await
+    .unwrap();
+    assert!(
+        run_cli(CliAction::RepoList { json: false }, &dirs)
+            .await
+            .is_err()
+    );
+}
+
 #[test]
 fn status_set_message_without_value_is_usage_error() {
     let err = parse_args(

@@ -110,7 +110,22 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         #[cfg(not(target_os = "macos"))]
         return Err(menubar_macos_only());
     }
-    let store = crate::data::store::Store::open(&dirs.db_path())?;
+    let store = match crate::data::store::Store::open(&dirs.db_path()) {
+        Ok(store) => store,
+        // A status hook must never fail the agent's turn (see the
+        // `StatusFromHook` arm), and a locked or unreadable store is no
+        // exception: a missed status update is not worth an error in the
+        // agent's chat.
+        Err(_)
+            if matches!(
+                action,
+                CliAction::StatusFromHook { .. } | CliAction::StatusFromNotify { .. }
+            ) =>
+        {
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
     match action {
         CliAction::Tui { .. } => unreachable!("handled in main"),
         CliAction::RepoAdd {

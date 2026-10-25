@@ -1,21 +1,34 @@
 //! Database schema: table DDL and the forward-only migration ladder.
 //!
-//! `migrate()` runs on every `Store::open` / `open_in_memory`. It is
-//! idempotent — `SCHEMA_V1` resets `user_version` to 1 each call, so every
-//! versioned step is guarded (column-adds via `add_column_if_missing`, schema
-//! batches via `CREATE TABLE IF NOT EXISTS`) and safely re-runs. Lives in its
-//! own module so the query methods in `store.rs` aren't buried under the DDL.
+//! `migrate()` runs on every `Store::open` / `open_in_memory`, and returns
+//! without writing when `user_version` is already `SCHEMA_VERSION`. Every
+//! process opens the store (each hook call, each widget poll), so on a slow
+//! disk a no-op open that still committed would hold the write lock for
+//! seconds. Below that, only the steps past the stored version run. Each step
+//! stays idempotent — column-adds via `add_column_if_missing`, schema batches
+//! via `CREATE TABLE IF NOT EXISTS` — because two processes can climb the
+//! ladder at once, and a crash between a step and its version bump re-runs
+//! it. Lives in its own module so the query methods in `store.rs` aren't
+//! buried under the DDL.
 
 use crate::data::store::Store;
 use crate::error::Result;
 
+/// The `user_version` the last step of `migrate()` sets. Bump it with each
+/// new step.
+pub(crate) const SCHEMA_VERSION: i64 = 30;
+
 impl Store {
     pub(crate) fn migrate(&self) -> Result<()> {
-        self.conn().execute_batch(SCHEMA_V1)?;
-
         let v: i64 = self
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if v >= SCHEMA_VERSION {
+            return Ok(());
+        }
+        if v < 1 {
+            self.conn().execute_batch(SCHEMA_V1)?;
+        }
         if v < 2 {
             self.conn().execute_batch(SCHEMA_V2_SETTINGS)?;
             self.add_column_if_missing("repos", "custom_instructions", "custom_instructions TEXT")?;
@@ -87,9 +100,9 @@ impl Store {
             if has_col == 0 {
                 // Add the column and seed initial ranks atomically. Done in one
                 // transaction so a crash between the two can't leave every repo
-                // stuck at the default sort_order=0: `migrate()` re-runs every
-                // startup (SCHEMA_V1 resets user_version to 1), but the column
-                // would already exist, so the seed would never run again and
+                // stuck at the default sort_order=0: a crash before the version
+                // bump re-runs this step, but the column would already exist,
+                // so the seed would never run again and
                 // swaps (which preserve the value set) would all be no-ops. The
                 // transaction makes it all-or-nothing — a failed migration rolls
                 // back and retries cleanly on the next open.
@@ -188,15 +201,14 @@ impl Store {
             // Per-agent status. `workspace_status` stays as the derived,
             // workspace-level row every dashboard reads; `agent_status` holds
             // what each instance last reported (see `data::status`). Create +
-            // backfill only when the table is new: the ladder re-runs on every
-            // open (SCHEMA_V1 resets user_version), and re-running the backfill
+            // backfill only when the table is new: a racing process or a crash
+            // before the version bump re-runs this step, and re-running the backfill
             // would copy a peer-derived workspace row onto a primary that never
             // reported it.
             //
             // Checked once cheaply, then again under an IMMEDIATE transaction:
             // two processes upgrading at once (the TUI and a hook) must not
-            // both see the table missing and both backfill, and every later
-            // open should not pay for the write lock.
+            // both see the table missing and both backfill.
             if !has_agent_status_table(self.conn())? {
                 create_agent_status_locked(self.conn())?;
             }
@@ -228,13 +240,19 @@ impl Store {
             self.conn().execute_batch(SCHEMA_V30_WORKSPACE_TAGS)?;
             self.conn().execute("PRAGMA user_version = 30", [])?;
         }
+        debug_assert_eq!(
+            self.conn()
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?,
+            SCHEMA_VERSION,
+            "the last migration step must set SCHEMA_VERSION"
+        );
         Ok(())
     }
 
     /// Add `column` to `table` only if it is not already present.
     ///
-    /// `migrate()` re-runs on every startup (SCHEMA_V1 resets `user_version`),
-    /// so each `ALTER TABLE ... ADD COLUMN` must be idempotent — this guards it
+    /// A step can re-run (two processes upgrading at once, or a crash before
+    /// its version bump), so each `ALTER TABLE ... ADD COLUMN` must be idempotent — this guards it
     /// behind a `pragma_table_info` existence check and cleanly survives
     /// partial-migration retries. `column_def` is the full definition that
     /// follows `ADD COLUMN` (e.g. `"yolo INTEGER NOT NULL DEFAULT 0"`).

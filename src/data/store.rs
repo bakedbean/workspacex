@@ -413,8 +413,13 @@ impl Store {
         &self.conn
     }
 
+    /// Rewind `user_version` to `version` and migrate, re-running every step
+    /// past it — as a racing process, or one that crashed before a step's
+    /// version bump, would.
     #[cfg(test)]
-    pub(crate) fn migrate_for_test(&self) -> Result<()> {
+    pub(crate) fn remigrate_from(&self, version: i64) -> Result<()> {
+        self.conn
+            .execute(&format!("PRAGMA user_version = {version}"), [])?;
         self.migrate()
     }
 }
@@ -519,8 +524,8 @@ mod tests {
     #[test]
     fn open_in_memory_runs_migrations_idempotently() {
         let store = Store::open_in_memory().unwrap();
-        // Calling migrate again should not fail.
-        store.migrate().unwrap();
+        // Re-running the ladder should not fail.
+        store.remigrate_from(1).unwrap();
         // Tables exist by querying their count.
         let count: i64 = store
             .conn
@@ -609,7 +614,7 @@ mod tests {
     #[test]
     fn migrate_v16_is_idempotent() {
         let store = Store::open_in_memory().unwrap();
-        store.migrate_for_test().unwrap(); // second run must not error
+        store.remigrate_from(1).unwrap(); // second run must not error
         let v: i64 = store
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -620,7 +625,7 @@ mod tests {
     #[test]
     fn migrate_v20_recap_short_columns_idempotent() {
         let store = Store::open_in_memory().unwrap();
-        store.migrate_for_test().unwrap(); // re-run must not error
+        store.remigrate_from(1).unwrap(); // re-run must not error
         let n: i64 = store
             .conn()
             .query_row(
@@ -636,7 +641,7 @@ mod tests {
     #[test]
     fn migrate_v21_scm_pr_review_column_idempotent() {
         let store = Store::open_in_memory().unwrap();
-        store.migrate_for_test().unwrap(); // re-run must not error
+        store.remigrate_from(1).unwrap(); // re-run must not error
         let n: i64 = store
             .conn()
             .query_row(
@@ -652,7 +657,7 @@ mod tests {
     #[test]
     fn migrate_v23_scm_pr_unresolved_column_idempotent() {
         let store = Store::open_in_memory().unwrap();
-        store.migrate_for_test().unwrap(); // re-run must not error
+        store.remigrate_from(1).unwrap(); // re-run must not error
         let n: i64 = store
             .conn()
             .query_row(
@@ -777,7 +782,7 @@ mod tests {
     #[test]
     fn migrate_v29_repo_hide_rules_column_idempotent() {
         let store = Store::open_in_memory().unwrap();
-        store.migrate_for_test().unwrap();
+        store.remigrate_from(1).unwrap();
         let n: i64 = store
             .conn()
             .query_row(
@@ -1444,8 +1449,8 @@ mod tests {
 
     #[test]
     fn workspace_name_color_survives_a_migrate_rerun() {
-        // `migrate()` re-runs on every startup (SCHEMA_V1 resets user_version),
-        // so the column-add must not clobber a stored color.
+        // A step re-runs when a racing process or a crash leaves the version
+        // behind, so the column-add must not clobber a stored color.
         let store = Store::open_in_memory().unwrap();
         let repo = store.add_repo(Path::new("/r"), "r", "").unwrap();
         let id = store
@@ -1461,7 +1466,7 @@ mod tests {
             .unwrap();
         store.set_workspace_name_color(id, Some(42)).unwrap();
 
-        store.migrate().unwrap();
+        store.remigrate_from(21).unwrap();
 
         assert_eq!(
             store.workspace_by_id(id).unwrap().unwrap().name_color,
@@ -1628,11 +1633,7 @@ mod tests {
             .conn()
             .execute("DELETE FROM workspace_agents", [])
             .unwrap();
-        store
-            .conn()
-            .execute("PRAGMA user_version = 11", [])
-            .unwrap();
-        store.migrate_for_test().unwrap();
+        store.remigrate_from(11).unwrap();
 
         let count: i64 = store
             .conn()
@@ -1657,11 +1658,7 @@ mod tests {
         // Simulate a crash between the DDL and the version bump: re-enter the
         // `v < 12` block with the backfilled rows already present. `INSERT OR
         // IGNORE` must keep this idempotent (count stays 1, not 2).
-        store
-            .conn()
-            .execute("PRAGMA user_version = 11", [])
-            .unwrap();
-        store.migrate_for_test().unwrap();
+        store.remigrate_from(11).unwrap();
         let count_after_reentry: i64 = store
             .conn()
             .query_row(
@@ -1676,7 +1673,7 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 30);
+        assert_eq!(v, crate::data::schema::SCHEMA_VERSION);
     }
 
     #[test]
@@ -1703,9 +1700,8 @@ mod tests {
     fn migration_seeds_on_upgrade_then_preserves_custom_order() {
         let store = Store::open_in_memory().unwrap();
         // Simulate a genuine pre-v14 database where the column does not exist.
-        // (`migrate()` resets user_version to 1 via SCHEMA_V1 on every call, so
-        // all blocks re-run regardless of version — dropping the column is what
-        // forces the v14 ALTER + one-time seed path.)
+        // Dropping the column is what forces the v14 ALTER + one-time seed
+        // path; rewinding to v13 is what re-enters the step.
         store
             .conn()
             .execute("ALTER TABLE repos DROP COLUMN sort_order", [])
@@ -1722,7 +1718,7 @@ mod tests {
             .unwrap();
 
         // Upgrade migration: adds the column and seeds alphabetical ranks once.
-        store.migrate_for_test().unwrap();
+        store.remigrate_from(13).unwrap();
         let repos = store.repos().unwrap();
         assert_eq!(
             repos.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
@@ -1734,18 +1730,19 @@ mod tests {
             "pre-existing repos seeded with unique 0-based alphabetical ranks"
         );
 
-        // The user reorders, then the app restarts (migrate runs again). The
-        // seed must NOT re-run and clobber the manual order.
+        // The user reorders, then the step re-runs (a racing process, or a
+        // crash before its version bump). The seed must NOT re-run and clobber
+        // the manual order.
         let id = |n: &str| repos.iter().find(|r| r.name == n).unwrap().id;
         store
             .swap_repo_sort_order(id("charlie"), id("alpha"))
             .unwrap();
-        store.migrate_for_test().unwrap();
+        store.remigrate_from(13).unwrap();
         let names: Vec<String> = store.repos().unwrap().into_iter().map(|r| r.name).collect();
         assert_eq!(
             names,
             vec!["charlie", "bravo", "alpha"],
-            "manual order must survive a re-run of migrate (restart)"
+            "manual order must survive a re-run of the v14 step"
         );
     }
 
@@ -2093,12 +2090,29 @@ mod tests {
     #[test]
     fn v30_migration_reruns_cleanly() {
         let store = Store::open_in_memory().unwrap();
-        store.migrate().unwrap();
-        store.migrate().unwrap();
+        store.remigrate_from(29).unwrap();
+        store.remigrate_from(29).unwrap();
         let v: i64 = store
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert!(v >= 30, "{v}");
+    }
+
+    /// Every hook call and widget poll opens the store, so an open of a
+    /// database that is already current must not commit anything: on a slow
+    /// disk each commit holds the write lock the dashboard is waiting on.
+    #[test]
+    fn opening_a_current_database_commits_nothing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = dir.path().join("wsx.db");
+        let first = Store::open(&db).unwrap();
+        let v0 = first.data_version().unwrap();
+        let _second = Store::open(&db).unwrap();
+        assert_eq!(
+            first.data_version().unwrap(),
+            v0,
+            "a second open must not commit"
+        );
     }
 }

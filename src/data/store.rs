@@ -189,6 +189,10 @@ impl Store {
         }
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        // The usual pairing with WAL: commits stop waiting on fsync (only
+        // checkpoints sync), so a slow disk no longer stretches every write
+        // lock. Still crash-safe; a power loss can drop the last few commits.
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         // Writers (the TUI and a sibling `wsx status` CLI process) contend for
         // the single WAL writer slot; wait up to 3s rather than erroring out

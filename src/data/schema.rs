@@ -4,12 +4,14 @@
 //! without writing when `user_version` is already `SCHEMA_VERSION`. Every
 //! process opens the store (each hook call, each widget poll), so on a slow
 //! disk a no-op open that still committed would hold the write lock for
-//! seconds. Below that, only the steps past the stored version run. Each step
-//! stays idempotent — column-adds via `add_column_if_missing`, schema batches
-//! via `CREATE TABLE IF NOT EXISTS` — because two processes can climb the
-//! ladder at once, and a crash between a step and its version bump re-runs
-//! it. Lives in its own module so the query methods in `store.rs` aren't
-//! buried under the DDL.
+//! seconds. Below that, the steps past the stored version run in one
+//! IMMEDIATE transaction: two processes upgrading at once (the TUI and a hook)
+//! take turns, and the second re-reads the version under the lock and finds
+//! nothing left to do; a crash rolls the whole upgrade back. Steps stay
+//! idempotent anyway — column-adds via `add_column_if_missing`, schema batches
+//! via `CREATE TABLE IF NOT EXISTS` — as a cheap guard against a database
+//! whose version and schema disagree. Lives in its own module so the query
+//! methods in `store.rs` aren't buried under the DDL.
 
 use crate::data::store::Store;
 use crate::error::Result;
@@ -23,6 +25,22 @@ impl Store {
         let v: i64 = self
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if v >= SCHEMA_VERSION {
+            return Ok(());
+        }
+        let tx = rusqlite::Transaction::new_unchecked(
+            self.conn(),
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
+        // Another process may have upgraded while we waited for the lock.
+        let v: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        self.upgrade_from(v)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Run every step past `v`. Called only inside `migrate`'s transaction.
+    fn upgrade_from(&self, v: i64) -> Result<()> {
         if v >= SCHEMA_VERSION {
             return Ok(());
         }
@@ -98,16 +116,12 @@ impl Store {
                 |r| r.get(0),
             )?;
             if has_col == 0 {
-                // Add the column and seed initial ranks atomically. Done in one
-                // transaction so a crash between the two can't leave every repo
-                // stuck at the default sort_order=0: a crash before the version
-                // bump re-runs this step, but the column would already exist,
-                // so the seed would never run again and
-                // swaps (which preserve the value set) would all be no-ops. The
-                // transaction makes it all-or-nothing — a failed migration rolls
-                // back and retries cleanly on the next open.
-                let tx = self.conn().unchecked_transaction()?;
-                tx.execute(
+                // Add the column and seed initial ranks together (`migrate`'s
+                // transaction makes them atomic): with the column present but
+                // unseeded, the seed would never run again, every repo would
+                // stay at sort_order=0, and swaps (which preserve the value
+                // set) would all be no-ops.
+                self.conn().execute(
                     "ALTER TABLE repos ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
                     [],
                 )?;
@@ -115,7 +129,7 @@ impl Store {
                 // id as tiebreak) for repos that predate this column. Stays inside
                 // the column-creation guard so re-runs never clobber the user's
                 // manual ordering.
-                tx.execute(
+                self.conn().execute(
                     "UPDATE repos SET sort_order = (\
                          SELECT COUNT(*) FROM repos r2 \
                          WHERE LOWER(r2.name) < LOWER(repos.name) \
@@ -123,7 +137,6 @@ impl Store {
                      )",
                     [],
                 )?;
-                tx.commit()?;
             }
             self.conn().execute("PRAGMA user_version = 14", [])?;
         }
@@ -201,16 +214,22 @@ impl Store {
             // Per-agent status. `workspace_status` stays as the derived,
             // workspace-level row every dashboard reads; `agent_status` holds
             // what each instance last reported (see `data::status`). Create +
-            // backfill only when the table is new: a racing process or a crash
-            // before the version bump re-runs this step, and re-running the backfill
-            // would copy a peer-derived workspace row onto a primary that never
-            // reported it.
-            //
-            // Checked once cheaply, then again under an IMMEDIATE transaction:
-            // two processes upgrading at once (the TUI and a hook) must not
-            // both see the table missing and both backfill.
+            // backfill only when the table is new: re-running the backfill
+            // would copy a peer-derived workspace row onto a primary that
+            // never reported it.
             if !has_agent_status_table(self.conn())? {
-                create_agent_status_locked(self.conn())?;
+                self.conn().execute_batch(SCHEMA_V26_AGENT_STATUS)?;
+                // Before this table existed every push landed on the one
+                // workspace row, and the primary is the agent it described.
+                self.conn().execute(
+                    "INSERT INTO agent_status \
+                         (agent_id, workspace_id, state, message, source, reported_at) \
+                     SELECT a.id, s.workspace_id, s.state, s.message, s.source, s.reported_at \
+                     FROM workspace_status s \
+                     JOIN workspace_agents a \
+                       ON a.workspace_id = s.workspace_id AND a.is_primary = 1",
+                    [],
+                )?;
             }
             self.conn().execute("PRAGMA user_version = 26", [])?;
         }
@@ -251,10 +270,9 @@ impl Store {
 
     /// Add `column` to `table` only if it is not already present.
     ///
-    /// A step can re-run (two processes upgrading at once, or a crash before
-    /// its version bump), so each `ALTER TABLE ... ADD COLUMN` must be idempotent — this guards it
-    /// behind a `pragma_table_info` existence check and cleanly survives
-    /// partial-migration retries. `column_def` is the full definition that
+    /// Guards an `ALTER TABLE ... ADD COLUMN` behind a `pragma_table_info`
+    /// existence check, so a step re-run against a schema that already has
+    /// the column (a version rewound by hand or by a test) is a no-op. `column_def` is the full definition that
     /// follows `ADD COLUMN` (e.g. `"yolo INTEGER NOT NULL DEFAULT 0"`).
     ///
     /// `table`/`column_def` are interpolated into the SQL because identifiers
@@ -280,28 +298,6 @@ fn has_agent_status_table(conn: &rusqlite::Connection) -> Result<bool> {
         [],
         |r| r.get::<_, i64>(0),
     )? > 0)
-}
-
-/// The v26 create + backfill, under the write lock and re-checked there: a
-/// process that saw the table missing may have lost the race to another.
-pub(crate) fn create_agent_status_locked(conn: &rusqlite::Connection) -> Result<()> {
-    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
-    if !has_agent_status_table(&tx)? {
-        tx.execute_batch(SCHEMA_V26_AGENT_STATUS)?;
-        // Before this table existed every push landed on the one workspace
-        // row, and the primary is the agent it described.
-        tx.execute(
-            "INSERT INTO agent_status \
-                 (agent_id, workspace_id, state, message, source, reported_at) \
-             SELECT a.id, s.workspace_id, s.state, s.message, s.source, s.reported_at \
-             FROM workspace_status s \
-             JOIN workspace_agents a \
-               ON a.workspace_id = s.workspace_id AND a.is_primary = 1",
-            [],
-        )?;
-    }
-    tx.commit()?;
-    Ok(())
 }
 
 const SCHEMA_V1: &str = r#"

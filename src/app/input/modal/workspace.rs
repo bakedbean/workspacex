@@ -74,12 +74,7 @@ pub(super) async fn new_workspace(
             } else {
                 Some(name_buffer.trim().to_string())
             };
-            let raw_tags: Vec<String> = tags_buffer
-                .split(|c: char| c == ',' || c.is_whitespace())
-                .filter(|t| !t.is_empty())
-                .map(str::to_string)
-                .collect();
-            let tags = match crate::data::tags::normalize_all(&raw_tags) {
+            let tags = match crate::data::tags::parse_list(&tags_buffer) {
                 Ok(tags) => tags,
                 Err(e) => {
                     let notice = match e {

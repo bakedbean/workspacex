@@ -322,6 +322,15 @@ pub async fn create_with_app(
     // `in_flight` entry. ---
     let id = {
         let mut g = app.lock().await;
+        // One IMMEDIATE transaction for the row, its primary agent and its
+        // tags: a failure part-way rolls all of it back, so there is no
+        // half-made Pending row (which `reconcile_create_result` would not
+        // report, since a row exists), and other readers never see the row
+        // untagged.
+        let tx = rusqlite::Transaction::new_unchecked(
+            g.store.conn(),
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
         let ws_id = g.store.insert_workspace(&NewWorkspace {
             repo_id: repo.id,
             name: &final_name,
@@ -337,6 +346,7 @@ pub async fn create_with_app(
         for tag in tags {
             g.store.add_workspace_tag(ws_id, tag)?;
         }
+        tx.commit()?;
         // Register in App's in_flight registry now that the workspace id
         // exists — this is what lets the dashboard show an in-flight badge
         // and what a later-opened SetupProgress viewer reads from.
@@ -1980,6 +1990,55 @@ mod tests {
             .unwrap();
         let tags: Vec<&str> = ws.tags.iter().map(|t| &**t).collect();
         assert_eq!(tags, ["spike", "ui"]);
+    }
+
+    #[tokio::test]
+    async fn create_with_app_rolls_back_the_row_when_a_tag_write_fails() {
+        use crate::app::App;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+        let store = Store::open_in_memory().unwrap();
+        store
+            .conn()
+            .execute_batch(
+                "CREATE TRIGGER boom BEFORE INSERT ON workspace_tags
+                 BEGIN SELECT RAISE(ABORT, 'boom'); END",
+            )
+            .unwrap();
+        let repo_dir = init_git_repo();
+        crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, base.path().to_path_buf()).unwrap(),
+        ));
+        let repo = {
+            let g = app.lock().await;
+            g.repos[0].clone()
+        };
+        let repo_id = repo.id;
+        let result = create_with_app(
+            app.clone(),
+            repo,
+            Some("alpha".to_string()),
+            &["ui".to_string()],
+            base.path().to_path_buf(),
+            false,
+            false,
+            crate::pty::session::AgentKind::Claude,
+            crate::data::progress::SetupProgress::shared(),
+            CancellationToken::new(),
+        )
+        .await;
+        assert!(result.is_err());
+        let g = app.lock().await;
+        assert!(
+            g.store.workspaces(repo_id).unwrap().is_empty(),
+            "a failed tag write must not leave a half-made row"
+        );
+        assert!(g.in_flight.is_empty());
     }
 
     /// The modal checks the name before it closes, but `create_with_app` is

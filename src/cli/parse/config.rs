@@ -34,6 +34,7 @@ pub(in crate::cli) fn known_setting_key(k: &str) -> bool {
             | "dashboard_pr_width"
             | "dashboard_sort_mode"
             | "dashboard_blocked_pin_max_age_secs"
+            | "top_bar_show_tags"
             | "coding_agent"
             | "detail_bar_config"
             | "usage_graph_window"

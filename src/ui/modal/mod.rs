@@ -54,6 +54,11 @@ pub enum Modal {
     NewWorkspace {
         repo_id: RepoId,
         name_buffer: String,
+        /// Tags to apply at creation, separated by spaces or commas;
+        /// validated on Enter.
+        tags_buffer: String,
+        /// Typing goes to `tags_buffer` instead of `name_buffer`; ↑/↓ flips it.
+        tags_focused: bool,
         yolo: bool,
         shared: bool,
         agent: crate::pty::session::AgentKind,
@@ -341,6 +346,8 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
     let (title, body, hints): (&str, Text<'static>, &[Hint]) = match modal {
         Modal::NewWorkspace {
             name_buffer,
+            tags_buffer,
+            tags_focused,
             yolo,
             shared,
             agent,
@@ -348,6 +355,11 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
             ..
         } => {
             let agent_label = agent.display_name();
+            let (name_cursor, tags_cursor) = if *tags_focused {
+                ("", "\u{2588}")
+            } else {
+                ("\u{2588}", "")
+            };
             let shared_line = if *shared { "on" } else { "off" };
             let notice_line = notice
                 .as_deref()
@@ -360,13 +372,14 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
                     "new workspace"
                 },
                 format!(
-                    "name:   {name_buffer}\u{2588}\nagent:  {agent_label}\nshared: {shared_line} (tmux)\n{notice_line}"
+                    "name:   {name_buffer}{name_cursor}\ntags:   {tags_buffer}{tags_cursor}\nagent:  {agent_label}\nshared: {shared_line} (tmux)\n{notice_line}"
                 )
                 .trim_end()
                 .to_string()
                 .into(),
                 &[
                     ("↵", "create"),
+                    ("↑↓", "name/tags"),
                     ("tab", "agent"),
                     ("^s", "shared"),
                     ("esc", "cancel"),
@@ -868,6 +881,26 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn new_workspace_shows_tags_row_and_moves_cursor_with_focus() {
+        let modal = |tags_focused| Modal::NewWorkspace {
+            repo_id: RepoId(1),
+            name_buffer: "beta".into(),
+            tags_buffer: "ui spike".into(),
+            tags_focused,
+            yolo: false,
+            shared: false,
+            agent: crate::pty::session::AgentKind::Claude,
+            notice: None,
+        };
+        let text = render_to_text(&modal(false));
+        assert!(text.contains("name:   beta\u{2588}"), "{text}");
+        assert!(text.contains("tags:   ui spike "), "{text}");
+        let text = render_to_text(&modal(true));
+        assert!(text.contains("name:   beta "), "{text}");
+        assert!(text.contains("tags:   ui spike\u{2588}"), "{text}");
     }
 
     #[test]

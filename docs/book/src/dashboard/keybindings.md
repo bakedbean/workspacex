@@ -75,6 +75,7 @@ Panels open in a drawer at the bottom of the screen.
 | `enter`    | Create (blank name generates one) | —                           |
 | `y` / `n`  | —                              | Confirm / cancel               |
 | `esc`      | Cancel                         | Cancel                         |
+| `↑` / `↓`  | Switch between name and tags   | —                              |
 | `Tab`      | Cycle the agent                | —                              |
 | `Ctrl-s`   | Toggle shared                  | —                              |
 

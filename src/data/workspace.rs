@@ -271,6 +271,9 @@ async fn run_setup_logged<F: FnMut(SetupLine) + Send>(
 /// cancellation returns `Err(Cancelled)` cleanly. Cancellation during
 /// setup marks the row `SetupStatus::Cancelled` and leaves the worktree
 /// on disk.
+///
+/// `tags` must already be normalized (`data::tags::normalize_all`); they are
+/// written alongside the row so it never appears untagged.
 // Workspace creation genuinely needs all these inputs; a params struct would
 // not improve clarity here.
 #[allow(clippy::too_many_arguments)]
@@ -278,6 +281,7 @@ pub async fn create_with_app(
     app: crate::app::SharedApp,
     repo: Repo,
     name: Option<String>,
+    tags: &[String],
     worktree_base: PathBuf,
     yolo: bool,
     shared: bool,
@@ -330,6 +334,9 @@ pub async fn create_with_app(
         // Seed the primary agent instance so the roster is authoritative from birth.
         g.store
             .add_primary_agent(ws_id, agent, crate::data::store::now_ms())?;
+        for tag in tags {
+            g.store.add_workspace_tag(ws_id, tag)?;
+        }
         // Register in App's in_flight registry now that the workspace id
         // exists — this is what lets the dashboard show an in-flight badge
         // and what a later-opened SetupProgress viewer reads from.
@@ -1912,6 +1919,7 @@ mod tests {
             app.clone(),
             repo,
             Some("alpha".to_string()),
+            &[],
             base.path().to_path_buf(),
             false,
             false,
@@ -1929,6 +1937,49 @@ mod tests {
             "create_with_app must remove its own in_flight entry on success"
         );
         drop(g);
+    }
+
+    #[tokio::test]
+    async fn create_with_app_tags_the_row_at_insert() {
+        use crate::app::App;
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        use tokio_util::sync::CancellationToken;
+        let store = Store::open_in_memory().unwrap();
+        let repo_dir = init_git_repo();
+        crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+        let base = TempDir::new().unwrap();
+        let app = Arc::new(Mutex::new(
+            App::new(store, base.path().to_path_buf()).unwrap(),
+        ));
+        let repo = {
+            let g = app.lock().await;
+            g.repos[0].clone()
+        };
+        let created = create_with_app(
+            app.clone(),
+            repo,
+            Some("alpha".to_string()),
+            &["ui".to_string(), "spike".to_string()],
+            base.path().to_path_buf(),
+            false,
+            false,
+            crate::pty::session::AgentKind::Claude,
+            crate::data::progress::SetupProgress::shared(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let g = app.lock().await;
+        let ws = g
+            .store
+            .workspace_by_id(created.workspace.id)
+            .unwrap()
+            .unwrap();
+        let tags: Vec<&str> = ws.tags.iter().map(|t| &**t).collect();
+        assert_eq!(tags, ["spike", "ui"]);
     }
 
     /// The modal checks the name before it closes, but `create_with_app` is
@@ -1958,6 +2009,7 @@ mod tests {
             app.clone(),
             repo,
             Some("a..b".to_string()),
+            &[],
             base.path().to_path_buf(),
             false,
             false,
@@ -2014,6 +2066,7 @@ mod tests {
             app.clone(),
             repo,
             Some("taken".to_string()),
+            &[],
             base.path().to_path_buf(),
             false,
             false,
@@ -2080,6 +2133,7 @@ mod tests {
                 app_clone,
                 repo,
                 Some("beta".to_string()),
+                &[],
                 base_path,
                 false,
                 false,
@@ -2180,6 +2234,7 @@ mod tests {
             app.clone(),
             repo,
             Some("doomed".to_string()),
+            &[],
             base.path().to_path_buf(),
             false,
             false,
@@ -2282,6 +2337,7 @@ mod tests {
             app.clone(),
             repo,
             Some("cancel-mid-setup".to_string()),
+            &[],
             base.path().to_path_buf(),
             false,
             false,

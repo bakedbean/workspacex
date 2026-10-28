@@ -30,6 +30,7 @@ pub(in crate::app::input) enum Panel {
     WorkspaceActions,
     HideRules,
     RepoSettings,
+    GlobalSettings,
     WorkspaceTags,
     NameColor,
     ProcessList,
@@ -58,6 +59,7 @@ const DASHBOARD: &[(Chord, Panel)] = &[
     (Chord::Key('?'), Panel::WorkspaceActions),
     (Chord::Key('F'), Panel::HideRules),
     (Chord::Key('s'), Panel::RepoSettings),
+    (Chord::Key(','), Panel::GlobalSettings),
     (Chord::Key('#'), Panel::WorkspaceTags),
     (Chord::Key('C'), Panel::NameColor),
     (Chord::Key('K'), Panel::ProcessList),
@@ -112,6 +114,7 @@ impl Panel {
             (Self::WorkspaceActions, Modal::WorkspaceActions)
                 | (Self::HideRules, Modal::HideRules { .. })
                 | (Self::RepoSettings, Modal::RepoSettings { .. })
+                | (Self::GlobalSettings, Modal::GlobalSettings { .. })
                 | (Self::WorkspaceTags, Modal::WorkspaceTags { .. })
                 | (Self::NameColor, Modal::NameColorPicker { .. })
                 | (Self::ProcessList, Modal::ProcessList { .. })
@@ -157,6 +160,9 @@ impl Panel {
                         selected: 0,
                     });
                 }
+            }
+            Self::GlobalSettings => {
+                app.modal = Some(Modal::GlobalSettings { selected: 0 });
             }
             Self::WorkspaceTags => {
                 if let Some(ws) = on.workspace(app) {

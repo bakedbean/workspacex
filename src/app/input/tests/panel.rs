@@ -49,6 +49,7 @@ async fn every_summon_key_replaces_a_hide_rules_card() {
         ),
         ('?', |m| matches!(m, Modal::WorkspaceActions)),
         ('s', |m| matches!(m, Modal::RepoSettings { .. })),
+        (',', |m| matches!(m, Modal::GlobalSettings { .. })),
         ('C', |m| matches!(m, Modal::NameColorPicker { .. })),
         ('K', |m| matches!(m, Modal::ProcessList { .. })),
     ] {

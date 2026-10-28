@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::app::{
-    App, AttachReady, PendingEdit, RepoSettingField, SharedApp, apply_repo_setting,
-    ensure_workspace_session, rescan_processes, restore_attached_state,
+    App, AttachReady, PendingEdit, RepoSettingField, SharedApp, apply_global_setting,
+    apply_repo_setting, ensure_workspace_session, rescan_processes, restore_attached_state,
 };
 use crate::error::Result;
 use crate::ui::View;
@@ -404,7 +404,7 @@ pub(super) async fn repo_settings(
         KeyCode::Enter => {
             let field =
                 RepoSettingField::ALL[selected.min(RepoSettingField::ALL.len().saturating_sub(1))];
-            app.pending_edit = Some(PendingEdit { repo_id, field });
+            app.pending_edit = Some(PendingEdit::Repo { repo_id, field });
             app.modal = None;
         }
         KeyCode::Char('d') => {
@@ -416,5 +416,56 @@ pub(super) async fn repo_settings(
         }
         _ => {}
     };
+    Ok(())
+}
+
+pub(super) fn global_settings(
+    app: &mut App,
+    k: crossterm::event::KeyEvent,
+    selected: usize,
+) -> Result<()> {
+    use crate::config::settings::SETTINGS;
+    let selected = selected.min(SETTINGS.len() - 1);
+    let def = &SETTINGS[selected];
+    match k.code {
+        KeyCode::Esc => app.modal = None,
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.modal = Some(Modal::GlobalSettings {
+                selected: selected.saturating_sub(1),
+            });
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.modal = Some(Modal::GlobalSettings {
+                selected: (selected + 1).min(SETTINGS.len() - 1),
+            });
+        }
+        KeyCode::Enter => {
+            let current = app.store.get_setting(def.key)?;
+            match def.next_value(current.as_deref()) {
+                Some(next) => {
+                    if let Err(e) = apply_global_setting(app, def.key, &next) {
+                        app.modal = Some(Modal::Error {
+                            message: e.to_string(),
+                        });
+                    }
+                }
+                None => {
+                    app.pending_edit = Some(PendingEdit::Global {
+                        key: def.key,
+                        selected,
+                    });
+                    app.modal = None;
+                }
+            }
+        }
+        KeyCode::Char('d') => {
+            if let Err(e) = apply_global_setting(app, def.key, "") {
+                app.modal = Some(Modal::Error {
+                    message: e.to_string(),
+                });
+            }
+        }
+        _ => {}
+    }
     Ok(())
 }

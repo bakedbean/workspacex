@@ -79,6 +79,9 @@ pub(super) fn draw_modal(f: &mut ratatui::Frame, app: &mut App, area: ratatui::l
                 );
             }
         }
+        crate::ui::modal::Modal::GlobalSettings { selected } => {
+            crate::ui::modal::render_global_settings(f, area, &app.store, *selected, &app.theme);
+        }
         crate::ui::modal::Modal::AgentsPanel {
             workspace_id,
             selected,

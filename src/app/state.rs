@@ -1485,6 +1485,8 @@ mod strip_instances_tests {
         let typing = crate::ui::modal::Modal::NewWorkspace {
             repo_id: repo,
             name_buffer: "half-typ".to_string(),
+            tags_buffer: String::new(),
+            tags_focused: false,
             yolo: false,
             shared: false,
             agent: AgentKind::Claude,

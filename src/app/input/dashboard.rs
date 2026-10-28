@@ -412,6 +412,8 @@ pub(in crate::app::input) async fn handle_key_dashboard(
                 app.modal = Some(Modal::NewWorkspace {
                     repo_id: id,
                     name_buffer: String::new(),
+                    tags_buffer: String::new(),
+                    tags_focused: false,
                     yolo: false,
                     shared: false,
                     agent: crate::pty::session::AgentKind::from_store(&app.store),
@@ -436,6 +438,8 @@ pub(in crate::app::input) async fn handle_key_dashboard(
                 app.modal = Some(Modal::NewWorkspace {
                     repo_id: id,
                     name_buffer: String::new(),
+                    tags_buffer: String::new(),
+                    tags_focused: false,
                     yolo,
                     shared: false,
                     agent: crate::pty::session::AgentKind::from_store(&app.store),
@@ -454,6 +458,8 @@ pub(in crate::app::input) async fn handle_key_dashboard(
                 app.modal = Some(Modal::NewWorkspace {
                     repo_id: id,
                     name_buffer: String::new(),
+                    tags_buffer: String::new(),
+                    tags_focused: false,
                     yolo: false,
                     shared: true,
                     agent: crate::pty::session::AgentKind::from_store(&app.store),

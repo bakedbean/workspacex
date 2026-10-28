@@ -29,6 +29,16 @@ pub fn normalize_all(raw: &[String]) -> crate::error::Result<Vec<String>> {
     Ok(out)
 }
 
+/// A typed tag list, split on spaces and commas, then `normalize_all`.
+pub fn parse_list(raw: &str) -> crate::error::Result<Vec<String>> {
+    let parts: Vec<String> = raw
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+        .collect();
+    normalize_all(&parts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,6 +84,16 @@ mod tests {
     fn normalize_all_rejects_whole_batch_on_one_bad_tag() {
         let err = normalize_all(&["ok".into(), "bad tag".into()]).unwrap_err();
         assert!(err.to_string().contains("bad tag"), "{err}");
+    }
+
+    #[test]
+    fn parse_list_splits_on_spaces_and_commas_and_dedupes() {
+        assert_eq!(
+            parse_list(" UI, spike,,ui  q4 ").unwrap(),
+            ["ui", "spike", "q4"]
+        );
+        assert!(parse_list("  , ").unwrap().is_empty());
+        assert!(parse_list("ui #bad").is_err());
     }
 
     #[test]

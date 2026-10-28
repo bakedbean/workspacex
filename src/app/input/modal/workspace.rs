@@ -21,13 +21,36 @@ pub(super) async fn new_workspace(
     k: crossterm::event::KeyEvent,
     repo_id: RepoId,
     mut name_buffer: String,
+    mut tags_buffer: String,
+    mut tags_focused: bool,
     yolo: bool,
-    ws_shared: bool,
+    mut ws_shared: bool,
     mut agent: crate::pty::session::AgentKind,
 ) -> Result<()> {
+    // Puts the modal back with the (possibly edited) fields. Every edit
+    // clears the notice; a refusal passes one.
+    let reopen = |app: &mut App,
+                  name_buffer: String,
+                  tags_buffer: String,
+                  tags_focused: bool,
+                  ws_shared: bool,
+                  agent: crate::pty::session::AgentKind,
+                  notice: Option<String>| {
+        app.modal = Some(Modal::NewWorkspace {
+            repo_id,
+            name_buffer,
+            tags_buffer,
+            tags_focused,
+            yolo,
+            shared: ws_shared,
+            agent,
+            notice,
+        });
+    };
     match k.code {
         KeyCode::Esc => {
             app.modal = None;
+            return Ok(());
         }
         KeyCode::Tab => {
             agent = match agent {
@@ -37,30 +60,38 @@ pub(super) async fn new_workspace(
                 crate::pty::session::AgentKind::Codex => crate::pty::session::AgentKind::Omp,
                 crate::pty::session::AgentKind::Omp => crate::pty::session::AgentKind::Claude,
             };
-            app.modal = Some(Modal::NewWorkspace {
-                repo_id,
-                name_buffer,
-                yolo,
-                shared: ws_shared,
-                agent,
-                notice: None,
-            });
         }
         KeyCode::Char('s') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.modal = Some(Modal::NewWorkspace {
-                repo_id,
-                name_buffer,
-                yolo,
-                shared: !ws_shared,
-                agent,
-                notice: None,
-            });
+            ws_shared = !ws_shared;
+        }
+        // Two fields, so either arrow just flips focus.
+        KeyCode::Up | KeyCode::Down => {
+            tags_focused = !tags_focused;
         }
         KeyCode::Enter => {
             let name = if name_buffer.trim().is_empty() {
                 None
             } else {
                 Some(name_buffer.trim().to_string())
+            };
+            let tags = match crate::data::tags::parse_list(&tags_buffer) {
+                Ok(tags) => tags,
+                Err(e) => {
+                    let notice = match e {
+                        crate::error::Error::UserInput(msg) => msg,
+                        other => other.to_string(),
+                    };
+                    reopen(
+                        app,
+                        name_buffer,
+                        tags_buffer,
+                        true,
+                        ws_shared,
+                        agent,
+                        Some(notice),
+                    );
+                    return Ok(());
+                }
             };
             // F5 part 1: validate the name up front. Without this, the
             // most common no-row failure — the UNIQUE(repo_id, name)
@@ -75,14 +106,16 @@ pub(super) async fn new_workspace(
                     .map(|rows| rows.iter().any(|w| &w.name == n))
                     .unwrap_or(false);
                 if taken {
-                    app.modal = Some(Modal::NewWorkspace {
-                        repo_id,
+                    let notice = format!("a workspace named '{n}' already exists");
+                    reopen(
+                        app,
                         name_buffer,
-                        yolo,
-                        shared: ws_shared,
+                        tags_buffer,
+                        false,
+                        ws_shared,
                         agent,
-                        notice: Some(format!("a workspace named '{n}' already exists")),
-                    });
+                        Some(notice),
+                    );
                     return Ok(());
                 }
                 // A name git can't use as a branch, or whose branch already
@@ -96,14 +129,15 @@ pub(super) async fn new_workspace(
                         crate::error::Error::UserInput(msg) => msg,
                         other => other.to_string(),
                     };
-                    app.modal = Some(Modal::NewWorkspace {
-                        repo_id,
+                    reopen(
+                        app,
                         name_buffer,
-                        yolo,
-                        shared: ws_shared,
+                        tags_buffer,
+                        false,
+                        ws_shared,
                         agent,
-                        notice: Some(notice),
-                    });
+                        Some(notice),
+                    );
                     return Ok(());
                 }
             }
@@ -126,6 +160,7 @@ pub(super) async fn new_workspace(
                     shared_clone.clone(),
                     repo,
                     Some(final_name),
+                    &tags,
                     base,
                     yolo,
                     ws_shared,
@@ -143,31 +178,33 @@ pub(super) async fn new_workspace(
                 )
                 .await;
             });
+            return Ok(());
         }
         KeyCode::Backspace => {
-            name_buffer.pop();
-            app.modal = Some(Modal::NewWorkspace {
-                repo_id,
-                name_buffer,
-                yolo,
-                shared: ws_shared,
-                agent,
-                notice: None,
-            });
+            if tags_focused {
+                tags_buffer.pop();
+            } else {
+                name_buffer.pop();
+            }
         }
         KeyCode::Char(c) => {
-            name_buffer.push(c);
-            app.modal = Some(Modal::NewWorkspace {
-                repo_id,
-                name_buffer,
-                yolo,
-                shared: ws_shared,
-                agent,
-                notice: None,
-            });
+            if tags_focused {
+                tags_buffer.push(c);
+            } else {
+                name_buffer.push(c);
+            }
         }
-        _ => {}
+        _ => return Ok(()),
     };
+    reopen(
+        app,
+        name_buffer,
+        tags_buffer,
+        tags_focused,
+        ws_shared,
+        agent,
+        None,
+    );
     Ok(())
 }
 

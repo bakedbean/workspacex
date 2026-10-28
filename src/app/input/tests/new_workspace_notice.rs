@@ -41,6 +41,8 @@ async fn enter_with_a_taken_name_shows_inline_notice_and_does_not_spawn() {
     app.modal = Some(crate::ui::modal::Modal::NewWorkspace {
         repo_id,
         name_buffer: "alpha".to_string(),
+        tags_buffer: String::new(),
+        tags_focused: false,
         yolo: false,
         shared: false,
         agent: crate::pty::session::AgentKind::Claude,
@@ -85,6 +87,8 @@ async fn enter_with_an_invalid_branch_name_shows_inline_notice_and_does_not_spaw
     app.modal = Some(crate::ui::modal::Modal::NewWorkspace {
         repo_id,
         name_buffer: "wsx integration".to_string(),
+        tags_buffer: String::new(),
+        tags_focused: false,
         yolo: false,
         shared: false,
         agent: crate::pty::session::AgentKind::Claude,
@@ -159,6 +163,8 @@ async fn enter_with_a_name_whose_branch_exists_shows_inline_notice_and_does_not_
     app.modal = Some(crate::ui::modal::Modal::NewWorkspace {
         repo_id,
         name_buffer: "taken".to_string(),
+        tags_buffer: String::new(),
+        tags_focused: false,
         yolo: false,
         shared: false,
         agent: crate::pty::session::AgentKind::Claude,
@@ -192,6 +198,8 @@ async fn typing_after_a_duplicate_notice_clears_it() {
     app.modal = Some(crate::ui::modal::Modal::NewWorkspace {
         repo_id,
         name_buffer: "alpha".to_string(),
+        tags_buffer: String::new(),
+        tags_focused: false,
         yolo: false,
         shared: false,
         agent: crate::pty::session::AgentKind::Claude,
@@ -216,4 +224,85 @@ async fn typing_after_a_duplicate_notice_clears_it() {
         }
         other => panic!("expected NewWorkspace modal, got {other:?}"),
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn arrows_move_typing_between_name_and_tags() {
+    let (mut app, repo_id) = app_with_existing_workspace();
+    app.modal = Some(crate::ui::modal::Modal::NewWorkspace {
+        repo_id,
+        name_buffer: "beta".to_string(),
+        tags_buffer: String::new(),
+        tags_focused: false,
+        yolo: false,
+        shared: false,
+        agent: crate::pty::session::AgentKind::Claude,
+        notice: None,
+    });
+    let shared = dummy_shared();
+    for code in [
+        KeyCode::Down,
+        KeyCode::Char('u'),
+        KeyCode::Char('i'),
+        KeyCode::Up,
+        KeyCode::Char('2'),
+    ] {
+        handle_key_modal(&mut app, &shared, KeyEvent::new(code, KeyModifiers::NONE))
+            .await
+            .unwrap();
+    }
+    match &app.modal {
+        Some(crate::ui::modal::Modal::NewWorkspace {
+            name_buffer,
+            tags_buffer,
+            tags_focused,
+            ..
+        }) => {
+            assert_eq!(name_buffer, "beta2");
+            assert_eq!(tags_buffer, "ui");
+            assert!(!tags_focused);
+        }
+        other => panic!("expected NewWorkspace modal, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn enter_with_an_invalid_tag_shows_inline_notice_and_does_not_spawn() {
+    let (mut app, repo_id) = app_with_existing_workspace();
+    app.modal = Some(crate::ui::modal::Modal::NewWorkspace {
+        repo_id,
+        name_buffer: "beta".to_string(),
+        tags_buffer: "ui, #oops".to_string(),
+        tags_focused: false,
+        yolo: false,
+        shared: false,
+        agent: crate::pty::session::AgentKind::Claude,
+        notice: None,
+    });
+    let shared = dummy_shared();
+    handle_key_modal(
+        &mut app,
+        &shared,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    )
+    .await
+    .unwrap();
+    match &app.modal {
+        Some(crate::ui::modal::Modal::NewWorkspace {
+            tags_buffer,
+            tags_focused,
+            notice,
+            ..
+        }) => {
+            assert_eq!(tags_buffer, "ui, #oops", "buffer must survive the refusal");
+            assert!(tags_focused, "focus moves to the field at fault");
+            assert!(
+                notice.as_deref().is_some_and(|n| n.contains("'#oops'")),
+                "{notice:?}"
+            );
+        }
+        other => panic!("expected NewWorkspace modal with a notice, got {other:?}"),
+    }
+    assert!(app.in_flight.is_empty(), "no create task may be spawned");
+    assert_eq!(app.store.workspaces(repo_id).unwrap().len(), 1);
 }

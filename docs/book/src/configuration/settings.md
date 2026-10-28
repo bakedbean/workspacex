@@ -18,6 +18,16 @@ Value sources:
 
 `config set` rejects unknown keys. On/off keys accept `on`/`true`/`1`/`yes` and `off`/`false`/`0`/`no`. See [`wsx config`](../cli-reference/other.md#wsx-config-set) for the full syntax.
 
+## Global settings drawer
+
+Press `,` on the dashboard to browse every key below without leaving wsx. The footer describes the selected key and lists its allowed values.
+
+- Unset keys are dimmed and show their default.
+- `↑`/`↓` selects a key. `Enter` flips an on/off key, steps a fixed-choice key (`theme`, `coding_agent`, bells, sort mode, usage window) to its next value, or opens any other key in `$EDITOR`.
+- `d` clears the key, restoring its default. `Esc` closes the drawer.
+
+Values are validated the same way as `wsx config set`. Dashboard sort and pin settings apply at once; keys marked "Restart wsx to apply" still need a restart.
+
 ## General
 
 | Key | Default | Effect |

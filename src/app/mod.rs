@@ -47,6 +47,7 @@ pub use crate::app::background::{
 pub use crate::app::bell::{BellPattern, alert_decision, fire_bell};
 pub use crate::app::render::draw_for_test;
 
+pub(crate) mod global_setting;
 pub(crate) mod reconcile;
 pub(crate) mod remote;
 pub(crate) mod repo_setting;
@@ -64,6 +65,7 @@ pub use run::run;
 pub use state::App;
 pub use types::{AppEvent, AttachReady, PendingEdit, SelectionTarget, StoppedKind};
 
+pub(crate) use global_setting::apply_global_setting;
 pub(crate) use reconcile::{reconcile_archive_result, reconcile_create_result};
 pub(crate) use remote::{
     attach_remote, attached_remote_record, detach_remote, queue_remote_tag,

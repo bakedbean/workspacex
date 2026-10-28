@@ -315,15 +315,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 store.delete_setting(&key)?;
                 println!("cleared {key}");
             } else {
-                let value = if key == "detail_bar_config" {
-                    detail_bar_config_validate_and_normalize(&value)?
-                } else if key == "usage_graph_window" {
-                    usage_window_validate_and_normalize(&value)?
-                } else if key.starts_with("notification_bell_") {
-                    bell_pattern_validate_and_normalize(&value)?
-                } else {
-                    value
-                };
+                let value = crate::config::settings::normalize(&key, &value)?;
                 store.set_setting(&key, &value)?;
                 println!("set {key} ({} chars)", value.len());
             }
@@ -358,15 +350,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             } else if new_value == current {
                 println!("{key} unchanged");
             } else {
-                let normalized = if key == "detail_bar_config" {
-                    detail_bar_config_validate_and_normalize(&new_value)?
-                } else if key == "usage_graph_window" {
-                    usage_window_validate_and_normalize(&new_value)?
-                } else if key.starts_with("notification_bell_") {
-                    bell_pattern_validate_and_normalize(&new_value)?
-                } else {
-                    new_value.clone()
-                };
+                let normalized = crate::config::settings::normalize(&key, &new_value)?;
                 store.set_setting(&key, &normalized)?;
                 println!("set {key} ({} chars)", normalized.len());
             }

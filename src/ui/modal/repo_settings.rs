@@ -203,7 +203,7 @@ fn preview_pinned_commands(value: &str, max_cols: usize) -> String {
 }
 
 /// First non-empty line, trimmed and truncated. Used by render_repo_settings.
-fn preview_value(s: &str, max: usize) -> String {
+pub(super) fn preview_value(s: &str, max: usize) -> String {
     let first_line = s.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
     let trimmed = first_line.trim();
     if trimmed.chars().count() <= max {

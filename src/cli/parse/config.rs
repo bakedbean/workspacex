@@ -5,40 +5,7 @@ use crate::cli::action::{CliAction, ValueSource};
 use crate::error::{Error, Result};
 
 pub(in crate::cli) fn known_setting_key(k: &str) -> bool {
-    matches!(
-        k,
-        "branch_prefix"
-            | "custom_instructions"
-            | "process_doctrine"
-            | "process_doctrine_extra"
-            | "nerd_fonts"
-            | "editor_cmd"
-            | "terminal_cmd"
-            | "diff_cmd"
-            | "lazygit_cmd"
-            | "notifications"
-            | "notification_bell_question"
-            | "notification_bell_complete"
-            | "notification_bell_permission"
-            | "notification_bell_stalled"
-            | "theme"
-            | "bar_theme"
-            | "mcp_mirror"
-            | "remote_control"
-            | "remote_control_sandbox"
-            | "pinned_commands"
-            | "prompt_tags"
-            | "remotes"
-            | "shared_hosts"
-            | "dashboard_branch_width"
-            | "dashboard_pr_width"
-            | "dashboard_sort_mode"
-            | "dashboard_blocked_pin_max_age_secs"
-            | "top_bar_show_tags"
-            | "coding_agent"
-            | "detail_bar_config"
-            | "usage_graph_window"
-    )
+    crate::config::settings::is_known(k)
 }
 
 pub(in crate::cli) fn parse_config(it: &mut Args) -> Result<CliAction> {

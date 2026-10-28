@@ -36,16 +36,7 @@ fn fingerprint(path: &Path) -> Option<(SystemTime, u64, u32)> {
 /// `true` / `1` / `yes` enable it. Read on the once-a-second check so
 /// `wsx config set bar_theme on` takes effect without a restart.
 pub fn bar_theme_enabled(store: &Store) -> bool {
-    matches!(
-        store
-            .get_setting("bar_theme")
-            .ok()
-            .flatten()
-            .as_deref()
-            .map(|v| v.trim().to_ascii_lowercase())
-            .as_deref(),
-        Some("on" | "true" | "1" | "yes")
-    )
+    crate::config::settings::toggle_on(store, "bar_theme")
 }
 
 impl App {

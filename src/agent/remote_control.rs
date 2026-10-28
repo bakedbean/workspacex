@@ -28,26 +28,12 @@ impl RemoteOpts {
 
 /// Defaults ON. Off-values: `false` / `off` / `0` / `no`.
 pub fn enabled(store: &crate::data::store::Store) -> bool {
-    !matches!(
-        store
-            .get_setting("remote_control")
-            .ok()
-            .flatten()
-            .as_deref(),
-        Some("false" | "off" | "0" | "no")
-    )
+    crate::config::settings::toggle_on(store, "remote_control")
 }
 
 /// Defaults OFF. On-values: `true` / `on` / `1` / `yes`.
 pub fn sandbox_enabled(store: &crate::data::store::Store) -> bool {
-    matches!(
-        store
-            .get_setting("remote_control_sandbox")
-            .ok()
-            .flatten()
-            .as_deref(),
-        Some("true" | "on" | "1" | "yes")
-    )
+    crate::config::settings::toggle_on(store, "remote_control_sandbox")
 }
 
 #[cfg(test)]

@@ -11,6 +11,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use std::collections::{HashMap, HashSet};
 
 mod agents_panel;
+mod global_settings;
 mod name_color_picker;
 mod process_list;
 mod prompt_tag;
@@ -24,6 +25,7 @@ pub mod workspace_tags;
 
 // Panel renderers called from app::render via `crate::ui::modal::*`.
 pub use agents_panel::render_agents_panel;
+pub use global_settings::render_global_settings;
 pub use name_color_picker::{Dir, move_selection, render_name_color_picker};
 pub use process_list::render_process_list;
 pub use prompt_tag::{EnterAction, PromptTagModal, TagStage, render_prompt_tag};
@@ -140,6 +142,10 @@ pub enum Modal {
     },
     RepoSettings {
         repo_id: crate::data::store::RepoId,
+        selected: usize,
+    },
+    /// Every global `wsx config` key; `selected` indexes `config::settings::SETTINGS`.
+    GlobalSettings {
         selected: usize,
     },
     /// Pick or name an XML tag and type the body to wrap in it; see
@@ -326,6 +332,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
         Modal::UpdatesPanel { .. }
             | Modal::ProcessList { .. }
             | Modal::RepoSettings { .. }
+            | Modal::GlobalSettings { .. }
             | Modal::AgentsPanel { .. }
             | Modal::UsageWindowPicker { .. }
             | Modal::NameColorPicker { .. }
@@ -462,6 +469,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
         Modal::UpdatesPanel { .. } => unreachable!("UpdatesPanel must not reach render()"),
         Modal::ProcessList { .. } => unreachable!("ProcessList must not reach render()"),
         Modal::RepoSettings { .. } => unreachable!("RepoSettings must not reach render()"),
+        Modal::GlobalSettings { .. } => unreachable!("GlobalSettings must not reach render()"),
         Modal::SetupLog { .. } => unreachable!("SetupLog must not reach render()"),
         Modal::AgentsPanel { .. } => unreachable!("AgentsPanel must not reach render()"),
         Modal::UsageWindowPicker { .. } => {

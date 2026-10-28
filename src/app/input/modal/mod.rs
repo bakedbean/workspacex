@@ -118,6 +118,7 @@ pub(in crate::app::input) async fn handle_key_modal(
         Modal::RepoSettings { repo_id, selected } => {
             panels::repo_settings(app, shared, k, repo_id, selected).await?
         }
+        Modal::GlobalSettings { selected } => panels::global_settings(app, k, selected)?,
         Modal::AgentMissing { ws_id, agent, .. } => {
             agents::agent_missing(app, shared, k, ws_id, agent).await?
         }

@@ -520,6 +520,7 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             }
         }
         (KeyCode::Char('s'), _) => Panel::RepoSettings.open(app, Surface::Dashboard)?,
+        (KeyCode::Char(','), _) => Panel::GlobalSettings.open(app, Surface::Dashboard)?,
         (KeyCode::Char('d'), _) => {
             if let Some(SelectionTarget::Workspace(id)) = app.selected_target()
                 // A workspace with any in-flight entry (create or archive)

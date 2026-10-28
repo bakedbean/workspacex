@@ -102,35 +102,37 @@ where
 {
     // Read current value + extension hint under the lock.
     let (current, ext) = {
-        let g = app.lock().await;
-        let Some(repo) = g.repos.iter().find(|r| r.id == edit.repo_id) else {
-            return Ok(());
-        };
-        match edit.field {
-            RepoSettingField::RepoName => (repo.name.clone(), "txt"),
-            RepoSettingField::BranchPrefix => (repo.branch_prefix.clone(), "txt"),
-            RepoSettingField::BaseBranch => (repo.base_branch.clone().unwrap_or_default(), "txt"),
-            RepoSettingField::CustomInstructions => {
-                (repo.custom_instructions.clone().unwrap_or_default(), "md")
+        let mut g = app.lock().await;
+        match &edit {
+            PendingEdit::Repo { repo_id, field } => {
+                let Some(repo) = g.repos.iter().find(|r| r.id == *repo_id) else {
+                    return Ok(());
+                };
+                repo_edit_seed(repo, *field)
             }
-            RepoSettingField::SetupScript => {
-                (repo.setup_script.clone().unwrap_or_default(), "bash")
-            }
-            RepoSettingField::ArchiveScript => {
-                (repo.archive_script.clone().unwrap_or_default(), "bash")
-            }
-            RepoSettingField::PinnedCommands => {
-                (repo.pinned_commands.clone().unwrap_or_default(), "txt")
-            }
-            RepoSettingField::RelatedRepos => {
-                (repo.related_repos.clone().unwrap_or_default(), "txt")
-            }
-            RepoSettingField::DetailBarConfig => {
-                let raw = repo
-                    .detail_bar_config
-                    .clone()
-                    .unwrap_or_else(|| "{}\n".to_string());
-                (raw, "json")
+            PendingEdit::Global { key, .. } => {
+                // Editing a seed of "" over an unreadable value would overwrite it.
+                let stored = match g.store.get_setting(key) {
+                    Ok(v) => v.unwrap_or_default(),
+                    Err(e) => {
+                        g.modal = Some(crate::ui::modal::Modal::Error {
+                            message: format!("{key}: {e}"),
+                        });
+                        return Ok(());
+                    }
+                };
+                let ext = match crate::config::settings::find(key).map(|d| d.kind) {
+                    Some(crate::config::settings::SettingKind::Text { ext }) => ext,
+                    _ => "txt",
+                };
+                if *key == "detail_bar_config" && stored.is_empty() {
+                    (
+                        crate::config::settings::detail_bar_config_seed_for_empty(),
+                        ext,
+                    )
+                } else {
+                    (stored, ext)
+                }
             }
         }
     };
@@ -152,10 +154,28 @@ where
     crossterm::terminal::enable_raw_mode()?;
     terminal.clear()?;
 
-    if let Ok(Some(new)) = result {
+    let mut g = app.lock().await;
+    if let PendingEdit::Global { selected, .. } = edit {
+        g.modal = Some(crate::ui::modal::Modal::GlobalSettings { selected });
+    }
+    let result = match result {
+        Ok(r) => r,
+        Err(e) => {
+            g.modal = Some(crate::ui::modal::Modal::Error {
+                message: format!("editor: {e}"),
+            });
+            None
+        }
+    };
+    if let Some(new) = result {
         if new.trim() != current.trim() {
-            let mut g = app.lock().await;
-            if let Err(e) = apply_repo_setting(&mut g, edit.repo_id, edit.field, &new) {
+            let applied = match edit {
+                PendingEdit::Repo { repo_id, field } => {
+                    apply_repo_setting(&mut g, repo_id, field, &new)
+                }
+                PendingEdit::Global { key, .. } => apply_global_setting(&mut g, key, &new),
+            };
+            if let Err(e) = applied {
                 g.modal = Some(crate::ui::modal::Modal::Error {
                     message: e.to_string(),
                 });
@@ -165,6 +185,36 @@ where
         }
     }
     Ok(())
+}
+
+/// The repo value to seed the editor with, and its file extension.
+fn repo_edit_seed(
+    repo: &crate::data::store::Repo,
+    field: RepoSettingField,
+) -> (String, &'static str) {
+    match field {
+        RepoSettingField::RepoName => (repo.name.clone(), "txt"),
+        RepoSettingField::BranchPrefix => (repo.branch_prefix.clone(), "txt"),
+        RepoSettingField::BaseBranch => (repo.base_branch.clone().unwrap_or_default(), "txt"),
+        RepoSettingField::CustomInstructions => {
+            (repo.custom_instructions.clone().unwrap_or_default(), "md")
+        }
+        RepoSettingField::SetupScript => (repo.setup_script.clone().unwrap_or_default(), "bash"),
+        RepoSettingField::ArchiveScript => {
+            (repo.archive_script.clone().unwrap_or_default(), "bash")
+        }
+        RepoSettingField::PinnedCommands => {
+            (repo.pinned_commands.clone().unwrap_or_default(), "txt")
+        }
+        RepoSettingField::RelatedRepos => (repo.related_repos.clone().unwrap_or_default(), "txt"),
+        RepoSettingField::DetailBarConfig => {
+            let raw = repo
+                .detail_bar_config
+                .clone()
+                .unwrap_or_else(|| "{}\n".to_string());
+            (raw, "json")
+        }
+    }
 }
 
 pub async fn run<B: Backend<Error = std::io::Error> + std::io::Write>(

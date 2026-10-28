@@ -7,6 +7,9 @@ use super::*;
 use crate::cli::action::TagOp;
 use crate::cli::parse::config::known_setting_key;
 use crate::cli::resolve::{self, *};
+use crate::config::settings::{
+    bell_pattern_validate_and_normalize, usage_window_validate_and_normalize,
+};
 use crate::error::{Error, Result};
 
 fn parse(args: &[&str]) -> Result<CliAction> {
@@ -2296,7 +2299,7 @@ fn parses_repo_set_base_branch_empty_value() {
 
 #[test]
 fn detail_bar_config_seed_returns_pretty_default_when_empty() {
-    let seed = resolve::detail_bar_config_seed_for_empty();
+    let seed = crate::config::settings::detail_bar_config_seed_for_empty();
     // Sanity: round-trips to default config.
     let parsed: crate::config::detail_bar_config::DetailBarConfig =
         serde_json::from_str(&seed).unwrap();
@@ -2310,14 +2313,15 @@ fn detail_bar_config_seed_returns_pretty_default_when_empty() {
 
 #[test]
 fn detail_bar_config_validate_rejects_malformed() {
-    let result = resolve::detail_bar_config_validate_and_normalize("{not json");
+    let result = crate::config::settings::detail_bar_config_validate_and_normalize("{not json");
     assert!(result.is_err());
 }
 
 #[test]
 fn detail_bar_config_validate_clamps_out_of_range() {
     let json = r#"{"height": {"percent": 200}}"#;
-    let normalized = resolve::detail_bar_config_validate_and_normalize(json).unwrap();
+    let normalized =
+        crate::config::settings::detail_bar_config_validate_and_normalize(json).unwrap();
     let parsed: crate::config::detail_bar_config::DetailBarConfig =
         serde_json::from_str(&normalized).unwrap();
     assert_eq!(parsed.height.percent, 80);
@@ -2326,7 +2330,8 @@ fn detail_bar_config_validate_clamps_out_of_range() {
 #[test]
 fn detail_bar_config_validate_accepts_partial() {
     let json = r#"{"visible": false}"#;
-    let normalized = resolve::detail_bar_config_validate_and_normalize(json).unwrap();
+    let normalized =
+        crate::config::settings::detail_bar_config_validate_and_normalize(json).unwrap();
     let parsed: crate::config::detail_bar_config::DetailBarConfig =
         serde_json::from_str(&normalized).unwrap();
     assert!(!parsed.visible);
@@ -2405,7 +2410,7 @@ fn detail_bar_config_validate_truncates_too_many_containers() {
         ]
     })
     .to_string();
-    let normalized = resolve::detail_bar_config_validate_and_normalize(&raw)
+    let normalized = crate::config::settings::detail_bar_config_validate_and_normalize(&raw)
         .expect("valid JSON should normalize");
     // Truncation happens inside sanitize(); the normalized blob
     // should round-trip to exactly 4 containers.

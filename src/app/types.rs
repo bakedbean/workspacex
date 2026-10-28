@@ -46,10 +46,15 @@ pub enum AttachReady {
     WorktreeMissing,
 }
 
+/// A setting to open in `$EDITOR` before the next frame.
 #[derive(Debug, Clone)]
-pub struct PendingEdit {
-    pub repo_id: crate::data::store::RepoId,
-    pub field: RepoSettingField,
+pub enum PendingEdit {
+    Repo {
+        repo_id: crate::data::store::RepoId,
+        field: RepoSettingField,
+    },
+    /// A global key; `selected` reopens the settings drawer on its row.
+    Global { key: &'static str, selected: usize },
 }
 
 /// Why the agent paused at end-of-turn. Distinguishes "asked the user

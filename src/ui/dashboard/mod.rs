@@ -129,17 +129,18 @@ impl DashboardState {
         // <key> @file` stores the file verbatim, and a trailing newline would
         // otherwise send a perfectly good value down the fallback path while
         // the CLI reported it saved.
-        if let Ok(Some(v)) = store.get_setting(SORT_MODE_SETTING) {
-            self.sort_mode = SortMode::from_str_or_default(v.trim());
-        }
-        if let Ok(Some(v)) = store.get_setting(BLOCKED_PIN_SETTING) {
-            if let Ok(secs) = v.trim().parse::<u64>() {
-                self.blocked_pin_max_age_secs = secs;
-            }
-        }
-        if let Ok(Some(v)) = store.get_setting(TOP_BAR_SHOW_TAGS_SETTING) {
-            self.top_bar_show_tags = parse_show_tags(&v);
-        }
+        // Unset resets to the default: the settings drawer re-runs this after
+        // clearing a key.
+        let get = |key| store.get_setting(key).ok().flatten();
+        self.sort_mode = get(SORT_MODE_SETTING)
+            .map(|v| SortMode::from_str_or_default(v.trim()))
+            .unwrap_or_default();
+        self.blocked_pin_max_age_secs = get(BLOCKED_PIN_SETTING)
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(BLOCKED_PIN_MAX_AGE_DEFAULT_SECS);
+        self.top_bar_show_tags = get(TOP_BAR_SHOW_TAGS_SETTING)
+            .map(|v| parse_show_tags(&v))
+            .unwrap_or_default();
     }
 
     /// Flip between repo and attention grouping. Shared by the dashboard's

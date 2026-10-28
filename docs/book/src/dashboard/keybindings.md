@@ -45,6 +45,7 @@ Every key in the wsx TUI, grouped by where you press it. Capital letters mean `S
 | ------------------ | ------------------------------------------------------- |
 | `K` / `J` on a repo | Move the repo up / down (saved)                        |
 | `s`                | Repo settings                                           |
+| `,`                | [Global settings](../configuration/settings.md#global-settings-drawer) |
 | `F`                | [Hide rules](tags-and-hiding.md#hiding-workspaces) for the repo |
 | `H`                | [Remote hosts](../integrations/shared-workspaces.md)    |
 | `p`                | Toggle the [digest](project-manager-digest.md)          |
@@ -111,6 +112,7 @@ Shows the [setup script](../configuration/setup-scripts.md)'s output: live while
 | Hide rules (`F`)       | `j`/`k` move; `space` toggle; `esc` close                           |
 | Name color (`C`)       | arrows move; type to filter; `enter` apply; `Delete` clear; `esc` close |
 | Repo settings (`s`)    | `j`/`k` move; `enter` edit; `d` clear the repo's value; `esc` close       |
+| Global settings (`,`)  | `j`/`k` move; `enter` toggle, cycle, or edit; `d` reset to default; `esc` close |
 | Processes (`K`)        | arrows move; `r` run a command; `k` SIGTERM; `K` SIGKILL; `esc` close |
 | Remote hosts (`H`)     | `j`/`k` move; `enter` open; `esc` close                             |
 | Remote workspace list  | `enter` attach or share; `n`/`N` new; `r` refresh; `esc` close      |

@@ -94,17 +94,24 @@ fn resolved_binary(agent: AgentKind) -> String {
 /// the `Error::AgentBinaryMissing` the dashboard would hit, from the same
 /// `WSX_<AGENT>_BIN` resolution the spawn uses.
 pub fn missing_agent_binary(agent: AgentKind) -> Option<String> {
+    locate_agent_binary(agent)
+        .is_none()
+        .then(|| resolved_binary(agent))
+}
+
+/// The file a spawn of `agent` would execute: the explicit path, or the
+/// first `PATH` entry holding the bare name. Symlinks are not resolved.
+pub fn locate_agent_binary(agent: AgentKind) -> Option<std::path::PathBuf> {
     let bin = resolved_binary(agent);
     let path = Path::new(&bin);
-    let found = if path.components().count() > 1 {
-        path.is_file()
-    } else {
-        std::env::var_os("PATH").is_some_and(|dirs| {
-            std::env::split_paths(&dirs)
-                .any(|d| !d.as_os_str().is_empty() && d.join(&bin).is_file())
-        })
-    };
-    (!found).then_some(bin)
+    if path.components().count() > 1 {
+        return path.is_file().then(|| path.to_path_buf());
+    }
+    let dirs = std::env::var_os("PATH")?;
+    std::env::split_paths(&dirs)
+        .filter(|d| !d.as_os_str().is_empty())
+        .map(|d| d.join(&bin))
+        .find(|p| p.is_file())
 }
 
 #[derive(Default)]

@@ -70,6 +70,9 @@ pub struct DashboardState {
     /// How long a blocked workspace keeps its top-of-list pin, from the
     /// `dashboard_blocked_pin_max_age_secs` setting.
     pub blocked_pin_max_age_secs: u64,
+    /// Tags that keep a workspace in the attached view's top bar despite the
+    /// repo's tag hide rules, from the `top_bar_show_tags` setting.
+    pub top_bar_show_tags: Vec<std::sync::Arc<str>>,
     /// Explicit user fold overrides; absent = use `default_fold(counts)`.
     pub folded: HashMap<u64, bool>,
     /// Hidden groups the user expanded this session. Not persisted.
@@ -100,10 +103,26 @@ pub struct DashboardState {
 pub const SORT_MODE_SETTING: &str = "dashboard_sort_mode";
 /// Settings key holding how long a blocked row keeps its pin, in seconds.
 pub const BLOCKED_PIN_SETTING: &str = "dashboard_blocked_pin_max_age_secs";
+/// Settings key holding the tags exempt from tag hide rules in the top bar.
+pub const TOP_BAR_SHOW_TAGS_SETTING: &str = "top_bar_show_tags";
+
+/// Comma- or space-separated tag names, normalized; invalid names are skipped.
+pub fn parse_show_tags(raw: &str) -> Vec<std::sync::Arc<str>> {
+    let mut tags: Vec<std::sync::Arc<str>> = Vec::new();
+    for t in raw
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter_map(crate::data::tags::normalize_tag)
+    {
+        if !tags.iter().any(|x| **x == *t) {
+            tags.push(t.into());
+        }
+    }
+    tags
+}
 
 impl DashboardState {
-    /// Load the persisted ordering preferences. Both fall back to their
-    /// defaults when unset or unparseable — a hand-edited settings row should
+    /// Load the persisted ordering and top-bar preferences. Each falls back to its
+    /// default when unset or unparseable — a hand-edited settings row should
     /// not stop the dashboard from drawing.
     pub fn load_ordering_prefs(&mut self, store: &crate::data::store::Store) {
         // Trimmed before parsing, like `dashboard_branch_width`: `config set
@@ -117,6 +136,9 @@ impl DashboardState {
             if let Ok(secs) = v.trim().parse::<u64>() {
                 self.blocked_pin_max_age_secs = secs;
             }
+        }
+        if let Ok(Some(v)) = store.get_setting(TOP_BAR_SHOW_TAGS_SETTING) {
+            self.top_bar_show_tags = parse_show_tags(&v);
         }
     }
 
@@ -146,6 +168,7 @@ impl Default for DashboardState {
             group_mode: GroupMode::default(),
             sort_mode: SortMode::default(),
             blocked_pin_max_age_secs: BLOCKED_PIN_MAX_AGE_DEFAULT_SECS,
+            top_bar_show_tags: Vec::new(),
             folded: HashMap::new(),
             expanded_hidden: Default::default(),
             filter: None,

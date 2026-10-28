@@ -1,7 +1,8 @@
 //! Content selection for the attached-view top-bar workspace row.
 //!
 //! Pure module: takes pre-computed slices of App state and returns the
-//! row's entries — every workspace but the attached one, those needing
+//! row's entries — every workspace but the attached one and those the
+//! dashboard's hide rules keep out, those needing
 //! attention first, the rest in dashboard order — as [`AttentionItems`].
 //! Laying them out is the bar engine's job: the `attention` provider in
 //! `ui::bar::providers` renders each entry through the theme's
@@ -58,6 +59,9 @@ pub struct WorkspaceUpdateInfo<'a> {
     /// `ReportedState` handling, so the two can disagree. Drives the
     /// sort so ordering matches the dashboard rows.
     pub status: Status,
+    /// Kept out of the row by the repo's hide rules. Caller computes via
+    /// `App::hidden_from_top_bar`.
+    pub hidden: bool,
 }
 
 /// One workspace that the user should pay attention to. Carries
@@ -120,8 +124,8 @@ impl SortRow for WorkspaceUpdateInfo<'_> {
     }
 }
 
-/// Collect every workspace except the currently-attached one, as the
-/// attached view's top-bar row. Workspaces whose `needs_attention` flag is
+/// Collect every workspace except the currently-attached and hidden ones,
+/// as the attached view's top-bar row. Workspaces whose `needs_attention` flag is
 /// set are promoted ahead of the rest; inside each group the dashboard's
 /// own comparator decides under the dashboard's current sort mode, so the
 /// row reads the same way the by-repo list does. Callers pass
@@ -136,7 +140,7 @@ pub fn collect_workspace_row(
     let (mut flagged, mut rest): (Vec<&WorkspaceUpdateInfo>, Vec<&WorkspaceUpdateInfo>) =
         candidates
             .iter()
-            .filter(|c| Some(c.id) != attached_workspace)
+            .filter(|c| Some(c.id) != attached_workspace && !c.hidden)
             .partition(|c| c.needs_attention);
     order_workspaces(&mut flagged, sort_mode, pin_max_age_secs);
     order_workspaces(&mut rest, sort_mode, pin_max_age_secs);
@@ -278,6 +282,7 @@ mod tests {
                         awaiting_tool: awaiting.clone(),
                         ago_secs: *ago_secs,
                         status: *status,
+                        hidden: false,
                     }
                 },
             )
@@ -464,6 +469,7 @@ mod tests {
             awaiting_tool: None,
             ago_secs: Some(ago),
             status,
+            hidden: false,
         };
         let candidates = vec![
             mk(1, "suppressed", Status::Waiting, 1),
@@ -507,6 +513,19 @@ mod tests {
             PIN,
         );
         assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn collect_workspace_row_excludes_hidden_even_when_flagged() {
+        let rows = [
+            ws(1, "hidden", None, ActivityState::Awaiting, true, None),
+            ws(2, "shown", None, ActivityState::Idle, false, None),
+        ];
+        let mut candidates = to_candidates(&rows);
+        candidates[0].hidden = true;
+        let entries = collect_workspace_row(&candidates, None, 10_000, SortMode::Recency, PIN);
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["shown"]);
     }
 
     #[test]

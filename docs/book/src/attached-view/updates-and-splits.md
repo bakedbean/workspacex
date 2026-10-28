@@ -8,6 +8,7 @@ The top bar lists every other workspace after the focused one's label, as `<glyp
 
 - The glyph and color match the workspace's dashboard row.
 - Workspaces that need attention come first. The rest follow the dashboard's order.
+- Workspaces the dashboard [hides](../dashboard/tags-and-hiding.md#hiding-workspaces) are left out, even ones that need attention. To keep a hidden tag in the strip, list it in the `top_bar_show_tags` [setting](../configuration/settings.md). A workspace with a listed tag ignores every tag rule, but PR rules still hide it.
 - Click an entry to switch to that workspace.
 - When the strip runs out of room it ends in `… +N more`. Click it to open the updates panel.
 

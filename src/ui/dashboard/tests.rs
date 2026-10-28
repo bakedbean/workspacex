@@ -1747,3 +1747,10 @@ mod hide_rules {
         assert_lockstep(GroupMode::Attention);
     }
 }
+
+#[test]
+fn parse_show_tags_normalizes_dedupes_and_skips_invalid() {
+    let tags = parse_show_tags(" Support, ops support\n#bad,,");
+    let names: Vec<&str> = tags.iter().map(|t| &**t).collect();
+    assert_eq!(names, ["support", "ops"]);
+}

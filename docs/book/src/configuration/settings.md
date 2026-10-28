@@ -63,6 +63,7 @@ Bell values are `off`, `single`, `double` or `triple`. `off` silences the bell b
 |---|---|---|
 | `dashboard_sort_mode` | `recency` | Workspace order within a repo: `recency` or `status`. `o` toggles it. |
 | `dashboard_blocked_pin_max_age_secs` | `86400` | How long a workspace blocked on you stays pinned to the top in `recency` mode. |
+| `top_bar_show_tags` | unset | Tags, separated by commas or spaces, that keep a workspace in the attached view's top bar when a tag hide rule hides it from the dashboard. A workspace with any listed tag ignores every tag rule; PR hide rules still apply. Names are lowercased, and invalid ones are ignored. Restart wsx to apply. |
 | `dashboard_branch_width` | `28` | Width of the branch column, clamped to 10–80. |
 | `dashboard_pr_width` | `16` | Width of the PR column, clamped to 8–24. |
 | `detail_bar_config` | built-in | JSON for the detail pane. See [Detail bar](../dashboard/detail-bar.md) for the schema. |

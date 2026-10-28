@@ -191,6 +191,14 @@ impl HideRules {
     pub fn classify(&self, s: &HideSubject) -> Option<HideRule> {
         self.iter().find(|r| r.matches(s)).cloned()
     }
+
+    /// Whether any rule hides `s`, where carrying any `shown` tag exempts it
+    /// from every tag rule. PR rules still apply, so finished work drops out.
+    pub fn hides_unless_shown(&self, s: &HideSubject, shown: &[Arc<str>]) -> bool {
+        let exempt = s.tags.iter().any(|t| shown.contains(t));
+        self.iter()
+            .any(|r| !(exempt && matches!(r, HideRule::Tag(_))) && r.matches(s))
+    }
 }
 
 #[cfg(test)]
@@ -383,5 +391,26 @@ mod tests {
             rules.classify(&subject(Some(BranchLifecycle::PrOpen))),
             None
         );
+    }
+
+    #[test]
+    fn shown_tag_exempts_from_tag_rules_but_not_pr_rules() {
+        let rules = HideRules::parse(Some("tag:support,tag:epics,pr:merged"));
+        let shown: Vec<Arc<str>> = vec![Arc::from("support")];
+        let tagged = |lc, tags: &[&str]| HideSubject {
+            lifecycle: lc,
+            tags: tags.iter().map(|t| Arc::from(*t)).collect(),
+            ..Default::default()
+        };
+        let open = Some(BranchLifecycle::PrOpen);
+        assert!(!rules.hides_unless_shown(&tagged(open, &["support"]), &shown));
+        assert!(!rules.hides_unless_shown(&tagged(open, &["epics", "support"]), &shown));
+        assert!(rules.hides_unless_shown(&tagged(open, &["epics"]), &shown));
+        assert!(rules.hides_unless_shown(
+            &tagged(Some(BranchLifecycle::PrMerged), &["support"]),
+            &shown
+        ));
+        assert!(!rules.hides_unless_shown(&tagged(open, &[]), &shown));
+        assert!(rules.hides_unless_shown(&tagged(open, &["support"]), &[]));
     }
 }

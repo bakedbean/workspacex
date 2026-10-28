@@ -124,6 +124,25 @@ impl App {
             .map(|rule| (rid, rule))
     }
 
+    /// Whether the attached view's top bar leaves `ws` out: the repo's hide
+    /// rules, minus tag rules for a workspace carrying a `top_bar_show_tags` tag.
+    pub(crate) fn hidden_from_top_bar(&self, ws: crate::data::store::WorkspaceId) -> bool {
+        let Some(rid) = self
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == ws)
+            .map(|(r, _)| *r)
+        else {
+            return false;
+        };
+        self.repos.iter().find(|r| r.id == rid).is_some_and(|repo| {
+            !repo.hide_rules.is_empty()
+                && repo
+                    .hide_rules
+                    .hides_unless_shown(&self.hide_subject(ws), &self.dashboard.top_bar_show_tags)
+        })
+    }
+
     /// Select a workspace by repo name + workspace slug, unfolding its repo.
     /// Returns false if the pair doesn't exist or is otherwise unselectable. A
     /// hidden workspace's group is expanded and the selection resolves on the

@@ -338,6 +338,32 @@ async fn tagged_workspace_hides_under_tag_rule() {
     assert!(app.selectable.contains(&SelectionTarget::Workspace(ids[1])));
 }
 
+#[test]
+fn top_bar_follows_hide_rules_except_shown_tags() {
+    let mut app = test_app_with_two_ready_workspaces();
+    app.refresh().unwrap();
+    let repo = app.repos[0].id;
+    let ids: Vec<_> = app.workspaces.iter().map(|(_, w)| w.id).collect();
+    app.store.add_workspace_tag(ids[0], "support").unwrap();
+    app.store
+        .set_repo_hide_rules(repo, &HideRules::parse(Some("tag:support,pr:merged")))
+        .unwrap();
+    app.refresh().unwrap();
+    assert!(app.hidden_from_top_bar(ids[0]));
+    assert!(!app.hidden_from_top_bar(ids[1]));
+
+    app.store
+        .set_setting(crate::ui::dashboard::TOP_BAR_SHOW_TAGS_SETTING, "Support")
+        .unwrap();
+    app.dashboard.load_ordering_prefs(&app.store);
+    assert!(
+        !app.hidden_from_top_bar(ids[0]),
+        "shown tag wins over tag rule"
+    );
+    app.pr_lifecycle.insert(ids[0], BranchLifecycle::PrMerged);
+    assert!(app.hidden_from_top_bar(ids[0]), "PR rules still apply");
+}
+
 fn picker_rows(app: &App) -> Vec<(HideRule, usize)> {
     let Some(crate::ui::modal::Modal::HideRules { rows, .. }) = &app.modal else {
         panic!("expected HideRules modal, got {:?}", app.modal);

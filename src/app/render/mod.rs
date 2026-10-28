@@ -83,6 +83,7 @@ pub(super) fn compute_attention_items(
                 awaiting_tool: app.awaiting_permission(w.id),
                 ago_secs: dashboard::workspace_age_secs(app, w.id, now_ms),
                 status: app.classify_status(w),
+                hidden: app.hidden_from_top_bar(w.id),
             }
         })
         .collect();

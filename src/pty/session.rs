@@ -99,8 +99,9 @@ pub fn missing_agent_binary(agent: AgentKind) -> Option<String> {
         .then(|| resolved_binary(agent))
 }
 
-/// The file a spawn of `agent` would execute: the explicit path, or the
-/// first `PATH` entry holding the bare name. Symlinks are not resolved.
+/// Best guess at the file a spawn of `agent` runs: the explicit path, or
+/// the first `PATH` entry holding the bare name (executable bit unchecked).
+/// Symlinks are not resolved.
 pub fn locate_agent_binary(agent: AgentKind) -> Option<std::path::PathBuf> {
     let bin = resolved_binary(agent);
     let path = Path::new(&bin);

@@ -93,7 +93,7 @@ impl App {
             theme_active: false,
             theme_fingerprint: None,
             theme_notice: None,
-            prewarmed_claude: None,
+            prewarmed_claude: Default::default(),
             pm_visible: false,
             focus: crate::ui::PaneFocus::Dashboard,
             recaps: Default::default(),
@@ -796,8 +796,8 @@ pub struct App {
     pub theme_fingerprint: Option<(std::time::SystemTime, u64, u32)>,
     /// `(message, expires_at_ms)` for the footer after a failed reload.
     pub theme_notice: Option<(String, u64)>,
-    /// The resolved claude binary last run by `maybe_prewarm_claude`.
-    pub prewarmed_claude: Option<std::path::PathBuf>,
+    /// Warm-up state for `maybe_prewarm_claude`, shared with its worker.
+    pub prewarmed_claude: std::sync::Arc<crate::app::binary_prewarm::ClaudePrewarm>,
     pub pm_visible: bool,
     pub focus: crate::ui::PaneFocus,
     /// Recaps for every workspace, loaded from the store each `refresh()`.

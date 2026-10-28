@@ -102,7 +102,7 @@ where
 {
     // Read current value + extension hint under the lock.
     let (current, ext) = {
-        let g = app.lock().await;
+        let mut g = app.lock().await;
         match &edit {
             PendingEdit::Repo { repo_id, field } => {
                 let Some(repo) = g.repos.iter().find(|r| r.id == *repo_id) else {
@@ -111,7 +111,16 @@ where
                 repo_edit_seed(repo, *field)
             }
             PendingEdit::Global { key, .. } => {
-                let stored = g.store.get_setting(key).ok().flatten().unwrap_or_default();
+                // Editing a seed of "" over an unreadable value would overwrite it.
+                let stored = match g.store.get_setting(key) {
+                    Ok(v) => v.unwrap_or_default(),
+                    Err(e) => {
+                        g.modal = Some(crate::ui::modal::Modal::Error {
+                            message: format!("{key}: {e}"),
+                        });
+                        return Ok(());
+                    }
+                };
                 let ext = match crate::config::settings::find(key).map(|d| d.kind) {
                     Some(crate::config::settings::SettingKind::Text { ext }) => ext,
                     _ => "txt",
@@ -149,7 +158,16 @@ where
     if let PendingEdit::Global { selected, .. } = edit {
         g.modal = Some(crate::ui::modal::Modal::GlobalSettings { selected });
     }
-    if let Ok(Some(new)) = result {
+    let result = match result {
+        Ok(r) => r,
+        Err(e) => {
+            g.modal = Some(crate::ui::modal::Modal::Error {
+                message: format!("editor: {e}"),
+            });
+            None
+        }
+    };
+    if let Some(new) = result {
         if new.trim() != current.trim() {
             let applied = match edit {
                 PendingEdit::Repo { repo_id, field } => {

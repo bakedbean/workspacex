@@ -4,6 +4,7 @@
 use super::repo_settings::preview_value;
 use super::*;
 use crate::config::settings::{SETTINGS, SettingKind};
+use unicode_width::UnicodeWidthStr;
 
 pub fn render_global_settings(
     f: &mut Frame,
@@ -13,26 +14,42 @@ pub fn render_global_settings(
     theme: &Theme,
 ) {
     let selected = selected.min(SETTINGS.len() - 1);
+    let def = &SETTINGS[selected];
+    let description = match def.kind {
+        SettingKind::Choice(values) => format!("{} ({})", def.description, values.join(", ")),
+        _ => def.description.to_string(),
+    };
     let groups = SETTINGS
         .iter()
         .enumerate()
         .filter(|(i, d)| *i == 0 || SETTINGS[i - 1].group != d.group)
         .count();
+    // Wrapped, up to four lines, so a narrow drawer still shows the choices.
+    let desc_lines = |width: u16| {
+        let width = usize::from(width).saturating_sub(4).max(1);
+        description.width().div_ceil(width).clamp(1, 4)
+    };
     // One line per key and per group heading, plus description and hints.
     let inner = panel_frame(
         f,
         area,
-        SETTINGS.len() + groups + 2,
+        SETTINGS.len() + groups + desc_lines(area.width) + 1,
         " Global settings ",
         theme,
     );
+    let footer_h = desc_lines(inner.width) as u16 + 1;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(2)])
+        .constraints([Constraint::Min(1), Constraint::Length(footer_h)])
         .split(inner);
     let (body_area, footer_area) = (chunks[0], chunks[1]);
 
-    let label_pad = SETTINGS.iter().map(|d| d.key.len()).max().unwrap_or(0) + 1;
+    // Keep at least MIN_VALUE columns for the value; long keys truncate instead.
+    const MIN_VALUE: usize = 16;
+    let longest = SETTINGS.iter().map(|d| d.key.len()).max().unwrap_or(0) + 1;
+    let label_pad = longest
+        .min((body_area.width as usize).saturating_sub(3 + MIN_VALUE))
+        .max(1);
     let value_width = (body_area.width as usize).saturating_sub(3 + label_pad);
     let mut lines: Vec<Line> = Vec::new();
     let mut selected_line = 0;
@@ -51,9 +68,12 @@ pub fn render_global_settings(
         let preview = match (&stored, def.default) {
             (Some(v), _) => preview_value(v, value_width),
             (None, "") => "(unset)".to_string(),
-            (None, default) => format!("(default: {default})"),
+            (None, default) => preview_value(&format!("(default: {default})"), value_width),
         };
-        let body = format!("  {:<label_pad$} {preview}", def.key);
+        let body = format!(
+            "  {:<label_pad$} {preview}",
+            truncate_key(def.key, label_pad - 1)
+        );
         let style = if i == selected {
             selected_line = lines.len();
             theme.selected_style()
@@ -71,31 +91,42 @@ pub fn render_global_settings(
         body_area,
     );
 
-    let def = &SETTINGS[selected];
     let enter = match def.kind {
         SettingKind::Toggle { .. } => "toggle",
         SettingKind::Choice(_) => "next",
         SettingKind::Text { .. } => "edit",
     };
-    let description = match def.kind {
-        SettingKind::Choice(values) => format!("  {} ({})", def.description, values.join(", ")),
-        _ => format!("  {}", def.description),
-    };
+    let footer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(footer_area);
     f.render_widget(
-        Paragraph::new(vec![
-            Line::from(Span::styled(description, theme.dim_style())),
-            crate::ui::drawer::hint_line(
-                &[
-                    ("↑↓", "move"),
-                    ("↵", enter),
-                    ("d", "reset"),
-                    ("esc", "close"),
-                ],
-                theme,
-            ),
-        ]),
-        footer_area,
+        Paragraph::new(Span::styled(description, theme.dim_style()))
+            .wrap(ratatui::widgets::Wrap { trim: true })
+            .block(Block::default().padding(ratatui::widgets::Padding::horizontal(2))),
+        footer[0],
     );
+    f.render_widget(
+        Paragraph::new(vec![crate::ui::drawer::hint_line(
+            &[
+                ("↑↓", "move"),
+                ("↵", enter),
+                ("d", "reset"),
+                ("esc", "close"),
+            ],
+            theme,
+        )]),
+        footer[1],
+    );
+}
+
+/// `key` cut to `max` columns with an ellipsis; keys are ASCII.
+fn truncate_key(key: &str, max: usize) -> std::borrow::Cow<'_, str> {
+    if key.len() <= max {
+        key.into()
+    } else {
+        format!("{}…", &key[..max.saturating_sub(1)]).into()
+    }
 }
 
 #[cfg(test)]
@@ -146,6 +177,21 @@ mod tests {
         assert!(text.contains("Base palette"), "{text}");
         assert!(text.contains("wsx, default, dracula, jellybeans, nord"));
         assert!(text.contains("next"));
+    }
+
+    #[test]
+    fn a_narrow_drawer_keeps_values_and_wraps_the_description() {
+        let store = Store::open_in_memory().unwrap();
+        store.set_setting("theme", "nord").unwrap();
+        let i = SETTINGS.iter().position(|d| d.key == "theme").unwrap();
+        let lines = screen(&store, i, 40, 60);
+        assert!(row(&lines, "theme").contains("nord"), "{lines:#?}");
+        assert!(
+            lines.iter().any(|l| l.contains("dashboard_blocked…")),
+            "{lines:#?}"
+        );
+        let text: String = lines.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" ");
+        assert!(text.contains("jellybeans, nord)"), "{text}");
     }
 
     #[test]

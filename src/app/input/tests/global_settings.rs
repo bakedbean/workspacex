@@ -111,6 +111,22 @@ async fn enter_on_a_text_key_queues_an_editor_session() {
     ));
 }
 
+#[tokio::test]
+async fn d_resets_pin_age_and_top_bar_tags_live() {
+    let mut app = app_on("dashboard_blocked_pin_max_age_secs");
+    crate::app::apply_global_setting(&mut app, "dashboard_blocked_pin_max_age_secs", "60").unwrap();
+    crate::app::apply_global_setting(&mut app, "top_bar_show_tags", "keep").unwrap();
+    assert_eq!(app.dashboard.blocked_pin_max_age_secs, 60);
+    assert_eq!(app.dashboard.top_bar_show_tags.len(), 1);
+    drawer_key(&mut app, KeyCode::Char('d')).await;
+    crate::app::apply_global_setting(&mut app, "top_bar_show_tags", "").unwrap();
+    assert_eq!(
+        app.dashboard.blocked_pin_max_age_secs,
+        crate::ui::dashboard::sort::BLOCKED_PIN_MAX_AGE_DEFAULT_SECS
+    );
+    assert!(app.dashboard.top_bar_show_tags.is_empty());
+}
+
 #[test]
 fn an_edited_value_is_validated_like_config_set() {
     let mut app = app_on("usage_graph_window");

@@ -30,10 +30,7 @@ fn read_claude_json(path: &Path) -> Result<Option<Value>> {
 /// Whether the mirror feature is enabled. Defaults to ON; the user can
 /// opt out with `wsx settings set mcp_mirror false`.
 pub fn enabled(store: &crate::data::store::Store) -> bool {
-    !matches!(
-        store.get_setting("mcp_mirror").ok().flatten().as_deref(),
-        Some("false" | "off" | "0" | "no")
-    )
+    crate::config::settings::toggle_on(store, "mcp_mirror")
 }
 
 /// Mirror `projects[repo_path].mcpServers` → `projects[worktree_path].mcpServers`

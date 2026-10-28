@@ -37,17 +37,11 @@ pub fn draw_for_test(f: &mut ratatui::Frame, app: &mut App) {
 }
 
 pub(super) fn nerd_fonts_enabled(store: &Store) -> bool {
-    match store.get_setting("nerd_fonts").ok().flatten().as_deref() {
-        Some("false") | Some("0") | Some("off") | Some("no") => false,
-        _ => true, // default ON
-    }
+    crate::config::settings::toggle_on(store, "nerd_fonts")
 }
 
 pub(super) fn notifications_enabled(store: &Store) -> bool {
-    match store.get_setting("notifications").ok().flatten().as_deref() {
-        Some("off") | Some("false") | Some("0") | Some("no") => false,
-        _ => true, // default ON
-    }
+    crate::config::settings::toggle_on(store, "notifications")
 }
 
 pub(super) fn compute_attention_items(

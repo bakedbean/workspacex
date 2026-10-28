@@ -204,7 +204,7 @@ pub const SETTINGS: &[SettingDef] = &[
         "Dashboard",
         "",
         "txt",
-        "Tags that keep a workspace in the attached top bar despite tag hide rules. Restart to apply.",
+        "Tags that keep a workspace in the attached top bar despite tag hide rules; `config set` needs a restart.",
     ),
     text(
         "dashboard_branch_width",
@@ -312,6 +312,17 @@ pub fn toggle_is_on(value: Option<&str>, default_on: bool) -> bool {
     }
 }
 
+/// Whether an on/off key is on, read from the store with the catalog default.
+/// Every runtime reader goes through this so the drawer's toggle and the
+/// effective value never disagree.
+pub fn toggle_on(store: &crate::data::store::Store, key: &str) -> bool {
+    let default_on = match find(key).map(|d| d.kind) {
+        Some(SettingKind::Toggle { default_on }) => default_on,
+        _ => false,
+    };
+    toggle_is_on(store.get_setting(key).ok().flatten().as_deref(), default_on)
+}
+
 impl SettingDef {
     /// The value Enter stores for a toggle or choice, given the stored one;
     /// `None` for text keys, which go to `$EDITOR`.
@@ -398,6 +409,69 @@ pub fn usage_window_validate_and_normalize(raw: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The CLI accepted exactly these keys before the catalog existed; a
+    /// removal here would make `wsx config set` reject a working key.
+    #[test]
+    fn catalog_matches_the_documented_key_set() {
+        let mut keys: Vec<_> = SETTINGS.iter().map(|d| d.key).collect();
+        keys.sort_unstable();
+        let mut expected = vec![
+            "branch_prefix",
+            "custom_instructions",
+            "process_doctrine",
+            "process_doctrine_extra",
+            "nerd_fonts",
+            "editor_cmd",
+            "terminal_cmd",
+            "diff_cmd",
+            "lazygit_cmd",
+            "notifications",
+            "notification_bell_question",
+            "notification_bell_complete",
+            "notification_bell_permission",
+            "notification_bell_stalled",
+            "theme",
+            "bar_theme",
+            "mcp_mirror",
+            "remote_control",
+            "remote_control_sandbox",
+            "pinned_commands",
+            "prompt_tags",
+            "remotes",
+            "shared_hosts",
+            "dashboard_branch_width",
+            "dashboard_pr_width",
+            "dashboard_sort_mode",
+            "dashboard_blocked_pin_max_age_secs",
+            "top_bar_show_tags",
+            "coding_agent",
+            "detail_bar_config",
+            "usage_graph_window",
+        ];
+        expected.sort_unstable();
+        assert_eq!(keys, expected);
+    }
+
+    #[test]
+    fn runtime_toggle_reads_agree_with_the_drawer() {
+        let store = crate::data::store::Store::open_in_memory().unwrap();
+        for d in SETTINGS {
+            let SettingKind::Toggle { default_on } = d.kind else {
+                continue;
+            };
+            assert_eq!(toggle_on(&store, d.key), default_on, "{} default", d.key);
+            for (raw, on) in [(" OFF\n", false), ("Yes", true), ("garbage", default_on)] {
+                store.set_setting(d.key, raw).unwrap();
+                assert_eq!(toggle_on(&store, d.key), on, "{}={raw:?}", d.key);
+                // Enter in the drawer must flip what the runtime sees.
+                let next = d.next_value(Some(raw)).unwrap();
+                store.set_setting(d.key, &next).unwrap();
+                assert_eq!(toggle_on(&store, d.key), !on, "{}={raw:?} toggled", d.key);
+            }
+            store.delete_setting(d.key).unwrap();
+        }
+    }
 
     #[test]
     fn keys_are_unique() {

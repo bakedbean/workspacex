@@ -31,6 +31,7 @@ use tokio::sync::Mutex;
 pub mod activity;
 pub mod background;
 pub mod bell;
+pub mod binary_prewarm;
 pub mod input;
 #[cfg(unix)]
 pub mod ipc;

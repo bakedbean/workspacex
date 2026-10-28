@@ -259,6 +259,8 @@ pub async fn run<B: Backend<Error = std::io::Error> + std::io::Write>(
                 // Pick up edits to ~/.config/wsx/theme.toml (fingerprint
                 // check once a second; reparse only on change).
                 g.maybe_reload_theme(now_ms);
+                // Warm a freshly updated claude binary before it is attached.
+                g.maybe_prewarm_claude();
                 // Apply a settled terminal resize to backgrounded sessions so
                 // re-attaching doesn't show a vt100 frame clipped to the old
                 // size. Visible panes are sized by the render path above.

@@ -68,7 +68,7 @@ The `F` picker lists every tag in use above the PR states. A tag rule hides ever
 
 - A `/` search covers every workspace, hidden or not.
 - Status bar, Waybar, and menu bar counts include hidden workspaces.
-- The updates panel (`Ctrl-x u`) leaves them out.
+- The updates panel (`Ctrl-x u`) shows the same group rows as the dashboard. Expanding a group in either place expands it in both.
 - The attached view's top bar leaves them out, except workspaces carrying a tag listed in the `top_bar_show_tags` [setting](../configuration/settings.md). Those stay in the bar unless a PR rule hides them.
 - The by-attention view (`G`) lists them in a HIDDEN section.
 

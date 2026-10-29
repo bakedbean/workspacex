@@ -1172,6 +1172,46 @@ async fn attached_ctrl_x_then_a_opens_agents_panel() {
     }
 }
 
+/// Ctrl-X then 'R' opens the focused workspace's recap; Esc dismisses it
+/// and leaves the pane attached.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn attached_ctrl_x_then_shift_r_opens_recap_and_esc_closes_it() {
+    use crate::ui::modal::Modal;
+    use crossterm::event::{KeyCode, KeyEvent};
+    let store = Store::open_in_memory().unwrap();
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    let ws_id = spawn_attached_workspace(&mut app);
+    let target = test_target(&app, ws_id);
+    app.modal = None;
+
+    handle_key_attached(
+        &mut app,
+        target,
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+    )
+    .await
+    .unwrap();
+    handle_key_attached(
+        &mut app,
+        target,
+        KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(app.modal, Some(Modal::Recap { workspace_id }) if workspace_id == ws_id),
+        "expected Recap modal; got {:?}",
+        app.modal
+    );
+
+    let shared = shared_app();
+    handle_key_modal(&mut app, &shared, KeyEvent::from(KeyCode::Esc))
+        .await
+        .unwrap();
+    assert!(app.modal.is_none(), "Esc must dismiss the recap");
+    assert!(matches!(app.view, crate::ui::View::Attached(_)));
+}
+
 #[tokio::test]
 async fn z_alone_arms_leader_without_action() {
     let (mut app, _) = make_app_with_n_repos(2);

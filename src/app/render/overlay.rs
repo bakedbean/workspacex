@@ -92,6 +92,22 @@ pub(super) fn draw_modal(f: &mut ratatui::Frame, app: &mut App, area: ratatui::l
                 .unwrap_or_default();
             crate::ui::modal::render_agents_panel(f, area, &agents, *selected, &app.theme);
         }
+        crate::ui::modal::Modal::Recap { workspace_id } => {
+            let name = app
+                .workspaces
+                .iter()
+                .find(|(_, w)| w.id == *workspace_id)
+                .map(|(_, w)| w.name.as_str())
+                .unwrap_or_default();
+            crate::ui::modal::render_recap_panel(
+                f,
+                area,
+                name,
+                app.recaps.get(workspace_id),
+                crate::util::time::now_ms(),
+                &app.theme,
+            );
+        }
         crate::ui::modal::Modal::UsageWindowPicker { .. } => {
             // Rendered separately below, anchored to the footer graph.
         }

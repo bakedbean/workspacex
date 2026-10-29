@@ -38,6 +38,7 @@ pub(in crate::app::input) enum Panel {
     Agents,
     Updates,
     PromptTag,
+    Recap,
 }
 
 /// Where a panel is summoned from. The panel's target follows from it: the
@@ -73,6 +74,7 @@ const ATTACHED: &[(Chord, Panel)] = &[
     (Chord::Leader('k'), Panel::ProcessList),
     (Chord::Leader('<'), Panel::PromptTag),
     (Chord::Leader('#'), Panel::WorkspaceTags),
+    (Chord::Leader('R'), Panel::Recap),
 ];
 
 impl Surface {
@@ -122,6 +124,7 @@ impl Panel {
                 | (Self::Agents, Modal::AgentsPanel { .. })
                 | (Self::Updates, Modal::UpdatesPanel { .. })
                 | (Self::PromptTag, Modal::PromptTag(_))
+                | (Self::Recap, Modal::Recap { .. })
         )
     }
 
@@ -228,6 +231,11 @@ impl Panel {
             }
             Self::PromptTag => {
                 app.modal = Some(Modal::PromptTag(crate::ui::modal::PromptTagModal::pick()));
+            }
+            Self::Recap => {
+                if let Some(workspace_id) = on.workspace(app) {
+                    app.modal = Some(Modal::Recap { workspace_id });
+                }
             }
         }
         Ok(())

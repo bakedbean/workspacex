@@ -111,6 +111,10 @@ const NAME_COL_MAX: usize = 28;
 /// Chars consumed left of the name column: 2-space indent + glyph + space.
 const ROW_PREFIX_W: usize = 4;
 
+/// Extra indent on an expanded hidden group's rows, setting them under the
+/// group row's label rather than flush with the repo's visible rows.
+const NEST_W: usize = 2;
+
 /// Gap between adjacent columns (name→chip→diff→status, status→age).
 const COL_GAP_W: usize = 2;
 
@@ -122,14 +126,14 @@ const DIFF_W: usize = crate::ui::dashboard::row::DIFF_WIDTH;
 /// little of a live one.
 const STATUS_MIN_W: usize = 12;
 
-/// Width of the shared workspace-name column: as wide as the longest name,
+/// Width of the shared workspace-name column: as wide as the widest name cell,
 /// capped at [`NAME_COL_MAX`] and clamped so prefix + name + gap always
 /// leave at least one char of status text in the narrowest panel. Shared
 /// across every section so status texts start at one fixed column for
 /// the whole panel.
-fn name_col_width<'a>(names: impl Iterator<Item = &'a str>, row_width: usize) -> usize {
+fn name_col_width(widths: impl Iterator<Item = usize>, row_width: usize) -> usize {
     let cap = NAME_COL_MAX.min(row_width.saturating_sub(ROW_PREFIX_W + COL_GAP_W + 1));
-    names.map(display_width).max().unwrap_or(0).min(cap)
+    widths.max().unwrap_or(0).min(cap)
 }
 
 /// Case-insensitive substring match against the workspace name, the owning
@@ -430,7 +434,27 @@ pub fn render_updates_panel(
     // Rows are laid out at the drawer's width, so measure it before
     // building them.
     let row_width = usize::from(crate::ui::drawer::body_width(area));
-    let name_col = name_col_width(labels.values().map(String::as_str), row_width);
+    // Group rows follow a section's visible rows, so every workspace after
+    // one is an expanded group's member.
+    let mut nested: HashSet<WorkspaceId> = HashSet::new();
+    for s in &sections {
+        let mut in_group = false;
+        for r in &s.rows {
+            match r {
+                PanelRow::HiddenGroup { .. } => in_group = true,
+                PanelRow::Workspace(id) if in_group => {
+                    nested.insert(*id);
+                }
+                PanelRow::Workspace(_) => {}
+            }
+        }
+    }
+    let name_col = name_col_width(
+        labels
+            .iter()
+            .map(|(id, label)| display_width(label) + if nested.contains(id) { NEST_W } else { 0 }),
+        row_width,
+    );
 
     let mut lines: Vec<Line> = Vec::new();
     let mut selected_visual_line: Option<usize> = None;
@@ -473,6 +497,7 @@ pub fn render_updates_panel(
             let item = inputs.item(*id);
             let row = RowData {
                 label,
+                nested: nested.contains(id),
                 failed: w.state == crate::data::store::WorkspaceState::Failed,
                 events: inputs.events.get(id),
                 activity: inputs.activity.get(id).copied(),
@@ -669,6 +694,8 @@ struct RowData<'a> {
     /// The name cell: the workspace name, or `<repo>/<name>` when the
     /// section headers don't carry the repo.
     label: &'a str,
+    /// An expanded hidden group's member, indented [`NEST_W`] under it.
+    nested: bool,
     /// The workspace's own lifecycle failed (no worktree).
     failed: bool,
     events: Option<&'a crate::activity::events::WorkspaceEvents>,
@@ -790,10 +817,13 @@ fn workspace_row<'a>(
     let status_txt = truncate(&status_text, status_budget);
     let pad_w = status_budget.saturating_sub(display_width(&status_txt)) + age_reserved - age_w;
 
+    // A nested row's indent comes out of its name cell, so its status text
+    // still starts at the shared column.
+    let nest = if row.nested { NEST_W.min(name_col) } else { 0 };
     let mut spans = vec![
-        Span::raw("  "),
+        Span::raw(" ".repeat(2 + nest)),
         Span::styled(format!("{glyph} "), glyph_style),
-        Span::styled(truncate_pad(row.label, name_col), name_style),
+        Span::styled(truncate_pad(row.label, name_col - nest), name_style),
         Span::raw(" ".repeat(COL_GAP_W)),
     ];
     if show_pr {
@@ -906,6 +936,7 @@ mod workspace_row_tests {
     ) -> Line<'a> {
         let row = RowData {
             label: &w.name,
+            nested: false,
             failed: w.state == WorkspaceState::Failed,
             events,
             activity,
@@ -1235,6 +1266,7 @@ mod workspace_row_tests {
             for tick in [0u32, 1] {
                 let row = RowData {
                     label: &w.name,
+                    nested: false,
                     failed: false,
                     events: None,
                     activity: Some(activity),
@@ -1306,6 +1338,7 @@ mod workspace_row_tests {
         for (status, activity, agent, glyph) in cases {
             let row = RowData {
                 label: &w.name,
+                nested: false,
                 failed: false,
                 events: None,
                 activity,
@@ -1344,6 +1377,7 @@ mod workspace_row_tests {
         let w = fixture_workspace("alpha");
         let row = RowData {
             label: &w.name,
+            nested: false,
             failed: true,
             events: None,
             activity: Some(ActivityState::Active),
@@ -1479,6 +1513,7 @@ mod workspace_row_tests {
     fn pr_row<'a>(w: &'a Workspace, lifecycle: Option<BranchLifecycle>) -> RowData<'a> {
         RowData {
             label: &w.name,
+            nested: false,
             failed: false,
             events: None,
             activity: None,
@@ -1762,7 +1797,10 @@ mod workspace_row_tests {
     fn name_col_width_fits_a_wide_name_whole() {
         // 7 chars but 13 cells: a column sized in chars would cut it short.
         let w = fixture_workspace("倉庫名-ワーク");
-        let name_col = name_col_width([w.name.as_str(), "alpha"].into_iter(), 98);
+        let name_col = name_col_width(
+            [w.name.as_str(), "alpha"].into_iter().map(display_width),
+            98,
+        );
         assert_eq!(name_col, 13);
         let line = row_line(
             &w,
@@ -1784,18 +1822,21 @@ mod workspace_row_tests {
 
     #[test]
     fn name_col_width_tracks_longest_name_capped() {
-        assert_eq!(name_col_width(["ab", "abcd"].into_iter(), 78), 4);
+        assert_eq!(
+            name_col_width(["ab", "abcd"].into_iter().map(display_width), 78),
+            4
+        );
         assert_eq!(name_col_width(std::iter::empty(), 78), 0);
         let long = "x".repeat(NAME_COL_MAX + 10);
         assert_eq!(
-            name_col_width([long.as_str()].into_iter(), 78),
+            name_col_width([long.as_str()].into_iter().map(display_width), 78),
             NAME_COL_MAX,
             "column caps at NAME_COL_MAX"
         );
         // Narrow panel: the column also clamps so prefix + name + gap leave
         // at least one status char. Inner width 18 (narrowest panel) → 11.
         assert_eq!(
-            name_col_width([long.as_str()].into_iter(), 18),
+            name_col_width([long.as_str()].into_iter().map(display_width), 18),
             18 - ROW_PREFIX_W - COL_GAP_W - 1,
             "column clamps to the row width in narrow panels"
         );
@@ -1809,7 +1850,7 @@ mod workspace_row_tests {
         let theme = Theme::ansi();
         let w = fixture_workspace("a-very-long-workspace-name");
         let row_width = 18;
-        let name_col = name_col_width([w.name.as_str()].into_iter(), row_width);
+        let name_col = name_col_width([w.name.as_str()].into_iter().map(display_width), row_width);
         let awaiting = ("Bash".to_string(), 5_000i64);
         let line = row_line(
             &w,
@@ -2488,7 +2529,12 @@ mod render_tests {
         )]);
         let expanded = draw(&open);
         assert!(expanded.contains("▾ ⎇ merged  ·  1 hidden"), "{expanded}");
-        assert!(expanded.contains("one"), "{expanded}");
+        // Members sit under the group's label, not flush with the fold glyph.
+        let col = |needle: &str| {
+            let line = expanded.lines().find(|l| l.contains(needle)).unwrap();
+            line.chars().position(|c| needle.starts_with(c)).unwrap()
+        };
+        assert_eq!(col("○ one"), col("⎇ merged"), "{expanded}");
     }
 
     /// Attention grouping draws the dashboard's section headers in place

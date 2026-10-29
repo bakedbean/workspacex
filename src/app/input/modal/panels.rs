@@ -7,7 +7,7 @@ use crate::app::{
 };
 use crate::error::Result;
 use crate::ui::View;
-use crate::ui::modal::Modal;
+use crate::ui::modal::{Modal, PanelRow};
 use crate::ui::split::SplitDirection;
 use crossterm::event::{KeyCode, KeyModifiers};
 // Test-only imports: the moved test modules access `draw_for_test`,
@@ -50,10 +50,9 @@ pub(super) async fn updates_panel(
             _ => None,
         };
         if let Some(new_filter) = edited {
-            let selected_id = order.get(selected_now).copied();
             let new_order = panel_order(app, new_filter.as_deref());
             app.modal = Some(Modal::UpdatesPanel {
-                selected: reselect(selected_id, &new_order, selected_now),
+                selected: reselect(order.get(selected_now), &new_order, selected_now),
                 filter: new_filter,
             });
             return Ok(());
@@ -99,14 +98,13 @@ pub(super) async fn updates_panel(
         // persistence. The cursor follows the selected workspace to its new
         // row rather than staying on the same index.
         KeyCode::Char('o') | KeyCode::Char('G') => {
-            let selected_id = order.get(selected_now).copied();
             if k.code == KeyCode::Char('o') {
                 app.dashboard.cycle_sort_mode(&app.store);
             } else {
                 app.dashboard.toggle_group_mode();
             }
             let new_order = panel_order(app, filter.as_deref());
-            let new_sel = reselect(selected_id, &new_order, selected_now);
+            let new_sel = reselect(order.get(selected_now), &new_order, selected_now);
             app.modal = Some(Modal::UpdatesPanel {
                 selected: new_sel,
                 filter: filter.clone(),
@@ -120,9 +118,28 @@ pub(super) async fn updates_panel(
                 filter: Some(String::new()),
             });
         }
+        // A hidden group row folds like the dashboard's: `l` opens it,
+        // `Enter` toggles it, and `h` closes it from the group or one of its
+        // rows, landing on the group. The state is the dashboard's own.
+        KeyCode::Enter | KeyCode::Char('l')
+            if matches!(order.get(selected_now), Some(PanelRow::HiddenGroup { .. })) =>
+        {
+            if let Some(group) = group_under_cursor(app, order.get(selected_now)) {
+                let open =
+                    k.code == KeyCode::Char('l') || !app.dashboard.expanded_hidden.contains(&group);
+                set_group_expanded(app, group, open, selected_now, filter);
+            }
+        }
+        KeyCode::Char('h') => {
+            if let Some(group) = group_under_cursor(app, order.get(selected_now))
+                .filter(|g| app.dashboard.expanded_hidden.contains(g))
+            {
+                set_group_expanded(app, group, false, selected_now, filter);
+            }
+        }
         // 'l' mirrors the dashboard's vim-style attach binding.
         KeyCode::Enter | KeyCode::Char('l') => {
-            if let Some(ws_id) = order.get(selected_now).copied() {
+            if let Some(&PanelRow::Workspace(ws_id)) = order.get(selected_now) {
                 // Mirror the dashboard-attach flow: clear the
                 // alert, spawn (or resume) the PTY, switch view.
                 app.workspace_needs_attention.remove(&ws_id);
@@ -170,7 +187,7 @@ pub(super) async fn updates_panel(
             } else {
                 SplitDirection::Horizontal
             };
-            if let Some(ws_id) = order.get(selected_now).copied() {
+            if let Some(&PanelRow::Workspace(ws_id)) = order.get(selected_now) {
                 app.workspace_needs_attention.remove(&ws_id);
                 match ensure_workspace_session(app, ws_id)? {
                     AttachReady::Ok => {
@@ -241,6 +258,49 @@ pub(super) async fn updates_panel(
     }
 
     Ok(())
+}
+
+/// The hidden group the panel cursor is in: the group row itself, or one of
+/// an expanded group's rows.
+fn group_under_cursor(
+    app: &App,
+    row: Option<&PanelRow>,
+) -> Option<(
+    crate::data::store::RepoId,
+    crate::data::hide_rules::HideRule,
+)> {
+    match row? {
+        PanelRow::HiddenGroup { repo, rule } => Some((*repo, rule.clone())),
+        PanelRow::Workspace(id) => app.hidden_group_of(*id),
+    }
+}
+
+/// Open or close a hidden group, keeping the panel cursor on its row.
+fn set_group_expanded(
+    app: &mut App,
+    group: (
+        crate::data::store::RepoId,
+        crate::data::hide_rules::HideRule,
+    ),
+    open: bool,
+    selected: usize,
+    filter: Option<String>,
+) {
+    if open {
+        app.dashboard.expanded_hidden.insert(group.clone());
+    } else {
+        app.dashboard.expanded_hidden.remove(&group);
+    }
+    let (repo, rule) = group;
+    let new_order = panel_order(app, filter.as_deref());
+    app.modal = Some(Modal::UpdatesPanel {
+        selected: reselect(
+            Some(&PanelRow::HiddenGroup { repo, rule }),
+            &new_order,
+            selected,
+        ),
+        filter,
+    });
 }
 
 pub(super) async fn process_list(

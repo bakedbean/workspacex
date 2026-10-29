@@ -35,9 +35,10 @@ pub use remote_workspace_list::render_remote_workspace_list;
 pub use repo_settings::render_repo_settings;
 pub use setup_log::{SetupLogView, StoredLog, render_setup_log};
 pub use textarea::TextArea;
+#[cfg(test)]
+pub use updates_panel::ordered_workspaces_for_panel;
 pub use updates_panel::{
-    PANEL_MAX_WIDTH, PanelInputs, PanelView, ordered_workspaces_for_panel, panel_sections,
-    render_updates_panel,
+    PANEL_MAX_WIDTH, PanelInputs, PanelRow, PanelView, panel_rows, render_updates_panel,
 };
 pub use usage_picker::render_usage_window_picker;
 

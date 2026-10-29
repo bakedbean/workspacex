@@ -628,29 +628,29 @@ pub(in crate::app::input) async fn handle_key_dashboard(
     Ok(())
 }
 
-/// The updates panel's ordered workspace list. Returns an owned Vec so the
+/// The updates panel's rows in order. Returns an owned Vec so the
 /// borrow of `app` ends at the call — the caller mutates `app.modal` right
 /// after. Both the key handler and `app::render` must derive row order from
 /// identical inputs or the selection indices drift from the drawn rows.
 pub(in crate::app::input) fn panel_order(
     app: &App,
     filter: Option<&str>,
-) -> Vec<crate::data::store::WorkspaceId> {
+) -> Vec<crate::ui::modal::PanelRow> {
     let now_ms = crate::util::time::now_ms();
     let inputs = crate::app::render::panel_inputs(app, now_ms);
-    crate::ui::modal::ordered_workspaces_for_panel(&inputs, filter)
+    crate::ui::modal::panel_rows(&inputs, filter)
 }
 
-/// Keep the cursor on its workspace across a re-order (a sort cycle or a
-/// filter edit) rather than on its index. Falls back to clamping the old
-/// index into range when the workspace is gone from the new order — which
+/// Keep the cursor on its row across a re-order (a sort cycle, a filter
+/// edit, a group expanding) rather than on its index. Falls back to clamping
+/// the old index into range when the row is gone from the new order — which
 /// is what a filter that hid it does.
 pub(in crate::app::input) fn reselect(
-    selected_id: Option<crate::data::store::WorkspaceId>,
-    new_order: &[crate::data::store::WorkspaceId],
+    selected: Option<&crate::ui::modal::PanelRow>,
+    new_order: &[crate::ui::modal::PanelRow],
     old_index: usize,
 ) -> usize {
-    if let Some(pos) = selected_id.and_then(|id| new_order.iter().position(|w| *w == id)) {
+    if let Some(pos) = selected.and_then(|row| new_order.iter().position(|r| r == row)) {
         return pos;
     }
     old_index.min(new_order.len().saturating_sub(1))

@@ -14,12 +14,13 @@ The top bar lists every other workspace after the focused one's label, as `<glyp
 
 ## Updates panel
 
-Press `Ctrl-x u` to open the updates panel, a compact dashboard in the bottom drawer. It lists every visible workspace in the dashboard's order and grouping, with nothing folded. Hidden workspaces fold into the dashboard's group rows: press `enter` or `l` on a group to list its workspaces and `h` to fold it again. A `/` search covers hidden workspaces too. Each row shows the workspace's state, latest event, PR chip, and `+N −N` diff. It updates live.
+Press `Ctrl-x u` to open the updates panel, a compact dashboard in the bottom drawer. It lists every visible workspace in the dashboard's order and grouping, with nothing folded. Hidden workspaces fold into the dashboard's group rows: press `l` on a group to list its workspaces, `h` to fold it again, or `enter` to toggle it. A `/` search covers hidden workspaces too. Each row shows the workspace's state, latest event, PR chip, and `+N −N` diff. It updates live.
 
 | Key                 | Action                                                         |
 | ------------------- | -------------------------------------------------------------- |
 | `↑` / `↓`, `k` / `j` | Move the selection (wraps at the ends)                        |
 | `Enter` or `l`      | Switch the current pane to the selected workspace              |
+| `l` / `h`           | Expand / fold a hidden group (`Enter` toggles it)              |
 | `v`                 | Open the selected workspace in a vertical split (side by side) |
 | `s`                 | Open the selected workspace in a horizontal split (stacked)    |
 | `o`                 | Cycle the sort mode (recency ↔ status), same as the dashboard  |

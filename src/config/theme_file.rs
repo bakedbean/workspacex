@@ -887,7 +887,7 @@ mod tests {
         );
         assert_eq!(
             specs.dashboard_header.format,
-            format::parse("$brand      $group(   $sort)(  $filter)").unwrap()
+            format::parse("$brand(  $filter)    ($statuses)").unwrap()
         );
         assert_eq!(specs.segments["pr"].priority, 50);
         assert_eq!(specs.segments["sort"].priority, 30);

@@ -278,13 +278,16 @@ pub fn render_without_footer(
     theme: &Theme,
     specs: &crate::config::theme_file::BarSpecs,
 ) -> ListClickTargets {
+    // The status tally rides in the header when the theme places
+    // `$statuses` there; otherwise it keeps its own row below it.
+    let strip = !specs.places(&specs.dashboard_header, "statuses");
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // top chrome
-            Constraint::Length(1), // status strip
-            Constraint::Length(1), // spacer
-            Constraint::Min(0),    // main list
+            Constraint::Length(1),                // top chrome
+            Constraint::Length(u16::from(strip)), // status strip
+            Constraint::Length(1),                // spacer
+            Constraint::Min(0),                   // main list
         ])
         .split(area);
     let width = chunks[3].width as usize;
@@ -301,6 +304,7 @@ pub fn render_without_footer(
                     sort: state.sort_mode,
                     repos: inputs.repos.len(),
                     workspaces: inputs.workspaces.len(),
+                    statuses: global_counts,
                     filter: state.filter.as_deref(),
                     view: "dashboard",
                     fleet: inputs.fleet,
@@ -311,10 +315,12 @@ pub fn render_without_footer(
         ),
         chunks[0],
     );
-    f.render_widget(
-        Paragraph::new(layout::status_strip(global_counts, theme)),
-        chunks[1],
-    );
+    if strip {
+        f.render_widget(
+            Paragraph::new(layout::status_strip(global_counts, theme)),
+            chunks[1],
+        );
+    }
 
     let (items, chip_spans, repo_link_spans) = match state.group_mode {
         GroupMode::Repo => render_by_repo(inputs, state, tick, width, theme),

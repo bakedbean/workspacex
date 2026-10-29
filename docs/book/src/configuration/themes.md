@@ -102,7 +102,7 @@ fill         = " "
 
 | Bar | Where |
 |---|---|
-| `dashboard_header` | The dashboard's top line: wordmark, filter echo, status tally, counts. Nothing on it is clickable. When its formats don't place `$statuses`, or `[statuses]` sets `disabled`, the tally gets its own row below it instead. That depends only on placement: a `priority` that lets `$statuses` drop on a narrow terminal doesn't bring the row back. |
+| `dashboard_header` | The dashboard's top line: wordmark, filter echo, status tally, counts. Only the tally's items are clickable. When its formats don't place `$statuses`, or `[statuses]` sets `disabled`, the tally gets its own row below it instead. That depends only on placement: a `priority` that lets `$statuses` drop on a narrow terminal doesn't bring the row back. |
 | `dashboard_footer` | The dashboard's bottom line: key hints and the [`funnel` module](#modules). |
 | `attached_top` | The attached view's top bar. |
 | `attached_bottom` | The attached view's bottom bar (chip row). |
@@ -227,7 +227,7 @@ Each segment has its own table, such as `[workspace]`, with these keys:
 | `brand` | `$symbol $name $mark $view` | The wordmark. `$view` is `dashboard`, not placed by default. Dashboard header only. |
 | `group` | `$label $tabs` | The `group:` mode tabs; the active one is highlighted. Not placed by default. Dashboard header only. |
 | `sort` | `$label $tabs` | The `sort:` mode tabs. Not placed by default. Dashboard header only. |
-| `statuses` | `$glyph $count $label` | One item per [status](../dashboard/status-indicators.md#status-glyphs) with a nonzero count, most urgent first, counting filtered-out workspaces too. `$style` is the status color. Dashboard header only. Older wsx builds reject a theme that uses it. |
+| `statuses` | `$glyph $count $label` | One item per [status](../dashboard/status-indicators.md#status-glyphs) with a nonzero count, most urgent first, counting filtered-out workspaces too. `$style` is the status color, reversed on the status the list is [filtered to](../dashboard/status-indicators.md#filtering-by-status) and dimmed on the rest. Dashboard header only. Clickable. Older wsx builds reject a theme that uses it. |
 | `filter` | `$needle` | The live filter, capped at 24 characters. Dashboard header only. |
 | `counts` | `$repos $workspaces` | Repo and workspace counts. Dashboard header only. |
 | `keys` | `$key $label` | One pill per key hint. Clickable. |

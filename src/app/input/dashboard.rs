@@ -105,6 +105,18 @@ pub(in crate::app::input) fn open_pr_for_workspace(
     }
 }
 
+/// The status a click lands on in the header's `$statuses` tally, or `None`
+/// if it missed every item.
+pub(crate) fn status_click_target(
+    app: &App,
+    m: &crossterm::event::MouseEvent,
+) -> Option<crate::ui::dashboard::status::Status> {
+    app.dashboard_status_rects
+        .iter()
+        .find(|(_, r)| rect_contains(r, m))
+        .map(|(s, _)| *s)
+}
+
 /// The repo path a click should open the author-filtered PR list for, or
 /// `None` if the click missed every repo header's PR link. Resolving the
 /// path here (rather than in the mouse handler) keeps the decision
@@ -341,6 +353,12 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         return Ok(());
     }
     match (k.code, k.modifiers) {
+        // Clears a status filter set by clicking the header tally. A typed
+        // `/` filter consumed the first Esc above, so with both active the
+        // needle goes first and the status second.
+        (KeyCode::Esc, _) if app.dashboard.status_filter.is_some() => {
+            app.dashboard.status_filter = None;
+        }
         (KeyCode::Char('q'), _) => {
             if app.in_flight.is_empty() {
                 app.quit = true;

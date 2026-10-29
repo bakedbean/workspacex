@@ -30,7 +30,16 @@ The name is bold, and warn-colored for a workspace created in permissive mode un
 | `✓`      | done      | The agent finished its turn                             |
 | `·`      | idle      | No session, or a session you haven't prompted yet       |
 
-The dashboard's top line tallies how many workspaces hold each status, listing only the ones in use: `? 2 question   ⠋ 3 thinking   · 4 idle`. The tally counts every workspace, including ones a `/` filter hides. A [theme](../configuration/themes.md) whose header leaves out `$statuses` shows the tally on its own row below the header instead, with every status listed, zeros dimmed.
+The dashboard's top line tallies how many workspaces hold each status, listing only the ones in use: `? 2 question   ⠋ 3 thinking   · 4 idle`. The tally counts every workspace, including ones a filter hides. A [theme](../configuration/themes.md) whose header leaves out `$statuses` shows the tally on its own row below the header instead, with every status listed, zeros dimmed. That row isn't clickable.
+
+### Filtering by status
+
+Click a status in the header tally to show only the workspaces in that status. Clicking `? 2 question` lists just those two rows. While the filter is on, that status is highlighted and the others are dimmed. If the last workspace leaves that status, its item stays in the tally at `0`, so you can still see what's filtering the list and click to clear it. The filter lasts until you clear it or quit wsx.
+
+- Click the same status again, or press `esc`, to clear the filter.
+- Click a different status to switch to it. Only one status filters at a time.
+- A status filter combines with a [`/` filter](tags-and-hiding.md#searching): both must match. With both on, the first `esc` clears the typed filter and the second clears the status.
+- Like a `/` filter, a status filter shows rows that [hide rules](tags-and-hiding.md) would otherwise hide, so the list matches the tally.
 
 In a workspace with several agents, a peer's bar in the agent strip turns into a spinner while that agent prints output. A `+` stands in for peers that don't fit.
 

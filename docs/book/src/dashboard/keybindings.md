@@ -14,6 +14,7 @@ Every key in the wsx TUI, grouped by where you press it. Capital letters mean `S
 | `z a` (or `z r`)        | Unfold every repo                                      |
 | `z M` (or `z m`)        | Fold every repo                                        |
 | `/`                     | [Filter](tags-and-hiding.md#searching) the rows; `esc` clears |
+| `esc`                   | Clear a [status filter](status-indicators.md#filtering-by-status) set by clicking the header tally |
 | `o`                     | Sort by recency or by status (saved)                   |
 | `G`                     | Group by repo or by attention                          |
 | `Tab`                   | Focus the detail-bar reply, then the digest            |

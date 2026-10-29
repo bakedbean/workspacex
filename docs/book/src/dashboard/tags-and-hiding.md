@@ -84,3 +84,5 @@ Press `/` and type. The filter matches branch names, repo names, tags, status wo
 ```
 
 `esc` clears the filter.
+
+To narrow the list by status, click a status in the header tally. See [Filtering by status](status-indicators.md#filtering-by-status).

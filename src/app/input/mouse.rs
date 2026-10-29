@@ -314,6 +314,10 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
                     input: None,
                     notice: None,
                 });
+            } else if let Some(status) = status_click_target(app, &m) {
+                // Clicking a header tally item filters the list to that
+                // status; clicking the active one clears the filter.
+                app.dashboard.toggle_status_filter(status);
             } else if let Some((idx, _)) = app.host_chip_rects.iter().copied().find(|(_, r)| {
                 m.column >= r.x
                     && m.column < r.x.saturating_add(r.width)

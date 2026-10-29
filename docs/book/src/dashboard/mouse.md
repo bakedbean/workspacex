@@ -16,6 +16,7 @@ Hold `Shift` while you drag. Most terminals (Alacritty, Kitty, WezTerm, iTerm2, 
 | Click                        | Does                                                     |
 | ---------------------------- | -------------------------------------------------------- |
 | A key hint in the footer     | Presses that key                                         |
+| A status in the header tally (`? 2 question`) | [Filters the list](status-indicators.md#filtering-by-status) to that status; click it again, or press `esc`, to clear |
 | A row's PR chip (`⏺ #123 open`) | Opens the PR in your browser                          |
 | A repo header's PR link      | Opens your open PRs in that repo on GitHub               |
 | A row's process count (`● 2p`) | Opens the [process list](process-tracking.md)          |

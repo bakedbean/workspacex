@@ -30,7 +30,7 @@ The name is bold, and warn-colored for a workspace created in permissive mode un
 | `✓`      | done      | The agent finished its turn                             |
 | `·`      | idle      | No session, or a session you haven't prompted yet       |
 
-The dashboard's top line tallies how many workspaces hold each status, listing only the ones in use: `? 2 question   ⠋ 3 thinking   · 4 idle`.
+The dashboard's top line tallies how many workspaces hold each status, listing only the ones in use: `? 2 question   ⠋ 3 thinking   · 4 idle`. The tally counts every workspace, including ones a `/` filter hides. A [theme](../configuration/themes.md) whose header leaves out `$statuses` shows the tally on its own row below the header instead, with every status listed, zeros dimmed.
 
 In a workspace with several agents, a peer's bar in the agent strip turns into a spinner while that agent prints output. A `+` stands in for peers that don't fit.
 

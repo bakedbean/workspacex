@@ -49,6 +49,8 @@ wsx config set bar_theme on
 
 They need a Nerd Font and a truecolor terminal. The powerline caps (U+E0B0, U+E0B2) are private-use characters, so copy the files as bytes (`cp`, `scp`, git). Pasting through a chat or editor can strip them: `wsx theme check` still passes, but the blocks lose their edges.
 
+The examples place `$statuses`, which wsx builds before the segment existed don't recognize: `wsx theme check` fails, and the running app keeps its last good theme. Use the examples from the release you run.
+
 To switch between several themes, make `theme.toml` a symlink and re-point it:
 
 ```bash
@@ -100,7 +102,7 @@ fill         = " "
 
 | Bar | Where |
 |---|---|
-| `dashboard_header` | The dashboard's top line: wordmark, filter echo, status tally, counts. Nothing on it is clickable. When it leaves out `$statuses`, the tally gets its own row below it. |
+| `dashboard_header` | The dashboard's top line: wordmark, filter echo, status tally, counts. Nothing on it is clickable. When its formats don't place `$statuses`, or `[statuses]` sets `disabled`, the tally gets its own row below it instead. That depends only on placement: a `priority` that lets `$statuses` drop on a narrow terminal doesn't bring the row back. |
 | `dashboard_footer` | The dashboard's bottom line: key hints and the [`funnel` module](#modules). |
 | `attached_top` | The attached view's top bar. |
 | `attached_bottom` | The attached view's bottom bar (chip row). |
@@ -225,7 +227,7 @@ Each segment has its own table, such as `[workspace]`, with these keys:
 | `brand` | `$symbol $name $mark $view` | The wordmark. `$view` is `dashboard`, not placed by default. Dashboard header only. |
 | `group` | `$label $tabs` | The `group:` mode tabs; the active one is highlighted. Not placed by default. Dashboard header only. |
 | `sort` | `$label $tabs` | The `sort:` mode tabs. Not placed by default. Dashboard header only. |
-| `statuses` | `$glyph $count $label` | One item per [status](../dashboard/status-indicators.md#status-glyphs) with a nonzero count, most urgent first. `$style` is the status color. Dashboard header only. |
+| `statuses` | `$glyph $count $label` | One item per [status](../dashboard/status-indicators.md#status-glyphs) with a nonzero count, most urgent first, counting filtered-out workspaces too. `$style` is the status color. Dashboard header only. Older wsx builds reject a theme that uses it. |
 | `filter` | `$needle` | The live filter, capped at 24 characters. Dashboard header only. |
 | `counts` | `$repos $workspaces` | Repo and workspace counts. Dashboard header only. |
 | `keys` | `$key $label` | One pill per key hint. Clickable. |

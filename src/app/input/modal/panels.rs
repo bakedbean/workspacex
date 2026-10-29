@@ -137,6 +137,10 @@ pub(super) async fn updates_panel(
                 set_group_expanded(app, group, false, selected_now, filter);
             }
         }
+        // A split needs a workspace; on a group row it does nothing rather
+        // than falling through to the arm's panel dismissal.
+        KeyCode::Char('v') | KeyCode::Char('s')
+            if matches!(order.get(selected_now), Some(PanelRow::HiddenGroup { .. })) => {}
         // 'l' mirrors the dashboard's vim-style attach binding.
         KeyCode::Enter | KeyCode::Char('l') => {
             if let Some(&PanelRow::Workspace(ws_id)) = order.get(selected_now) {

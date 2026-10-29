@@ -565,3 +565,41 @@ async fn updates_panel_expands_and_collapses_a_hidden_group() {
         "h lands on the group row"
     );
 }
+
+/// `v`/`s` need a workspace: on a group row they leave the panel and its
+/// cursor alone; `Enter` on an expanded group folds it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn updates_panel_group_row_ignores_splits_and_enter_toggles() {
+    use crate::ui::modal::Modal;
+    let (mut app, repo, _) = app_with_merged_hidden();
+    let shared = Arc::new(Mutex::new(
+        App::new(
+            crate::data::store::Store::open_in_memory().unwrap(),
+            std::path::PathBuf::from("/tmp/wsx-test"),
+        )
+        .unwrap(),
+    ));
+    let key = |code| crossterm::event::KeyEvent::new(code, KeyModifiers::NONE);
+    for ch in ['v', 's'] {
+        app.modal = Some(Modal::UpdatesPanel {
+            selected: 1,
+            filter: None,
+        });
+        handle_key_modal(&mut app, &shared, key(KeyCode::Char(ch)))
+            .await
+            .unwrap();
+        assert!(
+            matches!(app.modal, Some(Modal::UpdatesPanel { selected: 1, .. })),
+            "{ch} keeps the panel open on the group row"
+        );
+    }
+    app.dashboard.expanded_hidden.insert((repo, MERGED));
+    handle_key_modal(&mut app, &shared, key(KeyCode::Enter))
+        .await
+        .unwrap();
+    assert!(!app.dashboard.expanded_hidden.contains(&(repo, MERGED)));
+    assert!(matches!(
+        app.modal,
+        Some(Modal::UpdatesPanel { selected: 1, .. })
+    ));
+}

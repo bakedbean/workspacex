@@ -88,6 +88,14 @@ fn build_inputs<'a>(
 }
 
 fn render_to_strings(group: GroupMode) -> Vec<String> {
+    let specs = crate::config::theme_file::bundled_default(&Theme::wsx());
+    render_to_strings_with(group, &specs)
+}
+
+fn render_to_strings_with(
+    group: GroupMode,
+    specs: &crate::config::theme_file::BarSpecs,
+) -> Vec<String> {
     let fixtures = fixture::repos();
     let repos: Vec<Repo> = fixtures
         .iter()
@@ -110,10 +118,9 @@ fn render_to_strings(group: GroupMode) -> Vec<String> {
         ..Default::default()
     };
     let theme = Theme::wsx();
-    let specs = crate::config::theme_file::bundled_default(&theme);
     let backend = TestBackend::new(160, 40);
     let mut term = Terminal::new(backend).unwrap();
-    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme, &specs))
+    term.draw(|f| render(f, f.area(), &inputs, &mut state, 0, &theme, specs))
         .unwrap();
     let buf = term.backend().buffer().clone();
     (0..buf.area.height)
@@ -334,12 +341,33 @@ fn pr_chip_rects_survive_list_scroll() {
     assert_pr_rects_match_buffer(GroupMode::Repo, 12, true);
 }
 
+/// A theme written before `$statuses` existed keeps the tally on its own
+/// row, so upgrading doesn't silently take it away.
 #[test]
-fn by_repo_render_includes_chrome_status_strip_and_a_repo_header() {
+fn header_without_statuses_keeps_the_strip_row() {
+    let src = "[dashboard_header]\nformat = \"$brand      $group(   $sort)(  $filter)\"\n";
+    let specs = crate::config::theme_file::resolve(
+        crate::config::theme_file::ThemeFile::parse(src).unwrap(),
+        &Theme::wsx(),
+    )
+    .unwrap();
+    let lines = render_to_strings_with(GroupMode::Repo, &specs);
+    assert!(lines[0].contains("group: repo attention"), "{lines:?}");
+    assert!(!lines[0].contains("question"), "{lines:?}");
+    assert!(lines[1].starts_with("? 2 question"), "strip row: {lines:?}");
+}
+
+#[test]
+fn by_repo_render_includes_chrome_statuses_and_a_repo_header() {
     let lines = render_to_strings(GroupMode::Repo);
     let joined = lines.join("\n");
-    assert!(joined.contains("workspace x · dashboard"), "{joined}");
-    assert!(joined.contains("? 2 question"), "status strip: {joined}");
+    // The bundled header places `$statuses`, so the tally rides on the
+    // top line and the strip row below it is not drawn.
+    assert!(
+        lines[0].starts_with("▌ workspace x    ? 2 question"),
+        "{joined}"
+    );
+    assert!(lines[1].trim().is_empty(), "no strip row: {joined}");
     // wsx header: name right-justified, path left-justified after it.
     assert!(
         joined.contains("/home/eben/workspace/wsx"),

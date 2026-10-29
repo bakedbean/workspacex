@@ -29,11 +29,12 @@ purple   = "#c6b6ee"
 cyan     = "#8fbfdc"
 
 # The wordmark keeps the app's branding (the bundled default: brand-blue
-# bar and "x", cream name, dimmed view) flat on the bar background, so
-# the header's left edge is the app rather than a mode block; the chain
-# starts at the group block, which opens with a left cap.
+# bar and "x", cream name) flat on the bar background, so the header's
+# left edge is the app rather than a mode block. The filter echo follows
+# it, then the status tally on one capped block, which drops with an
+# empty fleet.
 [dashboard_header]
-format       = "$brand [](fg:plum)[ $group ](bg:plum fg:fg)[](fg:plum bg:dark)[( $sort )](bg:dark fg:grey)[](fg:dark)(  $filter)"
+format       = "$brand(  $filter) ([](fg:plum)[ $statuses ](bg:plum fg:fg)[](fg:plum))"
 right_format = "[](fg:mid)[ $counts ](bg:mid fg:fg)"
 fill         = " "
 
@@ -80,6 +81,11 @@ format = "[$label ]()$tabs"
 
 [sort]
 format = "[$label ]()$tabs"
+
+[statuses]
+# Inherit the block's text colour for the labels; the counts keep their
+# status colours.
+format = "[$glyph $count]($style)[ $label]()"
 
 [filter]
 format = "[/$needle](fg:yellow bold)"

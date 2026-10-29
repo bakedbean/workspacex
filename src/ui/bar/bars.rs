@@ -9,7 +9,7 @@ use super::segment::{Hit, HitSpan, Segment, SegmentConfig, SegmentMap};
 use super::style;
 use crate::config::theme_file::BarSpecs;
 use crate::ui::dashboard::layout::GroupMode;
-use crate::ui::dashboard::sort::SortMode;
+use crate::ui::dashboard::sort::{SortMode, StatusCounts};
 use crate::ui::theme::Theme;
 
 /// The segment config by name. Every name in `SEGMENTS` is present because
@@ -153,6 +153,8 @@ pub struct DashboardHeaderInputs<'a> {
     pub sort: SortMode,
     pub repos: usize,
     pub workspaces: usize,
+    /// The status tally of every workspace, filtered or not.
+    pub statuses: StatusCounts,
     /// The live filter needle, or `None` when no filter is active. `Some("")`
     /// is an armed-but-empty filter and still echoes a bare `/`.
     pub filter: Option<&'a str>,
@@ -161,9 +163,9 @@ pub struct DashboardHeaderInputs<'a> {
     pub fleet: &'a SegmentMap,
 }
 
-/// The dashboard's top line: wordmark, group and sort tabs, the live
-/// filter echo, and the repo/workspace counts flush right. Display only —
-/// none of its segments carry a click hit.
+/// The dashboard's top line: wordmark, the status tally, the live filter
+/// echo, and the repo/workspace counts flush right. Display only — none of
+/// its segments carry a click hit.
 pub fn dashboard_header(
     specs: &BarSpecs,
     theme: &Theme,
@@ -186,6 +188,11 @@ pub fn dashboard_header(
         &mut segments,
         "sort",
         providers::sort(cfg(specs, "sort"), inputs.sort, theme, &resolver),
+    );
+    put(
+        &mut segments,
+        "statuses",
+        providers::statuses(cfg(specs, "statuses"), inputs.statuses, theme, &resolver),
     );
     put(
         &mut segments,

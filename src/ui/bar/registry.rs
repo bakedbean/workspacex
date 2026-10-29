@@ -87,6 +87,14 @@ pub const SEGMENTS: &[SegmentDef] = &[
         singleton: false,
     },
     SegmentDef {
+        name: "statuses",
+        vars: &["glyph", "count", "label"],
+        style_vars: STYLE,
+        more_vars: NO_TAIL,
+        items: true,
+        singleton: false,
+    },
+    SegmentDef {
         name: "keys",
         vars: &["key", "label"],
         style_vars: STYLE,

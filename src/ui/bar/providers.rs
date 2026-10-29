@@ -17,7 +17,7 @@ use crate::pty::session::AgentKind;
 use crate::ui::attached::ChipPr;
 use crate::ui::attached::chip_row::CHIP_LABEL_COLS;
 use crate::ui::dashboard::layout::GroupMode;
-use crate::ui::dashboard::sort::SortMode;
+use crate::ui::dashboard::sort::{SortMode, StatusCounts};
 use crate::ui::dashboard::status::Status;
 use crate::ui::detail_modules::session_summary::ChipModelTokens;
 use crate::ui::text::{FILTER_ECHO_MAX, truncate};
@@ -286,6 +286,41 @@ pub fn filter(
         &[],
         resolver,
     )
+}
+
+/// The fleet's status tally, one item per status with a nonzero count, in
+/// attention order. `$style` is the status colour, bold. Absent when every
+/// count is zero. Variables: `$glyph` `$count` `$label`.
+pub fn statuses(
+    cfg: &SegmentConfig,
+    counts: StatusCounts,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
+    let items: Vec<(SegmentMap, Style, Option<Hit>)> = [
+        (Status::Question, counts.question),
+        (Status::Stalled, counts.stalled),
+        (Status::Waiting, counts.waiting),
+        (Status::Thinking, counts.thinking),
+        (Status::Complete, counts.complete),
+        (Status::Idle, counts.idle),
+    ]
+    .into_iter()
+    .filter(|(_, n)| *n > 0)
+    .map(|(status, n)| {
+        (
+            vars(vec![
+                ("glyph", var(status.glyph().to_string())),
+                ("count", var(n.to_string())),
+                ("label", var(status.label())),
+            ]),
+            theme.status_style(status).add_modifier(Modifier::BOLD),
+            None,
+        )
+    })
+    .collect();
+    eval_items(cfg, &items, resolver)
 }
 
 /// Registered repos and workspaces. Variables: `$repos` `$workspaces`.

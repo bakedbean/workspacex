@@ -1615,9 +1615,10 @@ mod segment_registry_drift_tests {
         }
     }
 
-    /// The dashboard header's five segments: registered like any other, but
+    /// The dashboard header's six segments: registered like any other, but
     /// carrying dashboard-only state, so the attached bars never build them.
-    const DASHBOARD_HEADER_ONLY: [&str; 5] = ["brand", "group", "sort", "filter", "counts"];
+    const DASHBOARD_HEADER_ONLY: [&str; 6] =
+        ["brand", "group", "sort", "statuses", "filter", "counts"];
 
     /// The dashboard footer's segment of its own: the shared-host chips,
     /// which open a remote list and so belong to the dashboard alone.
@@ -1658,7 +1659,7 @@ mod segment_registry_drift_tests {
         }
     }
 
-    /// Likewise the dashboard header's five.
+    /// Likewise the dashboard header's six.
     #[test]
     fn dashboard_header_segments_are_all_registered_names() {
         for name in DASHBOARD_HEADER_ONLY {
@@ -1676,14 +1677,18 @@ mod segment_registry_drift_tests {
 /// (cell-for-cell: symbol and background everywhere, foreground and
 /// modifiers on every non-blank cell) while the legacy painter still
 /// existed, in the commit that introduced this module. Pinning them as
-/// literals keeps them guarding the engine now that it is gone.
+/// literals keeps them guarding the engine now that it is gone — and,
+/// since the bundled header no longer places the group and sort tabs, the
+/// `$group`/`$sort` segments a theme can still bring back.
 #[cfg(test)]
 mod dashboard_header_tests {
     use super::*;
-    use crate::config::theme_file::bundled_default;
+    use crate::config::theme_file::{BarSpecs, ThemeFile, bundled_default, resolve};
     use crate::ui::bar::test_util::{plain, render_line};
     use crate::ui::dashboard::layout::GroupMode;
-    use crate::ui::dashboard::sort::SortMode;
+    use crate::ui::dashboard::sort::{SortMode, StatusCounts};
+    use crate::ui::dashboard::status::Status;
+    use ratatui::style::Modifier;
 
     /// (group Repo, sort Recency, no filter) at width 120.
     const LEGACY_PLAIN: &str = "▌ workspace x · dashboard      group: repo attention   sort: recency status                      9 repos · 14 workspaces";
@@ -1694,23 +1699,66 @@ mod dashboard_header_tests {
     /// `FILTER_ECHO_MAX`, and both shed the sort tabs to make room for it.
     const LEGACY_LONG_FILTER: &str = "▌ workspace x · dashboard      group: repo attention  /xxxxxxxxxxxxxxxxxxxxxxx…                  9 repos · 14 workspaces";
 
-    fn header(group: GroupMode, sort: SortMode, filter: Option<&str>, width: u16) -> Rendered {
-        let theme = Theme::wsx();
-        let specs = bundled_default(&theme);
+    /// The pre-`$statuses` bundled header, wordmark view label and all.
+    const LEGACY_THEME: &str = r#"
+[dashboard_header]
+format = "$brand      $group(   $sort)(  $filter)"
+[brand]
+format = "[$symbol](fg:brand) [$name](fg:wordmark bold)[ $mark](fg:brand bold)[ · $view](fg:dim)"
+"#;
+
+    /// Every status but `stalled` has someone in it.
+    const COUNTS: StatusCounts = StatusCounts {
+        question: 2,
+        stalled: 0,
+        waiting: 2,
+        thinking: 2,
+        complete: 3,
+        idle: 4,
+    };
+
+    fn render(
+        specs: &BarSpecs,
+        group: GroupMode,
+        sort: SortMode,
+        statuses: StatusCounts,
+        filter: Option<&str>,
+        width: u16,
+    ) -> Rendered {
         dashboard_header(
-            &specs,
-            &theme,
+            specs,
+            &Theme::wsx(),
             &DashboardHeaderInputs {
                 group,
                 sort,
                 repos: 9,
                 workspaces: 14,
+                statuses,
                 filter,
                 view: "dashboard",
                 fleet: crate::ui::bar::fleet::empty(),
             },
             width,
         )
+    }
+
+    /// The bundled header, with `COUNTS`.
+    fn header(filter: Option<&str>, width: u16) -> Rendered {
+        let specs = bundled_default(&Theme::wsx());
+        render(
+            &specs,
+            GroupMode::Repo,
+            SortMode::Recency,
+            COUNTS,
+            filter,
+            width,
+        )
+    }
+
+    /// The pre-`$statuses` header layout.
+    fn legacy(group: GroupMode, sort: SortMode, filter: Option<&str>, width: u16) -> Rendered {
+        let specs = resolve(ThemeFile::parse(LEGACY_THEME).unwrap(), &Theme::wsx()).unwrap();
+        render(&specs, group, sort, COUNTS, filter, width)
     }
 
     /// The column a label starts at. Every char on this line is one cell
@@ -1739,39 +1787,77 @@ mod dashboard_header_tests {
             ),
         ];
         for (group, sort, filter, expected) in cases {
-            let out = header(group, sort, filter, 120);
+            let out = legacy(group, sort, filter, 120);
             assert_eq!(plain(&out.line), expected, "filter={filter:?}");
             assert_eq!(out.line.width(), 120);
         }
     }
 
     #[test]
-    fn header_shows_app_name_and_counts() {
-        let t = plain(&header(GroupMode::Repo, SortMode::Recency, None, 100).line);
-        assert!(t.starts_with("▌ workspace x · dashboard"), "{t:?}");
-        assert!(t.contains("group: "), "{t:?}");
-        assert!(t.contains("repo"), "{t:?}");
-        assert!(t.contains("attention"), "{t:?}");
-        assert!(t.trim_end().ends_with("9 repos · 14 workspaces"), "{t:?}");
+    fn header_shows_wordmark_statuses_and_counts() {
+        let t = plain(&header(None, 120).line);
+        assert_eq!(
+            t,
+            "▌ workspace x    ? 2 question   … 2 waiting   ⠋ 2 thinking   ✓ 3 complete   · 4 idle             9 repos · 14 workspaces"
+        );
     }
 
+    /// The tabs and the view label are themeable, not gone: the bundled
+    /// header just doesn't place them.
     #[test]
-    fn header_names_both_sort_modes() {
-        let t = plain(&header(GroupMode::Repo, SortMode::Recency, None, 120).line);
-        assert!(t.contains("sort: "), "{t:?}");
-        assert!(t.contains("recency"), "{t:?}");
-        assert!(t.contains("status"), "{t:?}");
+    fn bundled_header_leaves_out_the_tabs_and_view_label() {
+        let t = plain(&header(None, 120).line);
+        assert!(!t.contains("group:"), "{t:?}");
+        assert!(!t.contains("sort:"), "{t:?}");
+        assert!(!t.contains("dashboard"), "{t:?}");
+    }
+
+    /// A status with nobody in it takes no room; an empty fleet leaves
+    /// just the wordmark and the counts.
+    #[test]
+    fn header_lists_only_nonzero_statuses() {
+        let t = plain(&header(None, 120).line);
+        assert!(!t.contains("stalled"), "{t:?}");
+        let specs = bundled_default(&Theme::wsx());
+        let empty = StatusCounts::default();
+        let out = render(&specs, GroupMode::Repo, SortMode::Recency, empty, None, 80);
+        let t = plain(&out.line);
+        assert!(t.starts_with("▌ workspace x "), "{t:?}");
+        assert!(t.trim_end().ends_with("9 repos · 14 workspaces"), "{t:?}");
+        assert!(!t.contains("idle"), "{t:?}");
+    }
+
+    /// Each status's glyph and count wear its colour, bold; the label is
+    /// the muted path hue, as the old strip row drew them.
+    #[test]
+    fn header_colours_each_status_by_its_own_state() {
+        let theme = Theme::wsx();
+        let out = header(None, 120);
+        let t = plain(&out.line);
+        let buf = render_line(&out.line, 120);
+        for status in [Status::Question, Status::Thinking, Status::Idle] {
+            let col = col_of(&t, &format!("{} ", status.glyph()));
+            let cell = &buf[(col, 0)];
+            assert_eq!(
+                cell.fg,
+                theme.status_style(status).fg.unwrap(),
+                "{status:?}"
+            );
+            assert!(cell.modifier.contains(Modifier::BOLD), "{status:?}");
+            let label = &buf[(col_of(&t, status.label()), 0)];
+            assert_eq!(label.fg, theme.path, "{status:?}");
+        }
     }
 
     /// Without the echo, `/` gives no feedback and rows disappearing from
     /// the list have no visible cause.
     #[test]
     fn header_echoes_the_active_filter() {
-        let t = plain(&header(GroupMode::Repo, SortMode::Recency, Some("auth"), 100).line);
-        assert!(t.contains("/auth"), "{t:?}");
+        let t = plain(&header(Some("auth"), 120).line);
+        assert!(t.starts_with("▌ workspace x  /auth    ? 2"), "{t:?}");
         // The echo's own prefix, not a bare `/`, so the assertion tracks
         // the echo and not some other span that grows a slash later.
-        let bare = plain(&header(GroupMode::Repo, SortMode::Recency, None, 100).line);
+        let bare = plain(&header(None, 120).line);
         assert!(!bare.contains("  /"), "{bare:?}");
     }
 
@@ -1779,60 +1865,31 @@ mod dashboard_header_tests {
     /// before the first character is typed.
     #[test]
     fn header_echoes_an_empty_filter() {
-        let t = plain(&header(GroupMode::Repo, SortMode::Recency, Some(""), 100).line);
+        let t = plain(&header(Some(""), 120).line);
         assert!(t.contains("  /"), "{t:?}");
     }
 
-    /// A long needle is capped at `FILTER_ECHO_MAX`; with room to spare
-    /// the counts still fit beside it.
-    #[test]
-    fn header_truncates_a_long_filter_and_keeps_counts() {
-        let needle = "x".repeat(80);
-        let width = 120u16;
-        let out = header(GroupMode::Repo, SortMode::Recency, Some(&needle), width);
-        let t = plain(&out.line);
-        assert!(
-            out.line.width() <= usize::from(width),
-            "width {width}: {t:?}"
-        );
-        assert!(t.contains("  /"), "echo present: {t:?}");
-        assert!(t.contains('…'), "needle truncates: {t:?}");
-        assert!(
-            t.trim_end().ends_with("9 repos · 14 workspaces"),
-            "counts kept: {t:?}"
-        );
-    }
-
-    /// Where the engine deliberately parts from the legacy painter. Legacy
-    /// budgeted the needle against the room actually left on the line, so a
-    /// long needle shrank and the counts always survived. The engine caps
-    /// the needle at `FILTER_ECHO_MAX` and, since `[filter]` sits at the
-    /// default priority and never drops, pays for it out of `[counts]`
-    /// (50) instead — and below about 80 columns the line runs long and is
-    /// clipped by whatever renders it. The rationale is unchanged: a needle
-    /// with no visible cause is worse than a truncated one.
+    /// A long needle is capped at `FILTER_ECHO_MAX`, and since the filter
+    /// and statuses never drop, it is the counts that pay for the room.
     #[test]
     fn a_long_filter_costs_the_counts_rather_than_being_shortened_further() {
         let needle = "x".repeat(80);
-        let out = header(GroupMode::Repo, SortMode::Recency, Some(&needle), 100);
+        let out = header(Some(&needle), 120);
         let t = plain(&out.line);
-        assert!(t.contains('…'), "{t:?}");
+        assert!(t.contains("  /"), "echo present: {t:?}");
+        assert!(t.contains('…'), "needle truncates: {t:?}");
         assert!(!t.contains("9 repos"), "the counts pay for the echo: {t:?}");
-        assert_eq!(out.line.width(), 100);
-
-        // Narrower still: nothing droppable is left and the echo itself is
-        // load-bearing, so the line overflows and the caller clips it.
-        let out = header(GroupMode::Repo, SortMode::Recency, Some(&needle), 60);
-        assert!(out.line.width() > 60, "{:?}", plain(&out.line));
+        assert_eq!(out.line.width(), 120);
     }
 
-    /// `[sort]`'s priority 30 beats `[counts]`'s 50, so the sort tabs go
-    /// first: the order stays reachable via `o` and the footer hint,
-    /// whereas the counts have no other home on this line. 120 holds
-    /// everything; 80 holds the counts but not the tabs on top of them.
+    /// `[sort]`'s priority 30 beats `[counts]`'s 50, so a theme that places
+    /// the sort tabs sheds them first: the order stays reachable via `o`
+    /// and the footer hint, whereas the counts have no other home on this
+    /// line. 120 holds everything; 80 holds the counts but not the tabs on
+    /// top of them.
     #[test]
     fn header_sheds_the_sort_tabs_before_the_counts() {
-        let at = |w| plain(&header(GroupMode::Repo, SortMode::Recency, None, w).line);
+        let at = |w| plain(&legacy(GroupMode::Repo, SortMode::Recency, None, w).line);
         assert!(at(120).contains("sort: "), "{:?}", at(120));
         assert!(at(120).contains("9 repos · 14 workspaces"), "{:?}", at(120));
         assert!(!at(80).contains("sort: "), "{:?}", at(80));
@@ -1844,12 +1901,12 @@ mod dashboard_header_tests {
 
     /// Anything past `width` would be clipped off-screen by ratatui, so
     /// the rendered width — not the concatenated text — is the property
-    /// that matters.
+    /// that matters. Down to 100 the counts drop and everything else fits.
     #[test]
-    fn header_never_overflows_a_narrow_terminal() {
-        for width in [100u16, 90, 80, 60] {
+    fn header_never_overflows_a_wide_terminal() {
+        for width in [120u16, 100] {
             for filter in [None, Some("auth")] {
-                let out = header(GroupMode::Repo, SortMode::Recency, filter, width);
+                let out = header(filter, width);
                 assert!(
                     out.line.width() <= usize::from(width),
                     "width {width} filter {filter:?} overflowed to {}: {:?}",
@@ -1857,6 +1914,26 @@ mod dashboard_header_tests {
                     plain(&out.line)
                 );
             }
+        }
+        for width in [100u16, 90, 80, 60] {
+            for filter in [None, Some("auth")] {
+                let out = legacy(GroupMode::Repo, SortMode::Recency, filter, width);
+                assert!(out.line.width() <= usize::from(width), "legacy {width}");
+            }
+        }
+    }
+
+    /// The statuses never drop, so a fleet with every status populated
+    /// runs past a narrow terminal and is clipped at its edge. The echo
+    /// sits before them so what the clip takes is the least urgent status,
+    /// never the filter.
+    #[test]
+    fn a_narrow_header_clips_the_statuses_and_keeps_the_filter() {
+        for width in [90u16, 80, 60] {
+            let t = plain(&header(Some("auth"), width).line);
+            let shown: String = t.chars().take(usize::from(width)).collect();
+            assert!(shown.contains("/auth"), "width {width}: {shown:?}");
+            assert!(shown.contains("? 2 question"), "width {width}: {shown:?}");
         }
     }
 
@@ -1867,7 +1944,7 @@ mod dashboard_header_tests {
     fn header_highlights_the_active_group_and_sort_modes() {
         let theme = Theme::wsx();
         let check = |group: GroupMode, sort: SortMode, active: &str, inactive: &str| {
-            let out = header(group, sort, None, 120);
+            let out = legacy(group, sort, None, 120);
             let t = plain(&out.line);
             let buf = render_line(&out.line, 120);
             assert_eq!(
@@ -2936,6 +3013,7 @@ mod example_theme_tests {
                     sort: SortMode::Recency,
                     repos: 9,
                     workspaces: 14,
+                    statuses: Default::default(),
                     filter: None,
                     view: "dashboard",
                     fleet: crate::ui::bar::fleet::empty(),
@@ -2970,6 +3048,78 @@ mod example_theme_tests {
             assert_eq!(mark.symbol(), "x", "{name}");
             assert_eq!(mark.fg, BRAND_ACCENT, "{name}: the x must be brand blue");
             assert!(mark.modifier.contains(Modifier::BOLD), "{name}");
+        }
+    }
+
+    /// Every example caps the status tally on one block: populated, the
+    /// counts sit on that block in their status colours, cap to cap; with
+    /// an empty fleet the whole block, caps included, drops.
+    #[test]
+    fn example_themes_cap_the_status_tally_and_drop_it_when_empty() {
+        let counts = crate::ui::dashboard::sort::StatusCounts {
+            question: 12,
+            stalled: 1,
+            waiting: 2,
+            thinking: 3,
+            complete: 4,
+            idle: 5,
+        };
+        for path in example_themes() {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let theme = Theme::jellybeans();
+            let specs = load(&path, &theme).unwrap();
+            let render = |statuses| {
+                dashboard_header(
+                    &specs,
+                    &theme,
+                    &DashboardHeaderInputs {
+                        group: GroupMode::Repo,
+                        sort: SortMode::Recency,
+                        repos: 9,
+                        workspaces: 14,
+                        statuses,
+                        filter: None,
+                        view: "dashboard",
+                        fleet: crate::ui::bar::fleet::empty(),
+                    },
+                    160,
+                )
+            };
+
+            // Every char on the line is one cell wide.
+            let col_of = |text: &str, needle: &str| {
+                let byte = text.find(needle).expect("item is on the line");
+                u16::try_from(text[..byte].chars().count()).unwrap()
+            };
+            let out = render(counts);
+            let text = plain(&out.line);
+            let buf = render_line(&out.line, 160);
+            let q = col_of(&text, "? 12 question");
+            let idle = col_of(&text, "· 5 idle");
+            let block = buf[(q, 0)].bg;
+            assert_ne!(block, Color::Reset, "{name}: tally sits on a block");
+            assert_eq!(buf[(q - 1, 0)].bg, block, "{name}: padded block");
+            assert_eq!(buf[(q - 2, 0)].symbol(), "\u{e0b2}", "{name}: left cap");
+            assert_eq!(buf[(idle + 9, 0)].symbol(), "\u{e0b0}", "{name}: right cap");
+            assert_eq!(buf[(idle, 0)].bg, block, "{name}: one block throughout");
+            assert_eq!(
+                buf[(q, 0)].fg,
+                theme
+                    .status_style(crate::ui::dashboard::status::Status::Question)
+                    .fg
+                    .unwrap(),
+                "{name}: glyph keeps its status colour"
+            );
+
+            // Only the left side: the counts block on the right has caps of
+            // its own.
+            let empty = plain(&render(Default::default()).line);
+            let left = &empty[..empty.find("9 repos").unwrap()];
+            let left = left.trim_end().trim_end_matches(['\u{e0b2}', '\u{e0b0}']);
+            assert!(
+                !left.contains(['\u{e0b2}', '\u{e0b0}']),
+                "{name}: no stray caps: {empty:?}"
+            );
         }
     }
 }

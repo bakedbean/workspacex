@@ -36,10 +36,15 @@ format = "$keys"
 right_format = "$funnel"
 fill = " "
 
-# The dashboard's top line: wordmark, group and sort tabs, the live filter
-# echo, and the repo/workspace counts flush right.
+# The dashboard's top line: wordmark, the live filter echo, the status
+# tally, and the repo/workspace counts flush right. The filter comes first
+# so a narrow terminal clips the least urgent statuses, not the echo.
+# $group and $sort (the `G` and `o` modes as tabs) are registered but not
+# placed; add them back with e.g.
+#   format = "$brand    $group   $sort(  $filter)"
+# A header that leaves out $statuses gets the tally on its own row below.
 [dashboard_header]
-format       = "$brand      $group(   $sort)(  $filter)"
+format       = "$brand(  $filter)    ($statuses)"
 right_format = "$counts"
 fill         = " "
 
@@ -87,10 +92,18 @@ fill         = " "
 
 # --- segments ---------------------------------------------------------
 
-# The wordmark on the dashboard's top line. Variables: $symbol $name $mark $view
+# The wordmark on the dashboard's top line. $view ("dashboard") is not
+# placed by default. Variables: $symbol $name $mark $view
 [brand]
 symbol = "▌"
-format = "[$symbol](fg:brand) [$name](fg:wordmark bold)[ $mark](fg:brand bold)[ · $view](fg:dim)"
+format = "[$symbol](fg:brand) [$name](fg:wordmark bold)[ $mark](fg:brand bold)"
+
+# The fleet's status tally: one item per status with a nonzero count, in
+# attention order (question, stalled, waiting, thinking, complete, idle).
+# $style is the status colour, bold. Variables: $glyph $count $label
+[statuses]
+format    = "[$glyph $count]($style)[ $label](fg:path)"
+separator = "   "
 
 # Variables: $label $tabs (the active tab is highlighted)
 [group]

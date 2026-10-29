@@ -34,7 +34,7 @@ The dashboard's top line tallies how many workspaces hold each status, listing o
 
 ### Filtering by status
 
-Click a status in the header tally to show only the workspaces in that status. Clicking `? 2 question` lists just those two rows. While the filter is on, that status is highlighted and the others are dimmed.
+Click a status in the header tally to show only the workspaces in that status. Clicking `? 2 question` lists just those two rows. While the filter is on, that status is highlighted and the others are dimmed. If the last workspace leaves that status, its item stays in the tally at `0`, so you can still see what's filtering the list and click to clear it. The filter lasts until you clear it or quit wsx.
 
 - Click the same status again, or press `esc`, to clear the filter.
 - Click a different status to switch to it. Only one status filters at a time.

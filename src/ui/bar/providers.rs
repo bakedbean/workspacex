@@ -290,8 +290,9 @@ pub fn filter(
 
 /// The fleet's status tally, one item per status with a nonzero count, in
 /// attention order. `$style` is the status colour, bold. While `active`
-/// filters the list, its item is reversed and the others dim. Each item
-/// carries a `Hit::Status` click. Absent when every count is zero.
+/// filters the list, its item is reversed and the others dim, and it shows
+/// even at zero. Each item carries a `Hit::Status` click. Absent when every
+/// count is zero and no status is active.
 /// Variables: `$glyph` `$count` `$label`.
 pub fn statuses(
     cfg: &SegmentConfig,
@@ -310,7 +311,9 @@ pub fn statuses(
         (Status::Idle, counts.idle),
     ]
     .into_iter()
-    .filter(|(_, n)| *n > 0)
+    // The active status stays at zero so its highlight, and the click that
+    // clears it, outlive the last workspace leaving that status.
+    .filter(|(status, n)| *n > 0 || active == Some(*status))
     .map(|(status, n)| {
         (
             vars(vec![

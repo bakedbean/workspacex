@@ -1890,8 +1890,14 @@ mod hide_rules {
         let statuses: Vec<Status> = out.statuses.iter().map(|(s, _)| *s).collect();
         assert_eq!(
             statuses,
-            [Status::Question, Status::Thinking, Status::Idle],
-            "the tally counts every row, even with the list filtered empty"
+            [
+                Status::Question,
+                Status::Stalled,
+                Status::Thinking,
+                Status::Idle
+            ],
+            "the tally counts every row, even with the list filtered empty, \
+             and keeps the active status at zero"
         );
         for (status, r) in &out.statuses {
             assert_eq!(r.y, 0);
@@ -1900,6 +1906,35 @@ mod hide_rules {
                 .collect();
             assert!(text.ends_with(status.label()), "{status:?}: {text:?}");
         }
+    }
+
+    /// A theme that leaves `$statuses` off the header gets the strip row
+    /// instead, which offers no click targets.
+    #[test]
+    fn the_fallback_strip_row_is_not_clickable() {
+        let src = "[dashboard_header]\nformat = \"$brand(  $filter)\"\n";
+        let theme = Theme::wsx();
+        let specs = crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse(src).unwrap(),
+            &theme,
+        )
+        .unwrap();
+        let repo = repo_with("");
+        let inputs = inputs(&repo, mixed(&repo));
+        let mut state = DashboardState::default();
+        let mut term = Terminal::new(TestBackend::new(160, 30)).unwrap();
+        let mut out = ListClickTargets::default();
+        term.draw(|f| {
+            out = render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme, &specs)
+        })
+        .unwrap();
+        let buf = term.backend().buffer().clone();
+        let strip: String = (0..40).map(|x| buf[(x, 1)].symbol().to_string()).collect();
+        assert!(
+            strip.starts_with("? 2 question"),
+            "strip row drawn: {strip:?}"
+        );
+        assert!(out.statuses.is_empty(), "{:?}", out.statuses);
     }
 
     /// A status with no rows left reads as a filter that hid everything.

@@ -1926,6 +1926,23 @@ format = "[$symbol](fg:brand) [$name](fg:wordmark bold)[ $mark](fg:brand bold)[ 
         }
     }
 
+    /// When the last workspace leaves the active status, its item stays,
+    /// at zero, so the filter still shows and one click still clears it.
+    #[test]
+    fn header_keeps_the_active_status_at_zero() {
+        let out = header_filtered_to(Some(Status::Stalled), 160);
+        let t = plain(&out.line);
+        assert!(t.contains("! 0 stalled"), "{t:?}");
+        assert!(
+            out.hits
+                .iter()
+                .any(|h| h.hit == Hit::Status(Status::Stalled)),
+            "{:?}",
+            out.hits
+        );
+        assert!(!plain(&header(None, 160).line).contains("stalled"));
+    }
+
     /// Without the echo, `/` gives no feedback and rows disappearing from
     /// the list have no visible cause.
     #[test]

@@ -30,7 +30,7 @@ async fn esc_clears_the_status_filter() {
     assert_eq!(app.dashboard.status_filter, None);
 }
 
-/// With both filters on, the first Esc leaves the typed needle and the
+/// With both filters on, the first Esc clears the typed needle and the
 /// second drops the status — innermost first, so one stray Esc doesn't
 /// throw away both.
 #[tokio::test]

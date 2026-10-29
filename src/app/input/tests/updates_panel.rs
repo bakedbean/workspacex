@@ -12,6 +12,17 @@ use std::path::PathBuf;
 use super::common::*;
 use crossterm::event::{KeyEvent, KeyModifiers};
 
+/// The panel's workspace rows in order, without hidden-group rows.
+fn panel_ids(app: &App, filter: Option<&str>) -> Vec<crate::data::store::WorkspaceId> {
+    panel_order(app, filter)
+        .into_iter()
+        .filter_map(|r| match r {
+            crate::ui::modal::PanelRow::Workspace(id) => Some(id),
+            crate::ui::modal::PanelRow::HiddenGroup { .. } => None,
+        })
+        .collect()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn updates_panel_modal_esc_closes() {
     let store = Store::open_in_memory().unwrap();
@@ -528,7 +539,7 @@ async fn updates_panel_v_splits_attached_view_vertically() {
     // The renderer's order is grouped/sorted; in this minimal setup both
     // workspaces are in `repo`. Find the index of `second_id` from the
     // module's ordering helper.
-    let order = panel_order(&app, None);
+    let order = panel_ids(&app, None);
     let target_idx = order.iter().position(|id| *id == second_id).unwrap();
     app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
         selected: target_idx,
@@ -604,7 +615,7 @@ async fn updates_panel_o_cycles_the_dashboard_sort_mode_and_follows_selection() 
     let (zeta, alpha) = (ids[0], ids[1]);
     let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
     assert_eq!(app.dashboard.sort_mode, SortMode::Recency);
-    assert_eq!(panel_order(&app, None), vec![alpha, zeta]);
+    assert_eq!(panel_ids(&app, None), vec![alpha, zeta]);
     app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
         selected: 0, // alpha
         filter: None,
@@ -623,7 +634,7 @@ async fn updates_panel_o_cycles_the_dashboard_sort_mode_and_follows_selection() 
         Some("status"),
         "and persists it, exactly like the dashboard's o"
     );
-    assert_eq!(panel_order(&app, None), vec![zeta, alpha]);
+    assert_eq!(panel_ids(&app, None), vec![zeta, alpha]);
     match app.modal {
         Some(crate::ui::modal::Modal::UpdatesPanel { selected, .. }) => {
             assert_eq!(selected, 1, "cursor follows alpha to its new row");
@@ -651,7 +662,7 @@ async fn updates_panel_shift_g_toggles_the_dashboard_group_mode_and_follows_sele
     let names = seed_lockstep_fixture(&store);
     let mut app = App::new(store, PathBuf::from("/tmp/lockstep")).unwrap();
     assert_eq!(app.dashboard.group_mode, GroupMode::Repo);
-    let repo_order = panel_order(&app, None);
+    let repo_order = panel_ids(&app, None);
     let mid = names["mid"];
     let mid_index = repo_order.iter().position(|id| *id == mid).unwrap();
     app.modal = Some(crate::ui::modal::Modal::UpdatesPanel {
@@ -663,7 +674,7 @@ async fn updates_panel_shift_g_toggles_the_dashboard_group_mode_and_follows_sele
 
     handle_key_modal(&mut app, &shared, press_g).await.unwrap();
     assert_eq!(app.dashboard.group_mode, GroupMode::Attention);
-    let attention_order = panel_order(&app, None);
+    let attention_order = panel_ids(&app, None);
     assert_ne!(
         attention_order, repo_order,
         "sanity: regrouping actually reorders this fixture"
@@ -759,7 +770,7 @@ fn updates_panel_orders_workspaces_exactly_like_the_dashboard() {
         vec!["beta", "mid", "alpha", "zeta"],
         "sanity: the dashboard's own order is not insertion order"
     );
-    assert_eq!(panel_order(&app, None), dashboard_ids);
+    assert_eq!(panel_ids(&app, None), dashboard_ids);
 }
 
 /// The PR chip and diff come from the same app caches the dashboard row
@@ -1121,7 +1132,7 @@ async fn updates_panel_selection_moves_up_when_a_filter_hides_the_row_above() {
         filter: Some(String::new()),
     });
     assert_eq!(
-        panel_order(&app, Some("")),
+        panel_ids(&app, Some("")),
         ids,
         "unfiltered order is insertion order"
     );
@@ -1136,7 +1147,7 @@ async fn updates_panel_selection_moves_up_when_a_filter_hides_the_row_above() {
             ref filter,
         }) => {
             assert_eq!(filter.as_deref(), Some("x"));
-            let order = panel_order(&app, filter.as_deref());
+            let order = panel_ids(&app, filter.as_deref());
             assert_eq!(order, vec![ids[1], ids[2]], "`x` hides alpha only");
             assert_eq!(
                 selected, 0,
@@ -1517,7 +1528,7 @@ fn updates_panel_render_scrolls_to_keep_selected_visible() {
     // Build the same order the renderer uses, so we can select the
     // very last workspace — the one that would be clipped without
     // scroll support.
-    let order = panel_order(&app, None);
+    let order = panel_ids(&app, None);
     assert!(
         order.len() >= 40,
         "expected ≥40 workspaces, got {}",

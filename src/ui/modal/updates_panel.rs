@@ -6,10 +6,12 @@
 //! dashboard row is built from.
 
 use super::*;
+use crate::data::hide_rules::HideRule;
 use crate::data::store::{Repo, Workspace, WorkspaceId};
+use crate::ui::dashboard::hidden::{HiddenGroupView, hidden_group_line};
 use crate::ui::dashboard::layout::GroupMode;
 use crate::ui::dashboard::sort::SortMode;
-use crate::ui::dashboard::{OrderedSection, SectionKind, WorkspaceItem, ordered_sections};
+use crate::ui::dashboard::{SectionKind, WorkspaceItem, ordered_sections};
 use crate::ui::text::{FILTER_ECHO_MAX, display_width, truncate, truncate_pad};
 
 /// Everything the panel reads, gathered once per render or keypress by
@@ -32,6 +34,9 @@ pub struct PanelInputs<'a> {
     pub group_mode: GroupMode,
     pub sort_mode: SortMode,
     pub blocked_pin_max_age_secs: u64,
+    /// The dashboard's expanded hidden groups — shared, so a group opened
+    /// here is open on the dashboard too.
+    pub expanded_hidden: &'a HashSet<(RepoId, HideRule)>,
     /// Width of the PR-chip cell — the dashboard's configured chip column,
     /// so a chip truncates identically in both views.
     pub pr_width: usize,
@@ -106,6 +111,10 @@ const NAME_COL_MAX: usize = 28;
 /// Chars consumed left of the name column: 2-space indent + glyph + space.
 const ROW_PREFIX_W: usize = 4;
 
+/// Extra indent on an expanded hidden group's rows, setting them under the
+/// group row's label rather than flush with the repo's visible rows.
+const NEST_W: usize = 2;
+
 /// Gap between adjacent columns (name→chip→diff→status, status→age).
 const COL_GAP_W: usize = 2;
 
@@ -117,14 +126,14 @@ const DIFF_W: usize = crate::ui::dashboard::row::DIFF_WIDTH;
 /// little of a live one.
 const STATUS_MIN_W: usize = 12;
 
-/// Width of the shared workspace-name column: as wide as the longest name,
+/// Width of the shared workspace-name column: as wide as the widest name cell,
 /// capped at [`NAME_COL_MAX`] and clamped so prefix + name + gap always
 /// leave at least one char of status text in the narrowest panel. Shared
 /// across every section so status texts start at one fixed column for
 /// the whole panel.
-fn name_col_width<'a>(names: impl Iterator<Item = &'a str>, row_width: usize) -> usize {
+fn name_col_width(widths: impl Iterator<Item = usize>, row_width: usize) -> usize {
     let cap = NAME_COL_MAX.min(row_width.saturating_sub(ROW_PREFIX_W + COL_GAP_W + 1));
-    names.map(display_width).max().unwrap_or(0).min(cap)
+    widths.max().unwrap_or(0).min(cap)
 }
 
 /// Case-insensitive substring match against the workspace name, the owning
@@ -138,18 +147,112 @@ fn matches_filter(w: &Workspace, repo_name: &str, status_text: &str, needle: &st
         || status_text.to_lowercase().contains(&needle)
 }
 
+/// One selectable row of the panel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PanelRow {
+    Workspace(WorkspaceId),
+    /// A repo's hide-rule summary row, as on the dashboard.
+    HiddenGroup {
+        repo: RepoId,
+        rule: HideRule,
+    },
+}
+
+/// What a [`PanelSection`] is headed by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PanelHeader {
+    Section(SectionKind),
+    /// Attention grouping's trailing section of every repo's hidden groups.
+    Hidden,
+}
+
+/// A header and its rows in display order. `count` is the workspace tally
+/// the header shows — group summary rows aren't workspaces.
+#[derive(Debug, Clone)]
+pub struct PanelSection {
+    pub header: PanelHeader,
+    pub count: usize,
+    pub rows: Vec<PanelRow>,
+}
+
+/// One repo's hidden group: its rule and its member ids, ordered by the
+/// dashboard's sort mode.
+struct HiddenGroup {
+    repo: RepoId,
+    rule: HideRule,
+    members: Vec<WorkspaceId>,
+}
+
+impl HiddenGroup {
+    fn expanded(&self, inputs: &PanelInputs<'_>) -> bool {
+        inputs
+            .expanded_hidden
+            .contains(&(self.repo, self.rule.clone()))
+    }
+
+    /// The group row, then its members when expanded.
+    fn rows(&self, inputs: &PanelInputs<'_>) -> impl Iterator<Item = PanelRow> {
+        let members = if self.expanded(inputs) {
+            self.members.clone()
+        } else {
+            Vec::new()
+        };
+        std::iter::once(PanelRow::HiddenGroup {
+            repo: self.repo,
+            rule: self.rule.clone(),
+        })
+        .chain(members.into_iter().map(PanelRow::Workspace))
+    }
+}
+
+/// Every repo's hidden groups, repos by `(sort_order, id)` then rule — the
+/// dashboard's order. A filter bypasses hide rules, so it yields none.
+fn hidden_groups(inputs: &PanelInputs<'_>, filter: Option<&str>) -> Vec<HiddenGroup> {
+    if active_needle(filter).is_some() {
+        return Vec::new();
+    }
+    let mut repos = inputs.repos.clone();
+    repos.sort_by_key(|r| (r.sort_order, r.id.0));
+    repos
+        .into_iter()
+        .flat_map(|r| {
+            crate::ui::dashboard::hidden_groups(r, &inputs.items, Default::default())
+                .into_iter()
+                .map(move |(rule, rows)| {
+                    let rows: Vec<WorkspaceItem<'_>> = rows.into_iter().cloned().collect();
+                    let members = ordered_sections(
+                        &[r],
+                        &rows,
+                        GroupMode::Repo,
+                        inputs.sort_mode,
+                        inputs.blocked_pin_max_age_secs,
+                    )
+                    .into_iter()
+                    .flat_map(|s| s.workspace_ids)
+                    .collect();
+                    HiddenGroup {
+                        repo: r.id,
+                        rule,
+                        members,
+                    }
+                })
+        })
+        .collect()
+}
+
 /// The panel's sections, in display order: the dashboard's ordering
 /// ([`ordered_sections`] under the dashboard's live group and sort modes)
-/// applied to the rows that survive `filter`. Hide rules drop rows unless
-/// filtering. Unlike the dashboard the panel never folds a repo or
-/// collapses quiet ones — every workspace is one keystroke from being
-/// switched to — and it omits repos left with no rows, since a bare header
-/// is noise in a panel meant to be scanned.
+/// applied to the rows that survive `filter`. Rows hide rules drop gather
+/// into the dashboard's group rows instead — under their repo, or in a
+/// trailing HIDDEN section when grouping by attention — and a group the
+/// dashboard has expanded lists its rows here too. Unlike the dashboard the
+/// panel never folds a repo or collapses quiet ones — every workspace is one
+/// keystroke from being switched to — and it omits sections left with no
+/// rows, since a bare header is noise in a panel meant to be scanned.
 ///
 /// Used by both the renderer (to draw rows) and, flattened through
-/// [`ordered_workspaces_for_panel`], the key handler (to map the selected
-/// index back to a workspace id).
-pub fn panel_sections(inputs: &PanelInputs<'_>, filter: Option<&str>) -> Vec<OrderedSection> {
+/// [`panel_rows`], the key handler (to map the selected index back to a row).
+pub fn panel_sections(inputs: &PanelInputs<'_>, filter: Option<&str>) -> Vec<PanelSection> {
     let needle = active_needle(filter);
     let shown: Vec<WorkspaceItem<'_>> = inputs
         .items
@@ -164,7 +267,8 @@ pub fn panel_sections(inputs: &PanelInputs<'_>, filter: Option<&str>) -> Vec<Ord
         })
         .cloned()
         .collect();
-    ordered_sections(
+    let groups = hidden_groups(inputs, filter);
+    let mut sections: Vec<PanelSection> = ordered_sections(
         &inputs.repos,
         &shown,
         inputs.group_mode,
@@ -172,19 +276,57 @@ pub fn panel_sections(inputs: &PanelInputs<'_>, filter: Option<&str>) -> Vec<Ord
         inputs.blocked_pin_max_age_secs,
     )
     .into_iter()
-    .filter(|s| !s.workspace_ids.is_empty())
-    .collect()
+    .map(|s| {
+        let mut rows: Vec<PanelRow> = s
+            .workspace_ids
+            .iter()
+            .copied()
+            .map(PanelRow::Workspace)
+            .collect();
+        if let SectionKind::Repo(rid) = s.kind {
+            for g in groups.iter().filter(|g| g.repo == rid) {
+                rows.extend(g.rows(inputs));
+            }
+        }
+        PanelSection {
+            header: PanelHeader::Section(s.kind),
+            count: s.workspace_ids.len(),
+            rows,
+        }
+    })
+    .collect();
+    if inputs.group_mode == GroupMode::Attention && !groups.is_empty() {
+        sections.push(PanelSection {
+            header: PanelHeader::Hidden,
+            count: groups.iter().map(|g| g.members.len()).sum(),
+            rows: groups.iter().flat_map(|g| g.rows(inputs)).collect(),
+        });
+    }
+    sections.retain(|s| !s.rows.is_empty());
+    sections
 }
 
-/// [`panel_sections`] flattened to the workspace ids in row order — the
-/// list `PanelView::selected` indexes into.
+/// [`panel_sections`] flattened to its rows in order — the list
+/// `PanelView::selected` indexes into.
+pub fn panel_rows(inputs: &PanelInputs<'_>, filter: Option<&str>) -> Vec<PanelRow> {
+    panel_sections(inputs, filter)
+        .into_iter()
+        .flat_map(|s| s.rows)
+        .collect()
+}
+
+/// The workspace rows of [`panel_rows`], in order.
+#[cfg(test)]
 pub fn ordered_workspaces_for_panel(
     inputs: &PanelInputs<'_>,
     filter: Option<&str>,
 ) -> Vec<WorkspaceId> {
-    panel_sections(inputs, filter)
+    panel_rows(inputs, filter)
         .into_iter()
-        .flat_map(|s| s.workspace_ids)
+        .filter_map(|r| match r {
+            PanelRow::Workspace(id) => Some(id),
+            PanelRow::HiddenGroup { .. } => None,
+        })
         .collect()
 }
 
@@ -258,26 +400,32 @@ pub fn render_updates_panel(
     theme: &Theme,
 ) {
     let sections = panel_sections(inputs, view.filter);
-    // Row labels: the workspace name, prefixed by its repo when the repo
-    // headers are gone (attention grouping) — the same `<repo>/<name>` the
-    // dashboard's flat rows use to keep repo context.
-    let labels: Vec<Vec<(WorkspaceId, String)>> = sections
+    // Repo headers are gone under attention grouping, so its rows carry
+    // their repo — the same `<repo>/<name>` the dashboard's flat rows use.
+    let prefix_repo = inputs.group_mode == GroupMode::Attention;
+    let repo_name = |rid: RepoId| {
+        inputs
+            .repos
+            .iter()
+            .find(|r| r.id == rid)
+            .map(|r| r.name.as_str())
+            .unwrap_or("")
+    };
+    let label = |id: WorkspaceId| {
+        let name = inputs.workspace(id).map(|w| w.name.as_str()).unwrap_or("");
+        if prefix_repo {
+            let repo = inputs.item(id).map(|i| i.repo.name.as_str()).unwrap_or("");
+            format!("{repo}/{name}")
+        } else {
+            name.to_string()
+        }
+    };
+    let labels: HashMap<WorkspaceId, String> = sections
         .iter()
-        .map(|s| {
-            s.workspace_ids
-                .iter()
-                .map(|id| {
-                    let name = inputs.workspace(*id).map(|w| w.name.as_str()).unwrap_or("");
-                    let label = match s.kind {
-                        SectionKind::Repo(_) => name.to_string(),
-                        SectionKind::Attention(_) => {
-                            let repo = inputs.item(*id).map(|i| i.repo.name.as_str()).unwrap_or("");
-                            format!("{repo}/{name}")
-                        }
-                    };
-                    (*id, label)
-                })
-                .collect()
+        .flat_map(|s| &s.rows)
+        .filter_map(|r| match r {
+            PanelRow::Workspace(id) => Some((*id, label(*id))),
+            PanelRow::HiddenGroup { .. } => None,
         })
         .collect();
 
@@ -286,43 +434,70 @@ pub fn render_updates_panel(
     // Rows are laid out at the drawer's width, so measure it before
     // building them.
     let row_width = usize::from(crate::ui::drawer::body_width(area));
+    // Group rows follow a section's visible rows, so every workspace after
+    // one is an expanded group's member.
+    let mut nested: HashSet<WorkspaceId> = HashSet::new();
+    for s in &sections {
+        let mut in_group = false;
+        for r in &s.rows {
+            match r {
+                PanelRow::HiddenGroup { .. } => in_group = true,
+                PanelRow::Workspace(id) if in_group => {
+                    nested.insert(*id);
+                }
+                PanelRow::Workspace(_) => {}
+            }
+        }
+    }
     let name_col = name_col_width(
-        labels.iter().flatten().map(|(_, label)| label.as_str()),
+        labels
+            .iter()
+            .map(|(id, label)| display_width(label) + if nested.contains(id) { NEST_W } else { 0 }),
         row_width,
     );
 
     let mut lines: Vec<Line> = Vec::new();
     let mut selected_visual_line: Option<usize> = None;
     let mut flat_index = 0usize;
-    for (section, rows) in sections.iter().zip(&labels) {
-        let (title, title_style) = match section.kind {
-            SectionKind::Repo(rid) => (
-                inputs
-                    .repos
-                    .iter()
-                    .find(|r| r.id == rid)
-                    .map(|r| r.name.clone())
-                    .unwrap_or_default(),
-                theme.header_style(),
-            ),
-            SectionKind::Attention(a) => (a.label().trim_start().to_string(), theme.header_style()),
+    for section in &sections {
+        let title = match &section.header {
+            PanelHeader::Section(SectionKind::Repo(rid)) => repo_name(*rid).to_string(),
+            PanelHeader::Section(SectionKind::Attention(a)) => a.label().trim_start().to_string(),
+            PanelHeader::Hidden => "HIDDEN".to_string(),
         };
         lines.push(Line::from(vec![
-            Span::styled(title, title_style),
-            Span::styled(format!("  ({})", rows.len()), theme.dim_style()),
+            Span::styled(title, theme.header_style()),
+            Span::styled(format!("  ({})", section.count), theme.dim_style()),
         ]));
-        for (id, label) in rows {
+        for row in &section.rows {
             let is_selected = flat_index == view.selected;
             flat_index += 1;
             if is_selected {
                 selected_visual_line = Some(lines.len());
             }
+            let id = match row {
+                PanelRow::Workspace(id) => id,
+                PanelRow::HiddenGroup { repo, rule } => {
+                    lines.push(group_row(
+                        inputs,
+                        *repo,
+                        rule,
+                        prefix_repo.then(|| repo_name(*repo)),
+                        is_selected,
+                        row_width,
+                        theme,
+                    ));
+                    continue;
+                }
+            };
+            let label = labels.get(id).map(String::as_str).unwrap_or("");
             let Some(w) = inputs.workspace(*id) else {
                 continue;
             };
             let item = inputs.item(*id);
             let row = RowData {
                 label,
+                nested: nested.contains(id),
                 failed: w.state == crate::data::store::WorkspaceState::Failed,
                 events: inputs.events.get(id),
                 activity: inputs.activity.get(id).copied(),
@@ -351,11 +526,10 @@ pub fn render_updates_panel(
     }
     // Nothing to show. Separate the two causes: an empty panel and a panel
     // whose rows the needle hid are very different situations for the user.
+    // (Hidden rows always draw as group rows, so they never empty it.)
     if lines.is_empty() {
         let msg = if view.active_needle().is_some() {
             "(no matching workspaces)"
-        } else if !inputs.items.is_empty() {
-            "(all workspaces hidden · / to search)"
         } else {
             "(no workspaces)"
         };
@@ -480,11 +654,48 @@ fn status_text_for(
     ("no session".to_string(), None)
 }
 
+/// A hidden group's summary row — the dashboard's own line, padded to
+/// `row_width` so the selection background spans the row.
+fn group_row(
+    inputs: &PanelInputs<'_>,
+    repo: RepoId,
+    rule: &HideRule,
+    repo_prefix: Option<&str>,
+    is_selected: bool,
+    row_width: usize,
+    theme: &Theme,
+) -> Line<'static> {
+    let members: Vec<_> = inputs
+        .items
+        .iter()
+        .filter(|i| {
+            i.repo.id == repo
+                && crate::ui::dashboard::hidden_by(i, Default::default()).as_ref() == Some(rule)
+        })
+        .map(|i| i.row.clone())
+        .collect();
+    let nerd_fonts = members.first().is_some_and(|r| r.nerd_fonts);
+    let view = HiddenGroupView {
+        rule: rule.clone(),
+        expanded: inputs.expanded_hidden.contains(&(repo, rule.clone())),
+        workspaces: members,
+    };
+    let mut line = hidden_group_line(&view, repo_prefix, nerd_fonts, theme);
+    let pad = row_width.saturating_sub(line.width());
+    line.spans.push(Span::raw(" ".repeat(pad)));
+    if is_selected {
+        line = line.style(theme.selected_bg_style());
+    }
+    line
+}
+
 /// One row's worth of inputs for [`workspace_row`].
 struct RowData<'a> {
     /// The name cell: the workspace name, or `<repo>/<name>` when the
     /// section headers don't carry the repo.
     label: &'a str,
+    /// An expanded hidden group's member, indented [`NEST_W`] under it.
+    nested: bool,
     /// The workspace's own lifecycle failed (no worktree).
     failed: bool,
     events: Option<&'a crate::activity::events::WorkspaceEvents>,
@@ -606,10 +817,13 @@ fn workspace_row<'a>(
     let status_txt = truncate(&status_text, status_budget);
     let pad_w = status_budget.saturating_sub(display_width(&status_txt)) + age_reserved - age_w;
 
+    // A nested row's indent comes out of its name cell, so its status text
+    // still starts at the shared column.
+    let nest = if row.nested { NEST_W.min(name_col) } else { 0 };
     let mut spans = vec![
-        Span::raw("  "),
+        Span::raw(" ".repeat(2 + nest)),
         Span::styled(format!("{glyph} "), glyph_style),
-        Span::styled(truncate_pad(row.label, name_col), name_style),
+        Span::styled(truncate_pad(row.label, name_col - nest), name_style),
         Span::raw(" ".repeat(COL_GAP_W)),
     ];
     if show_pr {
@@ -722,6 +936,7 @@ mod workspace_row_tests {
     ) -> Line<'a> {
         let row = RowData {
             label: &w.name,
+            nested: false,
             failed: w.state == WorkspaceState::Failed,
             events,
             activity,
@@ -1051,6 +1266,7 @@ mod workspace_row_tests {
             for tick in [0u32, 1] {
                 let row = RowData {
                     label: &w.name,
+                    nested: false,
                     failed: false,
                     events: None,
                     activity: Some(activity),
@@ -1122,6 +1338,7 @@ mod workspace_row_tests {
         for (status, activity, agent, glyph) in cases {
             let row = RowData {
                 label: &w.name,
+                nested: false,
                 failed: false,
                 events: None,
                 activity,
@@ -1160,6 +1377,7 @@ mod workspace_row_tests {
         let w = fixture_workspace("alpha");
         let row = RowData {
             label: &w.name,
+            nested: false,
             failed: true,
             events: None,
             activity: Some(ActivityState::Active),
@@ -1295,6 +1513,7 @@ mod workspace_row_tests {
     fn pr_row<'a>(w: &'a Workspace, lifecycle: Option<BranchLifecycle>) -> RowData<'a> {
         RowData {
             label: &w.name,
+            nested: false,
             failed: false,
             events: None,
             activity: None,
@@ -1578,7 +1797,10 @@ mod workspace_row_tests {
     fn name_col_width_fits_a_wide_name_whole() {
         // 7 chars but 13 cells: a column sized in chars would cut it short.
         let w = fixture_workspace("倉庫名-ワーク");
-        let name_col = name_col_width([w.name.as_str(), "alpha"].into_iter(), 98);
+        let name_col = name_col_width(
+            [w.name.as_str(), "alpha"].into_iter().map(display_width),
+            98,
+        );
         assert_eq!(name_col, 13);
         let line = row_line(
             &w,
@@ -1600,18 +1822,21 @@ mod workspace_row_tests {
 
     #[test]
     fn name_col_width_tracks_longest_name_capped() {
-        assert_eq!(name_col_width(["ab", "abcd"].into_iter(), 78), 4);
+        assert_eq!(
+            name_col_width(["ab", "abcd"].into_iter().map(display_width), 78),
+            4
+        );
         assert_eq!(name_col_width(std::iter::empty(), 78), 0);
         let long = "x".repeat(NAME_COL_MAX + 10);
         assert_eq!(
-            name_col_width([long.as_str()].into_iter(), 78),
+            name_col_width([long.as_str()].into_iter().map(display_width), 78),
             NAME_COL_MAX,
             "column caps at NAME_COL_MAX"
         );
         // Narrow panel: the column also clamps so prefix + name + gap leave
         // at least one status char. Inner width 18 (narrowest panel) → 11.
         assert_eq!(
-            name_col_width([long.as_str()].into_iter(), 18),
+            name_col_width([long.as_str()].into_iter().map(display_width), 18),
             18 - ROW_PREFIX_W - COL_GAP_W - 1,
             "column clamps to the row width in narrow panels"
         );
@@ -1625,7 +1850,7 @@ mod workspace_row_tests {
         let theme = Theme::ansi();
         let w = fixture_workspace("a-very-long-workspace-name");
         let row_width = 18;
-        let name_col = name_col_width([w.name.as_str()].into_iter(), row_width);
+        let name_col = name_col_width([w.name.as_str()].into_iter().map(display_width), row_width);
         let awaiting = ("Bash".to_string(), 5_000i64);
         let line = row_line(
             &w,
@@ -1705,6 +1930,7 @@ mod ordering_tests {
         ago: HashMap<WorkspaceId, u64>,
         group_mode: Option<GroupMode>,
         sort_mode: Option<SortMode>,
+        expanded: HashSet<(RepoId, HideRule)>,
     }
 
     fn inputs<'a>(
@@ -1734,6 +1960,7 @@ mod ordering_tests {
             group_mode: maps.group_mode.unwrap_or_default(),
             sort_mode: maps.sort_mode.unwrap_or_default(),
             blocked_pin_max_age_secs: BLOCKED_PIN_MAX_AGE_DEFAULT_SECS,
+            expanded_hidden: &maps.expanded,
             pr_width: crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
         }
     }
@@ -1816,13 +2043,19 @@ mod ordering_tests {
         maps.statuses.insert(WorkspaceId(2), Status::Thinking);
         maps.statuses.insert(WorkspaceId(3), Status::Question);
         let sections = panel_sections(&inputs(&repos, &ws, &maps), None);
-        let kinds: Vec<SectionKind> = sections.iter().map(|s| s.kind.clone()).collect();
+        let kinds: Vec<PanelHeader> = sections.iter().map(|s| s.header.clone()).collect();
         assert_eq!(
             kinds,
             vec![
-                SectionKind::Attention(crate::ui::dashboard::AttentionSection::NeedsAttention),
-                SectionKind::Attention(crate::ui::dashboard::AttentionSection::Working),
-                SectionKind::Attention(crate::ui::dashboard::AttentionSection::Idle),
+                PanelHeader::Section(SectionKind::Attention(
+                    crate::ui::dashboard::AttentionSection::NeedsAttention
+                )),
+                PanelHeader::Section(SectionKind::Attention(
+                    crate::ui::dashboard::AttentionSection::Working
+                )),
+                PanelHeader::Section(SectionKind::Attention(
+                    crate::ui::dashboard::AttentionSection::Idle
+                )),
             ]
         );
         assert_eq!(
@@ -1839,7 +2072,10 @@ mod ordering_tests {
         let ws = vec![fixture_ws(1, 2, "only")];
         let sections = panel_sections(&inputs(&repos, &ws, &Maps::default()), None);
         assert_eq!(sections.len(), 1);
-        assert_eq!(sections[0].kind, SectionKind::Repo(RepoId(2)));
+        assert_eq!(
+            sections[0].header,
+            PanelHeader::Section(SectionKind::Repo(RepoId(2)))
+        );
     }
 
     /// The panel is capped at `PANEL_MAX_WIDTH` columns with a 1-col border
@@ -2042,6 +2278,72 @@ mod ordering_tests {
         );
         assert!(ordered_workspaces_for_panel(&pi, Some("gone")).contains(&WorkspaceId(2)));
     }
+
+    /// Tag-hidden rows: one group row per rule after the repo's visible
+    /// rows, members listed only while the dashboard has it expanded, and
+    /// no group at all while filtering (the filter reaches every row).
+    #[test]
+    fn tag_hidden_rows_group_under_their_repo_and_expand() {
+        let mut repo = fixture_repo(1);
+        repo.hide_rules = crate::data::hide_rules::HideRules::parse(Some("tag:parked"));
+        let repos = vec![repo];
+        let ws = vec![fixture_ws(1, 1, "kept"), fixture_ws(2, 1, "parked")];
+        let parked = HideRule::tag("parked");
+        let group = PanelRow::HiddenGroup {
+            repo: RepoId(1),
+            rule: parked.clone(),
+        };
+        let mut maps = Maps::default();
+        let rows = |maps: &Maps, filter| {
+            let mut pi = inputs(&repos, &ws, maps);
+            pi.items[1].hide.tags = vec!["parked".into()];
+            panel_rows(&pi, filter)
+        };
+        assert_eq!(
+            rows(&maps, None),
+            vec![PanelRow::Workspace(WorkspaceId(1)), group.clone()]
+        );
+        maps.expanded.insert((RepoId(1), parked));
+        assert_eq!(
+            rows(&maps, None),
+            vec![
+                PanelRow::Workspace(WorkspaceId(1)),
+                group,
+                PanelRow::Workspace(WorkspaceId(2)),
+            ]
+        );
+        assert_eq!(
+            rows(&maps, Some("park")),
+            vec![PanelRow::Workspace(WorkspaceId(2))]
+        );
+    }
+
+    /// Under attention grouping every repo's hidden groups gather into a
+    /// trailing HIDDEN section, as on the dashboard.
+    #[test]
+    fn attention_grouping_puts_hidden_groups_last() {
+        let mut repo = fixture_repo(1);
+        repo.hide_rules = crate::data::hide_rules::HideRules::parse(Some("tag:parked"));
+        let repos = vec![repo];
+        let ws = vec![fixture_ws(1, 1, "kept"), fixture_ws(2, 1, "parked")];
+        let maps = Maps {
+            group_mode: Some(GroupMode::Attention),
+            ..Default::default()
+        };
+        let mut pi = inputs(&repos, &ws, &maps);
+        pi.items[1].hide.tags = vec!["parked".into()];
+        let sections = panel_sections(&pi, None);
+        let last = sections.last().unwrap();
+        assert_eq!(last.header, PanelHeader::Hidden);
+        assert_eq!(last.count, 1);
+        assert_eq!(
+            last.rows,
+            vec![PanelRow::HiddenGroup {
+                repo: RepoId(1),
+                rule: HideRule::tag("parked"),
+            }]
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2076,10 +2378,21 @@ mod render_tests {
         statuses: &HashMap<WorkspaceId, Status>,
         tick: u32,
     ) -> String {
-        draw_lifecycle(repos, ws, filter, group_mode, statuses, tick, None)
+        draw_lifecycle(
+            repos,
+            ws,
+            filter,
+            group_mode,
+            statuses,
+            tick,
+            None,
+            &HashSet::new(),
+        )
     }
 
-    /// `draw_at_tick` with every row's PR lifecycle forced to `lifecycle`.
+    /// `draw_at_tick` with every row's PR lifecycle forced to `lifecycle`
+    /// and the hidden groups in `expanded` open.
+    #[allow(clippy::too_many_arguments)]
     fn draw_lifecycle(
         repos: &[Repo],
         ws: &[(RepoId, Workspace)],
@@ -2088,6 +2401,7 @@ mod render_tests {
         statuses: &HashMap<WorkspaceId, Status>,
         tick: u32,
         lifecycle: Option<crate::git::forge::BranchLifecycle>,
+        expanded: &HashSet<(RepoId, HideRule)>,
     ) -> String {
         let theme = Theme::ansi();
         let events = HashMap::new();
@@ -2117,6 +2431,7 @@ mod render_tests {
             group_mode,
             sort_mode: SortMode::Recency,
             blocked_pin_max_age_secs: BLOCKED_PIN_MAX_AGE_DEFAULT_SECS,
+            expanded_hidden: expanded,
             pr_width: crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
         };
         let view = PanelView {
@@ -2183,24 +2498,43 @@ mod render_tests {
         assert!(draw(&repos, &[], None).contains("(no workspaces)"));
     }
 
-    /// Hiding that empties the panel reads differently from no workspaces
-    /// or a filter miss.
+    /// A hidden workspace draws as its group's summary row under its repo,
+    /// and its own row appears once the group is expanded.
     #[test]
-    fn all_rows_hidden_shows_its_own_empty_message() {
+    fn hidden_rows_draw_as_a_group_row_that_expands() {
         use crate::git::forge::BranchLifecycle;
         let mut repo = fixture_repo_named(1, "alpha-repo");
         repo.hide_rules = crate::data::hide_rules::HideRules::parse(Some("pr:merged"));
         let ws = vec![fixture_ws(1, 1, "one")];
-        let out = draw_lifecycle(
-            &[repo],
-            &ws,
-            None,
-            GroupMode::Repo,
-            &HashMap::new(),
-            0,
-            Some(BranchLifecycle::PrMerged),
-        );
-        assert!(out.contains("(all workspaces hidden"), "{out}");
+        let draw = |expanded: &HashSet<(RepoId, HideRule)>| {
+            draw_lifecycle(
+                std::slice::from_ref(&repo),
+                &ws,
+                None,
+                GroupMode::Repo,
+                &HashMap::new(),
+                0,
+                Some(BranchLifecycle::PrMerged),
+                expanded,
+            )
+        };
+        let collapsed = draw(&HashSet::new());
+        assert!(collapsed.contains("alpha-repo  (0)"), "{collapsed}");
+        assert!(collapsed.contains("▸ ⎇ merged  ·  1 hidden"), "{collapsed}");
+        assert!(!collapsed.contains("one"), "{collapsed}");
+
+        let open = HashSet::from([(
+            RepoId(1),
+            HideRule::Pr(crate::data::hide_rules::PrCriterion::Merged),
+        )]);
+        let expanded = draw(&open);
+        assert!(expanded.contains("▾ ⎇ merged  ·  1 hidden"), "{expanded}");
+        // Members sit under the group's label, not flush with the fold glyph.
+        let col = |needle: &str| {
+            let line = expanded.lines().find(|l| l.contains(needle)).unwrap();
+            line.chars().position(|c| needle.starts_with(c)).unwrap()
+        };
+        assert_eq!(col("○ one"), col("⎇ merged"), "{expanded}");
     }
 
     /// Attention grouping draws the dashboard's section headers in place

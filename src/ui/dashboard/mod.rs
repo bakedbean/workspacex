@@ -820,7 +820,7 @@ fn push_group_targets(
 
 /// `repo`'s hidden rows grouped by rule, in the repo's rule order. Empty
 /// groups are omitted.
-fn hidden_groups<'w, 'a>(
+pub(crate) fn hidden_groups<'w, 'a>(
     repo: &Repo,
     workspaces: &'w [WorkspaceItem<'a>],
     filter: RowFilter<'_>,

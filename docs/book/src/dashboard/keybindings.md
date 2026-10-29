@@ -157,7 +157,7 @@ A workspace attached from a remote host takes only `Ctrl-x d`, `Ctrl-x <`, `Ctrl
 
 | Panel                       | Keys                                                                |
 | --------------------------- | ------------------------------------------------------------------- |
-| Updates (`Ctrl-x u`)        | `j`/`k` move; `enter`/`l` attach; `v` side-by-side split; `s` stacked split; `o`/`G` sort and group; `/` filter; `esc` close |
+| Updates (`Ctrl-x u`)        | `j`/`k` move; `enter`/`l` attach, or expand a hidden group; `h` fold a hidden group; `v` side-by-side split; `s` stacked split; `o`/`G` sort and group; `/` filter; `esc` close |
 | Agents (`Ctrl-x a`)         | `j`/`k` move; `enter` add the selected kind; `a` add one of each; `x` remove the newest; `esc` close |
 | Prompt tag (`Ctrl-x <`)     | arrows move; `1`–`9` pick; type to filter or name a new tag; `enter` write the body; `Ctrl-d` delete the tag; `esc` close |
 | Prompt tag body             | `Ctrl-s` insert; `esc` back                                         |

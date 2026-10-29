@@ -1774,6 +1774,113 @@ mod hide_rules {
     fn attention_selection_highlight_matches_visible_targets() {
         assert_lockstep(GroupMode::Attention);
     }
+
+    fn with_status(mut it: WorkspaceItem<'_>, s: Status) -> WorkspaceItem<'_> {
+        it.status = s;
+        it.row.status = s;
+        it
+    }
+
+    /// open-pr asks a question, merged-a (hidden by a rule) asks too,
+    /// no-pr is thinking, the rest are idle.
+    fn mixed(repo: &Repo) -> Vec<WorkspaceItem<'_>> {
+        let mut ws = items(repo);
+        ws[0] = with_status(ws[0].clone(), Status::Question);
+        ws[1] = with_status(ws[1].clone(), Status::Question);
+        ws[3] = with_status(ws[3].clone(), Status::Thinking);
+        ws
+    }
+
+    fn shown_workspaces(t: &[SelectionTarget]) -> Vec<WorkspaceId> {
+        let mut ids: Vec<WorkspaceId> = t
+            .iter()
+            .filter_map(|x| match x {
+                SelectionTarget::Workspace(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        ids.sort_by_key(|id| id.0);
+        ids
+    }
+
+    /// A status filter shows exactly that status's rows — hidden-rule rows
+    /// included, so the list agrees with the header tally that counted them.
+    #[test]
+    fn status_filter_keeps_only_that_status_in_both_views() {
+        let repo = repo_with("pr:merged,pr:none");
+        let inputs = inputs(&repo, mixed(&repo));
+        for group in [GroupMode::Repo, GroupMode::Attention] {
+            let mut state = DashboardState {
+                group_mode: group,
+                status_filter: Some(Status::Question),
+                ..Default::default()
+            };
+            let t = visible_targets(&inputs, &state);
+            assert_eq!(
+                shown_workspaces(&t),
+                [WorkspaceId(1), WorkspaceId(2)],
+                "{group:?}: {t:?}"
+            );
+            let screen = draw(&inputs, &mut state);
+            assert!(
+                screen.contains("open-pr") && screen.contains("merged-a"),
+                "{group:?}:\n{screen}"
+            );
+            for gone in ["merged-b", "no-pr ", "unknown-pr", "hidden"] {
+                assert!(
+                    !screen.contains(gone),
+                    "{group:?} shows {gone:?}:\n{screen}"
+                );
+            }
+        }
+    }
+
+    /// The typed needle and the clicked status both apply.
+    #[test]
+    fn status_filter_combines_with_the_text_filter() {
+        let repo = repo_with("pr:merged,pr:none");
+        let inputs = inputs(&repo, mixed(&repo));
+        let state = DashboardState {
+            filter: Some("merged".into()),
+            status_filter: Some(Status::Question),
+            ..Default::default()
+        };
+        assert_eq!(
+            shown_workspaces(&visible_targets(&inputs, &state)),
+            [WorkspaceId(2)]
+        );
+    }
+
+    /// By attention folds an all-idle repo into QUIET REPOS, which renders
+    /// no rows. Filtering to idle must still list the idle rows.
+    #[test]
+    fn idle_status_filter_lists_rows_instead_of_a_quiet_repo() {
+        let repo = repo_with("");
+        let inputs = inputs(&repo, items(&repo));
+        let mut state = DashboardState {
+            group_mode: GroupMode::Attention,
+            status_filter: Some(Status::Idle),
+            ..Default::default()
+        };
+        assert_eq!(shown_workspaces(&visible_targets(&inputs, &state)).len(), 5);
+        let screen = draw(&inputs, &mut state);
+        assert!(!screen.contains("QUIET"), "{screen}");
+        assert!(screen.contains("unknown-pr"), "{screen}");
+    }
+
+    /// A status with no rows left reads as a filter that hid everything.
+    #[test]
+    fn status_filter_with_no_matches_says_so() {
+        let repo = repo_with("");
+        let inputs = inputs(&repo, items(&repo));
+        let mut state = DashboardState {
+            group_mode: GroupMode::Attention,
+            status_filter: Some(Status::Stalled),
+            ..Default::default()
+        };
+        let screen = draw(&inputs, &mut state);
+        assert!(screen.contains("(no matching workspaces)"), "{screen}");
+    }
 }
 
 #[test]

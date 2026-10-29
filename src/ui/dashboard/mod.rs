@@ -81,6 +81,10 @@ pub struct DashboardState {
         crate::data::hide_rules::HideRule,
     )>,
     pub filter: Option<String>,
+    /// The status picked by clicking a `$statuses` tally item in the header,
+    /// or `None`. Narrows the list alongside `filter` (both must match);
+    /// Esc clears it. Not persisted.
+    pub status_filter: Option<Status>,
     pub selection: Option<SelectionTarget>,
     /// Index into `App::selectable`. Owned here so that nav handlers in
     /// `app.rs` can mutate it without touching ratatui internals; the
@@ -173,6 +177,7 @@ impl Default for DashboardState {
             folded: HashMap::new(),
             expanded_hidden: Default::default(),
             filter: None,
+            status_filter: None,
             selection: None,
             selected: 0,
             reply_draft: String::new(),
@@ -338,7 +343,7 @@ pub fn render_without_footer(
     // REPOS, so `items` is empty only when there are no repos at all or a
     // filter hid every row.
     if items.is_empty() {
-        let msg = if state.filter.as_deref().filter(|f| !f.is_empty()).is_some() {
+        let msg = if RowFilter::of(state).is_active() {
             "(no matching workspaces)"
         } else {
             "(no repos · run wsx repo add <path>)"
@@ -486,11 +491,11 @@ pub fn visible_targets(
     inputs: &DashboardInputs<'_>,
     state: &DashboardState,
 ) -> Vec<SelectionTarget> {
-    let filter = state.filter.as_deref().filter(|f| !f.is_empty());
+    let filter = RowFilter::of(state);
     let shown: Vec<WorkspaceItem<'_>> = inputs
         .workspaces
         .iter()
-        .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
+        .filter(|w| filter.matches(w))
         .filter(|w| hidden_by(w, filter).is_none())
         .cloned()
         .collect();
@@ -566,10 +571,10 @@ pub fn visible_targets(
 /// The repos `render_by_attention` lists under QUIET REPOS for `filter`:
 /// every repo with no (matching) workspaces — unless a filter is active and
 /// misses the repo's name — plus every repo whose matching workspaces are
-/// all idle.
+/// all idle, unless a status filter is active.
 fn quiet_repo_names(
     inputs: &DashboardInputs<'_>,
-    filter: Option<&str>,
+    filter: RowFilter<'_>,
 ) -> std::collections::HashSet<String> {
     let mut quiet_names: std::collections::HashSet<String> = Default::default();
     for r in &inputs.repos {
@@ -577,17 +582,15 @@ fn quiet_repo_names(
             .workspaces
             .iter()
             .filter(|w| w.repo.id == r.id)
-            .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
+            .filter(|w| filter.matches(w))
             .filter(|w| hidden_by(w, filter).is_none())
             .collect();
         let count = repo_rows.len();
-        let all_idle =
-            !repo_rows.is_empty() && repo_rows.iter().all(|w| matches!(w.status, Status::Idle));
-        let repo_matches_filter = filter
-            .map(|f| r.name.to_lowercase().contains(&f.to_lowercase()))
-            .unwrap_or(true);
+        let all_idle = filter.status.is_none()
+            && !repo_rows.is_empty()
+            && repo_rows.iter().all(|w| matches!(w.status, Status::Idle));
         let has_hidden = !hidden_groups(r, &inputs.workspaces, filter).is_empty();
-        let include_empty = count == 0 && !has_hidden && (filter.is_none() || repo_matches_filter);
+        let include_empty = count == 0 && !has_hidden && filter.keeps_empty_repo(&r.name);
         if include_empty || all_idle {
             quiet_names.insert(r.name.clone());
         }
@@ -747,8 +750,8 @@ pub fn reconcile_selection(
 
 /// The rule hiding `w`, or `None` when it shows normally. An active filter
 /// bypasses every rule so a search can find any row.
-pub(crate) fn hidden_by(w: &WorkspaceItem<'_>, filter: Option<&str>) -> Option<HideRule> {
-    if filter.is_some() {
+pub(crate) fn hidden_by(w: &WorkspaceItem<'_>, filter: RowFilter<'_>) -> Option<HideRule> {
+    if filter.is_active() {
         return None;
     }
     w.repo.hide_rules.classify(&w.hide)
@@ -802,7 +805,7 @@ fn push_group_targets(
 fn hidden_groups<'w, 'a>(
     repo: &Repo,
     workspaces: &'w [WorkspaceItem<'a>],
-    filter: Option<&str>,
+    filter: RowFilter<'_>,
 ) -> Vec<(HideRule, Vec<&'w WorkspaceItem<'a>>)> {
     repo.hide_rules
         .iter()
@@ -819,7 +822,7 @@ fn hidden_groups<'w, 'a>(
 /// Every repo's hidden groups in display order: repos by `(sort_order, id)`, then rule.
 fn all_hidden_groups<'w, 'a>(
     inputs: &'w DashboardInputs<'a>,
-    filter: Option<&str>,
+    filter: RowFilter<'_>,
 ) -> Vec<(&'w Repo, HideRule, Vec<&'w WorkspaceItem<'a>>)> {
     let mut repos: Vec<&Repo> = inputs.repos.to_vec();
     repos.sort_by_key(|r| (r.sort_order, r.id.0));
@@ -837,6 +840,41 @@ fn all_hidden_groups<'w, 'a>(
 /// are all hidden stays open so its summary rows show.
 fn default_expanded(counts: StatusCounts, has_hidden: bool) -> bool {
     !default_fold(counts) || has_hidden
+}
+
+/// What narrows the list: the typed `/` needle and the clicked status.
+/// Both apply when both are set. An empty needle filters nothing.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct RowFilter<'f> {
+    text: Option<&'f str>,
+    status: Option<Status>,
+}
+
+impl<'f> RowFilter<'f> {
+    fn of(state: &'f DashboardState) -> Self {
+        RowFilter {
+            text: state.filter.as_deref().filter(|f| !f.is_empty()),
+            status: state.status_filter,
+        }
+    }
+
+    fn is_active(self) -> bool {
+        self.text.is_some() || self.status.is_some()
+    }
+
+    fn matches(self, w: &WorkspaceItem<'_>) -> bool {
+        self.status.is_none_or(|s| w.status == s) && self.text.is_none_or(|f| matches_filter(w, f))
+    }
+
+    /// Whether a repo with no matching rows still lists under QUIET REPOS:
+    /// always with no filter, and when only a needle naming the repo is set.
+    fn keeps_empty_repo(self, repo_name: &str) -> bool {
+        match (self.text, self.status) {
+            (None, None) => true,
+            (Some(f), None) => repo_name.to_lowercase().contains(&f.to_lowercase()),
+            (_, Some(_)) => false,
+        }
+    }
 }
 
 /// Case-insensitive substring match against the workspace branch, owning
@@ -891,7 +929,7 @@ fn render_by_repo<'a>(
     Vec<PrChipSpan>,
     Vec<by_repo::RepoPrLinkSpan>,
 ) {
-    let filter = state.filter.as_deref().filter(|f| !f.is_empty());
+    let filter = RowFilter::of(state);
     let mut views: Vec<RepoView<'a>> = inputs
         .repos
         .iter()
@@ -900,7 +938,7 @@ fn render_by_repo<'a>(
                 .workspaces
                 .iter()
                 .filter(|w| w.repo.id == r.id)
-                .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
+                .filter(|w| filter.matches(w))
                 .filter(|w| hidden_by(w, filter).is_none())
                 .map(|w| w.row.clone())
                 .collect();
@@ -1019,11 +1057,11 @@ fn render_by_attention<'a>(
     width: usize,
     theme: &Theme,
 ) -> (Vec<ratatui::widgets::ListItem<'static>>, Vec<PrChipSpan>) {
-    let filter = state.filter.as_deref().filter(|f| !f.is_empty());
+    let filter = RowFilter::of(state);
     let rows: Vec<FlatRow> = inputs
         .workspaces
         .iter()
-        .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
+        .filter(|w| filter.matches(w))
         .filter(|w| hidden_by(w, filter).is_none())
         .map(|w| FlatRow {
             repo_name: w.repo.name.clone(),
@@ -1036,19 +1074,18 @@ fn render_by_attention<'a>(
             .workspaces
             .iter()
             .filter(|w| w.repo.id == r.id)
-            .filter(|w| filter.map(|f| matches_filter(w, f)).unwrap_or(true))
+            .filter(|w| filter.matches(w))
             .filter(|w| hidden_by(w, filter).is_none())
             .collect();
         let count = repo_rows.len();
-        let all_idle =
-            !repo_rows.is_empty() && repo_rows.iter().all(|w| matches!(w.status, Status::Idle));
-        let repo_matches_filter = filter
-            .map(|f| r.name.to_lowercase().contains(&f.to_lowercase()))
-            .unwrap_or(true);
+        let all_idle = filter.status.is_none()
+            && !repo_rows.is_empty()
+            && repo_rows.iter().all(|w| matches!(w.status, Status::Idle));
         // Empty repos only show in QUIET REPOS when no filter is active
-        // OR when the filter matches the repo name itself.
+        // OR when the text filter matches the repo name itself. A status
+        // filter keeps its matching idle rows as rows, not a quiet repo.
         let has_hidden = !hidden_groups(r, &inputs.workspaces, filter).is_empty();
-        let include_empty = count == 0 && !has_hidden && (filter.is_none() || repo_matches_filter);
+        let include_empty = count == 0 && !has_hidden && filter.keeps_empty_repo(&r.name);
         if include_empty || all_idle {
             quiet.push(QuietRepo {
                 name: r.name.clone(),

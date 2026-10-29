@@ -156,7 +156,7 @@ pub fn panel_sections(inputs: &PanelInputs<'_>, filter: Option<&str>) -> Vec<Ord
         .iter()
         .filter(|item| {
             let Some(n) = needle else {
-                return crate::ui::dashboard::hidden_by(item, None).is_none();
+                return crate::ui::dashboard::hidden_by(item, Default::default()).is_none();
             };
             inputs
                 .workspace(item.workspace_id)

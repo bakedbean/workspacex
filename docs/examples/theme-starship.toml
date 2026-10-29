@@ -36,10 +36,10 @@ fill         = " "
 
 [dashboard_header]
 # Wordmark flat on the bar in the app's brand colours (the bundled default),
-# then group tabs on `second` (opening with a left cap, since there is no
-# block before it), sort tabs on `third` (dropped first when narrow), the
-# filter echo after the chain; counts on `fourth` flush right, pointing left.
-format       = "$brand [](fg:second)[ $group ](bg:second)[](fg:second bg:third)[( $sort )](bg:third)[](fg:third)(  $filter)"
+# then the filter echo, then the status tally on `second` (opening with a
+# left cap, since there is no block before it); counts on `fourth` flush
+# right, pointing left.
+format       = "$brand(  $filter) ([](fg:second)[ $statuses ](bg:second)[](fg:second))"
 right_format = "[](fg:fourth)[ $counts ](bg:fourth fg:label)"
 fill         = " "
 
@@ -96,6 +96,9 @@ format = "[$label ](fg:label)$tabs"
 
 [sort]
 format = "[$label ](fg:label)$tabs"
+
+[statuses]
+format = "[$glyph $count]($style)[ $label](fg:label)"
 
 [counts]
 format = "[$repos repos · $workspaces workspaces](fg:label)"

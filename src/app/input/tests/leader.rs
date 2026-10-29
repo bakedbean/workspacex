@@ -1199,12 +1199,17 @@ async fn attached_ctrl_x_then_shift_r_opens_recap_and_esc_closes_it() {
     .await
     .unwrap();
     assert!(
-        matches!(app.modal, Some(Modal::Recap { workspace_id }) if workspace_id == ws_id),
+        matches!(app.modal, Some(Modal::Recap { workspace_id, scroll: 0 }) if workspace_id == ws_id),
         "expected Recap modal; got {:?}",
         app.modal
     );
 
     let shared = shared_app();
+    // j/k scroll the panel rather than reaching the agent; the renderer clamps.
+    handle_key_modal(&mut app, &shared, KeyEvent::from(KeyCode::Char('j')))
+        .await
+        .unwrap();
+    assert!(matches!(app.modal, Some(Modal::Recap { scroll: 1, .. })));
     handle_key_modal(&mut app, &shared, KeyEvent::from(KeyCode::Esc))
         .await
         .unwrap();

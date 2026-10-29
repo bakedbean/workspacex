@@ -171,6 +171,8 @@ pub enum Modal {
     /// The workspace's `wsx recap set` digest, read live from `App::recaps`.
     Recap {
         workspace_id: crate::data::store::WorkspaceId,
+        /// Rows scrolled from the top; the renderer clamps and writes it back.
+        scroll: usize,
     },
     UsageWindowPicker {
         /// Index into `UsageWindow::ALL` for the cursor selection. The current

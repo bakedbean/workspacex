@@ -234,7 +234,10 @@ impl Panel {
             }
             Self::Recap => {
                 if let Some(workspace_id) = on.workspace(app) {
-                    app.modal = Some(Modal::Recap { workspace_id });
+                    app.modal = Some(Modal::Recap {
+                        workspace_id,
+                        scroll: 0,
+                    });
                 }
             }
         }

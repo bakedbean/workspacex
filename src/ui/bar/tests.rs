@@ -3050,6 +3050,78 @@ mod example_theme_tests {
             assert!(mark.modifier.contains(Modifier::BOLD), "{name}");
         }
     }
+
+    /// Every example caps the status tally on one block: populated, the
+    /// counts sit on that block in their status colours, cap to cap; with
+    /// an empty fleet the whole block, caps included, drops.
+    #[test]
+    fn example_themes_cap_the_status_tally_and_drop_it_when_empty() {
+        let counts = crate::ui::dashboard::sort::StatusCounts {
+            question: 12,
+            stalled: 1,
+            waiting: 2,
+            thinking: 3,
+            complete: 4,
+            idle: 5,
+        };
+        for path in example_themes() {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let theme = Theme::jellybeans();
+            let specs = load(&path, &theme).unwrap();
+            let render = |statuses| {
+                dashboard_header(
+                    &specs,
+                    &theme,
+                    &DashboardHeaderInputs {
+                        group: GroupMode::Repo,
+                        sort: SortMode::Recency,
+                        repos: 9,
+                        workspaces: 14,
+                        statuses,
+                        filter: None,
+                        view: "dashboard",
+                        fleet: crate::ui::bar::fleet::empty(),
+                    },
+                    160,
+                )
+            };
+
+            // Every char on the line is one cell wide.
+            let col_of = |text: &str, needle: &str| {
+                let byte = text.find(needle).expect("item is on the line");
+                u16::try_from(text[..byte].chars().count()).unwrap()
+            };
+            let out = render(counts);
+            let text = plain(&out.line);
+            let buf = render_line(&out.line, 160);
+            let q = col_of(&text, "? 12 question");
+            let idle = col_of(&text, "· 5 idle");
+            let block = buf[(q, 0)].bg;
+            assert_ne!(block, Color::Reset, "{name}: tally sits on a block");
+            assert_eq!(buf[(q - 1, 0)].bg, block, "{name}: padded block");
+            assert_eq!(buf[(q - 2, 0)].symbol(), "\u{e0b2}", "{name}: left cap");
+            assert_eq!(buf[(idle + 9, 0)].symbol(), "\u{e0b0}", "{name}: right cap");
+            assert_eq!(buf[(idle, 0)].bg, block, "{name}: one block throughout");
+            assert_eq!(
+                buf[(q, 0)].fg,
+                theme
+                    .status_style(crate::ui::dashboard::status::Status::Question)
+                    .fg
+                    .unwrap(),
+                "{name}: glyph keeps its status colour"
+            );
+
+            // Only the left side: the counts block on the right has caps of
+            // its own.
+            let empty = plain(&render(Default::default()).line);
+            let left = &empty[..empty.find("9 repos").unwrap()];
+            let left = left.trim_end().trim_end_matches(['\u{e0b2}', '\u{e0b0}']);
+            assert!(
+                !left.contains(['\u{e0b2}', '\u{e0b0}']),
+                "{name}: no stray caps: {empty:?}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

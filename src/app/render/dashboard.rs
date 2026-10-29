@@ -124,6 +124,7 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     );
     app.dashboard_pr_rects = click_targets.pr_chips;
     app.dashboard_repo_pr_rects = click_targets.repo_pr_links;
+    app.dashboard_status_rects = click_targets.statuses;
     if let Some(pm_area) = pm_area {
         let digest = app.build_pm_digest();
         let selected = app

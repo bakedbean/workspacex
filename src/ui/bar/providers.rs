@@ -289,11 +289,14 @@ pub fn filter(
 }
 
 /// The fleet's status tally, one item per status with a nonzero count, in
-/// attention order. `$style` is the status colour, bold. Absent when every
-/// count is zero. Variables: `$glyph` `$count` `$label`.
+/// attention order. `$style` is the status colour, bold. While `active`
+/// filters the list, its item is reversed and the others dim. Each item
+/// carries a `Hit::Status` click. Absent when every count is zero.
+/// Variables: `$glyph` `$count` `$label`.
 pub fn statuses(
     cfg: &SegmentConfig,
     counts: StatusCounts,
+    active: Option<Status>,
     theme: &Theme,
     resolver: &Resolver,
 ) -> Option<Segment> {
@@ -315,8 +318,14 @@ pub fn statuses(
                 ("count", var(n.to_string())),
                 ("label", var(status.label())),
             ]),
-            theme.status_style(status).add_modifier(Modifier::BOLD),
-            None,
+            match active {
+                None => theme.status_style(status).add_modifier(Modifier::BOLD),
+                Some(a) if a == status => theme
+                    .status_style(status)
+                    .add_modifier(Modifier::BOLD | Modifier::REVERSED),
+                Some(_) => theme.status_style(status).add_modifier(Modifier::DIM),
+            },
+            Some(Hit::Status(status)),
         )
     })
     .collect();

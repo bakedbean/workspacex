@@ -1868,6 +1868,40 @@ mod hide_rules {
         assert!(screen.contains("unknown-pr"), "{screen}");
     }
 
+    /// The header hands back one click rect per tally item, on the header
+    /// row and over that item's label, whatever the list shows.
+    #[test]
+    fn render_returns_a_rect_per_header_status() {
+        let repo = repo_with("pr:merged,pr:none");
+        let inputs = inputs(&repo, mixed(&repo));
+        let theme = Theme::wsx();
+        let specs = crate::config::theme_file::bundled_default(&theme);
+        let mut state = DashboardState {
+            status_filter: Some(Status::Stalled),
+            ..Default::default()
+        };
+        let mut term = Terminal::new(TestBackend::new(160, 30)).unwrap();
+        let mut out = ListClickTargets::default();
+        term.draw(|f| {
+            out = render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme, &specs)
+        })
+        .unwrap();
+        let buf = term.backend().buffer().clone();
+        let statuses: Vec<Status> = out.statuses.iter().map(|(s, _)| *s).collect();
+        assert_eq!(
+            statuses,
+            [Status::Question, Status::Thinking, Status::Idle],
+            "the tally counts every row, even with the list filtered empty"
+        );
+        for (status, r) in &out.statuses {
+            assert_eq!(r.y, 0);
+            let text: String = (r.x..r.x + r.width)
+                .map(|x| buf[(x, 0)].symbol().to_string())
+                .collect();
+            assert!(text.ends_with(status.label()), "{status:?}: {text:?}");
+        }
+    }
+
     /// A status with no rows left reads as a filter that hid everything.
     #[test]
     fn status_filter_with_no_matches_says_so() {

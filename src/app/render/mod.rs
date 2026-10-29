@@ -116,6 +116,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.pr_link_rect = None;
     app.dashboard_pr_rects.clear();
     app.dashboard_repo_pr_rects.clear();
+    app.dashboard_status_rects.clear();
     app.procs_link_rect = None;
     app.usage_graph_rect = None;
     app.footer_hint_rects.clear();

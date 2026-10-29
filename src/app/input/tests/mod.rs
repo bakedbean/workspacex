@@ -39,6 +39,7 @@ mod restore_layout;
 mod setup_log_modal;
 mod sort_mode;
 mod spawn;
+mod status_filter;
 mod updates_panel;
 mod workspace_lifecycle;
 mod workspace_tags;

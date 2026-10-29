@@ -29,6 +29,9 @@ pub enum Hit {
     RemoteHost(usize),
     Attention(WorkspaceId),
     AttentionMore,
+    /// A `$statuses` tally item: filters the dashboard list to that status,
+    /// or clears the filter when it is already the active one.
+    Status(crate::ui::dashboard::status::Status),
 }
 
 impl Hit {

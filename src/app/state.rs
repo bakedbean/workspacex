@@ -56,6 +56,7 @@ impl App {
             pr_link_rect: None,
             dashboard_pr_rects: Vec::new(),
             dashboard_repo_pr_rects: Vec::new(),
+            dashboard_status_rects: Vec::new(),
             procs_link_rect: None,
             github_remotes: Default::default(),
             pr_last_poll_ms: std::collections::HashMap::new(),
@@ -684,6 +685,10 @@ pub struct App {
     /// headers, one per visible header that has one. Set during draw, read
     /// by the mouse handler to open that repo's open PRs in the browser.
     pub dashboard_repo_pr_rects: Vec<(crate::data::store::RepoId, ratatui::layout::Rect)>,
+    /// Screen rects of the `$statuses` tally items in the dashboard header.
+    /// Set during draw, read by the mouse handler to toggle that status as
+    /// the list's status filter.
+    pub dashboard_status_rects: Vec<(crate::ui::dashboard::status::Status, ratatui::layout::Rect)>,
     /// Screen rect of the clickable running-process count (`● Np`) on the
     /// attached view's chip row, with the workspace it belongs to. Set during
     /// draw, read by the mouse handler to open the process-list modal on click.

@@ -980,3 +980,37 @@ async fn clicking_a_tag_chip_opens_the_body_stage_and_the_manager_chip_opens_pic
         app.modal
     );
 }
+
+/// Clicking a header tally item filters the list to that status; clicking
+/// it again clears the filter, and clicking another status replaces it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn click_header_status_toggles_the_status_filter() {
+    use crate::ui::dashboard::status::Status;
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let store = Store::open_in_memory().unwrap();
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    app.view = crate::ui::View::Dashboard;
+    let rect = |x| ratatui::layout::Rect {
+        x,
+        y: 0,
+        width: 10,
+        height: 1,
+    };
+    app.dashboard_status_rects = vec![(Status::Question, rect(20)), (Status::Idle, rect(40))];
+    let click = |column| MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    };
+    let shared = super::common::shared_app();
+
+    handle_mouse(&mut app, &shared, click(22)).await;
+    assert_eq!(app.dashboard.status_filter, Some(Status::Question));
+    handle_mouse(&mut app, &shared, click(45)).await;
+    assert_eq!(app.dashboard.status_filter, Some(Status::Idle), "replaces");
+    handle_mouse(&mut app, &shared, click(49)).await;
+    assert_eq!(app.dashboard.status_filter, None, "same item toggles off");
+    handle_mouse(&mut app, &shared, click(35)).await;
+    assert_eq!(app.dashboard.status_filter, None, "the gap is not a hit");
+}

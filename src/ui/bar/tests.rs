@@ -1734,6 +1734,7 @@ format = "[$symbol](fg:brand) [$name](fg:wordmark bold)[ $mark](fg:brand bold)[ 
                 repos: 9,
                 workspaces: 14,
                 statuses,
+                status_filter: None,
                 filter,
                 view: "dashboard",
                 fleet: crate::ui::bar::fleet::empty(),
@@ -1846,6 +1847,82 @@ format = "[$symbol](fg:brand) [$name](fg:wordmark bold)[ $mark](fg:brand bold)[ 
             assert!(cell.modifier.contains(Modifier::BOLD), "{status:?}");
             let label = &buf[(col_of(&t, status.label()), 0)];
             assert_eq!(label.fg, theme.path, "{status:?}");
+        }
+    }
+
+    /// The bundled header with `COUNTS` and `active` as the status filter.
+    fn header_filtered_to(active: Option<Status>, width: u16) -> Rendered {
+        let theme = Theme::wsx();
+        dashboard_header(
+            &bundled_default(&theme),
+            &theme,
+            &DashboardHeaderInputs {
+                group: GroupMode::Repo,
+                sort: SortMode::Recency,
+                repos: 9,
+                workspaces: 14,
+                statuses: COUNTS,
+                status_filter: active,
+                filter: None,
+                view: "dashboard",
+                fleet: crate::ui::bar::fleet::empty(),
+            },
+            width,
+        )
+    }
+
+    /// Every tally item is a click target for its own status, spanning its
+    /// glyph through its label and nothing else on the line.
+    #[test]
+    fn header_status_items_carry_their_status_hit() {
+        let out = header(None, 120);
+        let t = plain(&out.line);
+        let hits: Vec<(Status, u16, u16)> = out
+            .hits
+            .iter()
+            .map(|h| match h.hit {
+                Hit::Status(s) => (s, h.start_col, h.width),
+                other => panic!("only tally items are clickable, got {other:?}"),
+            })
+            .collect();
+        let shown = [
+            Status::Question,
+            Status::Waiting,
+            Status::Thinking,
+            Status::Complete,
+            Status::Idle,
+        ];
+        assert_eq!(hits.iter().map(|h| h.0).collect::<Vec<_>>(), shown);
+        for (status, start, width) in hits {
+            let item = format!(
+                "{} {} {}",
+                status.glyph(),
+                match status {
+                    Status::Complete => 3,
+                    Status::Idle => 4,
+                    _ => 2,
+                },
+                status.label()
+            );
+            assert_eq!(start, col_of(&t, &item), "{status:?}");
+            assert_eq!(usize::from(width), item.chars().count(), "{status:?}");
+        }
+    }
+
+    /// While a status filters the list, its item reads as selected and the
+    /// rest step back; every item stays clickable so another can be picked.
+    #[test]
+    fn header_marks_the_active_status_and_dims_the_rest() {
+        let out = header_filtered_to(Some(Status::Thinking), 120);
+        let t = plain(&out.line);
+        assert_eq!(t, plain(&header(None, 120).line), "same text, new style");
+        assert_eq!(out.hits.len(), 5);
+        let buf = render_line(&out.line, 120);
+        let at = |s: Status| buf[(col_of(&t, &format!("{} ", s.glyph())), 0)].modifier;
+        assert!(at(Status::Thinking).contains(Modifier::REVERSED));
+        for other in [Status::Question, Status::Idle] {
+            assert!(at(other).contains(Modifier::DIM), "{other:?}");
+            assert!(!at(other).contains(Modifier::REVERSED), "{other:?}");
         }
     }
 
@@ -3014,6 +3091,7 @@ mod example_theme_tests {
                     repos: 9,
                     workspaces: 14,
                     statuses: Default::default(),
+                    status_filter: None,
                     filter: None,
                     view: "dashboard",
                     fleet: crate::ui::bar::fleet::empty(),
@@ -3078,6 +3156,7 @@ mod example_theme_tests {
                         repos: 9,
                         workspaces: 14,
                         statuses,
+                        status_filter: None,
                         filter: None,
                         view: "dashboard",
                         fleet: crate::ui::bar::fleet::empty(),

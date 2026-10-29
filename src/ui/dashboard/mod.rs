@@ -156,6 +156,12 @@ impl DashboardState {
         };
     }
 
+    /// Filter the list to `status`, or clear the filter when `status` is
+    /// already the active one. Clicking another status replaces it.
+    pub fn toggle_status_filter(&mut self, status: Status) {
+        self.status_filter = (self.status_filter != Some(status)).then_some(status);
+    }
+
     /// Move to the next sort mode and remember it, so the choice survives a
     /// restart the way the theme does.
     pub fn cycle_sort_mode(&mut self, store: &crate::data::store::Store) {
@@ -231,6 +237,11 @@ pub struct ListClickTargets {
     /// Each visible repo header's PR link — opens that repo's open PRs
     /// filtered to the signed-in user. Empty outside the by-repo view.
     pub repo_pr_links: Vec<(crate::data::store::RepoId, Rect)>,
+    /// Each `$statuses` tally item in the header — filters the list to that
+    /// status, or clears the filter when it is the active one. Empty when
+    /// the theme leaves `$statuses` off the header (the fallback strip row
+    /// is not clickable).
+    pub statuses: Vec<(Status, Rect)>,
 }
 
 /// Resolve `(key, flat item index, (char offset, width))` spans into screen
@@ -272,8 +283,8 @@ fn spans_to_rects<K: Copy>(
 /// (usually in a separately-carved row below the detail/PM regions so the
 /// spec order list/detail/pm/footer is respected).
 ///
-/// Returns the on-screen rects of everything clickable in the list so the
-/// caller can hit-test against them.
+/// Returns the on-screen rects of everything clickable in the list and the
+/// header so the caller can hit-test against them.
 pub fn render_without_footer(
     f: &mut Frame,
     area: Rect,
@@ -299,27 +310,30 @@ pub fn render_without_footer(
 
     let global_counts = StatusCounts::from_iter(inputs.workspaces.iter().map(|w| w.status));
 
-    f.render_widget(
-        Paragraph::new(
-            crate::ui::bar::dashboard_header(
-                specs,
-                theme,
-                &crate::ui::bar::DashboardHeaderInputs {
-                    group: state.group_mode,
-                    sort: state.sort_mode,
-                    repos: inputs.repos.len(),
-                    workspaces: inputs.workspaces.len(),
-                    statuses: global_counts,
-                    filter: state.filter.as_deref(),
-                    view: "dashboard",
-                    fleet: inputs.fleet,
-                },
-                chunks[0].width,
-            )
-            .line,
-        ),
-        chunks[0],
+    let header = crate::ui::bar::dashboard_header(
+        specs,
+        theme,
+        &crate::ui::bar::DashboardHeaderInputs {
+            group: state.group_mode,
+            sort: state.sort_mode,
+            repos: inputs.repos.len(),
+            workspaces: inputs.workspaces.len(),
+            statuses: global_counts,
+            status_filter: state.status_filter,
+            filter: state.filter.as_deref(),
+            view: "dashboard",
+            fleet: inputs.fleet,
+        },
+        chunks[0].width,
     );
+    let statuses: Vec<(Status, Rect)> = crate::ui::bar::render::hit_rects(chunks[0], &header.hits)
+        .into_iter()
+        .filter_map(|(r, hit)| match hit {
+            crate::ui::bar::segment::Hit::Status(s) => Some((s, r)),
+            _ => None,
+        })
+        .collect();
+    f.render_widget(Paragraph::new(header.line), chunks[0]);
     if strip {
         f.render_widget(
             Paragraph::new(layout::status_strip(global_counts, theme)),
@@ -352,7 +366,10 @@ pub fn render_without_footer(
             Paragraph::new(Line::from(Span::styled(msg.to_string(), theme.dim_style()))),
             chunks[3],
         );
-        return ListClickTargets::default();
+        return ListClickTargets {
+            statuses,
+            ..Default::default()
+        };
     }
     let list = List::new(items).highlight_style(theme.selected_bg_style());
     f.render_stateful_widget(list, chunks[3], &mut state.list_state);
@@ -371,6 +388,7 @@ pub fn render_without_footer(
                 .into_iter()
                 .map(|(id, idx, span)| (crate::data::store::RepoId(id as i64), idx, span)),
         ),
+        statuses,
     }
 }
 

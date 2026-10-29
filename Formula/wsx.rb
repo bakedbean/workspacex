@@ -1,7 +1,7 @@
 class Wsx < Formula
   desc "Terminal UI for managing coding agent sessions in git worktrees"
   homepage "https://github.com/bakedbean/workspacex"
-  version "0.1.6"
+  version "0.1.7"
   license "MIT"
 
   # The checksums below are placeholders until the first tagged release.
@@ -10,23 +10,23 @@ class Wsx < Formula
   # then opens a pull request with the result.
   on_macos do
     on_arm do
-      url "https://github.com/bakedbean/workspacex/releases/download/v0.1.6/wsx-0.1.6-aarch64-apple-darwin.tar.gz"
-      sha256 "fc8780dd93325850bcb200dffc8d1b4d42b3b74986714d12040237e36b13e098"
+      url "https://github.com/bakedbean/workspacex/releases/download/v0.1.7/wsx-0.1.7-aarch64-apple-darwin.tar.gz"
+      sha256 "c4f793a724c0ee0e94fcf612e8d7348cec6fc9cb0cd3f339a738664863c109f8"
     end
     on_intel do
-      url "https://github.com/bakedbean/workspacex/releases/download/v0.1.6/wsx-0.1.6-x86_64-apple-darwin.tar.gz"
-      sha256 "0dcbf63d93dd197d7a6480a26b1b2318e5460c1f5d95a183cb268b5bdb0df37d"
+      url "https://github.com/bakedbean/workspacex/releases/download/v0.1.7/wsx-0.1.7-x86_64-apple-darwin.tar.gz"
+      sha256 "a650caac1751185a0b6839106b25ec97382f9a3547a91254f0f289e8495ffaea"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/bakedbean/workspacex/releases/download/v0.1.6/wsx-0.1.6-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "d114e5f33323b07ef44c91ce3e13dc6b6e62068e172c9abcf990c1178dab7c92"
+      url "https://github.com/bakedbean/workspacex/releases/download/v0.1.7/wsx-0.1.7-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "350d81bd83f9c6f44723895247397fa896b2babe739734444a129dfdca458bf7"
     end
     on_intel do
-      url "https://github.com/bakedbean/workspacex/releases/download/v0.1.6/wsx-0.1.6-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "2a9ceec788041f938c9614e3391a948011353d98081675df7e94d8908558c39f"
+      url "https://github.com/bakedbean/workspacex/releases/download/v0.1.7/wsx-0.1.7-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "1f06321ae68026c8468d970cf620521ca85b1e8c014823a1d89fcabcba83566a"
     end
   end
 

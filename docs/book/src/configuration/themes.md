@@ -65,7 +65,7 @@ The bundled default:
 
 ```toml
 [dashboard_header]
-format       = "$brand      $group(   $sort)(  $filter)"
+format       = "$brand(  $filter)    ($statuses)"
 right_format = "$counts"
 fill         = " "
 
@@ -100,7 +100,7 @@ fill         = " "
 
 | Bar | Where |
 |---|---|
-| `dashboard_header` | The dashboard's top line: wordmark, `group:` and `sort:` tabs, filter echo, counts. Nothing on it is clickable. |
+| `dashboard_header` | The dashboard's top line: wordmark, filter echo, status tally, counts. Nothing on it is clickable. When it leaves out `$statuses`, the tally gets its own row below it. |
 | `dashboard_footer` | The dashboard's bottom line: key hints and the [`funnel` module](#modules). |
 | `attached_top` | The attached view's top bar. |
 | `attached_bottom` | The attached view's bottom bar (chip row). |
@@ -130,7 +130,7 @@ The bundled priorities:
 |---|---|
 | `attached_bottom` | `model_tokens` 10, `agents` 20, `procs` 30, `diff` 40, `tags` 40, `pr` 50 |
 | `dashboard_footer` | `hosts` 45, `version` 50, `tokens` 55, `funnel` 60, `usage` 60 |
-| `dashboard_header` | `sort` 30, `counts` 50 |
+| `dashboard_header` | `sort` 30 (when placed), `counts` 50 |
 
 ### The reply row
 
@@ -222,9 +222,10 @@ Each segment has its own table, such as `[workspace]`, with these keys:
 
 | Segment | Variables | Notes |
 |---|---|---|
-| `brand` | `$symbol $name $mark $view` | The wordmark. Dashboard header only. |
-| `group` | `$label $tabs` | The `group:` mode tabs; the active one is highlighted. Dashboard header only. |
-| `sort` | `$label $tabs` | The `sort:` mode tabs. Dashboard header only. |
+| `brand` | `$symbol $name $mark $view` | The wordmark. `$view` is `dashboard`, not placed by default. Dashboard header only. |
+| `group` | `$label $tabs` | The `group:` mode tabs; the active one is highlighted. Not placed by default. Dashboard header only. |
+| `sort` | `$label $tabs` | The `sort:` mode tabs. Not placed by default. Dashboard header only. |
+| `statuses` | `$glyph $count $label` | One item per [status](../dashboard/status-indicators.md#status-glyphs) with a nonzero count, most urgent first. `$style` is the status color. Dashboard header only. |
 | `filter` | `$needle` | The live filter, capped at 24 characters. Dashboard header only. |
 | `counts` | `$repos $workspaces` | Repo and workspace counts. Dashboard header only. |
 | `keys` | `$key $label` | One pill per key hint. Clickable. |
@@ -252,7 +253,7 @@ Where segments produce output:
 |---|---|
 | Attached bars | All except the dashboard-header segments, `branch`, `prompt`, `status` and `hosts`. Either bar, either side. |
 | `dashboard_footer` | `keys`, `version`, `usage`, `hosts` |
-| `dashboard_header` | `brand`, `group`, `sort`, `filter`, `counts` |
+| `dashboard_header` | `brand`, `group`, `sort`, `statuses`, `filter`, `counts` |
 | `dashboard_detail` | `pins` |
 | `dashboard_detail_header` | `agent_bar`, `workspace`, `branch`, `pr`, `diff`, `procs`, `status` |
 | `dashboard_detail_reply` | `prompt`, `agent_bar`, `workspace`, `branch`, `pins`, `keys` |
@@ -354,7 +355,7 @@ The tokens each state uses:
 | `pr`, `workspace` | `ok` open, `merged`, `err` closed, `warn` conflict |
 | `workspace` | `header_fg` without a PR or on a draft |
 | `pr` | `dim` on a draft |
-| `attention` `$glyph` | The six status tokens |
+| `attention` `$glyph`, `statuses` | The six status tokens |
 | `group`, `sort` | `selected_fg`, `selected_bg`, `path` |
 
 ## Modules

@@ -131,6 +131,16 @@ pub(in crate::app::input) async fn handle_key_modal(
             workspace_id,
             selected,
         } => agents::agents_panel(app, shared, k, workspace_id, selected).await?,
+        Modal::Recap { .. } => {
+            if let Some(Modal::Recap { scroll, .. }) = app.modal.as_mut() {
+                match k.code {
+                    KeyCode::Esc => app.modal = None,
+                    KeyCode::Up | KeyCode::Char('k') => *scroll = scroll.saturating_sub(1),
+                    KeyCode::Down | KeyCode::Char('j') => *scroll = scroll.saturating_add(1),
+                    _ => {}
+                }
+            }
+        }
         Modal::UsageWindowPicker { selected } => {
             pickers::usage_window_picker(app, shared, k, selected).await?
         }

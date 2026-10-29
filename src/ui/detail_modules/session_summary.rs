@@ -65,7 +65,7 @@ fn build_lines(ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'
     // renders above the `match` — visible even while events are loading.
     let recap = ctx
         .recap
-        .map(|r| recap_lines(r, &prefix, theme, inner_width))
+        .map(|r| recap_lines(r, &prefix, theme.dim_style(), theme, inner_width))
         .unwrap_or_default();
     let has_recap = !recap.is_empty();
     out.extend(recap);
@@ -208,10 +208,11 @@ fn recap_field<'a>(long: Option<&'a str>, short: Option<&'a str>) -> Option<&'a 
 /// wrapped to the width left after the label and hanging-indented so
 /// continuation lines sit under the value's first character. Empty when
 /// every slot is absent or blank — the caller then falls back to the
-/// opening prompt.
-fn recap_lines(
+/// opening prompt. Also drawn by the attached view's recap panel.
+pub(crate) fn recap_lines(
     recap: &WorkspaceRecap,
     prefix: &ratatui::text::Span<'static>,
+    value_style: ratatui::style::Style,
     theme: &crate::ui::theme::Theme,
     inner_width: usize,
 ) -> Vec<ratatui::text::Line<'static>> {
@@ -251,7 +252,7 @@ fn recap_lines(
             } else {
                 vec![indent.clone()]
             };
-            spans.push(Span::styled(text, theme.dim_style()));
+            spans.push(Span::styled(text, value_style));
             out.push(Line::from(spans));
         }
     }

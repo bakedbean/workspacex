@@ -17,6 +17,32 @@ pub(super) fn draw_modal(f: &mut ratatui::Frame, app: &mut App, area: ratatui::l
         draw_setup_log(f, app, area);
         return;
     }
+    // Likewise the recap panel clamps its scroll against the drawer height.
+    if let Some(modal::Modal::Recap {
+        workspace_id,
+        scroll,
+    }) = app.modal
+    {
+        let name = app
+            .workspaces
+            .iter()
+            .find(|(_, w)| w.id == workspace_id)
+            .map(|(_, w)| w.name.as_str())
+            .unwrap_or_default();
+        let clamped = modal::render_recap_panel(
+            f,
+            area,
+            name,
+            app.recaps.get(&workspace_id),
+            scroll,
+            crate::util::time::now_ms(),
+            &app.theme,
+        );
+        if let Some(modal::Modal::Recap { scroll, .. }) = &mut app.modal {
+            *scroll = clamped;
+        }
+        return;
+    }
     let Some(m) = &app.modal else {
         return;
     };

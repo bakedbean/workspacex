@@ -15,6 +15,7 @@ mod global_settings;
 mod name_color_picker;
 mod process_list;
 mod prompt_tag;
+mod recap_panel;
 mod remote_workspace_list;
 mod repo_settings;
 mod setup_log;
@@ -29,6 +30,7 @@ pub use global_settings::render_global_settings;
 pub use name_color_picker::{Dir, move_selection, render_name_color_picker};
 pub use process_list::render_process_list;
 pub use prompt_tag::{EnterAction, PromptTagModal, TagStage, render_prompt_tag};
+pub use recap_panel::render_recap_panel;
 pub use remote_workspace_list::render_remote_workspace_list;
 pub use repo_settings::render_repo_settings;
 pub use setup_log::{SetupLogView, StoredLog, render_setup_log};
@@ -165,6 +167,12 @@ pub enum Modal {
     AgentsPanel {
         workspace_id: crate::data::store::WorkspaceId,
         selected: usize, // index into AgentKind::ALL for the add-picker
+    },
+    /// The workspace's `wsx recap set` digest, read live from `App::recaps`.
+    Recap {
+        workspace_id: crate::data::store::WorkspaceId,
+        /// Rows scrolled from the top; the renderer clamps and writes it back.
+        scroll: usize,
     },
     UsageWindowPicker {
         /// Index into `UsageWindow::ALL` for the cursor selection. The current
@@ -334,6 +342,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
             | Modal::RepoSettings { .. }
             | Modal::GlobalSettings { .. }
             | Modal::AgentsPanel { .. }
+            | Modal::Recap { .. }
             | Modal::UsageWindowPicker { .. }
             | Modal::NameColorPicker { .. }
             | Modal::RemoteWorkspaceList { .. }
@@ -472,6 +481,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
         Modal::GlobalSettings { .. } => unreachable!("GlobalSettings must not reach render()"),
         Modal::SetupLog { .. } => unreachable!("SetupLog must not reach render()"),
         Modal::AgentsPanel { .. } => unreachable!("AgentsPanel must not reach render()"),
+        Modal::Recap { .. } => unreachable!("Recap must not reach render()"),
         Modal::UsageWindowPicker { .. } => {
             unreachable!("UsageWindowPicker must not reach render()")
         }

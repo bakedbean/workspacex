@@ -24,7 +24,7 @@ Re-run it after upgrading wsx. It reports `already up to date` for unchanged ski
 | `agent-review` | Start a peer agent that reviews the current branch against `main` and reports back to you  |
 | `handoff`      | Continue a finished workspace's feature in a fresh workspace                               |
 
-**`agent-review`** takes the reviewer kind (`claude`, `pi`, `hermes`, `codex`, or `omp`) and asks if you omit it. It adds the reviewer with `wsx agent add` and gives it the branch diff. The reviewer runs the repo's own `code-review` skill when it has one (under `.claude/skills/`, `.agents/skills/`, or `.github/skills/`), else its harness's built-in, then replies with a risk assessment and gap analysis.
+**`agent-review`** takes the reviewer kind (`claude`, `pi`, `hermes`, `codex`, or `omp`) and asks if you omit it. It adds the reviewer with `wsx agent add` and gives it the branch diff. The reviewer runs the repo's own review skill when it has one (any `*review*` skill under `.claude/skills/`, `.agents/skills/`, or `.github/skills/`, such as `pr-review`), else its harness's built-in, then replies with a risk assessment and gap analysis.
 
 **`handoff`** takes what the new workspace should implement, or asks for it:
 

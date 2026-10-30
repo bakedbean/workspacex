@@ -84,13 +84,16 @@ stop and tell the user the valid kinds. Do not guess.
    The `<brief>` must instruct the reviewer to:
    - Review the current branch against `main`. Run `git diff main...HEAD`
      itself to see the full change.
-   - **Run a `code-review` skill first, preferring the repo's own.** Look for
-     a repo-local one under `.claude/skills/`, `.agents/skills/`, or
-     `.github/skills/` (e.g. `.github/skills/code-review/SKILL.md`); if found,
-     read its `SKILL.md` and follow it, since it carries the repo's review
-     conventions. Otherwise use the harness's built-in (Claude Code ships one
-     as `/code-review`). Run it on this branch's changes vs `main` and build
-     the report on its findings. Without either, review the diff directly.
+   - **Run a code-review skill first, preferring the repo's own.** Look for a
+     repo-local skill whose directory name contains `review` under
+     `.claude/skills/`, `.agents/skills/`, or `.github/skills/` (e.g.
+     `code-review`, `pr-review`), and check its `SKILL.md` description to
+     confirm it reviews code changes, not something like a design doc. If
+     found, read that `SKILL.md` and follow it, since it carries the repo's
+     review conventions. Otherwise use the harness's built-in (Claude Code
+     ships one as `/code-review`). Run it on this branch's changes vs `main`
+     and build the report on its findings. Without either, review the diff
+     directly.
    - **Keep the review read-only.** Never post to the PR or edit the working
      tree: skip any step of the skill that posts comments or applies fixes,
      and never pass `--comment`, `--fix`, or `--post`. Findings go back
@@ -120,10 +123,11 @@ wsx agent send claude#2 - <<'EOF'
 You are a code reviewer for this wsx workspace (I am claude, the primary).
 Branch: feat/widgets (3 commits, 7 files changed). Review this branch against
 main: run `git diff main...HEAD` to see the full change. First run a
-`code-review` skill on this branch's changes vs main and build on its
-findings: prefer the repo's own (check .claude/skills/, .agents/skills/,
-.github/skills/ and follow its SKILL.md), else your harness's built-in (e.g.
-Claude Code's `/code-review`). Stay read-only: don't post to the PR, apply
+code-review skill on this branch's changes vs main and build on its findings:
+prefer the repo's own (a `*review*` skill under .claude/skills/,
+.agents/skills/, or .github/skills/, e.g. pr-review, whose description says it
+reviews code; follow its SKILL.md), else your harness's built-in (e.g. Claude
+Code's `/code-review`). Stay read-only: don't post to the PR, apply
 fixes, or pass --comment, --fix, or --post. Provide (1) a risk
 assessment — security, performance, breaking changes, edge cases; and (2) a gap
 analysis — test coverage, documentation, error handling. When done, write your
@@ -138,9 +142,12 @@ EOF
   `$WSX_WORKSPACE_ID` or the cwd — you do not pass repo/slug.
 - `wsx agent send` is asynchronous; the reviewer receives the brief shortly
   after you send it and works in its own pane.
-- Which `code-review` skill applies depends on the repo and the reviewer's
-  harness, not yours, so the brief states the preference order and the
-  reviewer decides. A repo-local skill may live only under `.github/skills/`,
-  where non-Claude harnesses won't auto-discover it, hence the explicit paths.
+- Which review skill applies depends on the repo and the reviewer's harness,
+  not yours, so the brief states the preference order and the reviewer
+  decides. Repo-local review skills vary in name (`code-review`, `pr-review`)
+  and may live only under `.github/skills/`, where non-Claude harnesses won't
+  auto-discover them, hence matching on `review` and the explicit paths. A
+  name that differs from the built-in also means it won't shadow
+  `/code-review`, so without the preference a Claude reviewer would skip it.
 - The reviewer shares your worktree. Reviewing is read-only, so this is normally
   safe, but avoid large edits while the review runs.

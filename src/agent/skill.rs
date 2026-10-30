@@ -239,6 +239,28 @@ mod tests {
         );
     }
 
+    /// Repos like ssk keep their review conventions in a repo-local review
+    /// skill whose name varies (`pr-review`), sometimes only under
+    /// `.github/skills/`; the brief must point the reviewer there first.
+    #[test]
+    fn agent_review_skill_prefers_repo_local_code_review() {
+        for needle in [
+            ".claude/skills/",
+            ".agents/skills/",
+            ".github/skills/",
+            "pr-review",
+        ] {
+            assert!(
+                AGENT_REVIEW_SKILL_CONTENT.contains(needle),
+                "agent-review brief must mention {needle}"
+            );
+        }
+        assert!(
+            AGENT_REVIEW_SKILL_CONTENT.contains("preferring the repo's own"),
+            "agent-review brief must prefer the repo-local code-review skill"
+        );
+    }
+
     #[test]
     fn handoff_skill_has_frontmatter() {
         assert!(

@@ -2915,11 +2915,15 @@ mod example_theme_tests {
     /// With an empty fleet, `$funnel` is empty and its conditional group
     /// must drop *with* the arrow that leads into it — not leave a bare
     /// coloured stub dangling on the right. Nothing else is placed there,
-    /// so the keys block's wedge is the last thing on the bar.
+    /// so the keys block's wedge is the last thing on the bar. The orange
+    /// example always draws its hosts block and has its own test below.
     #[test]
     fn every_example_theme_drops_the_funnel_block_when_empty() {
         for path in example_themes() {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if name == "theme-orange.toml" {
+                continue;
+            }
             let theme = Theme::wsx();
             let specs = load(&path, &theme).unwrap();
             let activity: Vec<u32> = (0..24).collect();
@@ -3001,6 +3005,97 @@ mod example_theme_tests {
             .find(|s| s.content.contains("alpha"))
             .unwrap();
         assert_eq!((alpha.style.fg, alpha.style.bg), (orange, ash));
+    }
+
+    /// With the funnel present, the funnel's cap sits on the hosts block's
+    /// ash, so the two read as one chevron chain instead of a squared-off
+    /// ash block, a gap, and a cap out of the bar.
+    #[test]
+    fn orange_example_wedges_the_hosts_block_into_the_funnel() {
+        use crate::commands::shared_hosts::SharedHost;
+        use crate::ui::bar::fleet::{FleetRow, FleetStats};
+        let theme = Theme::jellybeans();
+        let specs = load(&examples_dir().join("theme-orange.toml"), &theme).unwrap();
+        let orange = Some(Color::Rgb(0xd7, 0x5f, 0x00));
+        let ash = Some(Color::Rgb(0x1c, 0x1c, 0x1c));
+        let hosts = [SharedHost {
+            name: "alpha".into(),
+            dest: "me@alpha".into(),
+        }];
+        let fleet = FleetStats::from_rows(
+            vec![FleetRow {
+                reported: Some(crate::data::store::ReportedState::Working),
+                ..Default::default()
+            }],
+            1,
+            0,
+        )
+        .to_vars();
+        let out = dashboard_footer(
+            &specs,
+            &theme,
+            &DashboardFooterInputs {
+                activity: &[],
+                version: "0.1.0",
+                window_label: "24h",
+                workspace_selected: false,
+                setup_log_available: false,
+                hosts: &hosts,
+                fleet: &fleet,
+            },
+            120,
+        );
+        let text = plain(&out.line);
+        assert!(
+            text.trim_end()
+                .ends_with("\u{e0b2} alpha \u{e0b2} 1 working"),
+            "{text:?}"
+        );
+        let caps: Vec<(Option<Color>, Option<Color>)> = out
+            .line
+            .spans
+            .iter()
+            .filter(|s| s.content.as_ref() == "\u{e0b2}")
+            .map(|s| (s.style.fg, s.style.bg))
+            .collect();
+        assert_eq!(caps, vec![(ash, None), (orange, ash)]);
+    }
+
+    /// With no hosts and an empty fleet the right side collapses to the
+    /// hosts block's bare wedge: the ash block stays so the funnel's cap
+    /// always has it to sit on, but nothing is drawn on it.
+    #[test]
+    fn orange_example_collapses_to_the_hosts_wedge_when_empty() {
+        let theme = Theme::jellybeans();
+        let specs = load(&examples_dir().join("theme-orange.toml"), &theme).unwrap();
+        let ash = Some(Color::Rgb(0x1c, 0x1c, 0x1c));
+        let out = dashboard_footer(
+            &specs,
+            &theme,
+            &DashboardFooterInputs {
+                activity: &[],
+                version: "0.1.0",
+                window_label: "24h",
+                workspace_selected: true,
+                setup_log_available: false,
+                hosts: &[],
+                fleet: crate::ui::bar::fleet::empty(),
+            },
+            120,
+        );
+        let text = plain(&out.line);
+        assert!(text.trim_end().ends_with('\u{e0b2}'), "{text:?}");
+        let last = out
+            .line
+            .spans
+            .iter()
+            .rev()
+            .find(|s| !s.content.trim().is_empty())
+            .unwrap();
+        assert_eq!(
+            (last.content.as_ref(), last.style.fg, last.style.bg),
+            ("\u{e0b2}", ash, None)
+        );
     }
 
     /// Every example leads the attached top bar with the focused agent's

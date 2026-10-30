@@ -91,17 +91,13 @@ stop and tell the user the valid kinds. Do not guess.
      confirm it reviews code changes, not something like a design doc. If
      found, read that `SKILL.md` and follow it, since it carries the repo's
      review conventions. Otherwise use the harness's built-in (Claude Code
-     ships one as `/code-review`). Run it on this branch's changes vs `main`
-     and build the report on its findings. Without either, review the diff
-     directly.
+     ships one as `/code-review`). Run it on this branch's changes vs `main`;
+     its findings are the report. Without either, review the diff directly.
    - **Keep the review read-only.** Never post to the PR or edit the working
      tree: skip any step of the skill that posts comments or applies fixes,
      and never pass `--comment`, `--fix`, or `--post`. Findings go back
      through wsx. If the skill reports findings through a UI tool rather than
      text, restate them in the reply.
-   - Produce a **risk assessment** — security, performance, breaking changes,
-     edge cases.
-   - Produce a **gap analysis** — test coverage, documentation, error handling.
    - Report findings back when done with
      `wsx agent reply --file <findings-file> <id>` (or `… <id> -` piping the
      findings on stdin), where `<id>` is the number in this brief's
@@ -123,15 +119,13 @@ wsx agent send claude#2 - <<'EOF'
 You are a code reviewer for this wsx workspace (I am claude, the primary).
 Branch: feat/widgets (3 commits, 7 files changed). Review this branch against
 main: run `git diff main...HEAD` to see the full change. First run a
-code-review skill on this branch's changes vs main and build on its findings:
-prefer the repo's own (a `*review*` skill under .claude/skills/,
+code-review skill on this branch's changes vs main; its findings are the
+report. Prefer the repo's own (a `*review*` skill under .claude/skills/,
 .agents/skills/, or .github/skills/, e.g. pr-review, whose description says it
 reviews code; follow its SKILL.md), else your harness's built-in (e.g. Claude
 Code's `/code-review`). Stay read-only: don't post to the PR, apply
-fixes, or pass --comment, --fix, or --post. Provide (1) a risk
-assessment — security, performance, breaking changes, edge cases; and (2) a gap
-analysis — test coverage, documentation, error handling. When done, write your
-findings to a file and send them back with:
+fixes, or pass --comment, --fix, or --post. When done, write your findings to
+a file and send them back with:
 wsx agent reply --file <findings-file> <id from this message's banner>
 EOF
 ```

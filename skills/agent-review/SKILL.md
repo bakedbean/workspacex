@@ -1,6 +1,6 @@
 ---
 name: agent-review
-description: Use in a wsx workspace to spin up a peer review agent that code-reviews the current branch. Takes the reviewer kind (claude|pi|hermes|codex|omp; asks which when omitted); spawns the peer, hands it branch-diff-vs-main context (telling it to run the code-review skill when its harness has one), and has it report findings back to you.
+description: Use in a wsx workspace to spin up a peer review agent that code-reviews the current branch. Takes the reviewer kind (claude|pi|hermes|codex|omp; asks which when omitted); spawns the peer, hands it branch-diff-vs-main context (telling it to run a code-review skill, preferring the repo-local one over its harness built-in), and has it report findings back to you.
 ---
 
 # agent-review
@@ -84,13 +84,18 @@ stop and tell the user the valid kinds. Do not guess.
    The `<brief>` must instruct the reviewer to:
    - Review the current branch against `main`. Run `git diff main...HEAD`
      itself to see the full change.
-   - **If a `code-review` skill is available in its harness** (Claude Code
-     ships one as `/code-review`), run it first on this branch's changes vs
-     `main` and build the report on its findings. Never pass `--comment`,
-     `--fix`, or `--post`: the review is read-only and findings go back
-     through wsx, not to the PR or the working tree. If the skill reports
-     findings through a UI tool rather than text, restate them in the reply.
-     Without the skill, review the diff directly.
+   - **Run a `code-review` skill first, preferring the repo's own.** Look for
+     a repo-local one under `.claude/skills/`, `.agents/skills/`, or
+     `.github/skills/` (e.g. `.github/skills/code-review/SKILL.md`); if found,
+     read its `SKILL.md` and follow it, since it carries the repo's review
+     conventions. Otherwise use the harness's built-in (Claude Code ships one
+     as `/code-review`). Run it on this branch's changes vs `main` and build
+     the report on its findings. Without either, review the diff directly.
+   - **Keep the review read-only.** Never post to the PR or edit the working
+     tree: skip any step of the skill that posts comments or applies fixes,
+     and never pass `--comment`, `--fix`, or `--post`. Findings go back
+     through wsx. If the skill reports findings through a UI tool rather than
+     text, restate them in the reply.
    - Produce a **risk assessment** — security, performance, breaking changes,
      edge cases.
    - Produce a **gap analysis** — test coverage, documentation, error handling.
@@ -114,10 +119,12 @@ stop and tell the user the valid kinds. Do not guess.
 wsx agent send claude#2 - <<'EOF'
 You are a code reviewer for this wsx workspace (I am claude, the primary).
 Branch: feat/widgets (3 commits, 7 files changed). Review this branch against
-main: run `git diff main...HEAD` to see the full change. If you have a
-`code-review` skill (e.g. Claude Code's `/code-review`), run it on this
-branch's changes vs main first and build on its findings; don't pass
---comment, --fix, or --post. Provide (1) a risk
+main: run `git diff main...HEAD` to see the full change. First run a
+`code-review` skill on this branch's changes vs main and build on its
+findings: prefer the repo's own (check .claude/skills/, .agents/skills/,
+.github/skills/ and follow its SKILL.md), else your harness's built-in (e.g.
+Claude Code's `/code-review`). Stay read-only: don't post to the PR, apply
+fixes, or pass --comment, --fix, or --post. Provide (1) a risk
 assessment — security, performance, breaking changes, edge cases; and (2) a gap
 analysis — test coverage, documentation, error handling. When done, write your
 findings to a file and send them back with:
@@ -131,7 +138,9 @@ EOF
   `$WSX_WORKSPACE_ID` or the cwd — you do not pass repo/slug.
 - `wsx agent send` is asynchronous; the reviewer receives the brief shortly
   after you send it and works in its own pane.
-- Whether `code-review` exists depends on the reviewer's harness, not yours,
-  so the brief always states the rule conditionally and the reviewer decides.
+- Which `code-review` skill applies depends on the repo and the reviewer's
+  harness, not yours, so the brief states the preference order and the
+  reviewer decides. A repo-local skill may live only under `.github/skills/`,
+  where non-Claude harnesses won't auto-discover it, hence the explicit paths.
 - The reviewer shares your worktree. Reviewing is read-only, so this is normally
   safe, but avoid large edits while the review runs.

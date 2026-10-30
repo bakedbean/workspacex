@@ -239,6 +239,23 @@ mod tests {
         );
     }
 
+    /// Repos like ssk keep their review conventions in a repo-local
+    /// `code-review` skill, sometimes only under `.github/skills/`; the brief
+    /// must point the reviewer there before the harness built-in.
+    #[test]
+    fn agent_review_skill_prefers_repo_local_code_review() {
+        for dir in [".claude/skills/", ".agents/skills/", ".github/skills/"] {
+            assert!(
+                AGENT_REVIEW_SKILL_CONTENT.contains(dir),
+                "agent-review brief must name the repo-local skill dir {dir}"
+            );
+        }
+        assert!(
+            AGENT_REVIEW_SKILL_CONTENT.contains("preferring the repo's own"),
+            "agent-review brief must prefer the repo-local code-review skill"
+        );
+    }
+
     #[test]
     fn handoff_skill_has_frontmatter() {
         assert!(

@@ -124,6 +124,22 @@ impl App {
             .map(|rule| (rid, rule))
     }
 
+    /// The tag of the tag group the selection is on or inside. A status filter
+    /// lists hidden rows flat, so a row isn't in a group while one is active.
+    pub(crate) fn selected_group_tag(&self) -> Option<String> {
+        let rule = match self.selected_target()? {
+            SelectionTarget::HiddenGroup { rule, .. } => rule,
+            SelectionTarget::Workspace(id) if self.dashboard.status_filter.is_none() => {
+                self.hidden_group_of(id)?.1
+            }
+            _ => return None,
+        };
+        match rule {
+            crate::data::hide_rules::HideRule::Tag(tag) => Some(tag.to_string()),
+            crate::data::hide_rules::HideRule::Pr(_) => None,
+        }
+    }
+
     /// Whether the attached view's top bar leaves `ws` out: the repo's hide
     /// rules, minus tag rules for a workspace carrying a `top_bar_show_tags` tag.
     pub(crate) fn hidden_from_top_bar(&self, ws: crate::data::store::WorkspaceId) -> bool {

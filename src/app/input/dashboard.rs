@@ -136,6 +136,26 @@ pub(crate) fn repo_pr_link_target(
         .map(|r| r.path.clone())
 }
 
+/// Opens the new-workspace form, pre-filling the tag of the tag group under
+/// the cursor.
+fn open_new_workspace(
+    app: &mut App,
+    repo_id: crate::data::store::RepoId,
+    yolo: bool,
+    shared: bool,
+) {
+    app.modal = Some(Modal::NewWorkspace {
+        repo_id,
+        name_buffer: String::new(),
+        tags_buffer: app.selected_group_tag().unwrap_or_default(),
+        tags_focused: false,
+        yolo,
+        shared,
+        agent: crate::pty::session::AgentKind::from_store(&app.store),
+        notice: None,
+    });
+}
+
 /// Vim-style `h` (fold) / `l` (unfold) on the focused row. Unlike
 /// [`toggle_focused_fold`], this is idempotent: pressing `h` on an
 /// already-folded repo leaves it folded.
@@ -426,18 +446,7 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         },
         (KeyCode::Enter, _) | (KeyCode::Char('i'), _) => match app.selected_target() {
             Some(SelectionTarget::Workspace(id)) => attach_workspace(app, id)?,
-            Some(SelectionTarget::Repo(id)) => {
-                app.modal = Some(Modal::NewWorkspace {
-                    repo_id: id,
-                    name_buffer: String::new(),
-                    tags_buffer: String::new(),
-                    tags_focused: false,
-                    yolo: false,
-                    shared: false,
-                    agent: crate::pty::session::AgentKind::from_store(&app.store),
-                    notice: None,
-                });
-            }
+            Some(SelectionTarget::Repo(id)) => open_new_workspace(app, id, false, false),
             Some(SelectionTarget::HiddenGroup { repo, rule }) => {
                 app.dashboard.expanded_hidden.insert((repo, rule));
             }
@@ -453,16 +462,7 @@ pub(in crate::app::input) async fn handle_key_dashboard(
                 .selected_repo()
                 .or_else(|| app.repos.first().map(|r| r.id));
             if let Some(id) = repo_id {
-                app.modal = Some(Modal::NewWorkspace {
-                    repo_id: id,
-                    name_buffer: String::new(),
-                    tags_buffer: String::new(),
-                    tags_focused: false,
-                    yolo,
-                    shared: false,
-                    agent: crate::pty::session::AgentKind::from_store(&app.store),
-                    notice: None,
-                });
+                open_new_workspace(app, id, yolo, false);
             }
         }
         (KeyCode::Char('S'), _) => {
@@ -473,16 +473,7 @@ pub(in crate::app::input) async fn handle_key_dashboard(
                 .selected_repo()
                 .or_else(|| app.repos.first().map(|r| r.id));
             if let Some(id) = repo_id {
-                app.modal = Some(Modal::NewWorkspace {
-                    repo_id: id,
-                    name_buffer: String::new(),
-                    tags_buffer: String::new(),
-                    tags_focused: false,
-                    yolo: false,
-                    shared: true,
-                    agent: crate::pty::session::AgentKind::from_store(&app.store),
-                    notice: None,
-                });
+                open_new_workspace(app, id, false, true);
             }
         }
         (KeyCode::Char('H'), _) => Panel::RemoteHosts.open(app, Surface::Dashboard)?,

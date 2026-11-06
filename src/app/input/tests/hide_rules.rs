@@ -603,3 +603,115 @@ async fn updates_panel_group_row_ignores_splits_and_enter_toggles() {
         Some(Modal::UpdatesPanel { selected: 1, .. })
     ));
 }
+
+/// `ids[0]` carries `parked` and `spike`, hidden by `tag:parked`; `ids[1]` is visible.
+fn app_with_tag_hidden() -> (
+    App,
+    crate::data::store::RepoId,
+    Vec<crate::data::store::WorkspaceId>,
+) {
+    let mut app = test_app_with_two_ready_workspaces();
+    app.refresh().unwrap();
+    let repo = app.repos[0].id;
+    let ids: Vec<_> = app.workspaces.iter().map(|(_, w)| w.id).collect();
+    app.store.add_workspace_tag(ids[0], "parked").unwrap();
+    app.store.add_workspace_tag(ids[0], "spike").unwrap();
+    app.store
+        .set_repo_hide_rules(repo, &HideRules::parse(Some("tag:parked")))
+        .unwrap();
+    app.refresh().unwrap();
+    (app, repo, ids)
+}
+
+fn new_workspace_tags(app: &App) -> &str {
+    match &app.modal {
+        Some(Modal::NewWorkspace { tags_buffer, .. }) => tags_buffer,
+        other => panic!("expected new-workspace modal, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn new_workspace_on_tag_group_row_inherits_the_tag() {
+    for key in ['n', 'N', 'S'] {
+        let (mut app, repo, _) = app_with_tag_hidden();
+        draw(&mut app);
+        select(
+            &mut app,
+            SelectionTarget::HiddenGroup {
+                repo,
+                rule: HideRule::tag("parked"),
+            },
+        );
+        press(&mut app, key, KeyModifiers::NONE).await;
+        assert_eq!(new_workspace_tags(&app), "parked", "key {key}");
+        let Some(Modal::NewWorkspace {
+            yolo,
+            shared,
+            tags_focused,
+            ..
+        }) = app.modal
+        else {
+            unreachable!()
+        };
+        assert_eq!((yolo, shared), (key == 'N', key == 'S'), "key {key}");
+        assert!(!tags_focused, "typing still goes to the name");
+    }
+}
+
+#[tokio::test]
+async fn new_workspace_on_tag_group_member_inherits_only_the_group_tag() {
+    let (mut app, repo, ids) = app_with_tag_hidden();
+    app.dashboard
+        .expanded_hidden
+        .insert((repo, HideRule::tag("parked")));
+    draw(&mut app);
+    select(&mut app, SelectionTarget::Workspace(ids[0]));
+    press(&mut app, 'n', KeyModifiers::NONE).await;
+    assert_eq!(new_workspace_tags(&app), "parked");
+}
+
+#[tokio::test]
+async fn new_workspace_outside_a_tag_group_starts_untagged() {
+    let (mut app, repo, ids) = app_with_tag_hidden();
+    draw(&mut app);
+    select(&mut app, SelectionTarget::Workspace(ids[1]));
+    press(&mut app, 'n', KeyModifiers::NONE).await;
+    assert_eq!(new_workspace_tags(&app), "", "visible workspace");
+
+    app.modal = None;
+    select(&mut app, SelectionTarget::Repo(repo));
+    press(&mut app, 'n', KeyModifiers::NONE).await;
+    assert_eq!(new_workspace_tags(&app), "", "repo header");
+}
+
+#[tokio::test]
+async fn new_workspace_in_a_pr_group_starts_untagged() {
+    let (mut app, repo, ids) = app_with_merged_hidden();
+    app.store.add_workspace_tag(ids[0], "spike").unwrap();
+    app.refresh().unwrap();
+    app.pr_lifecycle.insert(ids[0], BranchLifecycle::PrMerged);
+    app.dashboard.expanded_hidden.insert((repo, MERGED));
+    draw(&mut app);
+    select(
+        &mut app,
+        SelectionTarget::HiddenGroup { repo, rule: MERGED },
+    );
+    press(&mut app, 'n', KeyModifiers::NONE).await;
+    assert_eq!(new_workspace_tags(&app), "", "group row");
+
+    app.modal = None;
+    select(&mut app, SelectionTarget::Workspace(ids[0]));
+    press(&mut app, 'n', KeyModifiers::NONE).await;
+    assert_eq!(new_workspace_tags(&app), "", "member row");
+}
+
+#[tokio::test]
+async fn new_workspace_ignores_the_group_under_a_status_filter() {
+    // A status filter lists hidden rows flat, so the row isn't in a group.
+    let (mut app, _, ids) = app_with_tag_hidden();
+    app.dashboard.status_filter = Some(crate::ui::dashboard::status::Status::Idle);
+    draw(&mut app);
+    select(&mut app, SelectionTarget::Workspace(ids[0]));
+    press(&mut app, 'n', KeyModifiers::NONE).await;
+    assert_eq!(new_workspace_tags(&app), "");
+}

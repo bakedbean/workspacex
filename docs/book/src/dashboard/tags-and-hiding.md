@@ -16,7 +16,7 @@ Typing filters the list, which offers every tag used in wsx. Changes save as you
 
 Attached to a workspace on a [shared host](../integrations/remote-access.md), `Ctrl-x #` edits its tags on that host. The editor offers the tags used by that host's listed workspaces. Each change shows at once and runs `wsx workspace tag` there over ssh, one at a time in the order you made them; they finish even if you close the editor or detach. If a change fails, the editor shows the host's actual tags and why it failed.
 
-To tag a workspace as you create it, press `↓` in the new-workspace form and type its tags, separated by spaces or commas. An invalid tag keeps the form open and says which one.
+To tag a workspace as you create it, press `↓` in the new-workspace form and type its tags, separated by spaces or commas. An invalid tag keeps the form open and says which one. Creating a workspace with the cursor on a hidden tag group, or on a workspace inside one, fills in that group's tag; edit the field to change it.
 
 Tag rules:
 

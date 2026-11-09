@@ -46,6 +46,9 @@ pub fn create(
     // keeps those syscalls rare even when a setup script is noisy.
     let mut w = BufWriter::with_capacity(64 * 1024, File::create(&path).ok()?);
     write_header(&mut w, repo, name, worktree, started_secs).ok()?;
+    // Flush now: `rename` checks ownership by reading the header off disk, and
+    // a mid-setup rename would otherwise see an empty file and orphan the log.
+    w.flush().ok()?;
     Some(w)
 }
 
@@ -456,6 +459,25 @@ mod tests {
         assert!(read(logs.path(), "myrepo", "old").is_err());
         let lines = read(logs.path(), "myrepo", "new").expect("log should follow the rename");
         assert!(lines.contains(&"kept".to_string()), "{lines:?}");
+    }
+
+    /// Agents rename their workspace seconds after spawn, while setup is still
+    /// writing; the log (and its later lines) must follow.
+    #[test]
+    fn rename_moves_a_log_still_being_written() {
+        let logs = TempDir::new().unwrap();
+        let mut w = create(logs.path(), "myrepo", "old", Path::new("/wt/old"), 1).unwrap();
+
+        rename(logs.path(), "myrepo", "old", "new");
+        write_line(&mut w, &SetupLine::Stdout("after rename".into())).unwrap();
+        write_footer(&mut w, &SetupResult::Ok).unwrap();
+        drop(w);
+
+        assert!(read(logs.path(), "myrepo", "old").is_err());
+        let lines = read(logs.path(), "myrepo", "new").expect("log should follow the rename");
+        assert_eq!(lines[0], "=== setup: myrepo/old ===");
+        assert!(lines.contains(&"after rename".to_string()), "{lines:?}");
+        assert_eq!(lines.last().unwrap(), "=== OK ===");
     }
 
     #[test]

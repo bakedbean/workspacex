@@ -697,7 +697,7 @@ const FALLBACK_SEGMENT_FLOOR: usize = 32;
 /// segment the short layout showed — wide terminals read like the detail bar.
 fn fit_segments(segments: &[RecapSegment], avail: usize) -> String {
     let parts = if segments.iter().any(|s| s.full.is_some()) {
-        fit_parts(&upgrade_to_full(segments, avail), avail)
+        upgrade_to_full(segments, avail)
     } else {
         fit_parts(segments, avail)
     };
@@ -711,10 +711,11 @@ fn fit_segments(segments: &[RecapSegment], avail: usize) -> String {
 
 /// Greedy goal→state→next swap of short forms for full fields. A swap
 /// sticks only if that segment renders untruncated and no fewer segments
-/// render than before; otherwise the short form stays.
-fn upgrade_to_full(segments: &[RecapSegment], avail: usize) -> Vec<RecapSegment> {
+/// render than before; otherwise the short form stays. Returns the parts of
+/// the accepted layout.
+fn upgrade_to_full(segments: &[RecapSegment], avail: usize) -> Vec<String> {
     let mut chosen = segments.to_vec();
-    let mut shown = fit_parts(&chosen, avail).len();
+    let mut best = fit_parts(&chosen, avail);
     for (i, seg) in segments.iter().enumerate() {
         let Some(full) = seg.full.as_ref() else {
             continue;
@@ -726,12 +727,12 @@ fn upgrade_to_full(segments: &[RecapSegment], avail: usize) -> Vec<RecapSegment>
             full: None,
         };
         let parts = fit_parts(&candidate, avail);
-        if parts.len() >= shown && parts.get(i) == Some(full) {
-            shown = parts.len();
+        if parts.len() >= best.len() && parts.get(i) == Some(full) {
+            best = parts;
             chosen = candidate;
         }
     }
-    chosen
+    best
 }
 
 /// The three fitting passes; returns each emitted segment's rendered text.
@@ -1356,6 +1357,26 @@ mod tests {
             auf("3/12", "3 of 12 done"),
         ];
         assert_eq!(fit_segments(&segs, 30), " · Audit V2 · 3 of 12 done");
+    }
+
+    #[test]
+    fn full_form_upgrade_budgets_wide_text_in_cells() {
+        let segs = [auf("目標", "日本語の目標")];
+        assert_eq!(fit_segments(&segs, 15), " · 日本語の目標");
+        assert_eq!(fit_segments(&segs, 14), " · 目標");
+        assert_eq!(fit_segments(&segs, 4), "");
+    }
+
+    #[test]
+    fn full_form_upgrade_keeps_a_clipped_fallback_goal() {
+        // Upgrading state may shrink the fallback goal's expansion, but never
+        // below its floor or out of the row.
+        let goal = "Audit every V2 invoice issued today for amount drift";
+        let segs = [fb(goal), auf("3/12", "3 of 12 done")];
+        let out = fit_segments(&segs, 58);
+        assert!(out.ends_with(" · 3 of 12 done"), "{out}");
+        assert!(out.starts_with(" · Audit every V2 invoice"), "{out}");
+        assert!(display_width(&out) <= 58);
     }
 
     #[test]

@@ -6,7 +6,7 @@ use crate::activity::events::{ToolUseCounts, WorkspaceEvents};
 use crate::data::store::{ReportedStatus, WorkspaceRecap};
 use crate::ui::dashboard::status::Status;
 /// One recap segment for the renderer to width-fit. Agent-authored short
-/// forms render verbatim; fallback full fields (`authored: false`) get a
+/// forms render verbatim (or are swapped whole for `full`); fallback full fields (`authored: false`) get a
 /// width floor from the renderer and may expand into free column width.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecapSegment {

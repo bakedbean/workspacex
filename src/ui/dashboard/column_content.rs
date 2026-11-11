@@ -12,6 +12,9 @@ use crate::ui::dashboard::status::Status;
 pub struct RecapSegment {
     pub text: String,
     pub authored: bool,
+    /// The full field behind an authored short form; the renderer swaps it
+    /// in only when it fits whole, so wide terminals get the full context.
+    pub full: Option<String>,
 }
 
 /// Precomputed flex-column content for one workspace row, chosen by the
@@ -109,15 +112,18 @@ fn recap_segments(r: &WorkspaceRecap) -> Vec<RecapSegment> {
     ]
     .into_iter()
     .filter_map(|(short, full)| {
+        let full = non_empty_trimmed(full.as_deref());
         non_empty_trimmed(short.as_deref())
             .map(|s| RecapSegment {
                 text: collapse_ws(s),
                 authored: true,
+                full: full.map(collapse_ws),
             })
             .or_else(|| {
-                non_empty_trimmed(full.as_deref()).map(|f| RecapSegment {
+                full.map(|f| RecapSegment {
                     text: terse(f),
                     authored: false,
+                    full: None,
                 })
             })
     })
@@ -390,6 +396,30 @@ mod tests {
                 let texts: Vec<&str> = segments.iter().map(|s| s.text.as_str()).collect();
                 assert_eq!(texts, vec!["Audit V2 #2835", "3/12 done", "fix drift"]);
                 assert!(segments.iter().all(|s| s.authored));
+                assert!(segments.iter().all(|s| s.full.is_none()));
+            }
+            other => panic!("expected Recap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn short_form_carries_its_full_field_verbatim() {
+        let rc = recap_with(
+            Some("Audit  the V2 invoices\tfor drift"),
+            Some("Audit V2"),
+            None,
+            None,
+            0,
+        );
+        let c = row_column(Status::Waiting, Some(&evt()), 0, None, Some(&rc));
+        match c.body {
+            ColumnBody::Recap { segments } => {
+                assert_eq!(segments[0].text, "Audit V2");
+                // Whitespace collapsed, articles kept: this is the detail-bar text.
+                assert_eq!(
+                    segments[0].full.as_deref(),
+                    Some("Audit the V2 invoices for drift")
+                );
             }
             other => panic!("expected Recap, got {other:?}"),
         }

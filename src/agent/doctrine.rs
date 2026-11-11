@@ -62,7 +62,7 @@ const CLAUSE_RECAP: &str = "- Maintain the workspace recap with `wsx recap set`:
     Example: --goal \"Audit all V2 invoices auto-issued today for the \
     CV-04964 amount-drift bug fixed in PR #2835\" --goal-short \"Audit V2 invoices, \
     CV-04964, bug #2835\". The project-manager digest renders the full lines; the \
-    dashboard row renders the short forms.";
+    dashboard row shows the full lines where they fit and the short forms otherwise.";
 
 const CLAUSE_EXTERNAL_EDITOR: &str = "- An editor-hosted agent (one running inside the \
     user's editor rather than in a wsx session) may work in this worktree alongside \

@@ -904,6 +904,7 @@ fn matches_filter_matches_recap_segments() {
     let seg = |t: &str| column_content::RecapSegment {
         text: t.into(),
         authored: true,
+        full: None,
     };
     let item = item_with_column(
         &repo,
@@ -911,9 +912,19 @@ fn matches_filter_matches_recap_segments() {
             token: "idle".into(),
             reported: false,
             body: ColumnBody::Recap {
-                segments: vec![seg("Audit V2 invoices"), seg("fix drift calc")],
+                segments: vec![
+                    seg("Audit V2 invoices"),
+                    column_content::RecapSegment {
+                        full: Some("chasing the rounding regression".into()),
+                        ..seg("fix drift calc")
+                    },
+                ],
             },
         }),
+    );
+    assert!(
+        matches_filter(&item, "rounding"),
+        "full text behind a short form matches"
     );
     assert!(matches_filter(&item, "drift"));
     assert!(matches_filter(&item, "audit"));

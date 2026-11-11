@@ -917,9 +917,12 @@ fn matches_filter(w: &WorkspaceItem<'_>, filter: &str) -> bool {
         return true;
     }
     match &col.body {
-        column_content::ColumnBody::Recap { segments, .. } => segments
-            .iter()
-            .any(|s| s.text.to_lowercase().contains(&needle)),
+        column_content::ColumnBody::Recap { segments, .. } => segments.iter().any(|s| {
+            s.text.to_lowercase().contains(&needle)
+                || s.full
+                    .as_ref()
+                    .is_some_and(|f| f.to_lowercase().contains(&needle))
+        }),
         column_content::ColumnBody::Fallback { text, .. } => text.to_lowercase().contains(&needle),
         column_content::ColumnBody::Empty => false,
     }

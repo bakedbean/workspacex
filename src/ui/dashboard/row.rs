@@ -691,7 +691,52 @@ const FALLBACK_SEGMENT_FLOOR: usize = 32;
 /// Pass 2 — expansion: leftover width is granted to clipped fallback
 /// segments left-to-right. Each segment renders whole when its width
 /// allows, word-boundary truncated otherwise.
+///
+/// Before fitting, authored short forms are upgraded to their full field
+/// left-to-right whenever the full text renders whole without dropping a
+/// segment the short layout showed — wide terminals read like the detail bar.
 fn fit_segments(segments: &[RecapSegment], avail: usize) -> String {
+    let parts = if segments.iter().any(|s| s.full.is_some()) {
+        upgrade_to_full(segments, avail)
+    } else {
+        fit_parts(segments, avail)
+    };
+    let mut out = String::new();
+    for part in parts {
+        out.push_str(SEG_SEP);
+        out.push_str(&part);
+    }
+    out
+}
+
+/// Greedy goal→state→next swap of short forms for full fields. A swap
+/// sticks only if that segment renders untruncated and no fewer segments
+/// render than before; otherwise the short form stays. Returns the parts of
+/// the accepted layout.
+fn upgrade_to_full(segments: &[RecapSegment], avail: usize) -> Vec<String> {
+    let mut chosen = segments.to_vec();
+    let mut best = fit_parts(&chosen, avail);
+    for (i, seg) in segments.iter().enumerate() {
+        let Some(full) = seg.full.as_ref() else {
+            continue;
+        };
+        let mut candidate = chosen.clone();
+        candidate[i] = RecapSegment {
+            text: full.clone(),
+            authored: true,
+            full: None,
+        };
+        let parts = fit_parts(&candidate, avail);
+        if parts.len() >= best.len() && parts.get(i) == Some(full) {
+            best = parts;
+            chosen = candidate;
+        }
+    }
+    best
+}
+
+/// The three fitting passes; returns each emitted segment's rendered text.
+fn fit_parts(segments: &[RecapSegment], avail: usize) -> Vec<String> {
     let sep_len = SEG_SEP.chars().count();
 
     let mut widths: Vec<usize> = Vec::with_capacity(segments.len());
@@ -736,7 +781,7 @@ fn fit_segments(segments: &[RecapSegment], avail: usize) -> String {
     // come out well short of its target. That shortfall accrues as `bonus`
     // width, granted forward to later clipped fallback segments — otherwise
     // it would strand as blank space (allocation-only accounting bug).
-    let mut out = String::new();
+    let mut out = Vec::with_capacity(segments.len());
     let mut bonus = 0usize;
     for (w, seg) in widths.iter().zip(segments) {
         let len = display_width(&seg.text);
@@ -748,8 +793,7 @@ fn fit_segments(segments: &[RecapSegment], avail: usize) -> String {
         }
         let rendered = truncate_words(&seg.text, target);
         bonus += target - display_width(&rendered);
-        out.push_str(SEG_SEP);
-        out.push_str(&rendered);
+        out.push(rendered);
     }
     // The accrued shortfall can even re-admit segments pass 1 dropped: same
     // inclusion rule (whole base width fits), against bonus width only.
@@ -772,8 +816,7 @@ fn fit_segments(segments: &[RecapSegment], avail: usize) -> String {
         }
         let rendered = truncate_words(&seg.text, target);
         bonus += target - display_width(&rendered);
-        out.push_str(SEG_SEP);
-        out.push_str(&rendered);
+        out.push(rendered);
     }
     out
 }
@@ -1256,6 +1299,7 @@ mod tests {
         RecapSegment {
             text: s.to_string(),
             authored: true,
+            full: None,
         }
     }
 
@@ -1263,7 +1307,76 @@ mod tests {
         RecapSegment {
             text: s.to_string(),
             authored: false,
+            full: None,
         }
+    }
+
+    fn auf(short: &str, full: &str) -> RecapSegment {
+        RecapSegment {
+            full: Some(full.to_string()),
+            ..au(short)
+        }
+    }
+
+    #[test]
+    fn full_forms_replace_short_ones_when_they_fit_whole() {
+        let segs = [
+            auf("Audit V2", "Audit all V2 invoices"),
+            auf("3/12", "3 of 12 checked"),
+            auf("tests", "write regression tests"),
+        ];
+        let all_full = " · Audit all V2 invoices · 3 of 12 checked · write regression tests";
+        assert_eq!(fit_segments(&segs, 80), all_full);
+        assert_eq!(fit_segments(&segs, all_full.chars().count()), all_full);
+        // One cell short: next falls back to its short form, earlier stay full.
+        assert_eq!(
+            fit_segments(&segs, all_full.chars().count() - 1),
+            " · Audit all V2 invoices · 3 of 12 checked · tests"
+        );
+        // Narrow: all short, exactly as before the upgrade existed.
+        assert_eq!(fit_segments(&segs, 26), " · Audit V2 · 3/12 · tests");
+    }
+
+    #[test]
+    fn full_form_never_truncates_or_crowds_out_later_segments() {
+        // Full goal would fit alone but would drop state + next: stay short.
+        let segs = [
+            auf("Audit V2", "Audit all V2 invoices for drift"),
+            au("3/12"),
+            au("tests"),
+        ];
+        assert_eq!(fit_segments(&segs, 34), " · Audit V2 · 3/12 · tests");
+        // A goal-only row never shows a clipped full form, just the short one.
+        assert_eq!(
+            fit_segments(&[auf("Audit V2", "Audit all V2 invoices for drift")], 20),
+            " · Audit V2"
+        );
+        // A later segment can upgrade even when an earlier one cannot.
+        let segs = [
+            auf("Audit V2", "Audit every single V2 invoice issued today"),
+            auf("3/12", "3 of 12 done"),
+        ];
+        assert_eq!(fit_segments(&segs, 30), " · Audit V2 · 3 of 12 done");
+    }
+
+    #[test]
+    fn full_form_upgrade_budgets_wide_text_in_cells() {
+        let segs = [auf("目標", "日本語の目標")];
+        assert_eq!(fit_segments(&segs, 15), " · 日本語の目標");
+        assert_eq!(fit_segments(&segs, 14), " · 目標");
+        assert_eq!(fit_segments(&segs, 4), "");
+    }
+
+    #[test]
+    fn full_form_upgrade_keeps_a_clipped_fallback_goal() {
+        // Upgrading state may shrink the fallback goal's expansion, but never
+        // below its floor or out of the row.
+        let goal = "Audit every V2 invoice issued today for amount drift";
+        let segs = [fb(goal), auf("3/12", "3 of 12 done")];
+        let out = fit_segments(&segs, 58);
+        assert!(out.ends_with(" · 3 of 12 done"), "{out}");
+        assert!(out.starts_with(" · Audit every V2 invoice"), "{out}");
+        assert!(display_width(&out) <= 58);
     }
 
     #[test]

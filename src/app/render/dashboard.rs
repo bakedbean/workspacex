@@ -302,6 +302,17 @@ pub(crate) fn workspace_age_secs(
     ws_id: crate::data::store::WorkspaceId,
     now_ms: i64,
 ) -> Option<u64> {
+    workspace_last_active_ms(app, ws_id).map(|last_ms| ((now_ms - last_ms).max(0) / 1000) as u64)
+}
+
+/// Epoch-ms of a workspace's last activity, or `None` if nothing has ever
+/// recorded any — the signal [`workspace_age_secs`] ages. The attached
+/// top bar orders on this directly: whole-second ages tie and untie as
+/// the clock ticks, which would swap two quiet workspaces every second.
+pub(crate) fn workspace_last_active_ms(
+    app: &App,
+    ws_id: crate::data::store::WorkspaceId,
+) -> Option<i64> {
     let session_last_ms = app
         .primary_instance(ws_id)
         .and_then(|i| app.sessions.get(i))
@@ -313,11 +324,7 @@ pub(crate) fn workspace_age_secs(
         .and_then(|e| e.latest.as_ref().map(|ev| ev.timestamp_ms))
         .unwrap_or(0);
     let last_ms = session_last_ms.max(event_last_ms);
-    if last_ms == 0 {
-        None
-    } else {
-        Some(((now_ms - last_ms).max(0) / 1000) as u64)
-    }
+    (last_ms != 0).then_some(last_ms)
 }
 
 /// Every workspace as a dashboard item, in repo order. The dashboard list

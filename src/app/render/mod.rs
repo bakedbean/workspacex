@@ -72,22 +72,15 @@ pub(super) fn compute_attention_items(
                 repo_name,
                 events: app.workspace_events.get(&w.id),
                 activity,
-                needs_attention: app.workspace_needs_attention.contains(&w.id),
                 lifecycle: app.pr_lifecycle.get(&w.id).copied(),
                 awaiting_tool: app.awaiting_permission(w.id),
-                ago_secs: dashboard::workspace_age_secs(app, w.id, now_ms),
+                last_active_ms: dashboard::workspace_last_active_ms(app, w.id),
                 status: app.classify_status(w),
                 hidden: app.hidden_from_top_bar(w.id),
             }
         })
         .collect();
-    let entries = crate::ui::updates_bar::collect_workspace_row(
-        &candidates,
-        attached_id,
-        now_ms,
-        app.dashboard.sort_mode,
-        app.dashboard.blocked_pin_max_age_secs,
-    );
+    let entries = crate::ui::updates_bar::collect_workspace_row(&candidates, attached_id, now_ms);
     (!entries.is_empty()).then_some(crate::ui::updates_bar::AttentionItems {
         entries,
         now_ms,
@@ -268,5 +261,53 @@ mod drawer_hold_tests {
         let mut term = Terminal::new(TestBackend::new(80, 30)).unwrap();
         term.draw(|f| draw(f, app)).unwrap();
         assert!(app.drawer_hold.is_none());
+    }
+}
+
+#[cfg(test)]
+mod attention_items_tests {
+    use super::*;
+    use crate::activity::events::{EventKind, EventSnapshot, StopReason, WorkspaceEvents};
+    use crate::ui::dashboard::sort::SortMode;
+    use crate::ui::dashboard::status::Status;
+
+    fn events_at(timestamp_ms: i64, stop: Option<StopReason>) -> WorkspaceEvents {
+        WorkspaceEvents {
+            last_stop_reason: stop,
+            last_log_activity_ms: timestamp_ms,
+            latest: Some(EventSnapshot {
+                kind: EventKind::AssistantText,
+                display: "done".to_string(),
+                timestamp_ms,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// The bug this row was rebuilt for: a workspace flagged for attention
+    /// days ago and never opened led the row over one active seconds ago.
+    /// The attention flag and the dashboard's sort mode (status here, the
+    /// one that ranks a stall highest) must not decide the position; the
+    /// stale entry keeps its stalled status for its glyph.
+    #[test]
+    fn a_stale_flagged_workspace_trails_a_fresh_one_in_any_sort_mode() {
+        let store = Store::open_in_memory().unwrap();
+        let mut app = App::new(store, std::path::PathBuf::from("/tmp/wsx-test")).unwrap();
+        let stale = app.test_workspace("stale");
+        let fresh = app.test_workspace("fresh");
+        let now = crate::util::time::now_ms();
+        app.workspace_events.insert(
+            stale,
+            events_at(now - 3 * 86_400_000, Some(StopReason::ToolUse)),
+        );
+        app.workspace_events
+            .insert(fresh, events_at(now - 5_000, None));
+        app.workspace_needs_attention.insert(stale);
+        app.dashboard.sort_mode = SortMode::Status;
+
+        let items = compute_attention_items(&app, None, 200).expect("two entries");
+        let order: Vec<_> = items.entries.iter().map(|e| e.workspace_id).collect();
+        assert_eq!(order, [fresh, stale]);
+        assert_eq!(items.entries[1].status, Status::Stalled);
     }
 }

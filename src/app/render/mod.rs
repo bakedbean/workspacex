@@ -72,7 +72,6 @@ pub(super) fn compute_attention_items(
                 repo_name,
                 events: app.workspace_events.get(&w.id),
                 activity,
-                needs_attention: app.workspace_needs_attention.contains(&w.id),
                 lifecycle: app.pr_lifecycle.get(&w.id).copied(),
                 awaiting_tool: app.awaiting_permission(w.id),
                 ago_secs: dashboard::workspace_age_secs(app, w.id, now_ms),
@@ -81,13 +80,7 @@ pub(super) fn compute_attention_items(
             }
         })
         .collect();
-    let entries = crate::ui::updates_bar::collect_workspace_row(
-        &candidates,
-        attached_id,
-        now_ms,
-        app.dashboard.sort_mode,
-        app.dashboard.blocked_pin_max_age_secs,
-    );
+    let entries = crate::ui::updates_bar::collect_workspace_row(&candidates, attached_id, now_ms);
     (!entries.is_empty()).then_some(crate::ui::updates_bar::AttentionItems {
         entries,
         now_ms,

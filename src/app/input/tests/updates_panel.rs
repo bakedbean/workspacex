@@ -1651,16 +1651,24 @@ async fn attached_view_shows_status_row_for_other_workspace_needing_attention() 
         )
         .unwrap();
     app.view = crate::ui::View::Attached(AttachedState::single(test_target(&app, attached_id)));
-    // The status row lists every other workspace, flagged ones first.
-    // The glyph is the canonical dashboard status, so give the flagged
-    // workspace events that classify as Stalled: a tool_use stop with
-    // nothing pending and a log that went quiet over a minute ago.
+    // The status row lists every other workspace, most recently active
+    // first. The glyph is the canonical dashboard status, so give the
+    // other workspace events that classify as Stalled: a tool_use stop
+    // with nothing pending and a log that went quiet over a minute ago.
+    // Its latest event gives it an age, which puts it ahead of the
+    // never-active quiet one even though that one sorts first by name.
+    let quiet_since = crate::util::time::now_ms() - 120_000;
     app.workspace_needs_attention.insert(other_id);
     app.workspace_events.insert(
         other_id,
         crate::activity::events::WorkspaceEvents {
             last_stop_reason: Some(crate::activity::events::StopReason::ToolUse),
-            last_log_activity_ms: crate::util::time::now_ms() - 120_000,
+            last_log_activity_ms: quiet_since,
+            latest: Some(crate::activity::events::EventSnapshot {
+                kind: crate::activity::events::EventKind::AssistantText,
+                display: "done".to_string(),
+                timestamp_ms: quiet_since,
+            }),
             ..Default::default()
         },
     );
@@ -1685,7 +1693,7 @@ async fn attached_view_shows_status_row_for_other_workspace_needing_attention() 
         rendered.contains("! repo/the-other"),
         "expected V5 stalled glyph next to workspace name on status row:\n{rendered}"
     );
-    // The unflagged workspace is listed too, demoted behind the flagged one,
+    // The never-active workspace is listed too, after the active one,
     // with the idle dot its dashboard row would show.
     let flagged_at = rendered.find("repo/the-other").unwrap();
     let quiet_at = rendered
@@ -1693,7 +1701,7 @@ async fn attached_view_shows_status_row_for_other_workspace_needing_attention() 
         .unwrap_or_else(|| panic!("expected idle entry for the unflagged workspace:\n{rendered}"));
     assert!(
         flagged_at < quiet_at,
-        "flagged workspace must precede the unflagged one:\n{rendered}"
+        "recently active workspace must precede the never-active one:\n{rendered}"
     );
     assert!(
         app.attention_more_rect.is_none(),

@@ -45,10 +45,11 @@ pub struct WorkspaceUpdateInfo<'a> {
     /// for the App's stale threshold. Caller computes via
     /// `App::awaiting_permission`.
     pub awaiting_tool: Option<(String, i64)>,
-    /// The dashboard's recency signal for this workspace (seconds since
-    /// last interaction, `None` = never active). Caller computes via
-    /// `workspace_age_secs`; the row orders strictly by it.
-    pub ago_secs: Option<u64>,
+    /// Epoch-ms of this workspace's last activity (`None` = never
+    /// active) — the instant the dashboard's age is measured from. Caller
+    /// computes via `workspace_last_active_ms`; the row orders strictly by
+    /// it, newest first.
+    pub last_active_ms: Option<i64>,
     /// The dashboard's canonical classification for this workspace.
     /// Caller computes via `App::classify_status`; deliberately NOT
     /// derived from the legacy bell `activity`, whose classifier lacks
@@ -112,13 +113,13 @@ pub fn glyph_for_activity(a: ActivityState) -> char {
 /// Collect every workspace except the currently-attached and hidden ones,
 /// as the attached view's top-bar row, most recently active first.
 ///
-/// The order is strict recency by exact `ago_secs` — deliberately not the
+/// The order is strict recency by exact `last_active_ms` — deliberately not the
 /// dashboard's comparator. The dashboard buckets ages and sorts by name
 /// inside a bucket to keep its long list still, and both it and the old
 /// attention-first rule could park a days-old workspace ahead of one that
 /// is working right now. Status shows through each entry's glyph and color
-/// instead of its position. Never-active workspaces go last; the name
-/// breaks ties so the order is total.
+/// instead of its position. Never-active workspaces go last; repo, name
+/// and id break ties so the order is total.
 pub fn collect_workspace_row(
     candidates: &[WorkspaceUpdateInfo],
     attached_workspace: Option<WorkspaceId>,
@@ -129,8 +130,20 @@ pub fn collect_workspace_row(
         .filter(|c| Some(c.id) != attached_workspace && !c.hidden)
         .collect();
     rows.sort_by(|a, b| {
-        let key = |c: &WorkspaceUpdateInfo| (c.ago_secs.is_none(), c.ago_secs);
-        key(a).cmp(&key(b)).then_with(|| a.name.cmp(b.name))
+        // `Reverse` puts the newest first; `None` sorts below every `Some`
+        // and reversing would lift it, so never-active is keyed separately.
+        fn key<'a>(
+            c: &WorkspaceUpdateInfo<'a>,
+        ) -> (bool, std::cmp::Reverse<Option<i64>>, &'a str, &'a str, i64) {
+            (
+                c.last_active_ms.is_none(),
+                std::cmp::Reverse(c.last_active_ms),
+                c.repo_name,
+                c.name,
+                c.id.0,
+            )
+        }
+        key(a).cmp(&key(b))
     });
     rows.into_iter()
         .map(|c| {
@@ -166,8 +179,12 @@ mod tests {
     use crate::activity::events::{EventKind, EventSnapshot, WorkspaceEvents};
     use crate::data::store::WorkspaceId;
 
-    /// A candidate with no events, PR or pending tool; tests override the
-    /// fields they exercise with struct-update syntax.
+    /// Wall clock the fixtures' activity times are measured back from.
+    const NOW: i64 = 1_700_000_000_000;
+
+    /// A candidate with no events, PR or pending tool, last active `ago`
+    /// seconds before [`NOW`]; tests override the fields they exercise
+    /// with struct-update syntax.
     fn cand(
         id: i64,
         name: &'static str,
@@ -182,7 +199,7 @@ mod tests {
             activity: ActivityState::Idle,
             lifecycle: None,
             awaiting_tool: None,
-            ago_secs: ago,
+            last_active_ms: ago.map(|a| NOW - a as i64 * 1000),
             status,
             hidden: false,
         }
@@ -247,8 +264,9 @@ mod tests {
 
     #[test]
     fn ignores_event_timestamps_for_order() {
-        // Order follows ago_secs (the dashboard's recency signal), not the
-        // latest event timestamp, which here would give the opposite order.
+        // Order follows last_active_ms as the caller computed it, not the
+        // entry's latest event timestamp, which here would give the
+        // opposite order.
         let older_evt = events_with_latest("stale-ws-newer-event", 9_000);
         let newer_evt = events_with_latest("fresh-ws-older-event", 1_000);
         let candidates = [
@@ -263,6 +281,48 @@ mod tests {
         ];
         let entries = collect_workspace_row(&candidates, None, 10_000);
         assert_eq!(names(&entries), ["fresh", "stale"]);
+    }
+
+    #[test]
+    fn orders_within_a_second_by_milliseconds() {
+        // Whole-second ages would tie these two (both 1s old at NOW) and
+        // hand the lead to the name, then untie them as the clock moved —
+        // swapping them every second with no new activity.
+        let candidates = [
+            WorkspaceUpdateInfo {
+                last_active_ms: Some(NOW - 1_900),
+                ..cand(1, "alpha", Status::Idle, None)
+            },
+            WorkspaceUpdateInfo {
+                last_active_ms: Some(NOW - 1_100),
+                ..cand(2, "zeta", Status::Idle, None)
+            },
+        ];
+        let entries = collect_workspace_row(&candidates, None, NOW);
+        assert_eq!(names(&entries), ["zeta", "alpha"]);
+    }
+
+    #[test]
+    fn breaks_same_name_ties_by_repo_then_id() {
+        // The same workspace name in two repos, and twice in one: the
+        // order must not depend on candidate order.
+        let candidates = [
+            WorkspaceUpdateInfo {
+                repo_name: "zed",
+                ..cand(1, "fix", Status::Idle, Some(60))
+            },
+            WorkspaceUpdateInfo {
+                repo_name: "abc",
+                ..cand(3, "fix", Status::Idle, Some(60))
+            },
+            WorkspaceUpdateInfo {
+                repo_name: "abc",
+                ..cand(2, "fix", Status::Idle, Some(60))
+            },
+        ];
+        let entries = collect_workspace_row(&candidates, None, NOW);
+        let order: Vec<i64> = entries.iter().map(|e| e.workspace_id.0).collect();
+        assert_eq!(order, [2, 3, 1]);
     }
 
     #[test]

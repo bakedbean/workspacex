@@ -350,7 +350,7 @@ fn an_oversized_selected_row_still_draws() {
         screen.contains("repo/a"),
         "selected row's head drawn:\n{screen}"
     );
-    assert!(screen.contains("goal  word word"), "{screen}");
+    assert!(screen.contains("goal    word word"), "{screen}");
     let buf = term.backend().buffer().clone();
     for (_, r) in &app.dashboard_focus_row_rects {
         for y in r.y..r.y + r.height {

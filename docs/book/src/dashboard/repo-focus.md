@@ -6,20 +6,24 @@ The focus view shows one repo on the dashboard and gives each of its workspaces 
 ◂ all repos / workspacex  ~/src/workspacex  ──────────────────────────  ● 2  ? 1    5 ws
 
 ▎▍├  ⠋ ⎇ bakedbean/repo-focus-view          ⏺ #461 open ✓   ● 2p  +184 −22    ▸ working   2m ago
- ▍  goal  Single-repo dashboard view with richer per-workspace detail, wrapping every recap
- ▍        field across as many lines as it needs
- ▍  now   mapping dashboard code → draft design options
- ▍  git   ↑4 base · 3 modified 1 untracked · +184 −22 · ▎ claude  ▎ codex   ui
+ ▍  prompt  I want to design a new dashboard feature for how workspaces are displayed. I want
+ ▍          to be able to just show one repo on the dashboard via a keybind on the repo name…
+ ▍  goal    Single-repo dashboard view with richer per-workspace detail, wrapping every
+ ▍          recap field across as many lines as it needs
+ ▍  now     mapping dashboard code → draft design options
+ ▍  git     ↑4 base · 3 modified 1 untracked · +184 −22 · ▎ claude  ▎ codex   ui
 
 ▎▎├  ? ⎇ bakedbean/detail-bar-scroll        ⏺ #459 draft     ● 1p  +61 −8      └ asking   14m ago
- ▎  goal  Scroll detail-bar containers independently
- ▎  now   keep scroll offsets per workspace or global?
- ▎  git   ↑2 base · clean · +61 −8 · ▎ claude
+ ▎  prompt  The detail bar containers should scroll independently
+ ▎  goal    Scroll detail-bar containers independently
+ ▎  now     keep scroll offsets per workspace or global?
+ ▎  git     ↑2 base · clean · +61 −8 · ▎ claude
 ```
 
 Each workspace shows:
 
 - **The dashboard row**, with the status word but without the squeezed recap.
+- **prompt**: the first prompt the workspace's agent was given, in italics and cut to two lines, so you can see what the workspace was started for. It appears once the agent's session log has been read.
 - **goal**: the recap goal in full.
 - **now**: the recap state, then the next step after `→`. Without a recap, a **last** line takes its place: the status text the dashboard row would have clipped, usually the agent's last message, cut to two lines. It shows only there, not also on the first line.
 - **git**: commits ahead of the base branch, uncommitted changes, the diff, and every agent in the workspace, followed by its tags. Each agent is named with its icon from the theme's [`[agent_bar.symbols]`](../configuration/themes.md) table, or the `▎` bar when the theme has none.

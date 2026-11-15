@@ -387,6 +387,10 @@ pub(crate) fn build_workspace_items<'a>(
                         recap: app.recaps.get(&ws.id).cloned(),
                         git: app.workspace_status.get(&ws.id).copied(),
                         ahead_of_base: app.workspace_ahead_of_base.get(&ws.id).copied(),
+                        first_prompt: app
+                            .workspace_events
+                            .get(&ws.id)
+                            .and_then(|e| e.first_user_text.clone()),
                     }
                 } else {
                     Default::default()

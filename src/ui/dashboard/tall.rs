@@ -33,6 +33,9 @@ pub struct WorkspaceDetail {
     pub git: Option<WorkspaceStatus>,
     /// Commits on the branch that the repo's base branch lacks.
     pub ahead_of_base: Option<u32>,
+    /// The first prompt the workspace's agent was given, from its session
+    /// log; `None` until the log is scanned or when it has none.
+    pub first_prompt: Option<String>,
 }
 
 /// Each agent kind's icon, as the theme's `[agent_bar.symbols]` table
@@ -104,8 +107,14 @@ pub enum TallEntry<'a> {
     Group(Line<'static>),
 }
 
-/// Width of the label column on detail lines (`goal  `, `now   `, `git   `).
-const LABEL_WIDTH: usize = 6;
+/// Width of the label column on detail lines (`prompt  `, `goal    `, …):
+/// the longest label plus two spaces.
+const LABEL_WIDTH: usize = 8;
+
+/// Most lines the initial prompt may wrap onto. Prompts are often pasted
+/// briefs many paragraphs long; the opening is enough to say what the
+/// workspace was started for.
+const PROMPT_MAX_LINES: usize = 2;
 
 /// Most lines the no-recap fallback text may wrap onto.
 const FALLBACK_MAX_LINES: usize = 2;
@@ -188,6 +197,20 @@ pub fn row_lines(
             lines.push(Line::from(spans));
         }
     };
+
+    // What the workspace was started for, above what it is doing now.
+    if let Some(prompt) = detail.first_prompt.as_deref().map(str::trim)
+        && !prompt.is_empty()
+    {
+        push_wrapped(
+            "prompt",
+            prompt,
+            theme
+                .row_dim_style()
+                .add_modifier(ratatui::style::Modifier::ITALIC),
+            PROMPT_MAX_LINES,
+        );
+    }
 
     match recap {
         Some(r) => {
@@ -669,6 +692,7 @@ mod tests {
                 behind: 0,
             }),
             ahead_of_base: Some(4),
+            first_prompt: None,
         };
         let tall = TallRow {
             row: &row,
@@ -1013,5 +1037,68 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    /// The initial prompt shows first, labelled, italic, and capped at two
+    /// lines however long the brief was; it shows alongside a recap too.
+    #[test]
+    fn initial_prompt_leads_the_detail_lines() {
+        let row = base_row("b");
+        let detail = WorkspaceDetail {
+            first_prompt: Some(format!("FIRST-PROMPT {}", "brief ".repeat(200))),
+            recap: Some(WorkspaceRecap {
+                goal: Some("the goal".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let tall = TallRow {
+            row: &row,
+            detail: &detail,
+        };
+        let lines = row_lines(
+            &tall,
+            &AgentGlyphs::default(),
+            ColumnWidths::default(),
+            0,
+            &Theme::wsx(),
+            120,
+        );
+        let texts: Vec<String> = lines.iter().map(text).collect();
+        assert!(
+            texts[1].contains("prompt") && texts[1].contains("FIRST-PROMPT"),
+            "{texts:?}"
+        );
+        assert!(
+            texts[2].ends_with('…') || texts[2].trim_end().ends_with('…'),
+            "capped: {texts:?}"
+        );
+        assert!(texts[3].contains("goal"), "recap follows: {texts:?}");
+        let prompt_span = lines[1].spans.last().unwrap();
+        assert!(
+            prompt_span
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::ITALIC)
+        );
+
+        // No prompt known yet: no line.
+        let detail = WorkspaceDetail::default();
+        let tall = TallRow {
+            row: &row,
+            detail: &detail,
+        };
+        let texts: Vec<String> = row_lines(
+            &tall,
+            &AgentGlyphs::default(),
+            ColumnWidths::default(),
+            0,
+            &Theme::wsx(),
+            120,
+        )
+        .iter()
+        .map(text)
+        .collect();
+        assert!(!texts.iter().any(|l| l.contains("prompt")), "{texts:?}");
     }
 }

@@ -651,3 +651,148 @@ async fn moving_the_selection_scrolls_it_back_into_view() {
         .map(|(_, r)| *r);
     assert!(r.is_some_and(|r| r.y >= 4), "selected row on screen: {r:?}");
 }
+
+/// The focus view with `a` selected, a base branch set, and two commits and
+/// two changed files cached for `a`.
+fn app_with_branch_data() -> (App, RepoId, Vec<WorkspaceId>) {
+    let (mut app, repo, _, ids) = app();
+    app.store
+        .set_repo_base_branch(repo, Some("origin/main"))
+        .unwrap();
+    app.refresh().unwrap();
+    app.workspace_commits.insert(
+        ids[0],
+        vec![
+            crate::git::BranchCommit {
+                hash: "a1b2c3d".into(),
+                subject: "UNIQUE-COMMIT-SUBJECT".into(),
+            },
+            crate::git::BranchCommit {
+                hash: "9f8e7d6".into(),
+                subject: "earlier commit".into(),
+            },
+        ],
+    );
+    app.workspace_diff_per_file.insert(
+        ids[0],
+        [
+            (
+                "src/zeta.rs".to_string(),
+                crate::git::DiffStats {
+                    added: 3,
+                    removed: 1,
+                },
+            ),
+            (
+                "src/alpha.rs".to_string(),
+                crate::git::DiffStats {
+                    added: 40,
+                    removed: 2,
+                },
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    app.dashboard.focus_repo(repo);
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
+    (app, repo, ids)
+}
+
+#[tokio::test]
+async fn c_toggles_the_side_panel_showing_commits() {
+    let (mut app, _, _) = app_with_branch_data();
+    let screen = draw(&mut app);
+    assert!(
+        !screen.contains("UNIQUE-COMMIT-SUBJECT"),
+        "closed by default"
+    );
+    assert!(app.dashboard_panel_rect.is_none());
+
+    press(&mut app, KeyCode::Char('c')).await;
+    let screen = draw(&mut app);
+    assert!(screen.contains("Commits 2"), "{screen}");
+    assert!(screen.contains("Files 2"), "{screen}");
+    assert!(screen.contains("repo/a vs main"), "{screen}");
+    assert!(
+        screen.contains("a1b2c3d  UNIQUE-COMMIT-SUBJECT"),
+        "{screen}"
+    );
+    let panel = app.dashboard_panel_rect.expect("panel drawn");
+    for (_, r) in &app.dashboard_focus_row_rects {
+        assert!(r.x + r.width <= panel.x, "rows stay left of the panel");
+    }
+
+    press(&mut app, KeyCode::Char('c')).await;
+    draw(&mut app);
+    assert!(app.dashboard_panel_rect.is_none(), "c closes it");
+}
+
+#[tokio::test]
+async fn number_keys_and_clicks_switch_tabs() {
+    let (mut app, _, _) = app_with_branch_data();
+    press(&mut app, KeyCode::Char('2')).await;
+    assert!(app.dashboard.panel_open, "2 opens the panel");
+    let screen = draw(&mut app);
+    assert!(screen.contains("2 files  +43 −3"), "{screen}");
+    let alpha = screen.find("src/alpha.rs").unwrap();
+    let zeta = screen.find("src/zeta.rs").unwrap();
+    assert!(alpha < zeta, "sorted by path:\n{screen}");
+
+    let (tab, r) = app.dashboard_panel_tab_rects[0];
+    assert_eq!(tab, crate::ui::dashboard::side_panel::PanelTab::Commits);
+    assert_eq!(panel_tab_click_target(&app, &click(r.x, r.y)), Some(tab));
+    show_panel_tab(&mut app, tab);
+    assert!(draw(&mut app).contains("UNIQUE-COMMIT-SUBJECT"));
+
+    press(&mut app, KeyCode::Char('2')).await;
+    press(&mut app, KeyCode::Char('c')).await;
+    press(&mut app, KeyCode::Char('c')).await;
+    assert_eq!(
+        app.dashboard.panel_tab,
+        crate::ui::dashboard::side_panel::PanelTab::Files,
+        "the tab survives closing"
+    );
+}
+
+/// Esc peels the panel before leaving the focus view.
+#[tokio::test]
+async fn esc_closes_the_panel_before_leaving_focus() {
+    let (mut app, repo, _) = app_with_branch_data();
+    press(&mut app, KeyCode::Char('c')).await;
+    press(&mut app, KeyCode::Esc).await;
+    assert!(!app.dashboard.panel_open);
+    assert_eq!(app.dashboard.focused_repo, Some(repo));
+    press(&mut app, KeyCode::Esc).await;
+    assert_eq!(app.dashboard.focused_repo, None);
+}
+
+/// The panel follows the selection, and a repo header or empty selection
+/// gets an explanation instead of stale data.
+#[tokio::test]
+async fn the_panel_follows_the_selection() {
+    let (mut app, _, ids) = app_with_branch_data();
+    press(&mut app, KeyCode::Char('c')).await;
+    draw(&mut app);
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[1]));
+    let screen = draw(&mut app);
+    assert!(screen.contains("repo/b vs main"), "{screen}");
+    assert!(!screen.contains("UNIQUE-COMMIT-SUBJECT"), "{screen}");
+    assert!(
+        screen.contains("loading"),
+        "nothing polled for b yet:\n{screen}"
+    );
+}
+
+/// Too narrow for rows and a panel: the panel stays hidden.
+#[tokio::test]
+async fn a_narrow_terminal_hides_the_panel() {
+    let (mut app, _, _) = app_with_branch_data();
+    press(&mut app, KeyCode::Char('c')).await;
+    let mut term = Terminal::new(TestBackend::new(90, 30)).unwrap();
+    term.draw(|f| crate::app::render::draw_for_test(f, &mut app))
+        .unwrap();
+    assert!(app.dashboard_panel_rect.is_none());
+    assert!(app.dashboard.panel_open, "stays open for when there's room");
+}
+

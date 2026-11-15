@@ -60,6 +60,8 @@ impl App {
             dashboard_repo_name_rects: Vec::new(),
             dashboard_focus_row_rects: Vec::new(),
             dashboard_focus_group_rects: Vec::new(),
+            dashboard_panel_tab_rects: Vec::new(),
+            dashboard_panel_rect: None,
             dashboard_unfocus_rect: None,
             procs_link_rect: None,
             github_remotes: Default::default(),
@@ -904,6 +906,13 @@ pub struct App {
         ),
         ratatui::layout::Rect,
     )>,
+    /// The focus view side panel's tabs — a click shows that tab.
+    pub dashboard_panel_tab_rects: Vec<(
+        crate::ui::dashboard::side_panel::PanelTab,
+        ratatui::layout::Rect,
+    )>,
+    /// The focus view side panel — the wheel over it scrolls it.
+    pub dashboard_panel_rect: Option<ratatui::layout::Rect>,
     /// only populated while that modal is open.
     pub name_color_swatch_rects: Vec<(u8, ratatui::layout::Rect)>,
     /// Resolved pinned commands from the last draw tick (matches `chip_rects`).

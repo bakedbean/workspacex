@@ -47,6 +47,12 @@ pub struct WorkspaceDetail {
     /// The first prompt the workspace's agent was given, from its session
     /// log; `None` until the log is scanned or when it has none.
     pub first_prompt: Option<String>,
+    /// The branch's commits ahead of its base, newest first, for the side
+    /// panel. Filled only for the selected workspace; `None` until polled.
+    pub commits: Option<Vec<crate::git::BranchCommit>>,
+    /// The branch's changed files against its base, sorted by path, for
+    /// the side panel. Filled only for the selected workspace.
+    pub files: Option<Vec<(String, crate::git::DiffStats)>>,
 }
 
 /// Each agent kind's icon, as the theme's `[agent_bar.symbols]` table
@@ -957,7 +963,7 @@ fn wrap_capped(text: &str, width: usize, max: usize) -> Vec<String> {
 
 /// Greedy word wrap into lines of at most `width` cells. Never drops text:
 /// a word wider than the line is broken across lines.
-fn wrap(text: &str, width: usize) -> Vec<String> {
+pub(crate) fn wrap(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let mut lines: Vec<String> = Vec::new();
     let mut cur = String::new();
@@ -1137,6 +1143,8 @@ mod tests {
             ahead_of_base: Some(4),
             base_branch: Some("origin/main".into()),
             first_prompt: None,
+            commits: None,
+            files: None,
         };
         let tall = TallRow {
             row: &row,

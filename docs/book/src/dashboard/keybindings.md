@@ -20,6 +20,8 @@ Every key in the wsx TUI, grouped by where you press it. Capital letters mean `S
 | `f`                     | Show only the selected repo, [in detail](repo-focus.md); `f` or `esc` goes back |
 | `[` / `]` (focus view)  | Previous / next repo                                   |
 | `PgUp` / `PgDn` (focus view) | Scroll the [focus view](repo-focus.md) a page      |
+| `c` (focus view)        | Toggle the [side panel](repo-focus.md#side-panel); `esc` closes it |
+| `1` / `2` (focus view)  | Side panel: Commits / Files                            |
 | `Tab`                   | Focus the detail-bar reply, then the digest            |
 | `q`                     | Quit; stops direct sessions (shared ones keep running)  |
 

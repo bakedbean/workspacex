@@ -248,6 +248,27 @@ pub(in crate::app::input) fn toggle_focus_group(
     }
 }
 
+/// Open the focus view's side panel on `tab` — `1` / `2`, or a click on
+/// the tab.
+pub(in crate::app::input) fn show_panel_tab(
+    app: &mut App,
+    tab: crate::ui::dashboard::side_panel::PanelTab,
+) {
+    app.dashboard.panel_open = true;
+    app.dashboard.panel_tab = tab;
+}
+
+/// The side-panel tab a click landed on.
+pub(crate) fn panel_tab_click_target(
+    app: &App,
+    m: &crossterm::event::MouseEvent,
+) -> Option<crate::ui::dashboard::side_panel::PanelTab> {
+    app.dashboard_panel_tab_rects
+        .iter()
+        .find(|(_, r)| rect_contains(r, m))
+        .map(|(t, _)| *t)
+}
+
 /// Select `ws` and attach to it — a click on its row in the focus view.
 pub(in crate::app::input) fn select_and_attach(
     app: &mut App,
@@ -506,7 +527,22 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         (KeyCode::Esc, _) if app.dashboard.status_filter.is_some() => {
             app.dashboard.status_filter = None;
         }
+        // Esc closes the side panel before it leaves the focus view.
+        (KeyCode::Esc, _) if app.dashboard.focused_repo.is_some() && app.dashboard.panel_open => {
+            app.dashboard.panel_open = false;
+        }
         (KeyCode::Esc, _) if app.dashboard.focused_repo.is_some() => leave_repo_focus(app),
+        // The side panel: `c` toggles it, `1` / `2` pick its tab (opening
+        // it if closed).
+        (KeyCode::Char('c'), _) if app.dashboard.focused_repo.is_some() => {
+            app.dashboard.panel_open = !app.dashboard.panel_open;
+        }
+        (KeyCode::Char('1'), _) if app.dashboard.focused_repo.is_some() => {
+            show_panel_tab(app, crate::ui::dashboard::side_panel::PanelTab::Commits);
+        }
+        (KeyCode::Char('2'), _) if app.dashboard.focused_repo.is_some() => {
+            show_panel_tab(app, crate::ui::dashboard::side_panel::PanelTab::Files);
+        }
         (KeyCode::Char('f'), _) => toggle_repo_focus(app),
         // Page the focus view, so a workspace taller than the screen can
         // be read to its end.

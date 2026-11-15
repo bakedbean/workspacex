@@ -144,6 +144,8 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     app.dashboard_repo_name_rects = click_targets.repo_names;
     app.dashboard_focus_row_rects = click_targets.focus_rows;
     app.dashboard_focus_group_rects = click_targets.focus_groups;
+    app.dashboard_panel_tab_rects = click_targets.panel_tabs;
+    app.dashboard_panel_rect = click_targets.panel_area;
     app.dashboard_unfocus_rect = click_targets.unfocus;
     if let Some(pm_area) = pm_area {
         let digest = app.build_pm_digest();
@@ -375,6 +377,7 @@ pub(crate) fn build_workspace_items<'a>(
                 continue;
             }
             let row = build_row_inputs(app, ws, now_ms, nerd_fonts);
+            let selected = app.dashboard.selection == Some(SelectionTarget::Workspace(ws.id));
             workspaces.push(crate::ui::dashboard::WorkspaceItem {
                 repo,
                 workspace_id: ws.id,
@@ -392,6 +395,20 @@ pub(crate) fn build_workspace_items<'a>(
                             .workspace_events
                             .get(&ws.id)
                             .and_then(|e| e.first_user_text.clone()),
+                        // The side panel shows only the selected workspace.
+                        commits: selected
+                            .then(|| app.workspace_commits.get(&ws.id).cloned())
+                            .flatten(),
+                        files: selected
+                            .then(|| {
+                                app.workspace_diff_per_file.get(&ws.id).map(|m| {
+                                    let mut v: Vec<_> =
+                                        m.iter().map(|(p, d)| (p.clone(), *d)).collect();
+                                    v.sort_by(|a, b| a.0.cmp(&b.0));
+                                    v
+                                })
+                            })
+                            .flatten(),
                     }
                 } else {
                     Default::default()

@@ -41,6 +41,9 @@ pub struct WorkspaceDetail {
     pub git: Option<WorkspaceStatus>,
     /// Commits on the branch that the repo's base branch lacks.
     pub ahead_of_base: Option<u32>,
+    /// The repo's base branch as configured (`origin/main`), naming what
+    /// `ahead_of_base` counts against.
+    pub base_branch: Option<String>,
     /// The first prompt the workspace's agent was given, from its session
     /// log; `None` until the log is scanned or when it has none.
     pub first_prompt: Option<String>,
@@ -567,7 +570,7 @@ fn fact_lines(
     let mut git: Vec<Vec<Span<'static>>> = Vec::new();
     if let Some(n) = detail.ahead_of_base {
         git.push(vec![Span::styled(
-            format!("↑{n} base"),
+            ahead_label(n, detail.base_branch.as_deref()),
             theme.row_dim_style(),
         )]);
     }
@@ -628,6 +631,15 @@ fn fact_lines(
         out.push(vec![indent(), Span::styled(tags, theme.row_dim_style())]);
     }
     (out, pr_hit)
+}
+
+/// `↑4 vs main`: commits ahead of the base branch, named without its
+/// `origin/` remote prefix. Falls back to `↑4 base` if the name is unknown.
+fn ahead_label(n: u32, base: Option<&str>) -> String {
+    match base.map(str::trim).filter(|b| !b.is_empty()) {
+        Some(b) => format!("↑{n} vs {}", b.strip_prefix("origin/").unwrap_or(b)),
+        None => format!("↑{n} base"),
+    }
 }
 
 /// Pack `parts` onto lines of at most `width` cells, joined by `sep`; a
@@ -839,7 +851,7 @@ fn field(full: &Option<String>, short: &Option<String>) -> String {
     pick.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// `↑4 base · 3 modified · +184 −22 ·  claude  codex`. Each part is left
+/// `↑4 vs main · 3 modified · +184 −22 ·  claude  codex`. Each part is left
 /// out when its source is unknown, so a fresh workspace shows only what has
 /// loaded. The agents always show, primary first, each led by its icon.
 fn git_spans(
@@ -851,7 +863,10 @@ fn git_spans(
     let sep = || Span::styled(" · ", theme.dim_style());
     let mut spans: Vec<Span<'static>> = Vec::new();
     if let Some(n) = detail.ahead_of_base {
-        spans.push(Span::styled(format!("↑{n} base"), theme.row_dim_style()));
+        spans.push(Span::styled(
+            ahead_label(n, detail.base_branch.as_deref()),
+            theme.row_dim_style(),
+        ));
     }
     // A clean tree says nothing; only uncommitted changes are listed.
     if let Some(g) = detail.git.filter(|g| g.modified > 0 || g.untracked > 0) {
@@ -1120,6 +1135,7 @@ mod tests {
                 behind: 0,
             }),
             ahead_of_base: Some(4),
+            base_branch: Some("origin/main".into()),
             first_prompt: None,
         };
         let tall = TallRow {
@@ -1165,7 +1181,7 @@ mod tests {
             lines
                 .last()
                 .unwrap()
-                .contains("↑4 base · 3 modified 1 untracked"),
+                .contains("↑4 vs main · 3 modified 1 untracked"),
             "{all}"
         );
         for l in &lines {
@@ -1694,6 +1710,7 @@ mod tests {
                 ..Default::default()
             }),
             ahead_of_base: Some(4),
+            base_branch: Some("origin/main".into()),
             ..Default::default()
         };
         let entries = [TallEntry::Row(TallRow {
@@ -1704,7 +1721,7 @@ mod tests {
         let goal_col = lines[0].find("goal").expect("prose on the first line");
         assert!(lines[0].contains("bakedbean/repo-focus-view"), "{lines:?}");
         assert!(lines[1].contains("#461"), "PR under the branch: {lines:?}");
-        assert!(lines.iter().any(|l| l.contains("↑4 base")), "{lines:?}");
+        assert!(lines.iter().any(|l| l.contains("↑4 vs main")), "{lines:?}");
         for l in &lines {
             let chars: Vec<char> = l.chars().collect();
             let end = l.trim_end().chars().count();
@@ -1796,5 +1813,17 @@ mod tests {
             assert!(all.contains("↑2 base"), "{all}");
             assert!(!all.contains("clean"), "width {width}:\n{all}");
         }
+    }
+
+    #[test]
+    fn ahead_label_names_the_base_branch() {
+        assert_eq!(ahead_label(4, Some("origin/main")), "↑4 vs main");
+        assert_eq!(ahead_label(1, Some("develop")), "↑1 vs develop");
+        assert_eq!(
+            ahead_label(2, Some("upstream/trunk")),
+            "↑2 vs upstream/trunk"
+        );
+        assert_eq!(ahead_label(3, None), "↑3 base");
+        assert_eq!(ahead_label(3, Some("  ")), "↑3 base");
     }
 }

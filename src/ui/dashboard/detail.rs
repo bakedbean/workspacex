@@ -205,8 +205,68 @@ pub fn render(
         Vec::new()
     };
 
-    // The reply row is a themed bar too (`[dashboard_detail_reply]`), drawn
-    // like a shell prompt with the draft between its two sides.
+    chip_rects.extend(draw_reply_row(f, reply_area, inputs, theme));
+
+    DetailDrawOutput {
+        chip_rects,
+        container_rects,
+        pr_link_rect,
+    }
+}
+
+/// Rows `render_reply_only` takes under `config`: a rule, the reply row,
+/// and the bottom rule when the config draws one.
+pub fn reply_only_height(config: &DetailBarConfig) -> u16 {
+    2 + u16::from(config.bottom_rule)
+}
+
+/// Draw only the bar's reply row, under a dim rule — what the repo focus
+/// view keeps of the detail bar, whose tall rows already show the rest.
+/// Pinned commands appear only when the theme places `$pins` in the reply
+/// row itself. No-op when `area` is shorter than `reply_only_height`.
+pub fn render_reply_only(
+    f: &mut Frame,
+    area: Rect,
+    inputs: &mut DetailInputs<'_>,
+    theme: &Theme,
+) -> DetailDrawOutput {
+    use ratatui::widgets::Paragraph;
+    if area.height < reply_only_height(inputs.config) {
+        return DetailDrawOutput::default();
+    }
+    let rule = || {
+        Line::from(Span::styled(
+            "─".repeat(area.width as usize),
+            theme.dim_style(),
+        ))
+    };
+    let row = |dy: u16| Rect {
+        y: area.y + dy,
+        height: 1,
+        ..area
+    };
+    f.render_widget(Paragraph::new(rule()), row(0));
+    let chip_rects = draw_reply_row(f, row(1), inputs, theme);
+    if inputs.config.bottom_rule {
+        f.render_widget(Paragraph::new(rule()), row(2));
+    }
+    DetailDrawOutput {
+        chip_rects,
+        ..Default::default()
+    }
+}
+
+/// The reply row, a themed bar (`[dashboard_detail_reply]`) drawn like a
+/// shell prompt with the draft between its two sides. Places the cursor
+/// when the reply is focused and returns the pinned-chip rects the theme
+/// put in the row.
+fn draw_reply_row(
+    f: &mut Frame,
+    reply_area: Rect,
+    inputs: &DetailInputs<'_>,
+    theme: &Theme,
+) -> Vec<(usize, Rect)> {
+    use ratatui::widgets::Paragraph;
     let reply = crate::ui::bar::dashboard_detail_reply(
         inputs.bar_specs,
         theme,
@@ -222,23 +282,16 @@ pub fn render(
         reply_area.width,
     );
     f.render_widget(Paragraph::new(reply.line), reply_area);
-    chip_rects.extend(
-        crate::ui::bar::render::hit_rects(reply_area, &reply.hits)
-            .into_iter()
-            .filter_map(|(rect, hit)| match hit {
-                crate::ui::bar::segment::Hit::PinnedChip(i) => Some((i, rect)),
-                _ => None,
-            }),
-    );
     if inputs.reply_focused && reply_area.width > 0 {
         f.set_cursor_position((reply_area.x + reply.cursor_x, reply_area.y));
     }
-
-    DetailDrawOutput {
-        chip_rects,
-        container_rects,
-        pr_link_rect,
-    }
+    crate::ui::bar::render::hit_rects(reply_area, &reply.hits)
+        .into_iter()
+        .filter_map(|(rect, hit)| match hit {
+            crate::ui::bar::segment::Hit::PinnedChip(i) => Some((i, rect)),
+            _ => None,
+        })
+        .collect()
 }
 
 fn render_body_region(

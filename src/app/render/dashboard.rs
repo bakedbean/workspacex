@@ -33,12 +33,13 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     let selection_is_workspace =
         matches!(app.selected_target(), Some(SelectionTarget::Workspace(_)));
     let detail_cfg = resolve_dashboard_detail_cfg(app);
-    // The repo focus view's tall rows already show what the bar would, so
-    // the bar stays off there and the rows get the height.
+    // The repo focus view's tall rows already show what the bar's header
+    // and containers would, so there the bar shrinks to its reply row and
+    // the rows keep the height.
+    let reply_only = app.dashboard.focused_repo.is_some();
     let detail_visible = selection_is_workspace
         && detail_cfg.visible
-        && app.dashboard.focused_repo.is_none()
-        && area.height >= detail_cfg.minimum_height() + 10;
+        && (reply_only || area.height >= detail_cfg.minimum_height() + 10);
     // If the bar is hidden but focus is on the reply input,
     // bounce focus back to Dashboard and drop the draft.
     if !detail_visible && matches!(app.focus, crate::ui::PaneFocus::DetailBarReply) {
@@ -61,8 +62,13 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
         height: 1,
         ..area
     };
-    let (dashboard_area, detail_area, pm_area) =
-        dashboard_regions(inner_area, app.pm_visible, detail_visible, &detail_cfg);
+    let (dashboard_area, detail_area, pm_area) = dashboard_regions(
+        inner_area,
+        app.pm_visible,
+        detail_visible,
+        &detail_cfg,
+        reply_only,
+    );
     let nerd_fonts = nerd_fonts_enabled(&app.store);
 
     // Build per-workspace inputs in V5 shape.
@@ -195,8 +201,16 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
                     fleet: &fleet,
                     scroll_offsets: &mut app.detail_scroll_offsets,
                 };
-                let out =
-                    crate::ui::dashboard::detail::render(f, detail_area, &mut inputs, &app.theme);
+                let out = if reply_only {
+                    crate::ui::dashboard::detail::render_reply_only(
+                        f,
+                        detail_area,
+                        &mut inputs,
+                        &app.theme,
+                    )
+                } else {
+                    crate::ui::dashboard::detail::render(f, detail_area, &mut inputs, &app.theme)
+                };
                 app.detail_container_rects = out.container_rects;
                 app.pr_link_rect = out.pr_link_rect.map(|r| (ws.id, r));
                 if !out.chip_rects.is_empty() {
@@ -471,12 +485,17 @@ pub(super) fn dashboard_regions(
     pm_visible: bool,
     detail_visible: bool,
     detail_cfg: &DetailBarConfig,
+    reply_only: bool,
 ) -> (
     ratatui::layout::Rect,
     Option<ratatui::layout::Rect>,
     Option<ratatui::layout::Rect>,
 ) {
-    let detail_h = detail_cfg.preferred_height(area.height);
+    let detail_h = if reply_only {
+        crate::ui::dashboard::detail::reply_only_height(detail_cfg)
+    } else {
+        detail_cfg.preferred_height(area.height)
+    };
     match (pm_visible, detail_visible) {
         (false, false) => (area, None, None),
         (false, true) => {

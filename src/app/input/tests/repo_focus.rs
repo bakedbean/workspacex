@@ -290,10 +290,10 @@ fn tall_rows_show_long_recaps_and_branches_whole() {
     assert!(r.height >= 4, "head, wrapped goal, git line: {r:?}");
 }
 
-/// The tall rows replace the detail bar: it is not drawn in the focus view,
-/// and Tab does not move to its reply input.
+/// The focus view keeps only the detail bar's reply row: no header or
+/// containers, but Tab still reaches the reply input.
 #[tokio::test]
-async fn the_focus_view_hides_the_detail_bar() {
+async fn the_focus_view_keeps_only_the_reply_row() {
     let (mut app, repo, _, ids) = app();
     app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
     let list = draw(&mut app);
@@ -304,8 +304,15 @@ async fn the_focus_view_hides_the_detail_bar() {
 
     app.dashboard.focus_repo(repo);
     let focus = draw(&mut app);
-    assert!(!focus.contains("Reply to agent"), "bar hidden:\n{focus}");
+    assert!(focus.contains("Reply to agent"), "reply row kept:\n{focus}");
+    assert!(
+        !focus.contains("SESSION SUMMARY"),
+        "containers dropped:\n{focus}"
+    );
     assert!(app.detail_container_rects.iter().all(Option::is_none));
     press(&mut app, KeyCode::Tab).await;
-    assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+    assert!(matches!(app.focus, crate::ui::PaneFocus::DetailBarReply));
+    // Still focused after a redraw: the reply row counts as a visible bar.
+    draw(&mut app);
+    assert!(matches!(app.focus, crate::ui::PaneFocus::DetailBarReply));
 }

@@ -390,9 +390,7 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         app.z_leader_pending = false;
         let cfg = crate::app::render::resolve_dashboard_detail_cfg(app);
         let is_workspace = matches!(app.selected_target(), Some(SelectionTarget::Workspace(_)));
-        // No detail bar is drawn in the repo focus view, so there is no
-        // reply input to move to.
-        if is_workspace && cfg.visible && app.dashboard.focused_repo.is_none() {
+        if is_workspace && cfg.visible {
             app.focus = crate::ui::PaneFocus::DetailBarReply;
         } else if app.pm_visible {
             app.focus = crate::ui::PaneFocus::ProjectManager;

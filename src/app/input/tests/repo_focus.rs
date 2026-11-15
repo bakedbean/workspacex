@@ -316,3 +316,152 @@ async fn the_focus_view_keeps_only_the_reply_row() {
     draw(&mut app);
     assert!(matches!(app.focus, crate::ui::PaneFocus::DetailBarReply));
 }
+
+/// A row taller than the screen still draws, from its top, rather than
+/// vanishing; and no click target covers lines nothing was drawn on.
+#[test]
+fn an_oversized_selected_row_still_draws() {
+    let (mut app, repo, _, ids) = app();
+    let goal = "word ".repeat(400);
+    app.recaps.insert(
+        ids[0],
+        crate::data::store::WorkspaceRecap {
+            goal: Some(goal),
+            ..Default::default()
+        },
+    );
+    app.dashboard.focus_repo(repo);
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
+    let mut term = Terminal::new(TestBackend::new(100, 16)).unwrap();
+    term.draw(|f| crate::app::render::draw_for_test(f, &mut app))
+        .unwrap();
+    let screen: String = {
+        let buf = term.backend().buffer();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert!(
+        screen.contains("repo/a"),
+        "selected row's head drawn:\n{screen}"
+    );
+    assert!(screen.contains("goal  word word"), "{screen}");
+    let buf = term.backend().buffer().clone();
+    for (_, r) in &app.dashboard_focus_row_rects {
+        for y in r.y..r.y + r.height {
+            let line: String = (r.x..r.x + r.width)
+                .map(|x| buf[(x, y)].symbol().to_string())
+                .collect();
+            assert!(
+                !line.trim().is_empty(),
+                "click target over a blank line {y}:\n{screen}"
+            );
+        }
+    }
+}
+
+/// Rows partly scrolled past the bottom are drawn clipped, and their click
+/// target stops at the last drawn line.
+#[tokio::test]
+async fn click_targets_match_drawn_lines_after_scrolling() {
+    let (mut app, repo, _, ids) = app();
+    app.dashboard.focus_repo(repo);
+    // Short screen: 5 three-line rows plus spacers don't fit.
+    let mut term = Terminal::new(TestBackend::new(100, 14)).unwrap();
+    let mut draw_small = |app: &mut App| {
+        term.draw(|f| crate::app::render::draw_for_test(f, app))
+            .unwrap();
+        term.backend().buffer().clone()
+    };
+    draw_small(&mut app);
+    for _ in 0..4 {
+        press(&mut app, KeyCode::Char('j')).await;
+    }
+    let buf = draw_small(&mut app);
+    assert_eq!(
+        selected_ws(&app),
+        app.selectable.last().and_then(|t| match t {
+            SelectionTarget::Workspace(id) => Some(*id),
+            _ => None,
+        })
+    );
+    let last = app.selectable.len() - 1;
+    let sel = match &app.selectable[last] {
+        SelectionTarget::Workspace(id) => *id,
+        _ => unreachable!(),
+    };
+    assert!(
+        app.dashboard_focus_row_rects
+            .iter()
+            .any(|(id, _)| *id == sel),
+        "scrolled to the selected row"
+    );
+    for (_, r) in &app.dashboard_focus_row_rects {
+        for y in r.y..r.y + r.height {
+            let line: String = (r.x..r.x + r.width)
+                .map(|x| buf[(x, y)].symbol().to_string())
+                .collect();
+            assert!(!line.trim().is_empty(), "target over blank line {y}");
+        }
+    }
+    let _ = ids;
+}
+
+/// Unregistering the focused repo ends the focus instead of leaving stale
+/// focus-only behavior over the list.
+#[test]
+fn unregistering_the_focused_repo_clears_focus() {
+    let (mut app, _, other, _) = app();
+    app.dashboard.focus_repo(other);
+    app.store.remove_repo(other).unwrap();
+    app.refresh().unwrap();
+    draw(&mut app);
+    assert_eq!(app.dashboard.focused_repo, None);
+}
+
+/// Leaving the focus view onto a folded repo selects its header so the
+/// highlight stays visible.
+#[tokio::test]
+async fn leaving_into_a_folded_repo_selects_its_header() {
+    let (mut app, repo, _, ids) = app();
+    app.dashboard.folded.insert(repo.0 as u64, true);
+    app.dashboard.focus_repo(repo);
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[2]));
+    press(&mut app, KeyCode::Esc).await;
+    assert_eq!(app.selected_target(), Some(SelectionTarget::Repo(repo)));
+}
+
+/// The status filter narrows the focus view's rows and its nav order alike.
+#[test]
+fn the_status_filter_narrows_the_focus_view() {
+    let (mut app, repo, _, _) = app();
+    app.dashboard.focus_repo(repo);
+    app.dashboard.status_filter = Some(crate::ui::dashboard::status::Status::Question);
+    let screen = draw(&mut app);
+    assert!(app.selectable.is_empty());
+    assert!(app.dashboard_focus_row_rects.is_empty());
+    assert!(screen.contains("(no matching workspaces)"), "{screen}");
+}
+
+/// Unregistering the focused repo ends the focus on the next frame, so the
+/// reply-only bar and focus-only keys don't linger over the list.
+#[tokio::test]
+async fn unregistering_the_focused_repo_ends_the_focus() {
+    let (mut app, _, other, _) = app();
+    app.dashboard.focus_repo(other);
+    draw(&mut app);
+    app.store.remove_repo(other).unwrap();
+    app.refresh().unwrap();
+    draw(&mut app);
+    assert_eq!(app.dashboard.focused_repo, None);
+    // `f` then focuses afresh instead of only clearing stale state.
+    let repo = app.repos[0].id;
+    app.dashboard.selection = Some(SelectionTarget::Repo(repo));
+    press(&mut app, KeyCode::Char('f')).await;
+    assert_eq!(app.dashboard.focused_repo, Some(repo));
+}

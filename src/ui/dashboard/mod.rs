@@ -108,6 +108,9 @@ pub struct DashboardState {
     /// set, the list shows only that repo's workspaces, as tall rows. Not
     /// persisted.
     pub focused_repo: Option<RepoId>,
+    /// The focus view's first visible line. The focus view scrolls by lines,
+    /// not list items, so it keeps its own offset.
+    pub focus_scroll: usize,
 }
 
 /// Settings key holding the by-repo sort mode.
@@ -179,7 +182,7 @@ impl DashboardState {
     /// Focus the dashboard on `repo`, scrolled to its top.
     pub fn focus_repo(&mut self, repo: RepoId) {
         self.focused_repo = Some(repo);
-        *self.list_state.offset_mut() = 0;
+        self.focus_scroll = 0;
     }
 }
 
@@ -202,6 +205,7 @@ impl Default for DashboardState {
             reply_draft: String::new(),
             reply_draft_clear_at_ms: None,
             focused_repo: None,
+            focus_scroll: 0,
         }
     }
 }
@@ -450,13 +454,14 @@ fn focused_workspaces<'w, 'a>(
         .map(NavRow::from)
         .collect();
     order_workspaces(&mut rows, state.sort_mode, state.blocked_pin_max_age_secs);
+    let by_id: HashMap<crate::data::store::WorkspaceId, &WorkspaceItem<'a>> = inputs
+        .workspaces
+        .iter()
+        .filter(|w| w.repo.id == repo)
+        .map(|w| (w.workspace_id, w))
+        .collect();
     rows.iter()
-        .filter_map(|r| {
-            inputs
-                .workspaces
-                .iter()
-                .find(|w| w.workspace_id == r.workspace_id)
-        })
+        .filter_map(|r| by_id.get(&r.workspace_id).copied())
         .collect()
 }
 
@@ -546,7 +551,7 @@ fn render_focus(
         &tall_rows,
         glyphs,
         selected,
-        &mut state.list_state,
+        &mut state.focus_scroll,
         widths,
         tick,
         theme,

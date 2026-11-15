@@ -36,6 +36,13 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     // The repo focus view's tall rows already show what the bar's header
     // and containers would, so there the bar shrinks to its reply row and
     // the rows keep the height.
+    // A repo unregistered while focused ends the focus: left set, it would
+    // keep the reply-only bar and the focus-only keys alive over the list.
+    if let Some(rid) = app.dashboard.focused_repo
+        && !app.repos.iter().any(|r| r.id == rid)
+    {
+        app.dashboard.focused_repo = None;
+    }
     let reply_only = app.dashboard.focused_repo.is_some();
     let detail_visible = selection_is_workspace
         && detail_cfg.visible
@@ -372,10 +379,16 @@ pub(crate) fn build_workspace_items<'a>(
                 workspace_id: ws.id,
                 status: row.status,
                 hide: app.hide_subject_with_age(ws.id, row.ago_secs),
-                detail: crate::ui::dashboard::tall::WorkspaceDetail {
-                    recap: app.recaps.get(&ws.id).cloned(),
-                    git: app.workspace_status.get(&ws.id).copied(),
-                    ahead_of_base: app.workspace_ahead_of_base.get(&ws.id).copied(),
+                // Only the focus view reads this, and only for its repo, so
+                // skip cloning every recap on ordinary list frames.
+                detail: if app.dashboard.focused_repo == Some(repo.id) {
+                    crate::ui::dashboard::tall::WorkspaceDetail {
+                        recap: app.recaps.get(&ws.id).cloned(),
+                        git: app.workspace_status.get(&ws.id).copied(),
+                        ahead_of_base: app.workspace_ahead_of_base.get(&ws.id).copied(),
+                    }
+                } else {
+                    Default::default()
                 },
                 row,
             });

@@ -22,7 +22,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, ListState};
+use ratatui::widgets::Paragraph;
 
 /// What a tall row shows beyond the dashboard row: the full recap fields
 /// and the git counts the one-line row has no room for.
@@ -222,8 +222,15 @@ pub fn row_lines(
     lines
 }
 
-/// Draw the rows into `area` as a scrolling list, selecting `selected`, and
-/// return what a click can land on. A blank line separates rows.
+/// Draw the rows into `area`, scrolled by whole lines so a row taller than
+/// the viewport still shows (its top first), and return what a click can
+/// land on. A blank line separates rows. `scroll` is the first visible
+/// line; it is moved as little as possible to keep the selected row in
+/// view.
+///
+/// Rows are painted line by line rather than as `List` items: `List` skips
+/// any item that doesn't fit whole, which would blank out a selected row
+/// with a long recap and leave click targets over lines it never drew.
 #[allow(clippy::too_many_arguments)]
 pub fn render(
     f: &mut Frame,
@@ -231,7 +238,7 @@ pub fn render(
     rows: &[TallRow<'_>],
     glyphs: &AgentGlyphs,
     selected: Option<usize>,
-    list_state: &mut ListState,
+    scroll: &mut usize,
     widths: ColumnWidths,
     tick: u32,
     theme: &Theme,
@@ -241,58 +248,92 @@ pub fn render(
         branch: branch_width_for(rows, widths, width),
         ..widths
     };
-    // Items alternate row, spacer, row, spacer… so row `i` is item `2i`.
-    let mut items: Vec<ListItem<'static>> = Vec::with_capacity(rows.len() * 2);
-    let mut heights: Vec<usize> = Vec::with_capacity(rows.len() * 2);
-    for r in rows {
-        let lines = row_lines(r, glyphs, widths, tick, theme, width);
-        heights.push(lines.len());
-        items.push(ListItem::new(lines));
-        heights.push(1);
-        items.push(ListItem::new(""));
-    }
-    list_state.select(selected.map(|i| i * 2));
-    let list = List::new(items).highlight_style(theme.selected_bg_style());
-    f.render_stateful_widget(list, area, list_state);
-
-    // Walk the items from the scroll offset to place each visible row.
-    let mut targets = TallTargets::default();
-    let bottom = area.y.saturating_add(area.height);
-    let mut y = area.y;
-    for (item, h) in heights.iter().enumerate().skip(list_state.offset()) {
-        if y >= bottom {
-            break;
+    // Every line of every row, plus each row's `(first line, line count)`.
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(rows.len());
+    for (i, r) in rows.iter().enumerate() {
+        if i > 0 {
+            lines.push(Line::default());
         }
-        let height = (*h as u16).min(bottom - y);
-        if item % 2 == 0 {
-            let r = rows[item / 2].row;
-            targets.rows.push((
-                r.workspace_id,
-                Rect {
-                    x: area.x,
-                    y,
-                    width: area.width,
-                    height,
-                },
-            ));
-            if let Some((dx, w)) = row::pr_chip_hit_span(r, widths) {
-                let x = area.x.saturating_add(dx);
-                if x < area.x.saturating_add(area.width) {
-                    targets.pr_chips.push((
-                        r.workspace_id,
-                        Rect {
-                            x,
-                            y,
-                            width: w.min(area.x + area.width - x),
-                            height: 1,
-                        },
-                    ));
-                }
+        let row = row_lines(r, glyphs, widths, tick, theme, width);
+        spans.push((lines.len(), row.len()));
+        lines.extend(row);
+    }
+    let height = area.height as usize;
+    let sel_span = selected.and_then(|i| spans.get(i).copied());
+    *scroll = scroll_for(*scroll, sel_span, height, lines.len());
+
+    let visible: Vec<Line<'static>> = lines.into_iter().skip(*scroll).take(height).collect();
+    f.render_widget(Paragraph::new(visible), area);
+
+    let mut targets = TallTargets::default();
+    for (i, &(top, len)) in spans.iter().enumerate() {
+        let Some(rect) = visible_rect(area, *scroll, top, len) else {
+            continue;
+        };
+        if Some(i) == selected {
+            // Tint only the background so status and agent colors survive,
+            // as the list's highlight does.
+            f.buffer_mut().set_style(rect, theme.selected_bg_style());
+        }
+        let r = rows[i].row;
+        targets.rows.push((r.workspace_id, rect));
+        // The PR chip sits on the row's first line; it is clickable only
+        // when that line is on screen.
+        if top >= *scroll
+            && let Some((dx, w)) = row::pr_chip_hit_span(r, widths)
+        {
+            let x = area.x.saturating_add(dx);
+            if x < area.x.saturating_add(area.width) {
+                targets.pr_chips.push((
+                    r.workspace_id,
+                    Rect {
+                        x,
+                        y: rect.y,
+                        width: w.min(area.x + area.width - x),
+                        height: 1,
+                    },
+                ));
             }
         }
-        y = y.saturating_add(*h as u16);
     }
     targets
+}
+
+/// The first visible line after keeping `selected` (a row's `(first line,
+/// line count)`) in view: scroll up to its top when it starts above the
+/// viewport, down until its bottom shows when it ends below — but never
+/// past its top, so a row taller than the viewport shows from its start.
+/// Clamped so the viewport never hangs past the last line.
+pub fn scroll_for(
+    scroll: usize,
+    selected: Option<(usize, usize)>,
+    height: usize,
+    total: usize,
+) -> usize {
+    let mut scroll = scroll.min(total.saturating_sub(height));
+    if let Some((top, len)) = selected {
+        let bottom = top + len;
+        if top < scroll {
+            scroll = top;
+        } else if bottom > scroll + height {
+            scroll = (bottom.saturating_sub(height)).min(top);
+        }
+    }
+    scroll
+}
+
+/// The on-screen rect of a row spanning lines `top..top + len`, clipped to
+/// `area` scrolled to `scroll`, or `None` when none of it shows.
+fn visible_rect(area: Rect, scroll: usize, top: usize, len: usize) -> Option<Rect> {
+    let start = top.max(scroll);
+    let end = (top + len).min(scroll + area.height as usize);
+    (start < end).then(|| Rect {
+        x: area.x,
+        y: area.y + (start - scroll) as u16,
+        width: area.width,
+        height: (end - start) as u16,
+    })
 }
 
 fn has_recap(r: &WorkspaceRecap) -> bool {
@@ -727,5 +768,136 @@ mod tests {
         );
         let git = text(lines.last().unwrap());
         assert!(git.contains("C claude  codex  ▎ pi"), "{git:?}");
+    }
+
+    #[test]
+    fn scroll_keeps_the_selected_row_in_view() {
+        // Rows at lines 0..3, 4..7, 8..11; viewport 6 lines; 11 total.
+        assert_eq!(scroll_for(0, Some((0, 3)), 6, 11), 0);
+        assert_eq!(scroll_for(0, Some((4, 3)), 6, 11), 1, "bottom just shows");
+        assert_eq!(
+            scroll_for(5, Some((4, 3)), 6, 11),
+            4,
+            "top above: snap to it"
+        );
+        assert_eq!(scroll_for(9, None, 6, 11), 5, "never past the end");
+        assert_eq!(scroll_for(0, None, 20, 11), 0, "short content");
+    }
+
+    /// A row taller than the viewport shows from its first line.
+    #[test]
+    fn scroll_shows_the_top_of_an_oversized_row() {
+        assert_eq!(scroll_for(0, Some((4, 12)), 6, 20), 4);
+        assert_eq!(scroll_for(10, Some((4, 12)), 6, 20), 4);
+    }
+
+    #[test]
+    fn visible_rect_clips_to_the_viewport() {
+        let area = Rect::new(0, 10, 80, 6);
+        assert_eq!(visible_rect(area, 0, 0, 3), Some(Rect::new(0, 10, 80, 3)));
+        assert_eq!(
+            visible_rect(area, 2, 0, 3),
+            Some(Rect::new(0, 10, 80, 1)),
+            "top clipped"
+        );
+        assert_eq!(
+            visible_rect(area, 0, 4, 5),
+            Some(Rect::new(0, 14, 80, 2)),
+            "bottom clipped"
+        );
+        assert_eq!(visible_rect(area, 0, 6, 3), None, "below");
+        assert_eq!(visible_rect(area, 4, 0, 3), None, "above");
+    }
+
+    fn render_rows(
+        rows: &[TallRow<'_>],
+        selected: Option<usize>,
+        h: u16,
+    ) -> (String, TallTargets, usize) {
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, h)).unwrap();
+        let mut scroll = 0;
+        let mut targets = TallTargets::default();
+        term.draw(|f| {
+            targets = render(
+                f,
+                f.area(),
+                rows,
+                &AgentGlyphs::default(),
+                selected,
+                &mut scroll,
+                ColumnWidths::default(),
+                0,
+                &Theme::wsx(),
+            );
+        })
+        .unwrap();
+        let buf = term.backend().buffer().clone();
+        let text = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        (text, targets, scroll)
+    }
+
+    /// A selected row taller than the viewport still paints, from its top,
+    /// and its click target covers exactly the viewport.
+    #[test]
+    fn an_oversized_selected_row_paints_its_top() {
+        let row = base_row("bakedbean/huge");
+        let detail = WorkspaceDetail {
+            recap: Some(WorkspaceRecap {
+                goal: Some("word ".repeat(300)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let rows = [TallRow {
+            row: &row,
+            detail: &detail,
+        }];
+        let (text, targets, scroll) = render_rows(&rows, Some(0), 6);
+        assert_eq!(scroll, 0);
+        assert!(text.contains("bakedbean/huge"), "head painted:\n{text}");
+        assert!(text.contains("goal"), "{text}");
+        assert_eq!(
+            targets.rows,
+            vec![(row.workspace_id, Rect::new(0, 0, 120, 6))]
+        );
+    }
+
+    /// A partly visible last row's target covers just its painted lines,
+    /// and nothing claims the blank screen below the content.
+    #[test]
+    fn click_targets_stop_at_the_painted_lines() {
+        let mut a = base_row("first");
+        a.workspace_id = WorkspaceId(1);
+        let mut b = base_row("second");
+        b.workspace_id = WorkspaceId(2);
+        b.lifecycle = Some(crate::git::forge::BranchLifecycle::PrOpen);
+        b.pr_number = Some(7);
+        let detail = WorkspaceDetail::default();
+        let rows = [
+            TallRow {
+                row: &a,
+                detail: &detail,
+            },
+            TallRow {
+                row: &b,
+                detail: &detail,
+            },
+        ];
+        // Each row is a head and a git line, with a spacer between: 5 lines.
+        let (text, targets, _) = render_rows(&rows, Some(0), 4);
+        assert!(text.contains("second"), "second head paints:\n{text}");
+        assert_eq!(targets.rows[1].1, Rect::new(0, 3, 120, 1));
+        assert_eq!(targets.pr_chips.len(), 1, "head on screen: chip live");
+
+        let (_, targets, _) = render_rows(&rows, Some(0), 10);
+        let last = targets.rows.last().unwrap().1;
+        assert_eq!(last.y + last.height, 5, "nothing below the content");
     }
 }

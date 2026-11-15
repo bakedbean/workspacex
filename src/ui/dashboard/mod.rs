@@ -14,6 +14,7 @@ pub mod sort;
 pub mod sparkline;
 pub mod spinner;
 pub mod status;
+pub mod tall;
 
 use crate::app::SelectionTarget;
 use crate::data::hide_rules::{HideRule, HideSubject};

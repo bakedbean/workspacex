@@ -33,8 +33,11 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     let selection_is_workspace =
         matches!(app.selected_target(), Some(SelectionTarget::Workspace(_)));
     let detail_cfg = resolve_dashboard_detail_cfg(app);
+    // The repo focus view's tall rows already show what the bar would, so
+    // the bar stays off there and the rows get the height.
     let detail_visible = selection_is_workspace
         && detail_cfg.visible
+        && app.dashboard.focused_repo.is_none()
         && area.height >= detail_cfg.minimum_height() + 10;
     // If the bar is hidden but focus is on the reply input,
     // bounce focus back to Dashboard and drop the draft.

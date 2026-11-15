@@ -289,3 +289,23 @@ fn tall_rows_show_long_recaps_and_branches_whole() {
         .1;
     assert!(r.height >= 4, "head, wrapped goal, git line: {r:?}");
 }
+
+/// The tall rows replace the detail bar: it is not drawn in the focus view,
+/// and Tab does not move to its reply input.
+#[tokio::test]
+async fn the_focus_view_hides_the_detail_bar() {
+    let (mut app, repo, _, ids) = app();
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
+    let list = draw(&mut app);
+    assert!(
+        list.contains("Reply to agent"),
+        "bar shows on the list:\n{list}"
+    );
+
+    app.dashboard.focus_repo(repo);
+    let focus = draw(&mut app);
+    assert!(!focus.contains("Reply to agent"), "bar hidden:\n{focus}");
+    assert!(app.detail_container_rects.iter().all(Option::is_none));
+    press(&mut app, KeyCode::Tab).await;
+    assert!(matches!(app.focus, crate::ui::PaneFocus::Dashboard));
+}

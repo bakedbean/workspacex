@@ -24,6 +24,8 @@ Each workspace shows:
 - **now**: the recap state, then the next step after `→`. Without a recap, this line shows the status text the dashboard row would have clipped.
 - **git**: commits ahead of the base branch, uncommitted changes, the diff, and every agent in the workspace, followed by its tags.
 
+The [detail bar](detail-bar.md) is not shown in the focus view, so the rows get the full height.
+
 ## Opening and closing it
 
 - Press `f` on a repo header, or on any workspace to focus that workspace's repo. Click a repo header's name to do the same.

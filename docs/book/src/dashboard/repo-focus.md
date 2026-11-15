@@ -43,8 +43,8 @@ In the focus view the [detail bar](detail-bar.md) shrinks to its reply row, so t
 
 Press `c` to open a panel on the right showing the selected workspace's branch in more depth, one tab at a time:
 
-- **Commits**: each commit on the branch that the repo's base branch doesn't have, newest first, as a short hash and its full subject.
-- **Files**: each file the branch changed against its base, with its `+N −M` line counts, under a total. Paths wrap rather than being shortened. These are committed changes; uncommitted ones are counted in the left column.
+- **Commits**: the commits on the branch that the repo's base branch doesn't have, newest first, as a short hash and its full subject. The tab counts them all, but the list stops at the newest 200 and says how many older ones it left out.
+- **Files**: each file the branch changed against its base, with its `+N −M` line counts (`binary` for a binary file), under a total. Paths wrap rather than being shortened. These are committed changes; uncommitted ones are counted in the left column.
 
 ```text
 │  Commits 2   Files 7
@@ -56,7 +56,7 @@ Press `c` to open a panel on the right showing the selected workspace's branch i
 │ 392b182  fix(dashboard): drop "clean"
 ```
 
-Press `1` for Commits and `2` for Files, or click a tab; either opens the panel if it's closed. The mouse wheel over the panel scrolls it. `c` or `esc` closes it, and it remembers its tab. The panel needs the repo's **Base branch** setting (repo settings, `s`) to know what to compare against, and it stays hidden on terminals under 100 columns wide.
+Press `1` for Commits and `2` for Files, or click a tab; either opens the panel if it's closed. The mouse wheel over the panel scrolls it. `c` or `esc` closes it, and it remembers its tab. The panel needs the repo's **Base branch** setting (repo settings, `s`) to know what to compare against. After you change that setting, the panel shows `loading…` until the lists against the new base arrive (within about ten seconds); it never shows the old base's lists in their place. The panel stays hidden on terminals under 100 columns wide.
 
 ## Opening and closing it
 

@@ -48,11 +48,12 @@ pub struct WorkspaceDetail {
     /// log; `None` until the log is scanned or when it has none.
     pub first_prompt: Option<String>,
     /// The branch's commits ahead of its base, newest first, for the side
-    /// panel. Filled only for the selected workspace; `None` until polled.
+    /// panel. Filled only for the selected workspace, and only from a poll
+    /// against the current base; `None` until then.
     pub commits: Option<Vec<crate::git::BranchCommit>>,
-    /// The branch's changed files against its base, sorted by path, for
-    /// the side panel. Filled only for the selected workspace.
-    pub files: Option<Vec<(String, crate::git::DiffStats)>>,
+    /// The branch's changed files against its base, binary files included,
+    /// sorted by path, for the side panel. Filled as `commits` is.
+    pub files: Option<Vec<crate::git::ChangedFile>>,
 }
 
 /// Each agent kind's icon, as the theme's `[agent_bar.symbols]` table
@@ -942,7 +943,7 @@ fn clip_spans(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
 
 /// [`wrap`], keeping at most `max` lines; when text is cut, the last kept
 /// line ends with `…` at a word boundary.
-fn wrap_capped(text: &str, width: usize, max: usize) -> Vec<String> {
+pub(crate) fn wrap_capped(text: &str, width: usize, max: usize) -> Vec<String> {
     // `max` lines hold at most `width * max` cells, so a prefix one line
     // longer is enough to fill them and know to mark the cut. Wrapping only
     // that keeps a paragraphs-long prompt from being wrapped in full every

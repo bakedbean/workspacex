@@ -61,7 +61,25 @@ pub(crate) fn apply_repo_setting(
             Ok(())
         }
         RepoSettingField::BranchPrefix => app.store.set_repo_branch_prefix(repo_id, trimmed),
-        RepoSettingField::BaseBranch => app.store.set_repo_base_branch(repo_id, opt),
+        RepoSettingField::BaseBranch => {
+            app.store.set_repo_base_branch(repo_id, opt)?;
+            // Everything measured against the old base is now wrong: drop
+            // it and the poll throttle so the next tick measures afresh.
+            let ids: Vec<_> = app
+                .workspaces
+                .iter()
+                .filter(|(r, _)| *r == repo_id)
+                .map(|(_, w)| w.id)
+                .collect();
+            for id in ids {
+                app.workspace_diff.remove(&id);
+                app.workspace_diff_per_file.remove(&id);
+                app.workspace_ahead_of_base.remove(&id);
+                app.workspace_branch_lists.remove(&id);
+                app.diff_last_poll_ms.remove(&id);
+            }
+            Ok(())
+        }
         RepoSettingField::CustomInstructions => {
             app.store.set_repo_custom_instructions(repo_id, opt)
         }

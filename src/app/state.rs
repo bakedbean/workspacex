@@ -80,7 +80,7 @@ impl App {
             workspace_diff: std::collections::HashMap::new(),
             workspace_diff_per_file: std::collections::HashMap::new(),
             workspace_ahead_of_base: std::collections::HashMap::new(),
-            workspace_commits: std::collections::HashMap::new(),
+            workspace_branch_lists: std::collections::HashMap::new(),
             activity_history: std::collections::VecDeque::new(),
             msgs_queued: 0,
             last_proc_scan_ms: 0,
@@ -777,11 +777,13 @@ pub struct App {
     /// Commits on the workspace branch not on its base. Same poller and
     /// throttle as `workspace_diff`; feeds the `pr:none` hide exemption.
     pub workspace_ahead_of_base: std::collections::HashMap<crate::data::store::WorkspaceId, u32>,
-    /// The commits on each workspace branch not on its base, newest first,
-    /// for the focus view's side panel. Same poller and throttle as
-    /// `workspace_ahead_of_base`; empty when nothing is ahead.
-    pub workspace_commits:
-        std::collections::HashMap<crate::data::store::WorkspaceId, Vec<crate::git::BranchCommit>>,
+    /// Each workspace branch's commits and changed files against its base,
+    /// for the focus view's side panel, tagged with the base they were
+    /// computed against so a changed Base branch setting never shows the
+    /// old base's lists as current. Same poller and throttle as
+    /// `workspace_ahead_of_base`; dropped when a refresh fails.
+    pub workspace_branch_lists:
+        std::collections::HashMap<crate::data::store::WorkspaceId, crate::git::BranchLists>,
     /// Per-file diff stats keyed by `WorkspaceId`, then by path relative
     /// to the worktree root (as `git diff --numstat` emits them).
     /// Populated by the same poller that maintains `workspace_diff`.

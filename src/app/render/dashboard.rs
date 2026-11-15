@@ -378,6 +378,10 @@ pub(crate) fn build_workspace_items<'a>(
             }
             let row = build_row_inputs(app, ws, now_ms, nerd_fonts);
             let selected = app.dashboard.selection == Some(SelectionTarget::Workspace(ws.id));
+            let lists = app.workspace_branch_lists.get(&ws.id).filter(|l| {
+                // Copied only while the panel is open to show them.
+                selected && app.dashboard.panel_open && Some(&l.base) == repo.base_branch.as_ref()
+            });
             workspaces.push(crate::ui::dashboard::WorkspaceItem {
                 repo,
                 workspace_id: ws.id,
@@ -395,20 +399,14 @@ pub(crate) fn build_workspace_items<'a>(
                             .workspace_events
                             .get(&ws.id)
                             .and_then(|e| e.first_user_text.clone()),
-                        // The side panel shows only the selected workspace.
-                        commits: selected
-                            .then(|| app.workspace_commits.get(&ws.id).cloned())
-                            .flatten(),
-                        files: selected
-                            .then(|| {
-                                app.workspace_diff_per_file.get(&ws.id).map(|m| {
-                                    let mut v: Vec<_> =
-                                        m.iter().map(|(p, d)| (p.clone(), *d)).collect();
-                                    v.sort_by(|a, b| a.0.cmp(&b.0));
-                                    v
-                                })
-                            })
-                            .flatten(),
+                        // The side panel shows only the selected workspace,
+                        // and only lists polled against the current base.
+                        commits: lists.map(|l| l.commits.clone()),
+                        files: lists.map(|l| {
+                            let mut v = l.files.clone();
+                            v.sort_by(|a, b| a.path.cmp(&b.path));
+                            v
+                        }),
                     }
                 } else {
                     Default::default()

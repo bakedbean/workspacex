@@ -634,6 +634,7 @@ fn render_focus(
             base: repo.base_branch.as_deref(),
             commits: w.detail.commits.as_deref(),
             files: w.detail.files.as_deref(),
+            ahead: w.detail.ahead_of_base,
         });
         panel_targets = side_panel::render(
             f,

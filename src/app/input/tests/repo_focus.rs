@@ -652,6 +652,41 @@ async fn moving_the_selection_scrolls_it_back_into_view() {
     assert!(r.is_some_and(|r| r.y >= 4), "selected row on screen: {r:?}");
 }
 
+/// Two commits and two changed files (one binary-free), polled against
+/// `base`.
+fn branch_lists(base: &str) -> crate::git::BranchLists {
+    use crate::git::{BranchCommit, ChangedFile, DiffStats};
+    crate::git::BranchLists {
+        base: base.into(),
+        commits: vec![
+            BranchCommit {
+                hash: "a1b2c3d".into(),
+                subject: "UNIQUE-COMMIT-SUBJECT".into(),
+            },
+            BranchCommit {
+                hash: "9f8e7d6".into(),
+                subject: "earlier commit".into(),
+            },
+        ],
+        files: vec![
+            ChangedFile {
+                path: "src/zeta.rs".into(),
+                stats: Some(DiffStats {
+                    added: 3,
+                    removed: 1,
+                }),
+            },
+            ChangedFile {
+                path: "src/alpha.rs".into(),
+                stats: Some(DiffStats {
+                    added: 40,
+                    removed: 2,
+                }),
+            },
+        ],
+    }
+}
+
 /// The focus view with `a` selected, a base branch set, and two commits and
 /// two changed files cached for `a`.
 fn app_with_branch_data() -> (App, RepoId, Vec<WorkspaceId>) {
@@ -660,40 +695,8 @@ fn app_with_branch_data() -> (App, RepoId, Vec<WorkspaceId>) {
         .set_repo_base_branch(repo, Some("origin/main"))
         .unwrap();
     app.refresh().unwrap();
-    app.workspace_commits.insert(
-        ids[0],
-        vec![
-            crate::git::BranchCommit {
-                hash: "a1b2c3d".into(),
-                subject: "UNIQUE-COMMIT-SUBJECT".into(),
-            },
-            crate::git::BranchCommit {
-                hash: "9f8e7d6".into(),
-                subject: "earlier commit".into(),
-            },
-        ],
-    );
-    app.workspace_diff_per_file.insert(
-        ids[0],
-        [
-            (
-                "src/zeta.rs".to_string(),
-                crate::git::DiffStats {
-                    added: 3,
-                    removed: 1,
-                },
-            ),
-            (
-                "src/alpha.rs".to_string(),
-                crate::git::DiffStats {
-                    added: 40,
-                    removed: 2,
-                },
-            ),
-        ]
-        .into_iter()
-        .collect(),
-    );
+    app.workspace_branch_lists
+        .insert(ids[0], branch_lists("origin/main"));
     app.dashboard.focus_repo(repo);
     app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
     (app, repo, ids)
@@ -760,6 +763,7 @@ async fn number_keys_and_clicks_switch_tabs() {
 async fn esc_closes_the_panel_before_leaving_focus() {
     let (mut app, repo, _) = app_with_branch_data();
     press(&mut app, KeyCode::Char('c')).await;
+    draw(&mut app);
     press(&mut app, KeyCode::Esc).await;
     assert!(!app.dashboard.panel_open);
     assert_eq!(app.dashboard.focused_repo, Some(repo));
@@ -796,3 +800,75 @@ async fn a_narrow_terminal_hides_the_panel() {
     assert!(app.dashboard.panel_open, "stays open for when there's room");
 }
 
+/// Lists polled against a different base than the repo's current one are
+/// never shown as its results: the panel reads as still loading.
+#[tokio::test]
+async fn lists_from_another_base_are_not_shown() {
+    let (mut app, _, ids) = app_with_branch_data();
+    app.workspace_branch_lists
+        .insert(ids[0], branch_lists("origin/old-base"));
+    press(&mut app, KeyCode::Char('c')).await;
+    let screen = draw(&mut app);
+    assert!(screen.contains("repo/a vs main"), "{screen}");
+    assert!(!screen.contains("UNIQUE-COMMIT-SUBJECT"), "{screen}");
+    assert!(screen.contains("loading"), "{screen}");
+}
+
+/// Changing the repo's Base branch drops everything measured against the
+/// old one, so nothing stale shows while the next poll runs.
+#[test]
+fn changing_the_base_branch_drops_old_results() {
+    let (mut app, repo, ids) = app_with_branch_data();
+    app.workspace_ahead_of_base.insert(ids[0], 2);
+    app.workspace_diff.insert(
+        ids[0],
+        crate::git::DiffStats {
+            added: 1,
+            removed: 1,
+        },
+    );
+    app.diff_last_poll_ms.insert(ids[0], 1);
+    crate::app::repo_setting::apply_repo_setting(
+        &mut app,
+        repo,
+        crate::app::repo_setting::RepoSettingField::BaseBranch,
+        "origin/develop",
+    )
+    .unwrap();
+    assert!(!app.workspace_branch_lists.contains_key(&ids[0]));
+    assert!(!app.workspace_ahead_of_base.contains_key(&ids[0]));
+    assert!(!app.workspace_diff.contains_key(&ids[0]));
+    assert!(
+        !app.diff_last_poll_ms.contains_key(&ids[0]),
+        "re-polled next tick"
+    );
+}
+
+/// On a terminal too narrow to show the panel, Esc leaves the focus view
+/// at once rather than first closing an invisible panel.
+#[tokio::test]
+async fn esc_on_a_hidden_panel_leaves_focus() {
+    let (mut app, _, _) = app_with_branch_data();
+    press(&mut app, KeyCode::Char('c')).await;
+    let mut term = Terminal::new(TestBackend::new(90, 30)).unwrap();
+    term.draw(|f| crate::app::render::draw_for_test(f, &mut app))
+        .unwrap();
+    press(&mut app, KeyCode::Esc).await;
+    assert_eq!(app.dashboard.focused_repo, None);
+}
+
+/// A binary file on the branch shows in Files rather than vanishing.
+#[tokio::test]
+async fn binary_files_show_in_the_files_tab() {
+    let (mut app, _, ids) = app_with_branch_data();
+    let mut lists = branch_lists("origin/main");
+    lists.files = vec![crate::git::ChangedFile {
+        path: "assets/logo.png".into(),
+        stats: None,
+    }];
+    app.workspace_branch_lists.insert(ids[0], lists);
+    press(&mut app, KeyCode::Char('2')).await;
+    let screen = draw(&mut app);
+    assert!(screen.contains("assets/logo.png"), "{screen}");
+    assert!(screen.contains("1 binary"), "{screen}");
+}

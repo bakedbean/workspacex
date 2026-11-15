@@ -13,8 +13,9 @@
 //! Pure layout and painting; the caller owns which tab is showing, the
 //! scroll offset, and the data.
 
-use crate::git::{BranchCommit, DiffStats};
+use crate::git::{BranchCommit, ChangedFile};
 use crate::ui::dashboard::tall::wrap;
+use crate::ui::dashboard::tall::wrap_capped;
 use crate::ui::text::display_width;
 use crate::ui::theme::Theme;
 use ratatui::Frame;
@@ -61,8 +62,13 @@ pub struct PanelInputs<'a> {
     pub base: Option<&'a str>,
     /// `None` until the first poll has run.
     pub commits: Option<&'a [BranchCommit]>,
-    /// Sorted by path; `None` until the first poll has run.
-    pub files: Option<&'a [(String, DiffStats)]>,
+    /// Sorted by path, binary files included; `None` until the first poll
+    /// has run.
+    pub files: Option<&'a [ChangedFile]>,
+    /// How many commits the branch has ahead of its base. The commit list
+    /// stops at `BRANCH_COMMITS_LIMIT`, so this is the true total when it
+    /// is larger.
+    pub ahead: Option<u32>,
 }
 
 /// Click targets in the panel, in screen coordinates.
@@ -107,7 +113,10 @@ pub fn render(
     let mut x = inner.x;
     for t in PanelTab::ALL {
         let count = selected.and_then(|s| match t {
-            PanelTab::Commits => s.commits.map(<[_]>::len),
+            // The true total, not just the listed (capped) commits.
+            PanelTab::Commits => s
+                .commits
+                .map(|c| c.len().max(s.ahead.map_or(0, |a| a as usize))),
             PanelTab::Files => s.files.map(<[_]>::len),
         });
         let text = match count {
@@ -142,8 +151,14 @@ pub fn render(
             Some(b) => format!("{} vs {}", s.branch, b.strip_prefix("origin/").unwrap_or(b)),
             None => s.branch.to_string(),
         };
-        for l in wrap(&title, width) {
-            head.push(Line::from(Span::styled(l, theme.row_dim_style())));
+        // At most two lines, and never so many that the tab bar, the rule
+        // and at least one line of the list don't fit: a long branch name
+        // must not push the list it introduces off the bottom.
+        let room = (inner.height as usize).saturating_sub(3).min(2);
+        if room > 0 {
+            for l in wrap_capped(&title, width, room) {
+                head.push(Line::from(Span::styled(l, theme.row_dim_style())));
+            }
         }
     }
     head.push(Line::from(Span::styled(
@@ -186,7 +201,20 @@ fn body_lines(
         PanelTab::Commits => match s.commits {
             None => note("loading…"),
             Some([]) => note(&format!("No commits ahead of {base}.")),
-            Some(commits) => commit_lines(commits, width, theme),
+            Some(commits) => {
+                let mut lines = commit_lines(commits, width, theme);
+                let hidden = s
+                    .ahead
+                    .map_or(0, |a| (a as usize).saturating_sub(commits.len()));
+                if hidden > 0 {
+                    lines.push(Line::default());
+                    lines.extend(note(&format!(
+                        "{hidden} older commit{} not listed.",
+                        if hidden == 1 { "" } else { "s" }
+                    )));
+                }
+                lines
+            }
         },
         PanelTab::Files => match s.files {
             None => note("loading…"),
@@ -223,39 +251,51 @@ fn commit_lines(commits: &[BranchCommit], width: usize, theme: &Theme) -> Vec<Li
 }
 
 /// A total line, then each file's path with its `+N −M` flush right on
-/// the path's first line; long paths wrap rather than truncate.
-fn file_lines(files: &[(String, DiffStats)], width: usize, theme: &Theme) -> Vec<Line<'static>> {
+/// the path's first line (`binary` for a binary file, which has no line
+/// counts); long paths wrap rather than truncate.
+fn file_lines(files: &[ChangedFile], width: usize, theme: &Theme) -> Vec<Line<'static>> {
     let (added, removed) = files
         .iter()
-        .fold((0u32, 0u32), |(a, r), (_, d)| (a + d.added, r + d.removed));
-    let mut out = vec![
-        Line::from(vec![
-            Span::styled(
-                format!(
-                    "{} file{}  ",
-                    files.len(),
-                    if files.len() == 1 { "" } else { "s" }
-                ),
-                theme.row_dim_style(),
+        .filter_map(|f| f.stats)
+        .fold((0u32, 0u32), |(a, r), d| (a + d.added, r + d.removed));
+    let binary = files.iter().filter(|f| f.stats.is_none()).count();
+    let mut total = vec![
+        Span::styled(
+            format!(
+                "{} file{}  ",
+                files.len(),
+                if files.len() == 1 { "" } else { "s" }
             ),
-            Span::styled(format!("+{added}"), theme.ok_style()),
-            Span::raw(" "),
-            Span::styled(format!("−{removed}"), theme.err_style()),
-        ]),
-        Line::default(),
+            theme.row_dim_style(),
+        ),
+        Span::styled(format!("+{added}"), theme.ok_style()),
+        Span::raw(" "),
+        Span::styled(format!("−{removed}"), theme.err_style()),
     ];
-    for (path, d) in files {
-        let counts = format!("+{} −{}", d.added, d.removed);
-        let cw = display_width(&counts);
+    if binary > 0 {
+        total.push(Span::styled(
+            format!("  {binary} binary"),
+            theme.row_dim_style(),
+        ));
+    }
+    let mut out = vec![Line::from(total), Line::default()];
+    for f in files {
+        let counts: Vec<Span<'static>> = match f.stats {
+            Some(d) => vec![
+                Span::styled(format!("+{}", d.added), theme.ok_style()),
+                Span::raw(" "),
+                Span::styled(format!("−{}", d.removed), theme.err_style()),
+            ],
+            None => vec![Span::styled("binary", theme.row_dim_style())],
+        };
+        let cw: usize = counts.iter().map(|s| s.width()).sum();
         let path_w = width.saturating_sub(cw + 2).max(8);
-        for (i, l) in wrap(path, path_w).into_iter().enumerate() {
+        for (i, l) in wrap(&f.path, path_w).into_iter().enumerate() {
             let mut spans = vec![Span::raw(l.clone())];
             if i == 0 {
                 let pad = width.saturating_sub(display_width(&l) + cw);
                 spans.push(Span::raw(" ".repeat(pad.max(1))));
-                spans.push(Span::styled(format!("+{}", d.added), theme.ok_style()));
-                spans.push(Span::raw(" "));
-                spans.push(Span::styled(format!("−{}", d.removed), theme.err_style()));
+                spans.extend(counts.iter().cloned());
             }
             out.push(Line::from(spans));
         }
@@ -302,22 +342,23 @@ mod tests {
         ]
     }
 
-    fn files() -> Vec<(String, DiffStats)> {
+    fn files() -> Vec<ChangedFile> {
+        use crate::git::DiffStats;
         vec![
-            (
-                "src/ui/dashboard/tall.rs".into(),
-                DiffStats {
+            ChangedFile {
+                path: "src/ui/dashboard/tall.rs".into(),
+                stats: Some(DiffStats {
                     added: 412,
                     removed: 63,
-                },
-            ),
-            (
-                "docs/book/src/dashboard/a-rather-long-file-name-that-wraps.md".into(),
-                DiffStats {
+                }),
+            },
+            ChangedFile {
+                path: "docs/book/src/dashboard/a-rather-long-file-name-that-wraps.md".into(),
+                stats: Some(DiffStats {
                     added: 5,
                     removed: 1,
-                },
-            ),
+                }),
+            },
         ]
     }
 
@@ -337,6 +378,7 @@ mod tests {
             base: Some("origin/main"),
             commits: Some(&c),
             files: Some(&f),
+            ahead: None,
         };
         let (lines, targets) = draw(PanelTab::Commits, Some(inputs), 40, 14, &mut 0);
         assert!(
@@ -364,6 +406,7 @@ mod tests {
             base: Some("main"),
             commits: Some(&c),
             files: Some(&f),
+            ahead: None,
         };
         let (lines, _) = draw(PanelTab::Files, Some(inputs), 44, 16, &mut 0);
         let all = lines.join("\n");
@@ -384,6 +427,7 @@ mod tests {
             base: None,
             commits: Some(none),
             files: None,
+            ahead: None,
         };
         let (lines, _) = draw(PanelTab::Commits, Some(inputs), 40, 8, &mut 0);
         assert!(lines.join(" ").contains("base branch"), "{lines:?}");
@@ -414,10 +458,82 @@ mod tests {
             base: Some("main"),
             commits: Some(&many),
             files: None,
+            ahead: None,
         };
         let mut scroll = 999;
         let (lines, _) = draw(PanelTab::Commits, Some(inputs), 40, 10, &mut scroll);
         assert!(scroll < 50, "clamped: {scroll}");
         assert!(lines.last().unwrap().contains("commit 49"), "{lines:?}");
+    }
+
+    /// A branch that only adds a binary file still lists it, as `binary`.
+    #[test]
+    fn binary_files_are_listed() {
+        let c = commits();
+        let f = vec![ChangedFile {
+            path: "assets/logo.png".into(),
+            stats: None,
+        }];
+        let inputs = PanelInputs {
+            branch: "b",
+            base: Some("main"),
+            commits: Some(&c),
+            files: Some(&f),
+            ahead: Some(2),
+        };
+        let (lines, _) = draw(PanelTab::Files, Some(inputs), 44, 10, &mut 0);
+        let all = lines.join("\n");
+        assert!(all.contains("1 file  +0 −0  1 binary"), "{all}");
+        let row = lines.iter().find(|l| l.contains("logo.png")).unwrap();
+        assert!(row.trim_end().ends_with("binary"), "{row:?}");
+        assert!(!all.contains("No files changed"), "{all}");
+    }
+
+    /// Past the listing cap, the tab shows the true total and the list
+    /// says how many older commits it left out.
+    #[test]
+    fn capped_commit_lists_say_so() {
+        let listed: Vec<BranchCommit> = (0..3)
+            .map(|i| BranchCommit {
+                hash: format!("{i:07}"),
+                subject: format!("commit {i}"),
+            })
+            .collect();
+        let inputs = PanelInputs {
+            branch: "b",
+            base: Some("main"),
+            commits: Some(&listed),
+            files: None,
+            ahead: Some(250),
+        };
+        let (lines, _) = draw(PanelTab::Commits, Some(inputs), 44, 14, &mut 0);
+        let all = lines.join("\n");
+        assert!(lines[0].contains("Commits 250"), "{all}");
+        assert!(all.contains("247 older commits not listed."), "{all}");
+    }
+
+    /// A long branch name never crowds out the list: the title stops at
+    /// two lines, fewer when the panel is short.
+    #[test]
+    fn a_long_title_leaves_room_for_the_list() {
+        let c = vec![BranchCommit {
+            hash: "a1b2c3d".into(),
+            subject: "UNIQUE-COMMIT".into(),
+        }];
+        let branch = "bakedbean/".to_string() + &"very-long-branch-name-".repeat(6);
+        let inputs = PanelInputs {
+            branch: &branch,
+            base: Some("main"),
+            commits: Some(&c),
+            files: None,
+            ahead: Some(1),
+        };
+        for h in [6u16, 4] {
+            let (lines, _) = draw(PanelTab::Commits, Some(inputs), 40, h, &mut 999);
+            assert!(
+                lines.join("\n").contains("UNIQUE-COMMIT"),
+                "height {h}: {lines:?}"
+            );
+        }
     }
 }

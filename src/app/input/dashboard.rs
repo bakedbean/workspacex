@@ -527,8 +527,14 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         (KeyCode::Esc, _) if app.dashboard.status_filter.is_some() => {
             app.dashboard.status_filter = None;
         }
-        // Esc closes the side panel before it leaves the focus view.
-        (KeyCode::Esc, _) if app.dashboard.focused_repo.is_some() && app.dashboard.panel_open => {
+        // Esc closes the side panel before it leaves the focus view — but
+        // only a panel actually on screen; a terminal too narrow to show it
+        // leaves the view straight away.
+        (KeyCode::Esc, _)
+            if app.dashboard.focused_repo.is_some()
+                && app.dashboard.panel_open
+                && app.dashboard_panel_rect.is_some() =>
+        {
             app.dashboard.panel_open = false;
         }
         (KeyCode::Esc, _) if app.dashboard.focused_repo.is_some() => leave_repo_focus(app),

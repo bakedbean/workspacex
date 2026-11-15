@@ -13,8 +13,13 @@ impl App {
 
     /// The repo the selection belongs to: the header itself, a workspace's
     /// owner, or a hidden group's repo.
+    /// With nothing selected, the repo the dashboard is focused on, so `n`
+    /// in an empty focus view still creates in that repo.
     pub(crate) fn selected_repo(&self) -> Option<crate::data::store::RepoId> {
-        match self.selected_target()? {
+        let Some(target) = self.selected_target() else {
+            return self.dashboard.focused_repo;
+        };
+        match target {
             SelectionTarget::Repo(id) | SelectionTarget::HiddenGroup { repo: id, .. } => Some(id),
             SelectionTarget::Workspace(wid) => self
                 .workspaces

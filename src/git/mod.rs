@@ -232,6 +232,71 @@ pub(super) mod tests {
     }
 
     #[tokio::test]
+    async fn branch_commits_lists_commits_ahead_newest_first() {
+        let dir = init_repo();
+        let git = |args: &[&str]| {
+            assert!(
+                StdCmd::new("git")
+                    .current_dir(dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        git(&["checkout", "-q", "-b", "feature"]);
+        assert_eq!(branch_commits(dir.path(), "main").await, Some(vec![]));
+        git(&["commit", "--allow-empty", "-q", "-m", "first change"]);
+        git(&["commit", "--allow-empty", "-q", "-m", "second\tchange"]);
+        let commits = branch_commits(dir.path(), "main").await.unwrap();
+        let subjects: Vec<&str> = commits.iter().map(|c| c.subject.as_str()).collect();
+        assert_eq!(subjects, vec!["second\tchange", "first change"]);
+        assert!(commits.iter().all(|c| c.hash.len() >= 7));
+        assert_eq!(branch_commits(dir.path(), "no-such-ref").await, None);
+    }
+
+    #[test]
+    fn parse_numstat_keeps_binary_files() {
+        let files = parse_numstat("12\t3\tsrc/a.rs\n-\t-\tasset.bin\nbogus\n");
+        assert_eq!(
+            files,
+            vec![
+                ChangedFile {
+                    path: "src/a.rs".into(),
+                    stats: Some(DiffStats {
+                        added: 12,
+                        removed: 3
+                    }),
+                },
+                ChangedFile {
+                    path: "asset.bin".into(),
+                    stats: None,
+                },
+            ]
+        );
+        let map = per_file_stats(&files);
+        assert_eq!(map.len(), 1, "binary left out of the line-count map");
+    }
+
+    #[test]
+    fn parse_branch_commits_skips_malformed_lines() {
+        let parsed = parse_branch_commits("abc1234\tfix it\ngarbage\ndef5678\t\n");
+        assert_eq!(
+            parsed,
+            vec![
+                BranchCommit {
+                    hash: "abc1234".into(),
+                    subject: "fix it".into()
+                },
+                BranchCommit {
+                    hash: "def5678".into(),
+                    subject: String::new()
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn commits_ahead_of_counts_zero_line_commits() {
         let dir = init_repo();
         let git = |args: &[&str]| {
@@ -900,6 +965,63 @@ pub async fn commits_ahead_of(worktree: &Path, base: &str) -> Option<u32> {
         .ok()
 }
 
+/// One commit on a workspace branch, as the focus view's side panel lists
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchCommit {
+    /// Abbreviated hash, as `git log --format=%h` prints it.
+    pub hash: String,
+    pub subject: String,
+}
+
+/// A branch's commits and changed files against `base`, as last polled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchLists {
+    /// The base branch these were computed against.
+    pub base: String,
+    pub commits: Vec<BranchCommit>,
+    pub files: Vec<ChangedFile>,
+}
+
+/// Most commits `branch_commits` returns: a long-running branch can carry
+/// hundreds, and the panel is for a glance, not an audit.
+pub const BRANCH_COMMITS_LIMIT: usize = 200;
+
+/// The commits on HEAD not on `base`, newest first, up to
+/// `BRANCH_COMMITS_LIMIT`. `None` on any git failure.
+pub async fn branch_commits(worktree: &Path, base: &str) -> Option<Vec<BranchCommit>> {
+    let range = format!("{base}..HEAD");
+    let limit = format!("-n{BRANCH_COMMITS_LIMIT}");
+    let out = run(
+        worktree,
+        &[
+            "log",
+            "--no-color",
+            "--format=%h%x09%s",
+            &limit,
+            &range,
+            "--",
+        ],
+    )
+    .await
+    .ok()?;
+    Some(parse_branch_commits(&out))
+}
+
+/// Parse `git log --format=%h%x09%s` output; lines without a tab are
+/// skipped.
+fn parse_branch_commits(out: &str) -> Vec<BranchCommit> {
+    out.lines()
+        .filter_map(|l| {
+            let (hash, subject) = l.split_once('\t')?;
+            Some(BranchCommit {
+                hash: hash.trim().to_string(),
+                subject: subject.trim().to_string(),
+            })
+        })
+        .collect()
+}
+
 /// Compute line-count diff stats for a worktree against `base`.
 /// Returns `None` on any git failure (missing base ref, etc.).
 pub async fn workspace_diff_stats(worktree: &std::path::Path, base: &str) -> Option<DiffStats> {
@@ -919,14 +1041,19 @@ pub async fn workspace_diff_stats(worktree: &std::path::Path, base: &str) -> Opt
     parse_shortstat(&stdout)
 }
 
-/// Per-file line-count diff stats for a worktree against `base`. Keyed by
-/// path *relative to the worktree root*, as `git diff --numstat` emits
-/// them. Binary files (numstat output `-`) are silently omitted.
-/// Returns `None` on any git failure.
-pub async fn workspace_diff_per_file(
-    worktree: &std::path::Path,
-    base: &str,
-) -> Option<std::collections::HashMap<String, DiffStats>> {
+/// One file a branch changed against its base, as `git diff --numstat`
+/// reports it. `stats` is `None` for a binary file, which has no line
+/// counts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangedFile {
+    pub path: String,
+    pub stats: Option<DiffStats>,
+}
+
+/// Every file changed on HEAD since it left `base` (`git diff --numstat
+/// base...HEAD`), binary files included, in git's order. Paths are
+/// relative to the worktree root. `None` on any git failure.
+pub async fn branch_changed_files(worktree: &Path, base: &str) -> Option<Vec<ChangedFile>> {
     let out = tokio::process::Command::new("git")
         .arg("-C")
         .arg(worktree)
@@ -939,25 +1066,52 @@ pub async fn workspace_diff_per_file(
     if !out.status.success() {
         return None;
     }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let mut map = std::collections::HashMap::new();
-    for line in stdout.lines() {
-        // numstat format: "<added>\t<removed>\t<path>"; "-" for binary.
-        let mut parts = line.splitn(3, '\t');
-        let added = parts.next().and_then(|s| s.parse::<u32>().ok());
-        let removed = parts.next().and_then(|s| s.parse::<u32>().ok());
-        let path = parts.next();
-        if let (Some(a), Some(r), Some(p)) = (added, removed, path) {
-            map.insert(
-                p.to_string(),
-                DiffStats {
+    Some(parse_numstat(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// Parse `git diff --numstat` output: `<added>\t<removed>\t<path>`, with
+/// `-` for both counts on a binary file.
+fn parse_numstat(out: &str) -> Vec<ChangedFile> {
+    out.lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(3, '\t');
+            let added = parts.next()?;
+            let removed = parts.next()?;
+            let path = parts.next()?;
+            let stats = match (added.parse::<u32>(), removed.parse::<u32>()) {
+                (Ok(a), Ok(r)) => Some(DiffStats {
                     added: a,
                     removed: r,
-                },
-            );
-        }
-    }
-    Some(map)
+                }),
+                _ if added == "-" && removed == "-" => None,
+                _ => return None,
+            };
+            Some(ChangedFile {
+                path: path.to_string(),
+                stats,
+            })
+        })
+        .collect()
+}
+
+/// The line counts of `files` keyed by path, binary files left out — the
+/// shape the detail bar's RECENT FILES annotations read.
+pub fn per_file_stats(files: &[ChangedFile]) -> std::collections::HashMap<String, DiffStats> {
+    files
+        .iter()
+        .filter_map(|f| f.stats.map(|d| (f.path.clone(), d)))
+        .collect()
+}
+
+/// Per-file line-count diff stats for a worktree against `base`, binary
+/// files omitted. `None` on any git failure.
+pub async fn workspace_diff_per_file(
+    worktree: &std::path::Path,
+    base: &str,
+) -> Option<std::collections::HashMap<String, DiffStats>> {
+    branch_changed_files(worktree, base)
+        .await
+        .map(|f| per_file_stats(&f))
 }
 
 #[cfg(test)]

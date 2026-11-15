@@ -34,6 +34,7 @@ mod process_command;
 mod prompt_tag;
 mod remote;
 mod rename_modal;
+mod repo_focus;
 mod repo_pr_link_click;
 mod restore_layout;
 mod setup_log_modal;

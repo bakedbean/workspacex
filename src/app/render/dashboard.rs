@@ -33,9 +33,20 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     let selection_is_workspace =
         matches!(app.selected_target(), Some(SelectionTarget::Workspace(_)));
     let detail_cfg = resolve_dashboard_detail_cfg(app);
+    // The repo focus view's tall rows already show what the bar's header
+    // and containers would, so there the bar shrinks to its reply row and
+    // the rows keep the height.
+    // A repo unregistered while focused ends the focus: left set, it would
+    // keep the reply-only bar and the focus-only keys alive over the list.
+    if let Some(rid) = app.dashboard.focused_repo
+        && !app.repos.iter().any(|r| r.id == rid)
+    {
+        app.dashboard.focused_repo = None;
+    }
+    let reply_only = app.dashboard.focused_repo.is_some();
     let detail_visible = selection_is_workspace
         && detail_cfg.visible
-        && area.height >= detail_cfg.minimum_height() + 10;
+        && (reply_only || area.height >= detail_cfg.minimum_height() + 10);
     // If the bar is hidden but focus is on the reply input,
     // bounce focus back to Dashboard and drop the draft.
     if !detail_visible && matches!(app.focus, crate::ui::PaneFocus::DetailBarReply) {
@@ -58,8 +69,13 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
         height: 1,
         ..area
     };
-    let (dashboard_area, detail_area, pm_area) =
-        dashboard_regions(inner_area, app.pm_visible, detail_visible, &detail_cfg);
+    let (dashboard_area, detail_area, pm_area) = dashboard_regions(
+        inner_area,
+        app.pm_visible,
+        detail_visible,
+        &detail_cfg,
+        reply_only,
+    );
     let nerd_fonts = nerd_fonts_enabled(&app.store);
 
     // Build per-workspace inputs in V5 shape.
@@ -125,6 +141,12 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     app.dashboard_pr_rects = click_targets.pr_chips;
     app.dashboard_repo_pr_rects = click_targets.repo_pr_links;
     app.dashboard_status_rects = click_targets.statuses;
+    app.dashboard_repo_name_rects = click_targets.repo_names;
+    app.dashboard_focus_row_rects = click_targets.focus_rows;
+    app.dashboard_focus_group_rects = click_targets.focus_groups;
+    app.dashboard_panel_tab_rects = click_targets.panel_tabs;
+    app.dashboard_panel_rect = click_targets.panel_area;
+    app.dashboard_unfocus_rect = click_targets.unfocus;
     if let Some(pm_area) = pm_area {
         let digest = app.build_pm_digest();
         let selected = app
@@ -189,8 +211,16 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
                     fleet: &fleet,
                     scroll_offsets: &mut app.detail_scroll_offsets,
                 };
-                let out =
-                    crate::ui::dashboard::detail::render(f, detail_area, &mut inputs, &app.theme);
+                let out = if reply_only {
+                    crate::ui::dashboard::detail::render_reply_only(
+                        f,
+                        detail_area,
+                        &mut inputs,
+                        &app.theme,
+                    )
+                } else {
+                    crate::ui::dashboard::detail::render(f, detail_area, &mut inputs, &app.theme)
+                };
                 app.detail_container_rects = out.container_rects;
                 app.pr_link_rect = out.pr_link_rect.map(|r| (ws.id, r));
                 if !out.chip_rects.is_empty() {
@@ -347,11 +377,40 @@ pub(crate) fn build_workspace_items<'a>(
                 continue;
             }
             let row = build_row_inputs(app, ws, now_ms, nerd_fonts);
+            let selected = app.dashboard.selection == Some(SelectionTarget::Workspace(ws.id));
+            let lists = app.workspace_branch_lists.get(&ws.id).filter(|l| {
+                // Copied only while the panel is open to show them.
+                selected && app.dashboard.panel_open && Some(&l.base) == repo.base_branch.as_ref()
+            });
             workspaces.push(crate::ui::dashboard::WorkspaceItem {
                 repo,
                 workspace_id: ws.id,
                 status: row.status,
                 hide: app.hide_subject_with_age(ws.id, row.ago_secs),
+                // Only the focus view reads this, and only for its repo, so
+                // skip cloning every recap on ordinary list frames.
+                detail: if app.dashboard.focused_repo == Some(repo.id) {
+                    crate::ui::dashboard::tall::WorkspaceDetail {
+                        recap: app.recaps.get(&ws.id).cloned(),
+                        git: app.workspace_status.get(&ws.id).copied(),
+                        ahead_of_base: app.workspace_ahead_of_base.get(&ws.id).copied(),
+                        base_branch: repo.base_branch.clone(),
+                        first_prompt: app
+                            .workspace_events
+                            .get(&ws.id)
+                            .and_then(|e| e.first_user_text.clone()),
+                        // The side panel shows only the selected workspace,
+                        // and only lists polled against the current base.
+                        commits: lists.map(|l| l.commits.clone()),
+                        files: lists.map(|l| {
+                            let mut v = l.files.clone();
+                            v.sort_by(|a, b| a.path.cmp(&b.path));
+                            v
+                        }),
+                    }
+                } else {
+                    Default::default()
+                },
                 row,
             });
         }
@@ -460,12 +519,17 @@ pub(super) fn dashboard_regions(
     pm_visible: bool,
     detail_visible: bool,
     detail_cfg: &DetailBarConfig,
+    reply_only: bool,
 ) -> (
     ratatui::layout::Rect,
     Option<ratatui::layout::Rect>,
     Option<ratatui::layout::Rect>,
 ) {
-    let detail_h = detail_cfg.preferred_height(area.height);
+    let detail_h = if reply_only {
+        crate::ui::dashboard::detail::reply_only_height(detail_cfg)
+    } else {
+        detail_cfg.preferred_height(area.height)
+    };
     match (pm_visible, detail_visible) {
         (false, false) => (area, None, None),
         (false, true) => {

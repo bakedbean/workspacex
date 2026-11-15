@@ -1055,6 +1055,7 @@ async fn refresh_local(app: SharedApp, t: PollTarget) {
             g.workspace_diff.remove(&id);
             g.workspace_diff_per_file.remove(&id);
             g.workspace_ahead_of_base.remove(&id);
+            g.workspace_branch_lists.remove(&id);
             g.diff_last_poll_ms.remove(&id);
             // Everything below works from the snapshot taken before the
             // rename. Skip the rest; the throttle stamps were cleared
@@ -1093,13 +1094,40 @@ async fn refresh_local(app: SharedApp, t: PollTarget) {
                 let mut g = app.lock().await;
                 g.workspace_diff.insert(id, diff);
             }
-            if let Some(ahead) = crate::git::commits_ahead_of(&path, base).await {
-                let mut g = app.lock().await;
+            let ahead = crate::git::commits_ahead_of(&path, base).await;
+            // Only a branch with commits ahead has any to list; skip the
+            // log for the common idle case.
+            let commits = match ahead {
+                Some(0) => Some(Vec::new()),
+                Some(_) => crate::git::branch_commits(&path, base).await,
+                None => None,
+            };
+            let files = crate::git::branch_changed_files(&path, base).await;
+            let mut g = app.lock().await;
+            if let Some(ahead) = ahead {
                 g.workspace_ahead_of_base.insert(id, ahead);
             }
-            if let Some(per_file) = crate::git::workspace_diff_per_file(&path, base).await {
-                let mut g = app.lock().await;
-                g.workspace_diff_per_file.insert(id, per_file);
+            if let Some(files) = &files {
+                g.workspace_diff_per_file
+                    .insert(id, crate::git::per_file_stats(files));
+            }
+            // Keep the lists only when this refresh fully succeeded: a
+            // failure (say, a base that doesn't resolve) must not leave the
+            // previous base's lists showing as current.
+            match (commits, files) {
+                (Some(commits), Some(files)) => {
+                    g.workspace_branch_lists.insert(
+                        id,
+                        crate::git::BranchLists {
+                            base: base.to_string(),
+                            commits,
+                            files,
+                        },
+                    );
+                }
+                _ => {
+                    g.workspace_branch_lists.remove(&id);
+                }
             }
         }
     }

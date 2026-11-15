@@ -100,6 +100,25 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
             adjust_detail_scroll(app, slot, 3, up);
             return;
         }
+        // In the repo focus view the wheel scrolls the rows: there is no
+        // session pane on the dashboard for it to scroll instead.
+        if app.dashboard.focused_repo.is_some() && app.modal.is_none() {
+            let up = matches!(m.kind, MouseEventKind::ScrollUp);
+            if app
+                .dashboard_panel_rect
+                .is_some_and(|r| rect_contains(&r, &m))
+            {
+                let s = &mut app.dashboard.panel_scroll;
+                *s = if up {
+                    s.saturating_sub(3)
+                } else {
+                    s.saturating_add(3)
+                };
+            } else {
+                app.dashboard.scroll_focus(if up { -3 } else { 3 });
+            }
+            return;
+        }
     }
 
     // Attached view: a plain wheel over a pane whose agent has mouse
@@ -295,6 +314,29 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
                 // Clicking a row's PR chip in the dashboard PR column opens
                 // that PR in the browser, same as the detail-bar chip.
                 open_pr_for_workspace(app, ws_id);
+            } else if app
+                .dashboard_unfocus_rect
+                .is_some_and(|r| rect_contains(&r, &m))
+            {
+                // The focus view's `◂ all repos` link, same as Esc / `f`.
+                leave_repo_focus(app);
+            } else if let Some(tab) = panel_tab_click_target(app, &m) {
+                // A side-panel tab shows that tab, same as `1` / `2`.
+                show_panel_tab(app, tab);
+            } else if let Some(group) = focus_group_click_target(app, &m) {
+                // A hidden group's row in the focus view expands or
+                // collapses it.
+                toggle_focus_group(app, group);
+            } else if let Some(ws_id) = focus_row_click_target(app, &m) {
+                // A click on a row in the focus view selects it and attaches,
+                // same as Enter on the selected row.
+                if let Err(e) = select_and_attach(app, ws_id) {
+                    tracing::warn!(error = %e, "failed to attach from focus row click");
+                }
+            } else if let Some(rid) = repo_name_click_target(app, &m) {
+                // A click on a repo header's name focuses that repo, same as
+                // `f` on the header.
+                enter_repo_focus(app, rid);
             } else if let Some(repo_path) = repo_pr_link_target(app, &m) {
                 // Clicking a repo header's PR link opens that repo's open
                 // PRs filtered to the signed-in user — the by-hand route of

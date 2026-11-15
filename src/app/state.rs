@@ -57,6 +57,12 @@ impl App {
             dashboard_pr_rects: Vec::new(),
             dashboard_repo_pr_rects: Vec::new(),
             dashboard_status_rects: Vec::new(),
+            dashboard_repo_name_rects: Vec::new(),
+            dashboard_focus_row_rects: Vec::new(),
+            dashboard_focus_group_rects: Vec::new(),
+            dashboard_panel_tab_rects: Vec::new(),
+            dashboard_panel_rect: None,
+            dashboard_unfocus_rect: None,
             procs_link_rect: None,
             github_remotes: Default::default(),
             pr_last_poll_ms: std::collections::HashMap::new(),
@@ -74,6 +80,7 @@ impl App {
             workspace_diff: std::collections::HashMap::new(),
             workspace_diff_per_file: std::collections::HashMap::new(),
             workspace_ahead_of_base: std::collections::HashMap::new(),
+            workspace_branch_lists: std::collections::HashMap::new(),
             activity_history: std::collections::VecDeque::new(),
             msgs_queued: 0,
             last_proc_scan_ms: 0,
@@ -734,6 +741,12 @@ pub struct App {
     /// Workspaces whose primary transcript has been read successfully at least
     /// once. Initialization is sticky even if that transcript later disappears
     /// or becomes unreadable/ambiguous; peer scans never initialize a workspace.
+    /// Repo header names on the dashboard list — a click focuses that repo.
+    pub dashboard_repo_name_rects: Vec<(crate::data::store::RepoId, ratatui::layout::Rect)>,
+    /// Rows in the repo focus view — a click selects and attaches.
+    pub dashboard_focus_row_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)>,
+    /// The focus view's `◂ all repos` link — a click leaves the focus view.
+    pub dashboard_unfocus_rect: Option<ratatui::layout::Rect>,
     /// Until then the classifier's output is provisional (it can only see
     /// session-liveness, not stop_reason),
     /// so we hold off on recording activity / firing bells for it. Without
@@ -764,6 +777,13 @@ pub struct App {
     /// Commits on the workspace branch not on its base. Same poller and
     /// throttle as `workspace_diff`; feeds the `pr:none` hide exemption.
     pub workspace_ahead_of_base: std::collections::HashMap<crate::data::store::WorkspaceId, u32>,
+    /// Each workspace branch's commits and changed files against its base,
+    /// for the focus view's side panel, tagged with the base they were
+    /// computed against so a changed Base branch setting never shows the
+    /// old base's lists as current. Same poller and throttle as
+    /// `workspace_ahead_of_base`; dropped when a refresh fails.
+    pub workspace_branch_lists:
+        std::collections::HashMap<crate::data::store::WorkspaceId, crate::git::BranchLists>,
     /// Per-file diff stats keyed by `WorkspaceId`, then by path relative
     /// to the worktree root (as `git diff --numstat` emits them).
     /// Populated by the same poller that maintains `workspace_diff`.
@@ -879,6 +899,22 @@ pub struct App {
     pub usage_window_option_rects: Vec<ratatui::layout::Rect>,
     /// `(palette index, rect)` per swatch drawn by the open name-color picker,
     /// consumed by `handle_mouse` to apply a clicked color. Cleared each frame;
+    /// Hidden-group rows in the repo focus view — a click expands or
+    /// collapses the group.
+    pub dashboard_focus_group_rects: Vec<(
+        (
+            crate::data::store::RepoId,
+            crate::data::hide_rules::HideRule,
+        ),
+        ratatui::layout::Rect,
+    )>,
+    /// The focus view side panel's tabs — a click shows that tab.
+    pub dashboard_panel_tab_rects: Vec<(
+        crate::ui::dashboard::side_panel::PanelTab,
+        ratatui::layout::Rect,
+    )>,
+    /// The focus view side panel — the wheel over it scrolls it.
+    pub dashboard_panel_rect: Option<ratatui::layout::Rect>,
     /// only populated while that modal is open.
     pub name_color_swatch_rects: Vec<(u8, ratatui::layout::Rect)>,
     /// Resolved pinned commands from the last draw tick (matches `chip_rects`).

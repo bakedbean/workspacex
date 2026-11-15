@@ -42,6 +42,7 @@ fn build_inputs<'a>(
         for (i, w) in fr.workspaces.iter().enumerate() {
             let id = WorkspaceId((repo.id.0 * 100) + i as i64);
             wsks.push(WorkspaceItem {
+                detail: Default::default(),
                 repo,
                 workspace_id: id,
                 status: w.status,
@@ -872,6 +873,7 @@ fn base_row() -> row::RowInputs {
 
 fn item_with_column<'a>(repo: &'a Repo, column: Option<RowColumn>) -> WorkspaceItem<'a> {
     WorkspaceItem {
+        detail: Default::default(),
         repo,
         workspace_id: WorkspaceId(1),
         status: crate::ui::dashboard::status::Status::Idle,
@@ -1080,7 +1082,7 @@ fn folded_repos_do_not_widen_the_strip() {
     let folded_repo_id = inputs.workspaces[0].repo.id;
     let mut state = DashboardState::default();
     state.folded.insert(folded_repo_id.0 as u64, true);
-    let (items, chips, _) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
+    let (items, chips, _, _) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
     assert!(!chips.is_empty(), "other repos still render rows");
     let (ws_id, flat_idx, (x, _w)) = chips[0];
     let rendered = item_text(&items[flat_idx]);
@@ -1110,7 +1112,7 @@ fn chip_hit_spans_use_the_widened_strip() {
     let mut inputs = fixture_dashboard_inputs_with_pr();
     give_workspace_peers(&mut inputs, 0, 2);
     let mut state = DashboardState::default();
-    let (items, chips, _) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
+    let (items, chips, _, _) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
     let (ws_id, flat_idx, (x, _w)) = chips[0];
     let rendered = item_text(&items[flat_idx]);
     assert_eq!(
@@ -1309,6 +1311,7 @@ fn ordered_sections_by_attention_emits_non_empty_sections_in_urgency_order() {
         row.workspace_id = WorkspaceId(id);
         row.branch = format!("ws-{id}");
         WorkspaceItem {
+            detail: Default::default(),
             repo,
             workspace_id: WorkspaceId(id),
             status,
@@ -1405,6 +1408,7 @@ mod hide_rules {
         lc: Option<BranchLifecycle>,
     ) -> WorkspaceItem<'a> {
         WorkspaceItem {
+            detail: Default::default(),
             repo,
             workspace_id: WorkspaceId(id),
             status: Status::Idle,

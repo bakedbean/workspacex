@@ -362,7 +362,8 @@ pub fn render_without_footer(
     }
 
     if let Some(repo) = focused_repo(inputs, state) {
-        let mut targets = render_focus(f, chunks[3], inputs, state, repo, tick, theme);
+        let glyphs = tall::AgentGlyphs::from_specs(specs);
+        let mut targets = render_focus(f, chunks[3], inputs, state, repo, &glyphs, tick, theme);
         targets.statuses = statuses;
         return targets;
     }
@@ -461,12 +462,14 @@ fn focused_workspaces<'w, 'a>(
 
 /// Draw the repo focus view into `area`: the breadcrumb, a spacer, then the
 /// repo's workspaces as tall rows (or an empty-state line).
+#[allow(clippy::too_many_arguments)]
 fn render_focus(
     f: &mut Frame,
     area: Rect,
     inputs: &DashboardInputs<'_>,
     state: &mut DashboardState,
     repo: &Repo,
+    glyphs: &tall::AgentGlyphs,
     tick: u32,
     theme: &Theme,
 ) -> ListClickTargets {
@@ -541,6 +544,7 @@ fn render_focus(
         f,
         chunks[2],
         &tall_rows,
+        glyphs,
         selected,
         &mut state.list_state,
         widths,

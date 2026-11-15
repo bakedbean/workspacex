@@ -9,12 +9,12 @@ The focus view shows one repo on the dashboard and gives each of its workspaces 
  ▍  goal  Single-repo dashboard view with richer per-workspace detail, wrapping every recap
  ▍        field across as many lines as it needs
  ▍  now   mapping dashboard code → draft design options
- ▍  git   ↑4 base · 3 modified 1 untracked · +184 −22 · ▎claude ▎codex   ui
+ ▍  git   ↑4 base · 3 modified 1 untracked · +184 −22 · ▎ claude  ▎ codex   ui
 
 ▎▎├  ? ⎇ bakedbean/detail-bar-scroll        ⏺ #459 draft     ● 1p  +61 −8      └ asking   14m ago
  ▎  goal  Scroll detail-bar containers independently
  ▎  now   keep scroll offsets per workspace or global?
- ▎  git   ↑2 base · clean · +61 −8 · ▎claude
+ ▎  git   ↑2 base · clean · +61 −8 · ▎ claude
 ```
 
 Each workspace shows:
@@ -22,7 +22,7 @@ Each workspace shows:
 - **The dashboard row**, with the status word but without the squeezed recap.
 - **goal**: the recap goal in full.
 - **now**: the recap state, then the next step after `→`. Without a recap, this line shows the status text the dashboard row would have clipped.
-- **git**: commits ahead of the base branch, uncommitted changes, the diff, and every agent in the workspace, followed by its tags.
+- **git**: commits ahead of the base branch, uncommitted changes, the diff, and every agent in the workspace, followed by its tags. Each agent is named with its icon from the theme's [`[agent_bar.symbols]`](../configuration/themes.md) table, or the `▎` bar when the theme has none.
 
 The [detail bar](detail-bar.md) is not shown in the focus view, so the rows get the full height.
 

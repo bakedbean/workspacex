@@ -13,6 +13,7 @@
 
 use crate::data::store::{WorkspaceId, WorkspaceRecap};
 use crate::git::WorkspaceStatus;
+use crate::pty::session::AgentKind;
 use crate::ui::dashboard::column_content::{ColumnBody, ColumnEmphasis, RowColumn};
 use crate::ui::dashboard::row::{self, ColumnWidths, RowInputs};
 use crate::ui::text::{display_width, fit_tags, truncate};
@@ -32,6 +33,48 @@ pub struct WorkspaceDetail {
     pub git: Option<WorkspaceStatus>,
     /// Commits on the branch that the repo's base branch lacks.
     pub ahead_of_base: Option<u32>,
+}
+
+/// Each agent kind's icon, as the theme's `[agent_bar.symbols]` table
+/// draws it, so the focus view names agents with the same glyphs as the
+/// agent bar and pills. Kinds without an entry use the bar's `symbol`.
+#[derive(Debug, Clone)]
+pub struct AgentGlyphs {
+    by_kind: Vec<(AgentKind, String)>,
+    fallback: String,
+}
+
+impl Default for AgentGlyphs {
+    fn default() -> Self {
+        Self {
+            by_kind: Vec::new(),
+            fallback: "▎".to_string(),
+        }
+    }
+}
+
+impl AgentGlyphs {
+    /// Read the resolved theme's `agent_bar` segment.
+    pub fn from_specs(specs: &crate::config::theme_file::BarSpecs) -> Self {
+        let Some(cfg) = specs.segments.get("agent_bar") else {
+            return Self::default();
+        };
+        Self {
+            by_kind: cfg.symbols.clone(),
+            fallback: cfg.symbol.clone().unwrap_or_else(|| "▎".to_string()),
+        }
+    }
+
+    /// The icon for `kind`, or `None` when the theme blanks it — the kind
+    /// is then named by its label alone.
+    pub fn glyph(&self, kind: AgentKind) -> Option<&str> {
+        let g = self
+            .by_kind
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map_or(self.fallback.as_str(), |(_, g)| g.as_str());
+        (!g.is_empty()).then_some(g)
+    }
 }
 
 /// One tall row's inputs.
@@ -84,6 +127,7 @@ pub fn branch_width_for(rows: &[TallRow<'_>], widths: ColumnWidths, total_width:
 /// full width.
 pub fn row_lines(
     tall: &TallRow<'_>,
+    glyphs: &AgentGlyphs,
     widths: ColumnWidths,
     tick: u32,
     theme: &Theme,
@@ -161,7 +205,7 @@ pub fn row_lines(
     }
 
     let mut spans = gutter("git");
-    spans.extend(git_spans(row, detail, theme));
+    spans.extend(git_spans(row, detail, glyphs, theme));
     let used: usize = spans.iter().map(|s| s.width()).sum();
     let mut line = clip_spans(spans, width);
     let tags = fit_tags(&row.tags, width.saturating_sub(used + 3));
@@ -180,6 +224,7 @@ pub fn render(
     f: &mut Frame,
     area: Rect,
     rows: &[TallRow<'_>],
+    glyphs: &AgentGlyphs,
     selected: Option<usize>,
     list_state: &mut ListState,
     widths: ColumnWidths,
@@ -195,7 +240,7 @@ pub fn render(
     let mut items: Vec<ListItem<'static>> = Vec::with_capacity(rows.len() * 2);
     let mut heights: Vec<usize> = Vec::with_capacity(rows.len() * 2);
     for r in rows {
-        let lines = row_lines(r, widths, tick, theme, width);
+        let lines = row_lines(r, glyphs, widths, tick, theme, width);
         heights.push(lines.len());
         items.push(ListItem::new(lines));
         heights.push(1);
@@ -268,10 +313,15 @@ fn field(full: &Option<String>, short: &Option<String>) -> String {
     pick.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// `↑4 base · 3M 1U · +184 −22 · ● 2p · ▎claude ▎codex`. Each part is left
+/// `↑4 base · 3 modified · +184 −22 ·  claude  codex`. Each part is left
 /// out when its source is unknown, so a fresh workspace shows only what has
-/// loaded. The agents always show.
-fn git_spans(row: &RowInputs, detail: &WorkspaceDetail, theme: &Theme) -> Vec<Span<'static>> {
+/// loaded. The agents always show, primary first, each led by its icon.
+fn git_spans(
+    row: &RowInputs,
+    detail: &WorkspaceDetail,
+    glyphs: &AgentGlyphs,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
     let sep = || Span::styled(" · ", theme.dim_style());
     let mut spans: Vec<Span<'static>> = Vec::new();
     if let Some(n) = detail.ahead_of_base {
@@ -306,20 +356,23 @@ fn git_spans(row: &RowInputs, detail: &WorkspaceDetail, theme: &Theme) -> Vec<Sp
     if !spans.is_empty() {
         spans.push(sep());
     }
-    spans.push(Span::styled("▎", theme.agent_style(row.agent)));
-    spans.push(Span::styled(
-        row.agent.display_name().to_string(),
-        theme.row_dim_style(),
-    ));
-    for p in &row.peers {
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled("▎", theme.agent_style(p.agent)));
-        let style = if p.active {
-            theme.agent_style(p.agent)
+    // The primary, then peers in roster order; an active peer's label takes
+    // its agent color so live work stands out.
+    let agents =
+        std::iter::once((row.agent, false)).chain(row.peers.iter().map(|p| (p.agent, p.active)));
+    for (i, (kind, active)) in agents.enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("  "));
+        }
+        if let Some(g) = glyphs.glyph(kind) {
+            spans.push(Span::styled(format!("{g} "), theme.agent_style(kind)));
+        }
+        let label_style = if active {
+            theme.agent_style(kind)
         } else {
             theme.row_dim_style()
         };
-        spans.push(Span::styled(p.agent.display_name().to_string(), style));
+        spans.push(Span::styled(kind.display_name().to_string(), label_style));
     }
     spans
 }
@@ -479,10 +532,17 @@ mod tests {
             branch: branch_width_for(&rows, ColumnWidths::default(), width),
             ..ColumnWidths::default()
         };
-        let lines: Vec<String> = row_lines(&tall, widths, 0, &Theme::wsx(), width)
-            .iter()
-            .map(text)
-            .collect();
+        let lines: Vec<String> = row_lines(
+            &tall,
+            &AgentGlyphs::default(),
+            widths,
+            0,
+            &Theme::wsx(),
+            width,
+        )
+        .iter()
+        .map(text)
+        .collect();
         let all = lines.join("\n");
         assert!(lines[0].contains(&row.branch), "branch whole:\n{all}");
         assert!(lines[1].contains("goal"), "{all}");
@@ -538,9 +598,61 @@ mod tests {
             row: &row,
             detail: &detail,
         };
-        let lines = row_lines(&tall, ColumnWidths::default(), 0, &Theme::wsx(), 120);
+        let lines = row_lines(
+            &tall,
+            &AgentGlyphs::default(),
+            ColumnWidths::default(),
+            0,
+            &Theme::wsx(),
+            120,
+        );
         assert!(text(&lines[0]).contains("working"));
         assert!(!text(&lines[0]).contains("SQUEEZED-GOAL"));
         assert!(text(&lines[1]).contains("SQUEEZED-GOAL"));
+    }
+
+    /// Agents are named by the theme's per-kind icon, falling back to the
+    /// bar `symbol`; a blanked icon leaves the label alone.
+    #[test]
+    fn agents_take_their_theme_icons() {
+        let specs = crate::config::theme_file::resolve(
+            crate::config::theme_file::ThemeFile::parse(
+                "[agent_bar.symbols]\nclaude = \"C\"\ncodex = \"\"\n",
+            )
+            .unwrap(),
+            &Theme::wsx(),
+        )
+        .unwrap();
+        let glyphs = AgentGlyphs::from_specs(&specs);
+        assert_eq!(glyphs.glyph(AgentKind::Claude), Some("C"));
+        assert_eq!(glyphs.glyph(AgentKind::Codex), None, "blanked");
+        assert_eq!(glyphs.glyph(AgentKind::Pi), Some("▎"), "falls back");
+
+        let mut row = base_row("b");
+        row.peers = vec![
+            crate::ui::dashboard::row::PeerIndicator {
+                agent: AgentKind::Codex,
+                active: false,
+            },
+            crate::ui::dashboard::row::PeerIndicator {
+                agent: AgentKind::Pi,
+                active: true,
+            },
+        ];
+        let detail = WorkspaceDetail::default();
+        let tall = TallRow {
+            row: &row,
+            detail: &detail,
+        };
+        let lines = row_lines(
+            &tall,
+            &glyphs,
+            ColumnWidths::default(),
+            0,
+            &Theme::wsx(),
+            120,
+        );
+        let git = text(lines.last().unwrap());
+        assert!(git.contains("C claude  codex  ▎ pi"), "{git:?}");
     }
 }

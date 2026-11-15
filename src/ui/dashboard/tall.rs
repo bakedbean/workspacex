@@ -151,11 +151,16 @@ pub fn row_lines(
     let detail = tall.detail;
     let recap = detail.recap.as_ref().filter(|r| has_recap(r));
 
-    // The first line keeps the status token but not the recap: the lines
-    // below show the recap in full, and repeating a squeezed copy beside
-    // the branch would only add noise.
+    // The first line keeps the status token but not the recap or fallback
+    // text: the lines below show them with more room, and repeating a
+    // squeezed copy beside the branch would only add noise.
     let mut head = row.clone();
-    if recap.is_some() {
+    let fallback_below = recap.is_none()
+        && matches!(
+            row.column.as_ref().map(|c| &c.body),
+            Some(ColumnBody::Fallback { .. })
+        );
+    if recap.is_some() || fallback_below {
         head.column = row.column.as_ref().map(|c| RowColumn {
             body: ColumnBody::Empty,
             ..c.clone()
@@ -204,9 +209,11 @@ pub fn row_lines(
         }
         None => {
             // Without a recap, the row's fallback text (often the agent's
-            // last message, which can run to paragraphs) gets a little more
-            // room than the dashboard row gives it, but stays capped so one
-            // chatty workspace can't push its siblings off screen.
+            // last message, which can run to paragraphs) moves here from the
+            // first line, gets a little more room, and stays capped so one
+            // chatty workspace can't push its siblings off screen. It's
+            // labelled `last`, not `now`: it's what the agent last said, not
+            // a state it reported.
             if let Some(ColumnBody::Fallback { text, emphasis }) =
                 row.column.as_ref().map(|c| &c.body)
             {
@@ -215,7 +222,7 @@ pub fn row_lines(
                     ColumnEmphasis::Status => theme.status_style(row.status),
                     ColumnEmphasis::Warn => theme.warn_style(),
                 };
-                push_wrapped("now", text, style, FALLBACK_MAX_LINES);
+                push_wrapped("last", text, style, FALLBACK_MAX_LINES);
             }
         }
     }
@@ -964,5 +971,47 @@ mod tests {
         assert_eq!(targets.groups, vec![(1, Rect::new(0, 3, 120, 1))]);
         let buf = term.backend().buffer();
         assert_eq!(buf[(5, 3)].bg, Theme::wsx().selected_bg, "group tinted");
+    }
+
+    /// Without a recap, the fallback text shows once: under a `last` label,
+    /// not also squeezed onto the first line beside the status word.
+    #[test]
+    fn fallback_text_shows_once_under_last() {
+        let mut row = base_row("b");
+        row.column = Some(RowColumn {
+            token: "idle".into(),
+            reported: false,
+            body: ColumnBody::Fallback {
+                text: "UNIQUE-LAST-MESSAGE".into(),
+                emphasis: ColumnEmphasis::Dim,
+            },
+        });
+        let detail = WorkspaceDetail::default();
+        let tall = TallRow {
+            row: &row,
+            detail: &detail,
+        };
+        let lines: Vec<String> = row_lines(
+            &tall,
+            &AgentGlyphs::default(),
+            ColumnWidths::default(),
+            0,
+            &Theme::wsx(),
+            120,
+        )
+        .iter()
+        .map(text)
+        .collect();
+        assert!(lines[0].contains("idle"), "token kept: {:?}", lines[0]);
+        assert!(!lines[0].contains("UNIQUE-LAST-MESSAGE"), "{:?}", lines[0]);
+        assert!(lines[1].contains("last") && lines[1].contains("UNIQUE-LAST-MESSAGE"));
+        assert!(!lines[1].contains("now"), "{:?}", lines[1]);
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|l| l.contains("UNIQUE-LAST-MESSAGE"))
+                .count(),
+            1
+        );
     }
 }

@@ -21,7 +21,7 @@ Each workspace shows:
 
 - **The dashboard row**, with the status word but without the squeezed recap.
 - **goal**: the recap goal in full.
-- **now**: the recap state, then the next step after `→`. Without a recap, this line shows the status text the dashboard row would have clipped, such as the agent's last message, cut to two lines.
+- **now**: the recap state, then the next step after `→`. Without a recap, a **last** line takes its place: the status text the dashboard row would have clipped, usually the agent's last message, cut to two lines. It shows only there, not also on the first line.
 - **git**: commits ahead of the base branch, uncommitted changes, the diff, and every agent in the workspace, followed by its tags. Each agent is named with its icon from the theme's [`[agent_bar.symbols]`](../configuration/themes.md) table, or the `▎` bar when the theme has none.
 
 In the focus view the [detail bar](detail-bar.md) shrinks to its reply row, so the workspaces get nearly the full height. Press `Tab` to type a message to the selected workspace's agent, as you would on the list.

@@ -1,6 +1,6 @@
 # Repo focus view
 
-The focus view shows one repo on the dashboard and gives each of its workspaces several lines instead of one. The recap goal and state wrap onto as many lines as they need, and the branch column widens to fit the longest branch name, up to 80 cells and as far as the terminal leaves room for the status word. On a narrow terminal a very long branch can still be shortened.
+The focus view shows one repo on the dashboard and gives each of its workspaces several lines instead of one. The recap goal and state wrap onto as many lines as they need (a workspace taller than the screen scrolls; see [Moving around](#moving-around)), and the branch column widens to fit the longest branch name, up to 80 cells and as far as the terminal leaves room for the status word. On a narrow terminal a very long branch can still be shortened.
 
 ```text
 ◂ all repos / workspacex  ~/src/workspacex  ──────────────────────────  ● 2  ? 1    5 ws
@@ -38,7 +38,9 @@ In the focus view the [detail bar](detail-bar.md) shrinks to its reply row, so t
 
 ## Moving around
 
-The focus view moves like the list: `j` / `k` (or the arrows) select the next or previous workspace, and `enter`, `i` or `l` attaches. Clicking anywhere on a workspace attaches to it, and clicking its PR chip opens the PR. `n` creates a workspace in the focused repo. The other workspace keys (`d`, `e`, `#`, `?`, and so on) act on the selected workspace as usual.
+The focus view moves like the list: `j` / `k` (or the arrows) select the next or previous workspace, and `enter`, `i` or `l` attaches. Clicking anywhere on a workspace attaches to it, and clicking its PR chip opens the PR. `n` creates a workspace in the focused repo.
+
+The view keeps the selected workspace on screen. To read a workspace taller than the screen, page with `PgDn` / `PgUp` or scroll with the mouse wheel; the view stays put until you select a different workspace. The other workspace keys (`d`, `e`, `#`, `?`, and so on) act on the selected workspace as usual.
 
 ## Filters and hiding
 

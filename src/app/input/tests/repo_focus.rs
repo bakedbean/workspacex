@@ -575,3 +575,79 @@ async fn group_expansion_carries_between_views() {
     draw(&mut app);
     assert!(app.selectable.contains(&SelectionTarget::Workspace(ids[3])));
 }
+
+/// PgDn pages through a workspace taller than the screen to its last line,
+/// and the selection holding still doesn't snap it back to the top.
+#[tokio::test]
+async fn pgdn_reaches_the_end_of_an_oversized_row() {
+    let (mut app, repo, _, ids) = app();
+    app.recaps.insert(
+        ids[0],
+        crate::data::store::WorkspaceRecap {
+            goal: Some(format!("{} END-OF-GOAL", "word ".repeat(400))),
+            state: Some("STATE-AT-THE-END".into()),
+            ..Default::default()
+        },
+    );
+    app.dashboard.focus_repo(repo);
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
+    let frame = |app: &mut App| -> String {
+        let mut term = Terminal::new(TestBackend::new(100, 16)).unwrap();
+        term.draw(|f| crate::app::render::draw_for_test(f, app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let first = frame(&mut app);
+    assert!(!first.contains("STATE-AT-THE-END"), "starts at the top");
+    let mut seen_end = false;
+    for _ in 0..20 {
+        press(&mut app, KeyCode::PageDown).await;
+        let screen = frame(&mut app);
+        if screen.contains("END-OF-GOAL") && screen.contains("STATE-AT-THE-END") {
+            seen_end = true;
+            break;
+        }
+    }
+    assert!(seen_end, "the row's end is reachable");
+    assert_eq!(selected_ws(&app), Some(ids[0]), "selection unchanged");
+    // Paging back up returns to the row's head.
+    for _ in 0..20 {
+        press(&mut app, KeyCode::PageUp).await;
+    }
+    assert!(frame(&mut app).contains("repo/a"));
+    assert_eq!(app.dashboard.focus_scroll, 0);
+}
+
+/// Moving the selection scrolls the new row into view even after a manual
+/// scroll took the view elsewhere.
+#[tokio::test]
+async fn moving_the_selection_scrolls_it_back_into_view() {
+    let (mut app, repo, _, ids) = app();
+    app.dashboard.focus_repo(repo);
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
+    let mut term = Terminal::new(TestBackend::new(120, 14)).unwrap();
+    term.draw(|f| crate::app::render::draw_for_test(f, &mut app))
+        .unwrap();
+    press(&mut app, KeyCode::PageDown).await;
+    press(&mut app, KeyCode::PageDown).await;
+    term.draw(|f| crate::app::render::draw_for_test(f, &mut app))
+        .unwrap();
+    press(&mut app, KeyCode::Char('j')).await;
+    term.draw(|f| crate::app::render::draw_for_test(f, &mut app))
+        .unwrap();
+    let sel = selected_ws(&app).unwrap();
+    let r = app
+        .dashboard_focus_row_rects
+        .iter()
+        .find(|(id, _)| *id == sel)
+        .map(|(_, r)| *r);
+    assert!(r.is_some_and(|r| r.y >= 4), "selected row on screen: {r:?}");
+}

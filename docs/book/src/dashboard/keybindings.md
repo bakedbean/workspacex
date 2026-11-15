@@ -19,6 +19,7 @@ Every key in the wsx TUI, grouped by where you press it. Capital letters mean `S
 | `G`                     | Group by repo or by attention                          |
 | `f`                     | Show only the selected repo, [in detail](repo-focus.md); `f` or `esc` goes back |
 | `[` / `]` (focus view)  | Previous / next repo                                   |
+| `PgUp` / `PgDn` (focus view) | Scroll the [focus view](repo-focus.md) a page      |
 | `Tab`                   | Focus the detail-bar reply, then the digest            |
 | `q`                     | Quit; stops direct sessions (shared ones keep running)  |
 

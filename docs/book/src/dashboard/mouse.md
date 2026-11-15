@@ -9,7 +9,7 @@ Hold `Shift` while you drag. Most terminals (Alacritty, Kitty, WezTerm, iTerm2, 
 ## Scrolling
 
 - The wheel scrolls the attached pane's history. If the agent handles the mouse itself, the wheel goes to the agent; hold `Shift` to scroll wsx's history instead.
-- On the dashboard, the wheel over a [detail bar](detail-bar.md) container scrolls that container.
+- On the dashboard, the wheel over a [detail bar](detail-bar.md) container scrolls that container. In the [focus view](repo-focus.md) it scrolls the workspaces.
 
 ## Clickable targets
 

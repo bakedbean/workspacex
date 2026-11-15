@@ -199,9 +199,12 @@ pub fn row_lines(
     };
 
     // What the workspace was started for, above what it is doing now.
-    if let Some(prompt) = detail.first_prompt.as_deref().map(str::trim)
-        && !prompt.is_empty()
-    {
+    let prompt = detail
+        .first_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
+    if let Some(prompt) = prompt {
         push_wrapped(
             "prompt",
             prompt,
@@ -237,8 +240,16 @@ pub fn row_lines(
             // chatty workspace can't push its siblings off screen. It's
             // labelled `last`, not `now`: it's what the agent last said, not
             // a state it reported.
+            //
+            // An idle (or finished, before its first reply) workspace's
+            // fallback *is* the initial prompt; the `prompt` line above
+            // already shows it, so it isn't repeated as if the agent said it.
+            let is_prompt = |text: &str| {
+                prompt.is_some_and(|p| p.split_whitespace().eq(text.split_whitespace()))
+            };
             if let Some(ColumnBody::Fallback { text, emphasis }) =
                 row.column.as_ref().map(|c| &c.body)
+                && !is_prompt(text)
             {
                 let style = match emphasis {
                     ColumnEmphasis::Dim => theme.row_dim_style(),
@@ -280,6 +291,7 @@ pub fn render(
     glyphs: &AgentGlyphs,
     selected: Option<usize>,
     scroll: &mut usize,
+    follow: bool,
     widths: ColumnWidths,
     tick: u32,
     theme: &Theme,
@@ -312,7 +324,7 @@ pub fn render(
     }
     let height = area.height as usize;
     let sel_span = selected.and_then(|i| spans.get(i).copied());
-    *scroll = scroll_for(*scroll, sel_span, height, lines.len());
+    *scroll = scroll_for(*scroll, sel_span, height, lines.len(), follow);
 
     let visible: Vec<Line<'static>> = lines.into_iter().skip(*scroll).take(height).collect();
     f.render_widget(Paragraph::new(visible), area);
@@ -362,19 +374,32 @@ pub fn render(
 /// viewport, down until its bottom shows when it ends below — but never
 /// past its top, so a row taller than the viewport shows from its start.
 /// Clamped so the viewport never hangs past the last line.
+///
+/// `follow` is set on the frame the selection changes. Otherwise the
+/// offset is the user's (moved by the wheel or PgUp/PgDn) and is only held
+/// so some of the selected row stays on screen, which lets a row taller
+/// than the viewport be scrolled through instead of snapping to its top.
 pub fn scroll_for(
     scroll: usize,
     selected: Option<(usize, usize)>,
     height: usize,
     total: usize,
+    follow: bool,
 ) -> usize {
-    let mut scroll = scroll.min(total.saturating_sub(height));
+    let max = total.saturating_sub(height);
+    let mut scroll = scroll.min(max);
     if let Some((top, len)) = selected {
         let bottom = top + len;
-        if top < scroll {
-            scroll = top;
-        } else if bottom > scroll + height {
-            scroll = (bottom.saturating_sub(height)).min(top);
+        if follow {
+            if top < scroll {
+                scroll = top;
+            } else if bottom > scroll + height {
+                scroll = (bottom.saturating_sub(height)).min(top);
+            }
+        } else {
+            let lo = (top + 1).saturating_sub(height);
+            let hi = bottom.saturating_sub(1);
+            scroll = scroll.clamp(lo, hi.max(lo)).min(max);
         }
     }
     scroll
@@ -503,7 +528,16 @@ fn clip_spans(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
 /// [`wrap`], keeping at most `max` lines; when text is cut, the last kept
 /// line ends with `…` at a word boundary.
 fn wrap_capped(text: &str, width: usize, max: usize) -> Vec<String> {
-    let mut lines = wrap(text, width);
+    // `max` lines hold at most `width * max` cells, so a prefix one line
+    // longer is enough to fill them and know to mark the cut. Wrapping only
+    // that keeps a paragraphs-long prompt from being wrapped in full every
+    // frame just to throw most of it away.
+    let budget = width.max(1).saturating_mul(max.saturating_add(1));
+    let head: std::borrow::Cow<'_, str> = match text.char_indices().nth(budget) {
+        Some((cut, _)) => format!("{} …", &text[..cut]).into(),
+        None => text.into(),
+    };
+    let mut lines = wrap(&head, width);
     if lines.len() > max && max > 0 {
         let rest = lines.split_off(max).join(" ");
         let last = lines.pop().unwrap_or_default();
@@ -831,22 +865,26 @@ mod tests {
     #[test]
     fn scroll_keeps_the_selected_row_in_view() {
         // Rows at lines 0..3, 4..7, 8..11; viewport 6 lines; 11 total.
-        assert_eq!(scroll_for(0, Some((0, 3)), 6, 11), 0);
-        assert_eq!(scroll_for(0, Some((4, 3)), 6, 11), 1, "bottom just shows");
+        assert_eq!(scroll_for(0, Some((0, 3)), 6, 11, true), 0);
         assert_eq!(
-            scroll_for(5, Some((4, 3)), 6, 11),
+            scroll_for(0, Some((4, 3)), 6, 11, true),
+            1,
+            "bottom just shows"
+        );
+        assert_eq!(
+            scroll_for(5, Some((4, 3)), 6, 11, true),
             4,
             "top above: snap to it"
         );
-        assert_eq!(scroll_for(9, None, 6, 11), 5, "never past the end");
-        assert_eq!(scroll_for(0, None, 20, 11), 0, "short content");
+        assert_eq!(scroll_for(9, None, 6, 11, true), 5, "never past the end");
+        assert_eq!(scroll_for(0, None, 20, 11, true), 0, "short content");
     }
 
     /// A row taller than the viewport shows from its first line.
     #[test]
     fn scroll_shows_the_top_of_an_oversized_row() {
-        assert_eq!(scroll_for(0, Some((4, 12)), 6, 20), 4);
-        assert_eq!(scroll_for(10, Some((4, 12)), 6, 20), 4);
+        assert_eq!(scroll_for(0, Some((4, 12)), 6, 20, true), 4);
+        assert_eq!(scroll_for(10, Some((4, 12)), 6, 20, true), 4);
     }
 
     #[test]
@@ -884,6 +922,7 @@ mod tests {
                 &AgentGlyphs::default(),
                 selected,
                 &mut scroll,
+                true,
                 ColumnWidths::default(),
                 0,
                 &Theme::wsx(),
@@ -984,6 +1023,7 @@ mod tests {
                 &AgentGlyphs::default(),
                 Some(1),
                 &mut scroll,
+                true,
                 ColumnWidths::default(),
                 0,
                 &Theme::wsx(),
@@ -1100,5 +1140,109 @@ mod tests {
         .map(text)
         .collect();
         assert!(!texts.iter().any(|l| l.contains("prompt")), "{texts:?}");
+    }
+
+    /// Without `follow`, a scrolled offset is kept as long as some of the
+    /// selected row shows, so an oversized row can be read to its end.
+    #[test]
+    fn manual_scroll_reads_through_an_oversized_row() {
+        // One 30-line row in a 6-line viewport.
+        assert_eq!(scroll_for(6, Some((0, 30)), 6, 30, true), 0, "follow snaps");
+        assert_eq!(scroll_for(6, Some((0, 30)), 6, 30, false), 6, "held");
+        assert_eq!(scroll_for(24, Some((0, 30)), 6, 30, false), 24, "its end");
+        assert_eq!(scroll_for(99, Some((0, 30)), 6, 30, false), 24, "clamped");
+        // A short row can't be scrolled entirely off screen.
+        assert_eq!(scroll_for(20, Some((4, 3)), 6, 30, false), 6);
+        assert_eq!(scroll_for(0, Some((20, 3)), 6, 30, false), 15);
+    }
+
+    /// An idle workspace's fallback is its initial prompt; it shows once,
+    /// under `prompt`, not again under `last`.
+    #[test]
+    fn initial_prompt_is_not_repeated_as_last() {
+        let mut row = base_row("b");
+        row.column = Some(RowColumn {
+            token: "idle".into(),
+            reported: false,
+            body: ColumnBody::Fallback {
+                text: "fix the   login redirect".into(),
+                emphasis: ColumnEmphasis::Dim,
+            },
+        });
+        let detail = WorkspaceDetail {
+            first_prompt: Some("fix the login\nredirect".into()),
+            ..Default::default()
+        };
+        let tall = TallRow {
+            row: &row,
+            detail: &detail,
+        };
+        let texts: Vec<String> = row_lines(
+            &tall,
+            &AgentGlyphs::default(),
+            ColumnWidths::default(),
+            0,
+            &Theme::wsx(),
+            120,
+        )
+        .iter()
+        .map(text)
+        .collect();
+        assert!(texts.iter().any(|l| l.contains("prompt")), "{texts:?}");
+        assert!(!texts.iter().any(|l| l.contains("last")), "{texts:?}");
+    }
+
+    /// End to end with the real synthesizer: an idle workspace without a
+    /// recap, whose dashboard fallback is its first prompt, shows that
+    /// prompt once.
+    #[test]
+    fn idle_fallback_from_the_prompt_shows_once() {
+        let events = crate::activity::events::WorkspaceEvents {
+            first_user_text: Some("UNIQUE-INITIAL-PROMPT for the workspace".into()),
+            ..Default::default()
+        };
+        let mut row = base_row("b");
+        row.column = Some(crate::ui::dashboard::column_content::row_column(
+            crate::ui::dashboard::status::Status::Idle,
+            Some(&events),
+            0,
+            None,
+            None,
+        ));
+        let detail = WorkspaceDetail {
+            first_prompt: events.first_user_text.clone(),
+            ..Default::default()
+        };
+        let tall = TallRow {
+            row: &row,
+            detail: &detail,
+        };
+        let all: Vec<String> = row_lines(
+            &tall,
+            &AgentGlyphs::default(),
+            ColumnWidths::default(),
+            0,
+            &Theme::wsx(),
+            120,
+        )
+        .iter()
+        .map(text)
+        .collect();
+        assert_eq!(
+            all.iter()
+                .filter(|l| l.contains("UNIQUE-INITIAL-PROMPT"))
+                .count(),
+            1,
+            "{all:?}"
+        );
+        assert!(all.iter().any(|l| l.contains("prompt")), "{all:?}");
+    }
+
+    #[test]
+    fn wrap_capped_only_wraps_what_it_keeps() {
+        let huge = "word ".repeat(100_000);
+        let lines = wrap_capped(&huge, 40, 2);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[1].ends_with('…'), "{lines:?}");
     }
 }

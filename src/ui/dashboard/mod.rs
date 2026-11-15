@@ -111,6 +111,12 @@ pub struct DashboardState {
     /// The focus view's first visible line. The focus view scrolls by lines,
     /// not list items, so it keeps its own offset.
     pub focus_scroll: usize,
+    /// The selection the focus view last scrolled to. When the selection
+    /// differs, the next frame scrolls it into view; otherwise the offset
+    /// is left to the wheel and PgUp/PgDn.
+    pub focus_scroll_anchor: Option<SelectionTarget>,
+    /// Lines the focus view's rows had last frame, for paging.
+    pub focus_page: usize,
 }
 
 /// Settings key holding the by-repo sort mode.
@@ -183,6 +189,19 @@ impl DashboardState {
     pub fn focus_repo(&mut self, repo: RepoId) {
         self.focused_repo = Some(repo);
         self.focus_scroll = 0;
+        self.focus_scroll_anchor = None;
+    }
+
+    /// Scroll the focus view by `lines` (negative is up). The next frame
+    /// clamps it to the content and keeps part of the selected row showing.
+    pub fn scroll_focus(&mut self, lines: isize) {
+        self.focus_scroll = self.focus_scroll.saturating_add_signed(lines);
+    }
+
+    /// Lines PgUp / PgDn move the focus view: a page, less two lines of
+    /// overlap so the reader keeps their place.
+    pub fn focus_page_lines(&self) -> isize {
+        self.focus_page.saturating_sub(2).max(1) as isize
     }
 }
 
@@ -206,6 +225,8 @@ impl Default for DashboardState {
             reply_draft_clear_at_ms: None,
             focused_repo: None,
             focus_scroll: 0,
+            focus_scroll_anchor: None,
+            focus_page: 0,
         }
     }
 }
@@ -615,6 +636,9 @@ fn render_focus(
             (FocusEntry::Workspace(_), None) => unreachable!("rows mirror entries"),
         })
         .collect();
+    let follow = state.focus_scroll_anchor != selection;
+    state.focus_scroll_anchor = selection.clone();
+    state.focus_page = chunks[2].height as usize;
     let targets = tall::render(
         f,
         chunks[2],
@@ -622,6 +646,7 @@ fn render_focus(
         glyphs,
         selected,
         &mut state.focus_scroll,
+        follow,
         widths,
         tick,
         theme,

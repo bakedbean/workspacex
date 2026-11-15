@@ -508,6 +508,16 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         }
         (KeyCode::Esc, _) if app.dashboard.focused_repo.is_some() => leave_repo_focus(app),
         (KeyCode::Char('f'), _) => toggle_repo_focus(app),
+        // Page the focus view, so a workspace taller than the screen can
+        // be read to its end.
+        (KeyCode::PageDown, _) if app.dashboard.focused_repo.is_some() => {
+            let page = app.dashboard.focus_page_lines();
+            app.dashboard.scroll_focus(page);
+        }
+        (KeyCode::PageUp, _) if app.dashboard.focused_repo.is_some() => {
+            let page = app.dashboard.focus_page_lines();
+            app.dashboard.scroll_focus(-page);
+        }
         (KeyCode::Char('['), _) => cycle_repo_focus(app, false),
         (KeyCode::Char(']'), _) => cycle_repo_focus(app, true),
         (KeyCode::Char('q'), _) => {

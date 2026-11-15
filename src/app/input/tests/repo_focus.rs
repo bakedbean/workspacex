@@ -465,3 +465,113 @@ async fn unregistering_the_focused_repo_ends_the_focus() {
     press(&mut app, KeyCode::Char('f')).await;
     assert_eq!(app.dashboard.focused_repo, Some(repo));
 }
+
+/// `repo` with `d` and `e` tagged `parked` and a rule hiding that tag.
+fn app_with_parked_group() -> (App, RepoId, Vec<WorkspaceId>) {
+    let (mut app, repo, _, ids) = app();
+    for id in [ids[3], ids[4]] {
+        app.store.add_workspace_tag(id, "parked").unwrap();
+    }
+    app.store
+        .set_repo_hide_rules(
+            repo,
+            &crate::data::hide_rules::HideRules::parse(Some("tag:parked")),
+        )
+        .unwrap();
+    app.refresh().unwrap();
+    app.dashboard.focus_repo(repo);
+    (app, repo, ids)
+}
+
+fn parked(repo: RepoId) -> SelectionTarget {
+    SelectionTarget::HiddenGroup {
+        repo,
+        rule: crate::data::hide_rules::HideRule::tag("parked"),
+    }
+}
+
+/// A hidden tag group shows as a summary row after the repo's workspaces,
+/// collapsed, exactly as under the repo's header on the list.
+#[test]
+fn hidden_groups_show_collapsed_in_the_focus_view() {
+    let (mut app, repo, ids) = app_with_parked_group();
+    let screen = draw(&mut app);
+    assert!(screen.contains("#parked"), "group row drawn:\n{screen}");
+    assert!(screen.contains("2 hidden"), "{screen}");
+    assert!(!screen.contains("repo/d"), "members stay hidden:\n{screen}");
+    assert_eq!(app.selectable.len(), 4, "three rows and the group");
+    assert_eq!(app.selectable.last(), Some(&parked(repo)));
+    assert!(!app.selectable.contains(&SelectionTarget::Workspace(ids[3])));
+    assert_eq!(app.dashboard_focus_group_rects.len(), 1);
+}
+
+/// `l` / Enter expand the group in place and `h` collapses it — from the
+/// group row or from one of its members, which hands the selection back to
+/// the group row.
+#[tokio::test]
+async fn hidden_groups_expand_and_collapse_like_the_list() {
+    let (mut app, repo, ids) = app_with_parked_group();
+    draw(&mut app);
+    app.dashboard.selection = Some(parked(repo));
+    press(&mut app, KeyCode::Char('l')).await;
+    let screen = draw(&mut app);
+    assert!(
+        screen.contains("repo/d") && screen.contains("repo/e"),
+        "{screen}"
+    );
+    assert_eq!(
+        &app.selectable[3..],
+        &[
+            parked(repo),
+            SelectionTarget::Workspace(ids[3]),
+            SelectionTarget::Workspace(ids[4]),
+        ],
+        "members follow their group row"
+    );
+
+    press(&mut app, KeyCode::Char('j')).await;
+    assert_eq!(selected_ws(&app), Some(ids[3]));
+    press(&mut app, KeyCode::Char('h')).await;
+    assert_eq!(app.selected_target(), Some(parked(repo)));
+    draw(&mut app);
+    assert_eq!(app.selectable.len(), 4, "collapsed again");
+
+    press(&mut app, KeyCode::Enter).await;
+    draw(&mut app);
+    assert_eq!(app.selectable.len(), 6, "Enter expands too");
+    // `h` on an ordinary row in the focus view still does nothing.
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
+    press(&mut app, KeyCode::Char('h')).await;
+    assert!(app.dashboard.folded.is_empty());
+    assert_eq!(app.dashboard.focused_repo, Some(repo));
+}
+
+/// Clicking a group's row toggles it and selects it.
+#[test]
+fn clicking_a_hidden_group_toggles_it() {
+    let (mut app, repo, _) = app_with_parked_group();
+    draw(&mut app);
+    let (group, r) = app.dashboard_focus_group_rects[0].clone();
+    assert_eq!(
+        focus_group_click_target(&app, &click(r.x, r.y)),
+        Some(group.clone())
+    );
+    toggle_focus_group(&mut app, group.clone());
+    assert!(app.dashboard.expanded_hidden.contains(&group));
+    assert_eq!(app.selected_target(), Some(parked(repo)));
+    toggle_focus_group(&mut app, group.clone());
+    assert!(!app.dashboard.expanded_hidden.contains(&group));
+}
+
+/// The expansion is shared with the list: a group opened in the focus view
+/// is open on the list too, as one piece of state.
+#[tokio::test]
+async fn group_expansion_carries_between_views() {
+    let (mut app, repo, ids) = app_with_parked_group();
+    draw(&mut app);
+    app.dashboard.selection = Some(parked(repo));
+    press(&mut app, KeyCode::Char('l')).await;
+    press(&mut app, KeyCode::Esc).await;
+    draw(&mut app);
+    assert!(app.selectable.contains(&SelectionTarget::Workspace(ids[3])));
+}

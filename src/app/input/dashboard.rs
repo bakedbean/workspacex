@@ -218,6 +218,36 @@ pub(crate) fn repo_name_click_target(
         .map(|(id, _)| *id)
 }
 
+/// The hidden group whose focus-view summary row a click landed on.
+pub(crate) fn focus_group_click_target(
+    app: &App,
+    m: &crossterm::event::MouseEvent,
+) -> Option<(
+    crate::data::store::RepoId,
+    crate::data::hide_rules::HideRule,
+)> {
+    app.dashboard_focus_group_rects
+        .iter()
+        .find(|(_, r)| rect_contains(r, m))
+        .map(|(g, _)| g.clone())
+}
+
+/// Select a hidden group's row and expand or collapse it — a click on it
+/// in the focus view, matching `l` / `h` on the selected row.
+pub(in crate::app::input) fn toggle_focus_group(
+    app: &mut App,
+    group: (
+        crate::data::store::RepoId,
+        crate::data::hide_rules::HideRule,
+    ),
+) {
+    let (repo, rule) = group.clone();
+    app.dashboard.selection = Some(SelectionTarget::HiddenGroup { repo, rule });
+    if !app.dashboard.expanded_hidden.remove(&group) {
+        app.dashboard.expanded_hidden.insert(group);
+    }
+}
+
 /// Select `ws` and attach to it — a click on its row in the focus view.
 pub(in crate::app::input) fn select_and_attach(
     app: &mut App,
@@ -480,9 +510,6 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         (KeyCode::Char('f'), _) => toggle_repo_focus(app),
         (KeyCode::Char('['), _) => cycle_repo_focus(app, false),
         (KeyCode::Char(']'), _) => cycle_repo_focus(app, true),
-        // `h` folds the selected repo in the list; there is no fold to
-        // act on in the focus view.
-        (KeyCode::Char('h'), _) if app.dashboard.focused_repo.is_some() => {}
         (KeyCode::Char('q'), _) => {
             if app.in_flight.is_empty() {
                 app.quit = true;
@@ -537,6 +564,8 @@ pub(in crate::app::input) async fn handle_key_dashboard(
                         app.dashboard.selection = Some(SelectionTarget::HiddenGroup { repo, rule });
                     }
                 }
+                // The focus view has no repo fold for `h` to close.
+                _ if app.dashboard.focused_repo.is_some() => {}
                 _ => set_focused_fold(app, true),
             }
         }

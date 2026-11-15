@@ -89,8 +89,19 @@ pub struct TallRow<'a> {
 pub struct TallTargets {
     /// Each visible row's whole block — a click attaches.
     pub rows: Vec<(WorkspaceId, Rect)>,
+    /// Each visible hidden-group summary line, by its index in the entries
+    /// passed to `render` — a click expands or collapses it.
+    pub groups: Vec<(usize, Rect)>,
     /// Each visible row's PR chip — a click opens the PR.
     pub pr_chips: Vec<(WorkspaceId, Rect)>,
+}
+
+/// One entry in the focus view: a workspace's tall row, or the one-line
+/// summary of a hidden group (`▸ #parked · 3 hidden`), drawn as on the list.
+#[derive(Debug, Clone)]
+pub enum TallEntry<'a> {
+    Row(TallRow<'a>),
+    Group(Line<'static>),
 }
 
 /// Width of the label column on detail lines (`goal  `, `now   `, `git   `).
@@ -235,7 +246,7 @@ pub fn row_lines(
 pub fn render(
     f: &mut Frame,
     area: Rect,
-    rows: &[TallRow<'_>],
+    entries: &[TallEntry<'_>],
     glyphs: &AgentGlyphs,
     selected: Option<usize>,
     scroll: &mut usize,
@@ -244,20 +255,30 @@ pub fn render(
     theme: &Theme,
 ) -> TallTargets {
     let width = area.width as usize;
+    let rows: Vec<TallRow<'_>> = entries
+        .iter()
+        .filter_map(|e| match e {
+            TallEntry::Row(r) => Some(r.clone()),
+            TallEntry::Group(_) => None,
+        })
+        .collect();
     let widths = ColumnWidths {
-        branch: branch_width_for(rows, widths, width),
+        branch: branch_width_for(&rows, widths, width),
         ..widths
     };
-    // Every line of every row, plus each row's `(first line, line count)`.
+    // Every line of every entry, plus each entry's `(first line, line count)`.
     let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(rows.len());
-    for (i, r) in rows.iter().enumerate() {
+    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(entries.len());
+    for (i, e) in entries.iter().enumerate() {
         if i > 0 {
             lines.push(Line::default());
         }
-        let row = row_lines(r, glyphs, widths, tick, theme, width);
-        spans.push((lines.len(), row.len()));
-        lines.extend(row);
+        let entry = match e {
+            TallEntry::Row(r) => row_lines(r, glyphs, widths, tick, theme, width),
+            TallEntry::Group(line) => vec![line.clone()],
+        };
+        spans.push((lines.len(), entry.len()));
+        lines.extend(entry);
     }
     let height = area.height as usize;
     let sel_span = selected.and_then(|i| spans.get(i).copied());
@@ -276,7 +297,13 @@ pub fn render(
             // as the list's highlight does.
             f.buffer_mut().set_style(rect, theme.selected_bg_style());
         }
-        let r = rows[i].row;
+        let r = match &entries[i] {
+            TallEntry::Row(r) => r.row,
+            TallEntry::Group(_) => {
+                targets.groups.push((i, rect));
+                continue;
+            }
+        };
         targets.rows.push((r.workspace_id, rect));
         // The PR chip sits on the row's first line; it is clickable only
         // when that line is on screen.
@@ -814,6 +841,7 @@ mod tests {
         selected: Option<usize>,
         h: u16,
     ) -> (String, TallTargets, usize) {
+        let entries: Vec<TallEntry<'_>> = rows.iter().cloned().map(TallEntry::Row).collect();
         let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, h)).unwrap();
         let mut scroll = 0;
         let mut targets = TallTargets::default();
@@ -821,7 +849,7 @@ mod tests {
             targets = render(
                 f,
                 f.area(),
-                rows,
+                &entries,
                 &AgentGlyphs::default(),
                 selected,
                 &mut scroll,
@@ -899,5 +927,42 @@ mod tests {
         let (_, targets, _) = render_rows(&rows, Some(0), 10);
         let last = targets.rows.last().unwrap().1;
         assert_eq!(last.y + last.height, 5, "nothing below the content");
+    }
+
+    /// Group lines sit between rows, take the selection tint, and report
+    /// their own click targets by entry index.
+    #[test]
+    fn group_entries_paint_and_report_targets() {
+        let a = base_row("first");
+        let detail = WorkspaceDetail::default();
+        let entries = [
+            TallEntry::Row(TallRow {
+                row: &a,
+                detail: &detail,
+            }),
+            TallEntry::Group(Line::from("  ▸ #parked  ·  2 hidden")),
+        ];
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 10)).unwrap();
+        let mut scroll = 0;
+        let mut targets = TallTargets::default();
+        term.draw(|f| {
+            targets = render(
+                f,
+                f.area(),
+                &entries,
+                &AgentGlyphs::default(),
+                Some(1),
+                &mut scroll,
+                ColumnWidths::default(),
+                0,
+                &Theme::wsx(),
+            );
+        })
+        .unwrap();
+        // Row: head + git (lines 0-1), spacer, group on line 3.
+        assert_eq!(targets.rows.len(), 1);
+        assert_eq!(targets.groups, vec![(1, Rect::new(0, 3, 120, 1))]);
+        let buf = term.backend().buffer();
+        assert_eq!(buf[(5, 3)].bg, Theme::wsx().selected_bg, "group tinted");
     }
 }

@@ -59,6 +59,7 @@ impl App {
             dashboard_status_rects: Vec::new(),
             dashboard_repo_name_rects: Vec::new(),
             dashboard_focus_row_rects: Vec::new(),
+            dashboard_focus_group_rects: Vec::new(),
             dashboard_unfocus_rect: None,
             procs_link_rect: None,
             github_remotes: Default::default(),
@@ -888,6 +889,15 @@ pub struct App {
     pub usage_window_option_rects: Vec<ratatui::layout::Rect>,
     /// `(palette index, rect)` per swatch drawn by the open name-color picker,
     /// consumed by `handle_mouse` to apply a clicked color. Cleared each frame;
+    /// Hidden-group rows in the repo focus view — a click expands or
+    /// collapses the group.
+    pub dashboard_focus_group_rects: Vec<(
+        (
+            crate::data::store::RepoId,
+            crate::data::hide_rules::HideRule,
+        ),
+        ratatui::layout::Rect,
+    )>,
     /// only populated while that modal is open.
     pub name_color_swatch_rects: Vec<(u8, ratatui::layout::Rect)>,
     /// Resolved pinned commands from the last draw tick (matches `chip_rects`).

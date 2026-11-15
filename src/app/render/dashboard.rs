@@ -143,6 +143,7 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     app.dashboard_status_rects = click_targets.statuses;
     app.dashboard_repo_name_rects = click_targets.repo_names;
     app.dashboard_focus_row_rects = click_targets.focus_rows;
+    app.dashboard_focus_group_rects = click_targets.focus_groups;
     app.dashboard_unfocus_rect = click_targets.unfocus;
     if let Some(pm_area) = pm_area {
         let digest = app.build_pm_digest();

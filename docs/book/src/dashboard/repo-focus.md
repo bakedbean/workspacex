@@ -38,6 +38,6 @@ The focus view moves like the list: `j` / `k` (or the arrows) select the next or
 
 ## Filters and hiding
 
-The `/` filter and the [status filter](status-indicators.md#filtering-by-status) narrow the view the same way they narrow the list. Workspaces a [hide rule](tags-and-hiding.md#hiding-workspaces) hides are left out; the header counts them as `+N hidden`. A `/` filter shows them again, as it does on the list.
+The `/` filter and the [status filter](status-indicators.md#filtering-by-status) narrow the view the same way they narrow the list. Workspaces a [hide rule](tags-and-hiding.md#hiding-workspaces) hides collapse into a summary row per rule after the other workspaces (`▸ #parked  ·  2 hidden`), as they do under the repo's header on the list. `enter` or `l` on the row, or a click, shows its workspaces under it; `h` on the row or on one of them hides them again. A group left open in one view is open in the other. A `/` filter shows hidden workspaces among the others, as it does on the list.
 
 The focus view lasts until you leave it or quit wsx. Pressing `G` leaves it, since grouping has nothing to act on in a single repo.

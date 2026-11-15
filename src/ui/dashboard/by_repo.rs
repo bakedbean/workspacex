@@ -270,14 +270,11 @@ pub(crate) fn count_spans(counts: StatusCounts, theme: &Theme) -> Vec<Span<'stat
 
 /// The repo focus view's header: `◂ all repos / name  path ─── counts`.
 /// Returns the line and the `(offset, width)` of the `◂ all repos` link,
-/// which leaves the focus view when clicked. `hidden` counts the repo's
-/// workspaces hide rules keep off the grid; they get a dim note so the
-/// grid never silently looks smaller than the repo is.
+/// which leaves the focus view when clicked.
 pub fn breadcrumb_line(
     name: &str,
     path: &str,
     counts: StatusCounts,
-    hidden: usize,
     width: usize,
     theme: &Theme,
 ) -> (Line<'static>, PrLinkSpan) {
@@ -293,13 +290,7 @@ pub fn breadcrumb_line(
         Span::raw("  ".to_string()),
         Span::styled(path.to_string(), theme.dim_style()),
     ];
-    let mut right = count_spans(counts, theme);
-    if hidden > 0 {
-        right.push(Span::styled(
-            format!("  +{hidden} hidden"),
-            theme.dim_style(),
-        ));
-    }
+    let right = count_spans(counts, theme);
     let used_left: usize = spans.iter().map(|s| s.width()).sum();
     let used_right: usize = right.iter().map(|s| s.width()).sum();
     let gap = width.saturating_sub(used_left + used_right);

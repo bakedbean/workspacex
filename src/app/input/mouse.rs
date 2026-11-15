@@ -301,6 +301,10 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
             {
                 // The focus view's `◂ all repos` link, same as Esc / `f`.
                 leave_repo_focus(app);
+            } else if let Some(group) = focus_group_click_target(app, &m) {
+                // A hidden group's row in the focus view expands or
+                // collapses it.
+                toggle_focus_group(app, group);
             } else if let Some(ws_id) = focus_row_click_target(app, &m) {
                 // A click on a row in the focus view selects it and attaches,
                 // same as Enter on the selected row.

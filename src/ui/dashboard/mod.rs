@@ -264,6 +264,9 @@ pub struct ListClickTargets {
     pub repo_names: Vec<(crate::data::store::RepoId, Rect)>,
     /// Each tall row in the focus view — selects and attaches its workspace.
     pub focus_rows: Vec<(crate::data::store::WorkspaceId, Rect)>,
+    /// Each hidden-group summary row in the focus view — expands or
+    /// collapses that group.
+    pub focus_groups: Vec<((RepoId, HideRule), Rect)>,
     /// The focus view's `◂ all repos` link — leaves the focus view.
     pub unfocus: Option<Rect>,
 }
@@ -465,8 +468,63 @@ fn focused_workspaces<'w, 'a>(
         .collect()
 }
 
+/// One entry in the focus view, in display order.
+enum FocusEntry<'w, 'a> {
+    Workspace(&'w WorkspaceItem<'a>),
+    /// A hide rule's summary row, with its rows ordered for display.
+    Group(HiddenGroupView),
+}
+
+/// The focus view's entries: the repo's shown workspaces, then each hidden
+/// group's summary row followed by its workspaces when expanded — the same
+/// sequence the by-repo list draws under the repo's header. Shared by the
+/// renderer and `visible_targets` so the drawn order and nav order agree.
+fn focus_entries<'w, 'a>(
+    inputs: &'w DashboardInputs<'a>,
+    state: &DashboardState,
+    repo: &Repo,
+) -> Vec<FocusEntry<'w, 'a>> {
+    let mut out: Vec<FocusEntry<'w, 'a>> = focused_workspaces(inputs, state, repo.id)
+        .into_iter()
+        .map(FocusEntry::Workspace)
+        .collect();
+    let by_id: HashMap<crate::data::store::WorkspaceId, &'w WorkspaceItem<'a>> = inputs
+        .workspaces
+        .iter()
+        .filter(|w| w.repo.id == repo.id)
+        .map(|w| (w.workspace_id, w))
+        .collect();
+    for (rule, rows) in hidden_groups(repo, &inputs.workspaces, RowFilter::of(state)) {
+        let view = hidden_group_view(repo.id, rule, &rows, state);
+        let members: Vec<&'w WorkspaceItem<'a>> = if view.expanded {
+            view.workspaces
+                .iter()
+                .filter_map(|r| by_id.get(&r.workspace_id).copied())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        out.push(FocusEntry::Group(view));
+        out.extend(members.into_iter().map(FocusEntry::Workspace));
+    }
+    out
+}
+
+impl FocusEntry<'_, '_> {
+    fn target(&self, repo: RepoId) -> SelectionTarget {
+        match self {
+            FocusEntry::Workspace(w) => SelectionTarget::Workspace(w.workspace_id),
+            FocusEntry::Group(g) => SelectionTarget::HiddenGroup {
+                repo,
+                rule: g.rule.clone(),
+            },
+        }
+    }
+}
+
 /// Draw the repo focus view into `area`: the breadcrumb, a spacer, then the
-/// repo's workspaces as tall rows (or an empty-state line).
+/// repo's workspaces as tall rows and its hidden groups as summary rows (or
+/// an empty-state line).
 #[allow(clippy::too_many_arguments)]
 fn render_focus(
     f: &mut Frame,
@@ -486,17 +544,17 @@ fn render_focus(
             Constraint::Min(0),    // rows
         ])
         .split(area);
-    let shown = focused_workspaces(inputs, state, repo.id);
-    let hidden = hidden_groups(repo, &inputs.workspaces, RowFilter::of(state))
-        .iter()
-        .map(|(_, rows)| rows.len())
-        .sum();
-    let counts = StatusCounts::from_iter(shown.iter().map(|w| w.status));
+    let entries = focus_entries(inputs, state, repo);
+    // The header counts what shows normally, as the list's repo header does.
+    let counts = StatusCounts::from_iter(
+        focused_workspaces(inputs, state, repo.id)
+            .iter()
+            .map(|w| w.status),
+    );
     let (crumb, (dx, w)) = by_repo::breadcrumb_line(
         &repo.name,
         &repo.path.to_string_lossy(),
         counts,
-        hidden,
         chunks[0].width as usize,
         theme,
     );
@@ -508,7 +566,7 @@ fn render_focus(
         height: 1,
     });
 
-    if shown.is_empty() {
+    if entries.is_empty() {
         let msg = if RowFilter::of(state).is_active() {
             "(no matching workspaces)"
         } else {
@@ -523,32 +581,44 @@ fn render_focus(
             ..Default::default()
         };
     }
+    let selection = state.selection.clone();
+    let selected = entries
+        .iter()
+        .position(|e| Some(e.target(repo.id)) == selection);
     // Mark the selected row the way the list does, so the row composer
     // paints the thicker gutter.
-    let rows: Vec<RowInputs> = shown
+    let rows: Vec<Option<RowInputs>> = entries
         .iter()
-        .map(|w| {
-            let mut row = w.row.clone();
-            row.selected = state.selection == Some(SelectionTarget::Workspace(w.workspace_id));
-            row
+        .map(|e| match e {
+            FocusEntry::Workspace(w) => {
+                let mut row = w.row.clone();
+                row.selected = selection == Some(SelectionTarget::Workspace(w.workspace_id));
+                Some(row)
+            }
+            FocusEntry::Group(_) => None,
         })
         .collect();
-    let selected = rows.iter().position(|r| r.selected);
     let widths = inputs
         .column_widths
-        .with_agent(derived_agent_width(rows.iter()));
-    let tall_rows: Vec<tall::TallRow<'_>> = rows
+        .with_agent(derived_agent_width(rows.iter().flatten()));
+    let tall_entries: Vec<tall::TallEntry<'_>> = entries
         .iter()
-        .zip(&shown)
-        .map(|(row, w)| tall::TallRow {
-            row,
-            detail: &w.detail,
+        .zip(&rows)
+        .map(|(e, row)| match (e, row) {
+            (FocusEntry::Workspace(w), Some(row)) => tall::TallEntry::Row(tall::TallRow {
+                row,
+                detail: &w.detail,
+            }),
+            (FocusEntry::Group(g), _) => {
+                tall::TallEntry::Group(hidden::hidden_group_line(g, None, inputs.nerd_fonts, theme))
+            }
+            (FocusEntry::Workspace(_), None) => unreachable!("rows mirror entries"),
         })
         .collect();
     let targets = tall::render(
         f,
         chunks[2],
-        &tall_rows,
+        &tall_entries,
         glyphs,
         selected,
         &mut state.focus_scroll,
@@ -556,9 +626,18 @@ fn render_focus(
         tick,
         theme,
     );
+    let focus_groups = targets
+        .groups
+        .into_iter()
+        .filter_map(|(i, rect)| match &entries[i] {
+            FocusEntry::Group(g) => Some(((repo.id, g.rule.clone()), rect)),
+            FocusEntry::Workspace(_) => None,
+        })
+        .collect();
     ListClickTargets {
         pr_chips: targets.pr_chips,
         focus_rows: targets.rows,
+        focus_groups,
         unfocus,
         ..Default::default()
     }
@@ -682,9 +761,9 @@ pub fn visible_targets(
     state: &DashboardState,
 ) -> Vec<SelectionTarget> {
     if let Some(repo) = focused_repo(inputs, state) {
-        return focused_workspaces(inputs, state, repo.id)
-            .into_iter()
-            .map(|w| SelectionTarget::Workspace(w.workspace_id))
+        return focus_entries(inputs, state, repo)
+            .iter()
+            .map(|e| e.target(repo.id))
             .collect();
     }
     let filter = RowFilter::of(state);

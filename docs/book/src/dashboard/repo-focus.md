@@ -1,6 +1,6 @@
 # Repo focus view
 
-The focus view shows one repo on the dashboard and gives each of its workspaces several lines instead of one. Nothing is cut short: the branch column widens to fit the longest branch name, and the recap goal and state wrap onto as many lines as they need.
+The focus view shows one repo on the dashboard and gives each of its workspaces several lines instead of one. The recap goal and state wrap onto as many lines as they need, and the branch column widens to fit the longest branch name, up to 80 cells and as far as the terminal leaves room for the status word. On a narrow terminal a very long branch can still be shortened.
 
 ```text
 ◂ all repos / workspacex  ~/src/workspacex  ──────────────────────────  ● 2  ? 1    5 ws
@@ -29,7 +29,7 @@ In the focus view the [detail bar](detail-bar.md) shrinks to its reply row, so t
 ## Opening and closing it
 
 - Press `f` on a repo header, or on any workspace to focus that workspace's repo. Click a repo header's name to do the same.
-- Press `f` again, press `esc`, or click `◂ all repos` to go back to every repo.
+- Press `f` again, press `esc`, or click `◂ all repos` to go back to every repo. While a `/` filter or status filter is set, `esc` clears that first.
 - `[` and `]` move to the previous and next repo in the dashboard's repo order.
 
 ## Moving around

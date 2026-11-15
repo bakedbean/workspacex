@@ -571,22 +571,19 @@ fn fact_lines(
             theme.row_dim_style(),
         )]);
     }
+    // A clean tree says nothing; only uncommitted changes are listed.
     if let Some(g) = detail.git {
-        if g.modified == 0 && g.untracked == 0 {
-            git.push(vec![Span::styled("clean", theme.row_dim_style())]);
-        } else {
-            if g.modified > 0 {
-                git.push(vec![Span::styled(
-                    format!("{} modified", g.modified),
-                    theme.row_dim_style(),
-                )]);
-            }
-            if g.untracked > 0 {
-                git.push(vec![Span::styled(
-                    format!("{} untracked", g.untracked),
-                    theme.row_dim_style(),
-                )]);
-            }
+        if g.modified > 0 {
+            git.push(vec![Span::styled(
+                format!("{} modified", g.modified),
+                theme.row_dim_style(),
+            )]);
+        }
+        if g.untracked > 0 {
+            git.push(vec![Span::styled(
+                format!("{} untracked", g.untracked),
+                theme.row_dim_style(),
+            )]);
         }
     }
     if let Some(d) = row.diff.filter(|d| d.added > 0 || d.removed > 0) {
@@ -856,23 +853,19 @@ fn git_spans(
     if let Some(n) = detail.ahead_of_base {
         spans.push(Span::styled(format!("↑{n} base"), theme.row_dim_style()));
     }
-    if let Some(g) = detail.git {
+    // A clean tree says nothing; only uncommitted changes are listed.
+    if let Some(g) = detail.git.filter(|g| g.modified > 0 || g.untracked > 0) {
         if !spans.is_empty() {
             spans.push(sep());
         }
-        let text = if g.modified == 0 && g.untracked == 0 {
-            "clean".to_string()
-        } else {
-            let mut parts = Vec::new();
-            if g.modified > 0 {
-                parts.push(format!("{} modified", g.modified));
-            }
-            if g.untracked > 0 {
-                parts.push(format!("{} untracked", g.untracked));
-            }
-            parts.join(" ")
-        };
-        spans.push(Span::styled(text, theme.row_dim_style()));
+        let mut parts = Vec::new();
+        if g.modified > 0 {
+            parts.push(format!("{} modified", g.modified));
+        }
+        if g.untracked > 0 {
+            parts.push(format!("{} untracked", g.untracked));
+        }
+        spans.push(Span::styled(parts.join(" "), theme.row_dim_style()));
     }
     if let Some(d) = row.diff.filter(|d| d.added > 0 || d.removed > 0) {
         if !spans.is_empty() {
@@ -1782,5 +1775,26 @@ mod tests {
         assert_ne!(bg(1), alt, "first row plain");
         assert_eq!(bg(2), alt, "second row tinted despite the group between");
         assert_ne!(bg(3), alt, "third row plain");
+    }
+
+    /// A clean working tree adds nothing to the git facts, in either layout.
+    #[test]
+    fn a_clean_tree_is_not_mentioned() {
+        let row = base_row("b");
+        let detail = WorkspaceDetail {
+            git: Some(WorkspaceStatus::default()),
+            ahead_of_base: Some(2),
+            ..Default::default()
+        };
+        let entries = [TallEntry::Row(TallRow {
+            row: &row,
+            detail: &detail,
+        })];
+        for width in [STACKED, 160] {
+            let (lines, _, _) = split_render(&entries, width, 12);
+            let all = lines.join("\n");
+            assert!(all.contains("↑2 base"), "{all}");
+            assert!(!all.contains("clean"), "width {width}:\n{all}");
+        }
     }
 }

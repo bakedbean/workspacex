@@ -16,7 +16,7 @@ The focus view shows one repo on the dashboard and gives each of its workspaces 
 ▎▎ ? bakedbean/detail-bar-scroll        prompt  The detail bar containers should scroll
  ▎   ⏺ #459 draft                   14m         independently
  ▎   └ asking  ● 1p                     goal    Scroll detail-bar containers independently
- ▎   ↑2 base · clean · +61 −8           now     keep scroll offsets per workspace or global?
+ ▎   ↑2 base · +61 −8                   now     keep scroll offsets per workspace or global?
  ▎    claude
 ```
 
@@ -25,7 +25,7 @@ The left column, top to bottom:
 - **The branch**, after the status glyph (a spinner while the agent works). A branch longer than the column wraps onto the next line; it is never shortened.
 - **The PR chip** and how long ago the workspace was active.
 - **The status word**, as on the dashboard row, with the running-process count and any badge.
-- **Git**: commits ahead of the base branch, uncommitted changes, and the diff.
+- **Git**: commits ahead of the base branch, uncommitted changes (nothing is shown for a clean tree), and the diff.
 - **Agents**: every agent in the workspace, named with its icon from the theme's [`[agent_bar.symbols]`](../configuration/themes.md) table, or the `▎` bar when the theme has none.
 - **Tags**.
 

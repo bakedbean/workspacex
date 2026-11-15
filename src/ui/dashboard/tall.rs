@@ -16,7 +16,7 @@ use crate::git::WorkspaceStatus;
 use crate::pty::session::AgentKind;
 use crate::ui::dashboard::column_content::{ColumnBody, ColumnEmphasis, RowColumn};
 use crate::ui::dashboard::row::{self, ColumnWidths, RowInputs};
-use crate::ui::text::{display_width, fit_tags, truncate};
+use crate::ui::text::{display_width, fit_tags, truncate, truncate_words};
 use crate::ui::theme::Theme;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -96,6 +96,9 @@ pub struct TallTargets {
 /// Width of the label column on detail lines (`goal  `, `now   `, `git   `).
 const LABEL_WIDTH: usize = 6;
 
+/// Most lines the no-recap fallback text may wrap onto.
+const FALLBACK_MAX_LINES: usize = 2;
+
 /// Narrowest the first line's message column may get when the branch
 /// column widens, so the status token still shows.
 const MIN_MESSAGE_WIDTH: usize = 10;
@@ -162,8 +165,8 @@ pub fn row_lines(
             Span::styled(format!("{label:<LABEL_WIDTH$}"), theme.dim_style()),
         ]
     };
-    let mut push_wrapped = |label: &str, text: &str, style: Style| {
-        for (i, l) in wrap(text, text_width).into_iter().enumerate() {
+    let mut push_wrapped = |label: &str, text: &str, style: Style, max: usize| {
+        for (i, l) in wrap_capped(text, text_width, max).into_iter().enumerate() {
             let mut spans = gutter(if i == 0 { label } else { "" });
             spans.push(Span::styled(l, style));
             lines.push(Line::from(spans));
@@ -174,7 +177,7 @@ pub fn row_lines(
         Some(r) => {
             let goal = field(&r.goal, &r.goal_short);
             if !goal.is_empty() {
-                push_wrapped("goal", &goal, Style::default());
+                push_wrapped("goal", &goal, Style::default(), usize::MAX);
             }
             let state = field(&r.state, &r.state_short);
             let next = field(&r.next, &r.next_short);
@@ -185,12 +188,14 @@ pub fn row_lines(
                 (true, true) => String::new(),
             };
             if !now.is_empty() {
-                push_wrapped("now", &now, theme.row_dim_style());
+                push_wrapped("now", &now, theme.row_dim_style(), usize::MAX);
             }
         }
         None => {
-            // Without a recap, the fallback text the dashboard row clips
-            // gets its full length here.
+            // Without a recap, the row's fallback text (often the agent's
+            // last message, which can run to paragraphs) gets a little more
+            // room than the dashboard row gives it, but stays capped so one
+            // chatty workspace can't push its siblings off screen.
             if let Some(ColumnBody::Fallback { text, emphasis }) =
                 row.column.as_ref().map(|c| &c.body)
             {
@@ -199,7 +204,7 @@ pub fn row_lines(
                     ColumnEmphasis::Status => theme.status_style(row.status),
                     ColumnEmphasis::Warn => theme.warn_style(),
                 };
-                push_wrapped("now", text, style);
+                push_wrapped("now", text, style, FALLBACK_MAX_LINES);
             }
         }
     }
@@ -397,6 +402,18 @@ fn clip_spans(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
     Line::from(out)
 }
 
+/// [`wrap`], keeping at most `max` lines; when text is cut, the last kept
+/// line ends with `…` at a word boundary.
+fn wrap_capped(text: &str, width: usize, max: usize) -> Vec<String> {
+    let mut lines = wrap(text, width);
+    if lines.len() > max && max > 0 {
+        let rest = lines.split_off(max).join(" ");
+        let last = lines.pop().unwrap_or_default();
+        lines.push(truncate_words(&format!("{last} {rest}"), width.max(1)));
+    }
+    lines
+}
+
 /// Greedy word wrap into lines of at most `width` cells. Never drops text:
 /// a word wider than the line is broken across lines.
 fn wrap(text: &str, width: usize) -> Vec<String> {
@@ -471,6 +488,62 @@ mod tests {
 
     fn text(line: &Line<'_>) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn wrap_capped_ellipsizes_past_the_limit() {
+        let text = "one two three four five six seven eight nine ten";
+        assert_eq!(wrap_capped(text, 100, 2), vec![text], "fits: untouched");
+        let capped = wrap_capped(text, 10, 2);
+        assert_eq!(capped.len(), 2);
+        assert!(capped[1].ends_with('…'), "{capped:?}");
+        assert!(capped.iter().all(|l| display_width(l) <= 10), "{capped:?}");
+    }
+
+    /// A long last message without a recap stays at two lines; a long
+    /// recap goal still wraps in full.
+    #[test]
+    fn fallback_text_is_capped_but_recap_is_not() {
+        let long = "word ".repeat(200);
+        let mut row = base_row("b");
+        row.column = Some(RowColumn {
+            token: "idle".into(),
+            reported: false,
+            body: ColumnBody::Fallback {
+                text: long.clone(),
+                emphasis: ColumnEmphasis::Dim,
+            },
+        });
+        let detail = WorkspaceDetail::default();
+        let tall = TallRow {
+            row: &row,
+            detail: &detail,
+        };
+        let draw = |t: &TallRow<'_>| {
+            row_lines(
+                t,
+                &AgentGlyphs::default(),
+                ColumnWidths::default(),
+                0,
+                &Theme::wsx(),
+                120,
+            )
+        };
+        // Head, two fallback lines, git.
+        assert_eq!(draw(&tall).len(), 4);
+
+        let detail = WorkspaceDetail {
+            recap: Some(WorkspaceRecap {
+                goal: Some(long),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let tall = TallRow {
+            row: &row,
+            detail: &detail,
+        };
+        assert!(draw(&tall).len() > 4, "recap goal not capped");
     }
 
     #[test]

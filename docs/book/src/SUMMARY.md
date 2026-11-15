@@ -7,6 +7,7 @@
   - [Quick start](getting-started/quick-start.md)
 - [Dashboard](dashboard/index.md)
   - [Keybindings](dashboard/keybindings.md)
+  - [Repo focus view](dashboard/repo-focus.md)
   - [Status indicators](dashboard/status-indicators.md)
   - [Detail bar](dashboard/detail-bar.md)
   - [Project manager digest](dashboard/project-manager-digest.md)

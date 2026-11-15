@@ -19,6 +19,9 @@ Hold `Shift` while you drag. Most terminals (Alacritty, Kitty, WezTerm, iTerm2, 
 | A status in the header tally (`? 2 question`) | [Filters the list](status-indicators.md#filtering-by-status) to that status; click it again, or press `esc`, to clear |
 | A row's PR chip (`⏺ #123 open`) | Opens the PR in your browser                          |
 | A repo header's PR link      | Opens your open PRs in that repo on GitHub               |
+| A repo header's name         | Shows only that repo, in the [focus view](repo-focus.md) |
+| A workspace in the focus view | Attaches to it                                          |
+| `◂ all repos` in the focus view | Goes back to every repo                               |
 | A row's process count (`● 2p`) | Opens the [process list](process-tracking.md)          |
 | A pinned-command chip        | Sends that [pinned command](../attached-view/pinned-commands.md) |
 | A prompt-tag chip            | Opens that [prompt tag](../attached-view/prompt-tags.md)'s body box |

@@ -232,6 +232,48 @@ pub(super) mod tests {
     }
 
     #[tokio::test]
+    async fn branch_commits_lists_commits_ahead_newest_first() {
+        let dir = init_repo();
+        let git = |args: &[&str]| {
+            assert!(
+                StdCmd::new("git")
+                    .current_dir(dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        git(&["checkout", "-q", "-b", "feature"]);
+        assert_eq!(branch_commits(dir.path(), "main").await, Some(vec![]));
+        git(&["commit", "--allow-empty", "-q", "-m", "first change"]);
+        git(&["commit", "--allow-empty", "-q", "-m", "second\tchange"]);
+        let commits = branch_commits(dir.path(), "main").await.unwrap();
+        let subjects: Vec<&str> = commits.iter().map(|c| c.subject.as_str()).collect();
+        assert_eq!(subjects, vec!["second\tchange", "first change"]);
+        assert!(commits.iter().all(|c| c.hash.len() >= 7));
+        assert_eq!(branch_commits(dir.path(), "no-such-ref").await, None);
+    }
+
+    #[test]
+    fn parse_branch_commits_skips_malformed_lines() {
+        let parsed = parse_branch_commits("abc1234\tfix it\ngarbage\ndef5678\t\n");
+        assert_eq!(
+            parsed,
+            vec![
+                BranchCommit {
+                    hash: "abc1234".into(),
+                    subject: "fix it".into()
+                },
+                BranchCommit {
+                    hash: "def5678".into(),
+                    subject: String::new()
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn commits_ahead_of_counts_zero_line_commits() {
         let dir = init_repo();
         let git = |args: &[&str]| {
@@ -898,6 +940,54 @@ pub async fn commits_ahead_of(worktree: &Path, base: &str) -> Option<u32> {
         .trim()
         .parse()
         .ok()
+}
+
+/// One commit on a workspace branch, as the focus view's side panel lists
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchCommit {
+    /// Abbreviated hash, as `git log --format=%h` prints it.
+    pub hash: String,
+    pub subject: String,
+}
+
+/// Most commits `branch_commits` returns: a long-running branch can carry
+/// hundreds, and the panel is for a glance, not an audit.
+pub const BRANCH_COMMITS_LIMIT: usize = 200;
+
+/// The commits on HEAD not on `base`, newest first, up to
+/// `BRANCH_COMMITS_LIMIT`. `None` on any git failure.
+pub async fn branch_commits(worktree: &Path, base: &str) -> Option<Vec<BranchCommit>> {
+    let range = format!("{base}..HEAD");
+    let limit = format!("-n{BRANCH_COMMITS_LIMIT}");
+    let out = run(
+        worktree,
+        &[
+            "log",
+            "--no-color",
+            "--format=%h%x09%s",
+            &limit,
+            &range,
+            "--",
+        ],
+    )
+    .await
+    .ok()?;
+    Some(parse_branch_commits(&out))
+}
+
+/// Parse `git log --format=%h%x09%s` output; lines without a tab are
+/// skipped.
+fn parse_branch_commits(out: &str) -> Vec<BranchCommit> {
+    out.lines()
+        .filter_map(|l| {
+            let (hash, subject) = l.split_once('\t')?;
+            Some(BranchCommit {
+                hash: hash.trim().to_string(),
+                subject: subject.trim().to_string(),
+            })
+        })
+        .collect()
 }
 
 /// Compute line-count diff stats for a worktree against `base`.

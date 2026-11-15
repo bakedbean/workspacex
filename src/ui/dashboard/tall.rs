@@ -1,11 +1,19 @@
 //! Tall rows for the repo focus view: one repo's workspaces as a list in
 //! which each workspace spans several lines.
 //!
-//! The first line is the ordinary dashboard row, with the branch column
-//! widened to fit the longest branch so no name truncates. Under it, the
-//! recap goal and state → next wrap in full, and a last line carries the
-//! git counts and the agent roster. Nothing on a tall row truncates except
-//! the one-line columns the dashboard row already owns.
+//! On a wide enough terminal each row splits in two: a narrow column of
+//! facts on the left (branch, PR and age, status, git counts, agents, tags)
+//! and the prose on the right (initial prompt, recap goal and state → next,
+//! or the agent's last message), wrapped at a comfortable reading width
+//! rather than across the whole screen. Alternate rows take a background
+//! tint so each workspace reads as one block.
+//!
+//! Narrower terminals fall back to a stacked row: the ordinary dashboard
+//! row with its branch column widened, then the prose lines, then a line of
+//! git counts and agents.
+//!
+//! Rows scroll by line rather than by item, so a workspace taller than the
+//! screen still shows from its first line.
 //!
 //! Pure layout and painting. The caller picks the workspaces and their
 //! order (see `focused_workspaces` in the parent module) and owns the
@@ -119,6 +127,17 @@ const PROMPT_MAX_LINES: usize = 2;
 /// Most lines the no-recap fallback text may wrap onto.
 const FALLBACK_MAX_LINES: usize = 2;
 
+/// Narrowest terminal that gets the two-column layout.
+pub const SPLIT_MIN_WIDTH: usize = 96;
+/// Bounds on the facts column's width (after the agent strip and gutter).
+const LEFT_MIN: usize = 30;
+const LEFT_MAX: usize = 44;
+/// Blank cells between the facts and the prose.
+const COLUMN_GAP: usize = 3;
+/// Widest the prose column gets, label included: lines much past ~80
+/// characters of text get tiring to read.
+const PROSE_MAX: usize = 92;
+
 /// Narrowest the first line's message column may get when the branch
 /// column widens, so the status token still shows.
 const MIN_MESSAGE_WIDTH: usize = 10;
@@ -198,67 +217,8 @@ pub fn row_lines(
         }
     };
 
-    // What the workspace was started for, above what it is doing now.
-    let prompt = detail
-        .first_prompt
-        .as_deref()
-        .map(str::trim)
-        .filter(|p| !p.is_empty());
-    if let Some(prompt) = prompt {
-        push_wrapped(
-            "prompt",
-            prompt,
-            theme
-                .row_dim_style()
-                .add_modifier(ratatui::style::Modifier::ITALIC),
-            PROMPT_MAX_LINES,
-        );
-    }
-
-    match recap {
-        Some(r) => {
-            let goal = field(&r.goal, &r.goal_short);
-            if !goal.is_empty() {
-                push_wrapped("goal", &goal, Style::default(), usize::MAX);
-            }
-            let state = field(&r.state, &r.state_short);
-            let next = field(&r.next, &r.next_short);
-            let now = match (state.is_empty(), next.is_empty()) {
-                (false, false) => format!("{state} → {next}"),
-                (false, true) => state,
-                (true, false) => format!("→ {next}"),
-                (true, true) => String::new(),
-            };
-            if !now.is_empty() {
-                push_wrapped("now", &now, theme.row_dim_style(), usize::MAX);
-            }
-        }
-        None => {
-            // Without a recap, the row's fallback text (often the agent's
-            // last message, which can run to paragraphs) moves here from the
-            // first line, gets a little more room, and stays capped so one
-            // chatty workspace can't push its siblings off screen. It's
-            // labelled `last`, not `now`: it's what the agent last said, not
-            // a state it reported.
-            //
-            // An idle (or finished, before its first reply) workspace's
-            // fallback *is* the initial prompt; the `prompt` line above
-            // already shows it, so it isn't repeated as if the agent said it.
-            let is_prompt = |text: &str| {
-                prompt.is_some_and(|p| p.split_whitespace().eq(text.split_whitespace()))
-            };
-            if let Some(ColumnBody::Fallback { text, emphasis }) =
-                row.column.as_ref().map(|c| &c.body)
-                && !is_prompt(text)
-            {
-                let style = match emphasis {
-                    ColumnEmphasis::Dim => theme.row_dim_style(),
-                    ColumnEmphasis::Status => theme.status_style(row.status),
-                    ColumnEmphasis::Warn => theme.warn_style(),
-                };
-                push_wrapped("last", text, style, FALLBACK_MAX_LINES);
-            }
-        }
+    for item in prose_items(row, detail, theme) {
+        push_wrapped(item.label, &item.text, item.style, item.max);
     }
 
     let mut spans = gutter("git");
@@ -272,6 +232,431 @@ pub fn row_lines(
     }
     lines.push(line);
     lines
+}
+
+/// One labelled run of prose on a tall row, before wrapping.
+struct Prose {
+    label: &'static str,
+    text: String,
+    style: Style,
+    /// Most lines it may wrap onto.
+    max: usize,
+}
+
+/// The prose a row shows, in order: the initial prompt, then the recap's
+/// goal and state → next, or without a recap the row's fallback text.
+fn prose_items(row: &RowInputs, detail: &WorkspaceDetail, theme: &Theme) -> Vec<Prose> {
+    let mut out = Vec::new();
+    let recap = detail.recap.as_ref().filter(|r| has_recap(r));
+    // What the workspace was started for, above what it is doing now.
+    let prompt = detail
+        .first_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
+    if let Some(prompt) = prompt {
+        out.push(Prose {
+            label: "prompt",
+            text: prompt.to_string(),
+            style: theme
+                .row_dim_style()
+                .add_modifier(ratatui::style::Modifier::ITALIC),
+            max: PROMPT_MAX_LINES,
+        });
+    }
+    match recap {
+        Some(r) => {
+            let goal = field(&r.goal, &r.goal_short);
+            if !goal.is_empty() {
+                out.push(Prose {
+                    label: "goal",
+                    text: goal,
+                    style: Style::default(),
+                    max: usize::MAX,
+                });
+            }
+            let state = field(&r.state, &r.state_short);
+            let next = field(&r.next, &r.next_short);
+            let now = match (state.is_empty(), next.is_empty()) {
+                (false, false) => format!("{state} → {next}"),
+                (false, true) => state,
+                (true, false) => format!("→ {next}"),
+                (true, true) => String::new(),
+            };
+            if !now.is_empty() {
+                out.push(Prose {
+                    label: "now",
+                    text: now,
+                    style: theme.row_dim_style(),
+                    max: usize::MAX,
+                });
+            }
+        }
+        None => {
+            // Without a recap, the row's fallback text (often the agent's
+            // last message, which can run to paragraphs) moves here from the
+            // first line, gets a little more room, and stays capped so one
+            // chatty workspace can't push its siblings off screen. It's
+            // labelled `last`, not `now`: it's what the agent last said, not
+            // a state it reported.
+            //
+            // An idle (or finished, before its first reply) workspace's
+            // fallback *is* the initial prompt; the `prompt` line already
+            // shows it, so it isn't repeated as if the agent said it.
+            let is_prompt = |text: &str| {
+                prompt.is_some_and(|p| p.split_whitespace().eq(text.split_whitespace()))
+            };
+            if let Some(ColumnBody::Fallback { text, emphasis }) =
+                row.column.as_ref().map(|c| &c.body)
+                && !is_prompt(text)
+            {
+                let style = match emphasis {
+                    ColumnEmphasis::Dim => theme.row_dim_style(),
+                    ColumnEmphasis::Status => theme.status_style(row.status),
+                    ColumnEmphasis::Warn => theme.warn_style(),
+                };
+                out.push(Prose {
+                    label: "last",
+                    text: text.clone(),
+                    style,
+                    max: FALLBACK_MAX_LINES,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// How rows are laid out at a given width; decided once per frame so every
+/// row's columns line up.
+#[derive(Debug, Clone, Copy)]
+pub enum Geometry {
+    /// The dashboard row, then prose and git lines under it.
+    Stacked { widths: ColumnWidths },
+    /// Facts in a `left`-cell column, prose in a `prose`-cell column.
+    Split {
+        widths: ColumnWidths,
+        left: usize,
+        prose: usize,
+    },
+}
+
+/// Pick the layout for `rows` at `width`: split when the terminal is wide
+/// enough, with the facts column sized to the longest branch within its
+/// bounds; stacked otherwise, with the branch column widened.
+pub fn geometry(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -> Geometry {
+    if width < SPLIT_MIN_WIDTH {
+        return Geometry::Stacked {
+            widths: ColumnWidths {
+                branch: branch_width_for(rows, widths, width),
+                ..widths
+            },
+        };
+    }
+    // The facts sit two cells in from the status glyph; a branch longer
+    // than the column wraps rather than truncating.
+    let longest = rows
+        .iter()
+        .map(|r| 2 + display_width(&r.row.branch))
+        .max()
+        .unwrap_or(0);
+    let left = longest.clamp(LEFT_MIN, LEFT_MAX);
+    let prefix = widths.agent + 2;
+    let prose = width
+        .saturating_sub(prefix + left + COLUMN_GAP)
+        .min(PROSE_MAX);
+    Geometry::Split {
+        widths,
+        left,
+        prose,
+    }
+}
+
+/// A row's lines plus where its PR chip landed: `(line, x offset, width)`.
+pub struct RowLayout {
+    pub lines: Vec<Line<'static>>,
+    pub pr_hit: Option<(usize, u16, u16)>,
+}
+
+/// Lay out one row under `geo`.
+pub fn row_layout(
+    tall: &TallRow<'_>,
+    glyphs: &AgentGlyphs,
+    geo: Geometry,
+    tick: u32,
+    theme: &Theme,
+    width: usize,
+) -> RowLayout {
+    match geo {
+        Geometry::Stacked { widths } => RowLayout {
+            lines: row_lines(tall, glyphs, widths, tick, theme, width),
+            pr_hit: row::pr_chip_hit_span(tall.row, widths).map(|(dx, w)| (0, dx, w)),
+        },
+        Geometry::Split {
+            widths,
+            left,
+            prose,
+        } => split_layout(tall, glyphs, widths, left, prose, tick, theme),
+    }
+}
+
+/// The two-column row: facts on the left, prose on the right, each line
+/// led by the agent strip (first line) or the status gutter.
+fn split_layout(
+    tall: &TallRow<'_>,
+    glyphs: &AgentGlyphs,
+    widths: ColumnWidths,
+    left: usize,
+    prose: usize,
+    tick: u32,
+    theme: &Theme,
+) -> RowLayout {
+    let row = tall.row;
+    let (facts, pr_line) = fact_lines(row, tall.detail, glyphs, left, tick, theme);
+
+    let text_width = prose.saturating_sub(LABEL_WIDTH).max(8);
+    let mut prose_lines: Vec<Vec<Span<'static>>> = Vec::new();
+    for item in prose_items(row, tall.detail, theme) {
+        for (i, l) in wrap_capped(&item.text, text_width, item.max)
+            .into_iter()
+            .enumerate()
+        {
+            let label = if i == 0 { item.label } else { "" };
+            prose_lines.push(vec![
+                Span::styled(format!("{label:<LABEL_WIDTH$}"), theme.dim_style()),
+                Span::styled(l, item.style),
+            ]);
+        }
+    }
+
+    let gutter = Span::styled(
+        if row.selected { "▍" } else { "▎" },
+        theme.status_style(row.status),
+    );
+    let n = facts.len().max(prose_lines.len());
+    let mut lines = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut spans: Vec<Span<'static>> = if i == 0 {
+            row::agent_strip_spans(row, widths, tick, theme)
+        } else {
+            vec![Span::raw(" ".repeat(widths.agent))]
+        };
+        spans.push(gutter.clone());
+        spans.push(Span::raw(" "));
+        let fact = facts.get(i).cloned().unwrap_or_default();
+        let used: usize = fact.iter().map(|s| s.width()).sum();
+        spans.extend(fact);
+        if let Some(p) = prose_lines.get(i) {
+            spans.push(Span::raw(
+                " ".repeat(left.saturating_sub(used) + COLUMN_GAP),
+            ));
+            spans.extend(p.iter().cloned());
+        }
+        lines.push(Line::from(spans));
+    }
+    let pr_hit = pr_line.map(|(line, dx, w)| (line, (widths.agent + 2 + dx) as u16, w));
+    RowLayout { lines, pr_hit }
+}
+
+/// A row's fact lines and where its PR chip sits: `(line, x offset within
+/// the column, width)`.
+type Facts = (Vec<Vec<Span<'static>>>, Option<(usize, usize, u16)>);
+
+/// The facts column, each line at most `left` cells: the status glyph and
+/// branch (wrapping, never truncated), then PR chip and age, status word
+/// and process count, git counts, agents, and tags.
+fn fact_lines(
+    row: &RowInputs,
+    detail: &WorkspaceDetail,
+    glyphs: &AgentGlyphs,
+    left: usize,
+    tick: u32,
+    theme: &Theme,
+) -> Facts {
+    use crate::ui::dashboard::status::Status;
+    let inner = left.saturating_sub(2).max(1);
+    let indent = || Span::raw("  ");
+    let mut out: Vec<Vec<Span<'static>>> = Vec::new();
+
+    // Glyph and branch.
+    let (glyph, glyph_style) = if row.status.is_live() {
+        (
+            crate::ui::dashboard::spinner::frame(tick),
+            theme.agent_style(row.agent),
+        )
+    } else {
+        (row.status.glyph(), theme.status_style(row.status))
+    };
+    let mut name_style = Style::default().add_modifier(ratatui::style::Modifier::BOLD);
+    if row.yolo {
+        name_style = name_style.fg(theme.warn);
+    }
+    if let Some(c) = row.name_color {
+        name_style = name_style.fg(c);
+    }
+    for (i, part) in wrap(&row.branch, inner).into_iter().enumerate() {
+        let lead = if i == 0 {
+            Span::styled(format!("{glyph} "), glyph_style)
+        } else {
+            indent()
+        };
+        out.push(vec![lead, Span::styled(part, name_style)]);
+    }
+
+    // PR chip and age, the age flush with the column's right edge.
+    let age = crate::ui::dashboard::column_content::format_ago_short(row.ago_secs);
+    let room = inner.saturating_sub(display_width(&age) + 1);
+    let chip = row.lifecycle.and_then(|lc| {
+        crate::ui::theme::pr_chip(lc, row.pr_number, row.review, row.unresolved, room)
+    });
+    let mut pr_hit = None;
+    let mut line = vec![indent()];
+    match chip {
+        Some(c) => {
+            let w = display_width(&c.text()).min(room);
+            pr_hit = Some((out.len(), 2, w as u16));
+            line.extend(row::pr_chip_spans(
+                row.lifecycle,
+                row.pr_number,
+                row.review,
+                row.unresolved,
+                w,
+                theme,
+            ));
+        }
+        None => line.push(Span::styled("no PR", theme.dim_style())),
+    }
+    let used: usize = line.iter().map(|s| s.width()).sum();
+    line.push(Span::raw(
+        " ".repeat(left.saturating_sub(used + display_width(&age))),
+    ));
+    line.push(Span::styled(age, theme.row_dim_style()));
+    out.push(line);
+
+    // Status word, processes, and badges.
+    let mut status: Vec<Span<'static>> = Vec::new();
+    if let Some(col) = row.column.as_ref() {
+        let prefix = if col.reported { "▸ " } else { "└ " };
+        let token_style = if row.status == Status::Stalled && !col.reported {
+            theme.warn_style()
+        } else {
+            theme.status_style(row.status)
+        };
+        status.push(Span::styled(prefix, theme.status_style(row.status)));
+        status.push(Span::styled(col.token.clone(), token_style));
+    }
+    if row.procs > 0 {
+        status.push(Span::styled(
+            format!("  ● {}p", row.procs),
+            theme.status_style(Status::Thinking),
+        ));
+    }
+    if let Some(b) = row.badge {
+        status.push(Span::styled(b.glyph(tick), b.style(theme)));
+    }
+    if row.undelivered_mail {
+        status.push(Span::styled(" ✉!", theme.err_style()));
+    }
+    if !status.is_empty() {
+        let mut l = vec![indent()];
+        l.extend(status);
+        out.push(l);
+    }
+
+    // Git counts, packed onto as few lines as fit.
+    let mut git: Vec<Vec<Span<'static>>> = Vec::new();
+    if let Some(n) = detail.ahead_of_base {
+        git.push(vec![Span::styled(
+            format!("↑{n} base"),
+            theme.row_dim_style(),
+        )]);
+    }
+    if let Some(g) = detail.git {
+        if g.modified == 0 && g.untracked == 0 {
+            git.push(vec![Span::styled("clean", theme.row_dim_style())]);
+        } else {
+            if g.modified > 0 {
+                git.push(vec![Span::styled(
+                    format!("{} modified", g.modified),
+                    theme.row_dim_style(),
+                )]);
+            }
+            if g.untracked > 0 {
+                git.push(vec![Span::styled(
+                    format!("{} untracked", g.untracked),
+                    theme.row_dim_style(),
+                )]);
+            }
+        }
+    }
+    if let Some(d) = row.diff.filter(|d| d.added > 0 || d.removed > 0) {
+        git.push(vec![
+            Span::styled(format!("+{}", d.added), theme.ok_style()),
+            Span::raw(" "),
+            Span::styled(format!("−{}", d.removed), theme.err_style()),
+        ]);
+    }
+    let sep = Span::styled(" · ", theme.dim_style());
+    for l in pack(git, &sep, inner) {
+        let mut line = vec![indent()];
+        line.extend(l);
+        out.push(line);
+    }
+
+    // Agents, primary first, each led by its icon.
+    let agents: Vec<Vec<Span<'static>>> = std::iter::once((row.agent, false))
+        .chain(row.peers.iter().map(|p| (p.agent, p.active)))
+        .map(|(kind, active)| {
+            let mut a = Vec::new();
+            if let Some(g) = glyphs.glyph(kind) {
+                a.push(Span::styled(format!("{g} "), theme.agent_style(kind)));
+            }
+            let label_style = if active {
+                theme.agent_style(kind)
+            } else {
+                theme.row_dim_style()
+            };
+            a.push(Span::styled(kind.display_name().to_string(), label_style));
+            a
+        })
+        .collect();
+    for l in pack(agents, &Span::raw("  "), inner) {
+        let mut line = vec![indent()];
+        line.extend(l);
+        out.push(line);
+    }
+
+    let tags = fit_tags(&row.tags, inner);
+    if !tags.is_empty() {
+        out.push(vec![indent(), Span::styled(tags, theme.row_dim_style())]);
+    }
+    (out, pr_hit)
+}
+
+/// Pack `parts` onto lines of at most `width` cells, joined by `sep`; a
+/// part wider than a line gets a line of its own.
+fn pack(
+    parts: Vec<Vec<Span<'static>>>,
+    sep: &Span<'static>,
+    width: usize,
+) -> Vec<Vec<Span<'static>>> {
+    let w = |p: &[Span<'static>]| p.iter().map(|s| s.width()).sum::<usize>();
+    let mut out: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut cur: Vec<Span<'static>> = Vec::new();
+    for part in parts {
+        let pw = w(&part);
+        if !cur.is_empty() && w(&cur) + sep.width() + pw > width {
+            out.push(std::mem::take(&mut cur));
+        }
+        if !cur.is_empty() {
+            cur.push(sep.clone());
+        }
+        cur.extend(part);
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
 }
 
 /// Draw the rows into `area`, scrolled by whole lines so a row taller than
@@ -304,22 +689,25 @@ pub fn render(
             TallEntry::Group(_) => None,
         })
         .collect();
-    let widths = ColumnWidths {
-        branch: branch_width_for(&rows, widths, width),
-        ..widths
-    };
-    // Every line of every entry, plus each entry's `(first line, line count)`.
+    let geo = geometry(&rows, widths, width);
+    // Every line of every entry, plus each entry's `(first line, line
+    // count)` and, for rows, where the PR chip landed.
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut spans: Vec<(usize, usize)> = Vec::with_capacity(entries.len());
+    let mut pr_hits: Vec<Option<(usize, u16, u16)>> = Vec::with_capacity(entries.len());
     for (i, e) in entries.iter().enumerate() {
         if i > 0 {
             lines.push(Line::default());
         }
-        let entry = match e {
-            TallEntry::Row(r) => row_lines(r, glyphs, widths, tick, theme, width),
-            TallEntry::Group(line) => vec![line.clone()],
+        let (entry, pr_hit) = match e {
+            TallEntry::Row(r) => {
+                let l = row_layout(r, glyphs, geo, tick, theme, width);
+                (l.lines, l.pr_hit)
+            }
+            TallEntry::Group(line) => (vec![line.clone()], None),
         };
         spans.push((lines.len(), entry.len()));
+        pr_hits.push(pr_hit);
         lines.extend(entry);
     }
     let height = area.height as usize;
@@ -330,10 +718,23 @@ pub fn render(
     f.render_widget(Paragraph::new(visible), area);
 
     let mut targets = TallTargets::default();
+    // Alternate workspaces take a faint background so each reads as one
+    // block; counted over rows only, so a group line doesn't flip the
+    // pattern.
+    let mut row_ordinal = 0usize;
     for (i, &(top, len)) in spans.iter().enumerate() {
+        let is_row = matches!(entries[i], TallEntry::Row(_));
+        let tinted = is_row && row_ordinal % 2 == 1;
+        if is_row {
+            row_ordinal += 1;
+        }
         let Some(rect) = visible_rect(area, *scroll, top, len) else {
             continue;
         };
+        if tinted {
+            f.buffer_mut()
+                .set_style(rect, Style::default().bg(theme.bg_alt));
+        }
         if Some(i) == selected {
             // Tint only the background so status and agent colors survive,
             // as the list's highlight does.
@@ -347,10 +748,10 @@ pub fn render(
             }
         };
         targets.rows.push((r.workspace_id, rect));
-        // The PR chip sits on the row's first line; it is clickable only
-        // when that line is on screen.
-        if top >= *scroll
-            && let Some((dx, w)) = row::pr_chip_hit_span(r, widths)
+        // The PR chip is clickable only while its line is on screen.
+        if let Some((line, dx, w)) = pr_hits[i]
+            && top + line >= *scroll
+            && top + line < *scroll + height
         {
             let x = area.x.saturating_add(dx);
             if x < area.x.saturating_add(area.width) {
@@ -358,7 +759,7 @@ pub fn render(
                     r.workspace_id,
                     Rect {
                         x,
-                        y: rect.y,
+                        y: area.y + (top + line - *scroll) as u16,
                         width: w.min(area.x + area.width - x),
                         height: 1,
                     },
@@ -905,13 +1306,17 @@ mod tests {
         assert_eq!(visible_rect(area, 4, 0, 3), None, "above");
     }
 
+    /// A width below `SPLIT_MIN_WIDTH`, for tests of the stacked layout.
+    const STACKED: u16 = 90;
+
     fn render_rows(
         rows: &[TallRow<'_>],
         selected: Option<usize>,
         h: u16,
     ) -> (String, TallTargets, usize) {
         let entries: Vec<TallEntry<'_>> = rows.iter().cloned().map(TallEntry::Row).collect();
-        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, h)).unwrap();
+        let mut term =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(STACKED, h)).unwrap();
         let mut scroll = 0;
         let mut targets = TallTargets::default();
         term.draw(|f| {
@@ -963,7 +1368,7 @@ mod tests {
         assert!(text.contains("goal"), "{text}");
         assert_eq!(
             targets.rows,
-            vec![(row.workspace_id, Rect::new(0, 0, 120, 6))]
+            vec![(row.workspace_id, Rect::new(0, 0, STACKED, 6))]
         );
     }
 
@@ -991,7 +1396,7 @@ mod tests {
         // Each row is a head and a git line, with a spacer between: 5 lines.
         let (text, targets, _) = render_rows(&rows, Some(0), 4);
         assert!(text.contains("second"), "second head paints:\n{text}");
-        assert_eq!(targets.rows[1].1, Rect::new(0, 3, 120, 1));
+        assert_eq!(targets.rows[1].1, Rect::new(0, 3, STACKED, 1));
         assert_eq!(targets.pr_chips.len(), 1, "head on screen: chip live");
 
         let (_, targets, _) = render_rows(&rows, Some(0), 10);
@@ -1012,7 +1417,8 @@ mod tests {
             }),
             TallEntry::Group(Line::from("  ▸ #parked  ·  2 hidden")),
         ];
-        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 10)).unwrap();
+        let mut term =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(STACKED, 10)).unwrap();
         let mut scroll = 0;
         let mut targets = TallTargets::default();
         term.draw(|f| {
@@ -1032,7 +1438,7 @@ mod tests {
         .unwrap();
         // Row: head + git (lines 0-1), spacer, group on line 3.
         assert_eq!(targets.rows.len(), 1);
-        assert_eq!(targets.groups, vec![(1, Rect::new(0, 3, 120, 1))]);
+        assert_eq!(targets.groups, vec![(1, Rect::new(0, 3, STACKED, 1))]);
         let buf = term.backend().buffer();
         assert_eq!(buf[(5, 3)].bg, Theme::wsx().selected_bg, "group tinted");
     }
@@ -1244,5 +1650,137 @@ mod tests {
         let lines = wrap_capped(&huge, 40, 2);
         assert_eq!(lines.len(), 2);
         assert!(lines[1].ends_with('…'), "{lines:?}");
+    }
+
+    fn split_render(
+        entries: &[TallEntry<'_>],
+        width: u16,
+        h: u16,
+    ) -> (Vec<String>, TallTargets, ratatui::buffer::Buffer) {
+        let mut term =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, h)).unwrap();
+        let mut scroll = 0;
+        let mut targets = TallTargets::default();
+        term.draw(|f| {
+            targets = render(
+                f,
+                f.area(),
+                entries,
+                &AgentGlyphs::default(),
+                None,
+                &mut scroll,
+                true,
+                ColumnWidths::default(),
+                0,
+                &Theme::wsx(),
+            );
+        })
+        .unwrap();
+        let buf = term.backend().buffer().clone();
+        let lines = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect();
+        (lines, targets, buf)
+    }
+
+    /// On a wide terminal the facts take a narrow left column and the
+    /// prose starts beside them on the row's first line, wrapped well short
+    /// of the screen edge.
+    #[test]
+    fn wide_rows_split_facts_from_prose() {
+        let mut row = base_row("bakedbean/repo-focus-view");
+        row.lifecycle = Some(crate::git::forge::BranchLifecycle::PrOpen);
+        row.pr_number = Some(461);
+        let detail = WorkspaceDetail {
+            recap: Some(WorkspaceRecap {
+                goal: Some("word ".repeat(60)),
+                ..Default::default()
+            }),
+            ahead_of_base: Some(4),
+            ..Default::default()
+        };
+        let entries = [TallEntry::Row(TallRow {
+            row: &row,
+            detail: &detail,
+        })];
+        let (lines, targets, _) = split_render(&entries, 220, 20);
+        let goal_col = lines[0].find("goal").expect("prose on the first line");
+        assert!(lines[0].contains("bakedbean/repo-focus-view"), "{lines:?}");
+        assert!(lines[1].contains("#461"), "PR under the branch: {lines:?}");
+        assert!(lines.iter().any(|l| l.contains("↑4 base")), "{lines:?}");
+        for l in &lines {
+            let chars: Vec<char> = l.chars().collect();
+            let end = l.trim_end().chars().count();
+            assert!(end <= goal_col + PROSE_MAX, "prose wraps short: {l:?}");
+            let facts: String = chars[..goal_col.min(chars.len())].iter().collect();
+            assert!(!facts.contains("word"), "prose stays right: {l:?}");
+        }
+        // The PR chip's click target sits over the painted chip.
+        let (_, r) = targets.pr_chips[0];
+        let chip: String = lines[r.y as usize]
+            .chars()
+            .skip(r.x as usize)
+            .take(r.width as usize)
+            .collect();
+        assert!(chip.contains("#461"), "{chip:?}");
+    }
+
+    /// A branch longer than the facts column wraps instead of truncating.
+    #[test]
+    fn split_wraps_a_long_branch() {
+        let row = base_row("bakedbean/a-branch-name-much-longer-than-the-facts-column-allows");
+        let detail = WorkspaceDetail::default();
+        let entries = [TallEntry::Row(TallRow {
+            row: &row,
+            detail: &detail,
+        })];
+        let (lines, _, _) = split_render(&entries, 160, 12);
+        let joined: String = lines.iter().map(|l| l.trim()).collect::<Vec<_>>().join("");
+        assert!(joined.contains("facts-column-allows"), "{lines:?}");
+        assert!(
+            !lines.iter().any(|l| l.contains('…')),
+            "no ellipsis: {lines:?}"
+        );
+    }
+
+    /// Every other workspace takes the alternate background; a group line
+    /// between them doesn't flip the pattern.
+    #[test]
+    fn alternate_rows_are_tinted() {
+        let mut a = base_row("a");
+        a.workspace_id = WorkspaceId(1);
+        let mut b = base_row("b");
+        b.workspace_id = WorkspaceId(2);
+        let mut c = base_row("c");
+        c.workspace_id = WorkspaceId(3);
+        let detail = WorkspaceDetail::default();
+        let entries = [
+            TallEntry::Row(TallRow {
+                row: &a,
+                detail: &detail,
+            }),
+            TallEntry::Group(Line::from("  ▸ #parked  ·  1 hidden")),
+            TallEntry::Row(TallRow {
+                row: &b,
+                detail: &detail,
+            }),
+            TallEntry::Row(TallRow {
+                row: &c,
+                detail: &detail,
+            }),
+        ];
+        let (_, targets, buf) = split_render(&entries, 160, 40);
+        let bg = |id: i64| {
+            let r = targets.rows.iter().find(|(w, _)| w.0 == id).unwrap().1;
+            buf[(r.x + 100, r.y)].bg
+        };
+        let alt = Theme::wsx().bg_alt;
+        assert_ne!(bg(1), alt, "first row plain");
+        assert_eq!(bg(2), alt, "second row tinted despite the group between");
+        assert_ne!(bg(3), alt, "third row plain");
     }
 }

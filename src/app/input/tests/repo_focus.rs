@@ -278,7 +278,7 @@ fn tall_rows_show_long_recaps_and_branches_whole() {
     app.dashboard.focus_repo(repo);
     let screen = draw(&mut app);
     let flat = screen.split_whitespace().collect::<Vec<_>>().join(" ");
-    for chunk in ["wrapping every recap field", "as it needs"] {
+    for chunk in ["Single-repo dashboard view", "as it needs"] {
         assert!(flat.contains(chunk), "{chunk:?} missing:\n{screen}");
     }
     let r = app

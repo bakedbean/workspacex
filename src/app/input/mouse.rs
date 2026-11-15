@@ -295,6 +295,22 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
                 // Clicking a row's PR chip in the dashboard PR column opens
                 // that PR in the browser, same as the detail-bar chip.
                 open_pr_for_workspace(app, ws_id);
+            } else if app
+                .dashboard_unfocus_rect
+                .is_some_and(|r| rect_contains(&r, &m))
+            {
+                // The focus view's `◂ all repos` link, same as Esc / `f`.
+                leave_repo_focus(app);
+            } else if let Some(ws_id) = focus_row_click_target(app, &m) {
+                // A click on a row in the focus view selects it and attaches,
+                // same as Enter on the selected row.
+                if let Err(e) = select_and_attach(app, ws_id) {
+                    tracing::warn!(error = %e, "failed to attach from focus row click");
+                }
+            } else if let Some(rid) = repo_name_click_target(app, &m) {
+                // A click on a repo header's name focuses that repo, same as
+                // `f` on the header.
+                enter_repo_focus(app, rid);
             } else if let Some(repo_path) = repo_pr_link_target(app, &m) {
                 // Clicking a repo header's PR link opens that repo's open
                 // PRs filtered to the signed-in user — the by-hand route of

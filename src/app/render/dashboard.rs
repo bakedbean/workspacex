@@ -125,6 +125,9 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     app.dashboard_pr_rects = click_targets.pr_chips;
     app.dashboard_repo_pr_rects = click_targets.repo_pr_links;
     app.dashboard_status_rects = click_targets.statuses;
+    app.dashboard_repo_name_rects = click_targets.repo_names;
+    app.dashboard_focus_row_rects = click_targets.focus_rows;
+    app.dashboard_unfocus_rect = click_targets.unfocus;
     if let Some(pm_area) = pm_area {
         let digest = app.build_pm_digest();
         let selected = app
@@ -352,6 +355,11 @@ pub(crate) fn build_workspace_items<'a>(
                 workspace_id: ws.id,
                 status: row.status,
                 hide: app.hide_subject_with_age(ws.id, row.ago_secs),
+                detail: crate::ui::dashboard::tall::WorkspaceDetail {
+                    recap: app.recaps.get(&ws.id).cloned(),
+                    git: app.workspace_status.get(&ws.id).copied(),
+                    ahead_of_base: app.workspace_ahead_of_base.get(&ws.id).copied(),
+                },
                 row,
             });
         }

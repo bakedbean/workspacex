@@ -57,6 +57,9 @@ impl App {
             dashboard_pr_rects: Vec::new(),
             dashboard_repo_pr_rects: Vec::new(),
             dashboard_status_rects: Vec::new(),
+            dashboard_repo_name_rects: Vec::new(),
+            dashboard_focus_row_rects: Vec::new(),
+            dashboard_unfocus_rect: None,
             procs_link_rect: None,
             github_remotes: Default::default(),
             pr_last_poll_ms: std::collections::HashMap::new(),
@@ -734,6 +737,12 @@ pub struct App {
     /// Workspaces whose primary transcript has been read successfully at least
     /// once. Initialization is sticky even if that transcript later disappears
     /// or becomes unreadable/ambiguous; peer scans never initialize a workspace.
+    /// Repo header names on the dashboard list — a click focuses that repo.
+    pub dashboard_repo_name_rects: Vec<(crate::data::store::RepoId, ratatui::layout::Rect)>,
+    /// Rows in the repo focus view — a click selects and attaches.
+    pub dashboard_focus_row_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)>,
+    /// The focus view's `◂ all repos` link — a click leaves the focus view.
+    pub dashboard_unfocus_rect: Option<ratatui::layout::Rect>,
     /// Until then the classifier's output is provisional (it can only see
     /// session-liveness, not stop_reason),
     /// so we hold off on recording activity / firing bells for it. Without

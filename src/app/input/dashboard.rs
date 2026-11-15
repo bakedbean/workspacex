@@ -136,6 +136,103 @@ pub(crate) fn repo_pr_link_target(
         .map(|r| r.path.clone())
 }
 
+/// `f`: focus the dashboard on the selected row's repo, or leave the focus
+/// view when already in it.
+pub(in crate::app::input) fn toggle_repo_focus(app: &mut App) {
+    if app.dashboard.focused_repo.is_some() {
+        leave_repo_focus(app);
+    } else if let Some(rid) = app.selected_repo() {
+        enter_repo_focus(app, rid);
+    }
+}
+
+/// Focus the dashboard on `rid`. A selected workspace in that repo stays
+/// selected; any other selection (a header, a hidden group, another repo's
+/// workspace) is dropped so the view starts on its first workspace.
+pub(in crate::app::input) fn enter_repo_focus(app: &mut App, rid: crate::data::store::RepoId) {
+    let keep = matches!(app.selected_target(), Some(SelectionTarget::Workspace(_)))
+        && app.selected_repo() == Some(rid);
+    if !keep {
+        app.dashboard.selection = None;
+        app.dashboard.selected = 0;
+    }
+    app.dashboard.focus_repo(rid);
+}
+
+/// Leave the focus view. The selected workspace stays selected; when its
+/// repo is folded in the list, the repo's header takes the selection so the
+/// highlight doesn't vanish into the fold.
+pub(in crate::app::input) fn leave_repo_focus(app: &mut App) {
+    let Some(rid) = app.dashboard.focused_repo.take() else {
+        return;
+    };
+    let folded = match app.dashboard.folded.get(&(rid.0 as u64)).copied() {
+        Some(explicit) => explicit,
+        None => crate::ui::dashboard::sort::default_fold(current_repo_counts(app, rid)),
+    };
+    if folded || app.selected_target().is_none() {
+        app.dashboard.selection = Some(SelectionTarget::Repo(rid));
+    }
+}
+
+/// `[` / `]`: move the focus view to the previous / next repo in the saved
+/// repo order, wrapping at the ends.
+pub(in crate::app::input) fn cycle_repo_focus(app: &mut App, forward: bool) {
+    let Some(current) = app.dashboard.focused_repo else {
+        return;
+    };
+    let mut order: Vec<&crate::data::store::Repo> = app.repos.iter().collect();
+    order.sort_by_key(|r| (r.sort_order, r.id.0));
+    let Some(pos) = order.iter().position(|r| r.id == current) else {
+        return;
+    };
+    let n = order.len();
+    let next = if forward {
+        (pos + 1) % n
+    } else {
+        (pos + n - 1) % n
+    };
+    let rid = order[next].id;
+    enter_repo_focus(app, rid);
+}
+
+/// The workspace whose focus-view row a click landed on.
+pub(crate) fn focus_row_click_target(
+    app: &App,
+    m: &crossterm::event::MouseEvent,
+) -> Option<crate::data::store::WorkspaceId> {
+    app.dashboard_focus_row_rects
+        .iter()
+        .find(|(_, r)| rect_contains(r, m))
+        .map(|(id, _)| *id)
+}
+
+/// The repo whose header name a click landed on.
+pub(crate) fn repo_name_click_target(
+    app: &App,
+    m: &crossterm::event::MouseEvent,
+) -> Option<crate::data::store::RepoId> {
+    app.dashboard_repo_name_rects
+        .iter()
+        .find(|(_, r)| rect_contains(r, m))
+        .map(|(id, _)| *id)
+}
+
+/// Select `ws` and attach to it — a click on its row in the focus view.
+pub(in crate::app::input) fn select_and_attach(
+    app: &mut App,
+    ws: crate::data::store::WorkspaceId,
+) -> Result<()> {
+    if let Some(idx) = app
+        .selectable
+        .iter()
+        .position(|t| *t == SelectionTarget::Workspace(ws))
+    {
+        app.select_index(idx);
+    }
+    attach_workspace(app, ws)
+}
+
 /// Opens the new-workspace form, pre-filling the tag of the tag group under
 /// the cursor.
 fn open_new_workspace(
@@ -379,6 +476,13 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         (KeyCode::Esc, _) if app.dashboard.status_filter.is_some() => {
             app.dashboard.status_filter = None;
         }
+        (KeyCode::Esc, _) if app.dashboard.focused_repo.is_some() => leave_repo_focus(app),
+        (KeyCode::Char('f'), _) => toggle_repo_focus(app),
+        (KeyCode::Char('['), _) => cycle_repo_focus(app, false),
+        (KeyCode::Char(']'), _) => cycle_repo_focus(app, true),
+        // `h` folds the selected repo in the list; there is no fold to
+        // act on in the focus view.
+        (KeyCode::Char('h'), _) if app.dashboard.focused_repo.is_some() => {}
         (KeyCode::Char('q'), _) => {
             if app.in_flight.is_empty() {
                 app.quit = true;
@@ -586,6 +690,8 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             nudge_status_refresh(app);
         }
         (KeyCode::Char('G'), _) => {
+            // Grouping has nothing to act on in a single repo, so leave focus.
+            leave_repo_focus(app);
             app.dashboard.toggle_group_mode();
         }
         (KeyCode::Char('o'), _) => {

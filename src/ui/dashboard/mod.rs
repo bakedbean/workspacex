@@ -43,6 +43,8 @@ pub struct WorkspaceItem<'a> {
     pub row: RowInputs,
     /// What hide rules test; built by `App::hide_subject`.
     pub hide: HideSubject,
+    /// The extra detail the repo focus view's tall rows show.
+    pub detail: tall::WorkspaceDetail,
 }
 
 /// What `app.rs` passes to `render()`. Replaces the old `Item` enum.
@@ -102,6 +104,10 @@ pub struct DashboardState {
     /// interaction with the draft (typing, Backspace) clears the
     /// deadline so it doesn't wipe their fresh input mid-edit.
     pub reply_draft_clear_at_ms: Option<u64>,
+    /// The repo the dashboard is focused on, or `None` for every repo. While
+    /// set, the list shows only that repo's workspaces, as tall rows. Not
+    /// persisted.
+    pub focused_repo: Option<RepoId>,
 }
 
 /// Settings key holding the by-repo sort mode.
@@ -169,6 +175,12 @@ impl DashboardState {
         self.sort_mode = self.sort_mode.cycle();
         let _ = store.set_setting(SORT_MODE_SETTING, self.sort_mode.as_str());
     }
+
+    /// Focus the dashboard on `repo`, scrolled to its top.
+    pub fn focus_repo(&mut self, repo: RepoId) {
+        self.focused_repo = Some(repo);
+        *self.list_state.offset_mut() = 0;
+    }
 }
 
 // Hand-written rather than derived: `blocked_pin_max_age_secs` must default to
@@ -189,6 +201,7 @@ impl Default for DashboardState {
             selected: 0,
             reply_draft: String::new(),
             reply_draft_clear_at_ms: None,
+            focused_repo: None,
         }
     }
 }
@@ -243,6 +256,12 @@ pub struct ListClickTargets {
     /// the theme leaves `$statuses` off the header (the fallback strip row
     /// is not clickable).
     pub statuses: Vec<(Status, Rect)>,
+    /// Each visible repo header's name — focuses the dashboard on that repo.
+    pub repo_names: Vec<(crate::data::store::RepoId, Rect)>,
+    /// Each tall row in the focus view — selects and attaches its workspace.
+    pub focus_rows: Vec<(crate::data::store::WorkspaceId, Rect)>,
+    /// The focus view's `◂ all repos` link — leaves the focus view.
+    pub unfocus: Option<Rect>,
 }
 
 /// Resolve `(key, flat item index, (char offset, width))` spans into screen
@@ -342,11 +361,17 @@ pub fn render_without_footer(
         );
     }
 
-    let (items, chip_spans, repo_link_spans) = match state.group_mode {
+    if let Some(repo) = focused_repo(inputs, state) {
+        let mut targets = render_focus(f, chunks[3], inputs, state, repo, tick, theme);
+        targets.statuses = statuses;
+        return targets;
+    }
+
+    let (items, chip_spans, repo_link_spans, name_spans) = match state.group_mode {
         GroupMode::Repo => render_by_repo(inputs, state, tick, width, theme),
         GroupMode::Attention => {
             let (items, chips) = render_by_attention(inputs, state, tick, width, theme);
-            (items, chips, Vec::new())
+            (items, chips, Vec::new(), Vec::new())
         }
     };
     // Nothing to show. An empty body reads as "the tool is broken", and the
@@ -380,16 +405,153 @@ pub fn render_without_footer(
     // position.
     let list_area = chunks[3];
     let offset = state.list_state.offset();
-    ListClickTargets {
-        pr_chips: spans_to_rects(list_area, offset, chip_spans),
-        repo_pr_links: spans_to_rects(
+    let repo_spans = |spans: Vec<by_repo::RepoPrLinkSpan>| {
+        spans_to_rects(
             list_area,
             offset,
-            repo_link_spans
+            spans
                 .into_iter()
                 .map(|(id, idx, span)| (crate::data::store::RepoId(id as i64), idx, span)),
-        ),
+        )
+    };
+    ListClickTargets {
+        pr_chips: spans_to_rects(list_area, offset, chip_spans),
+        repo_pr_links: repo_spans(repo_link_spans),
+        repo_names: repo_spans(name_spans),
         statuses,
+        ..Default::default()
+    }
+}
+
+/// The focused repo, when focus is set and the repo still exists. A repo
+/// unregistered while focused simply drops the dashboard back to every repo.
+fn focused_repo<'a>(inputs: &DashboardInputs<'a>, state: &DashboardState) -> Option<&'a Repo> {
+    let id = state.focused_repo?;
+    inputs.repos.iter().copied().find(|r| r.id == id)
+}
+
+/// The focused repo's workspaces in display order: the same filter, hide rules
+/// and sort the by-repo list applies, so a workspace sits in the same place
+/// relative to its siblings in both views. Shared by the renderer and
+/// `visible_targets` so the rows and keyboard nav cannot drift.
+fn focused_workspaces<'w, 'a>(
+    inputs: &'w DashboardInputs<'a>,
+    state: &DashboardState,
+    repo: RepoId,
+) -> Vec<&'w WorkspaceItem<'a>> {
+    let filter = RowFilter::of(state);
+    let mut rows: Vec<NavRow> = inputs
+        .workspaces
+        .iter()
+        .filter(|w| w.repo.id == repo)
+        .filter(|w| filter.matches(w))
+        .filter(|w| hidden_by(w, filter).is_none())
+        .map(NavRow::from)
+        .collect();
+    order_workspaces(&mut rows, state.sort_mode, state.blocked_pin_max_age_secs);
+    rows.iter()
+        .filter_map(|r| {
+            inputs
+                .workspaces
+                .iter()
+                .find(|w| w.workspace_id == r.workspace_id)
+        })
+        .collect()
+}
+
+/// Draw the repo focus view into `area`: the breadcrumb, a spacer, then the
+/// repo's workspaces as tall rows (or an empty-state line).
+fn render_focus(
+    f: &mut Frame,
+    area: Rect,
+    inputs: &DashboardInputs<'_>,
+    state: &mut DashboardState,
+    repo: &Repo,
+    tick: u32,
+    theme: &Theme,
+) -> ListClickTargets {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // breadcrumb
+            Constraint::Length(1), // spacer
+            Constraint::Min(0),    // rows
+        ])
+        .split(area);
+    let shown = focused_workspaces(inputs, state, repo.id);
+    let hidden = hidden_groups(repo, &inputs.workspaces, RowFilter::of(state))
+        .iter()
+        .map(|(_, rows)| rows.len())
+        .sum();
+    let counts = StatusCounts::from_iter(shown.iter().map(|w| w.status));
+    let (crumb, (dx, w)) = by_repo::breadcrumb_line(
+        &repo.name,
+        &repo.path.to_string_lossy(),
+        counts,
+        hidden,
+        chunks[0].width as usize,
+        theme,
+    );
+    f.render_widget(Paragraph::new(crumb), chunks[0]);
+    let unfocus = Some(Rect {
+        x: chunks[0].x + dx,
+        y: chunks[0].y,
+        width: w.min(chunks[0].width.saturating_sub(dx)),
+        height: 1,
+    });
+
+    if shown.is_empty() {
+        let msg = if RowFilter::of(state).is_active() {
+            "(no matching workspaces)"
+        } else {
+            "(no workspaces · n to create one)"
+        };
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(msg.to_string(), theme.dim_style()))),
+            chunks[2],
+        );
+        return ListClickTargets {
+            unfocus,
+            ..Default::default()
+        };
+    }
+    // Mark the selected row the way the list does, so the row composer
+    // paints the thicker gutter.
+    let rows: Vec<RowInputs> = shown
+        .iter()
+        .map(|w| {
+            let mut row = w.row.clone();
+            row.selected = state.selection == Some(SelectionTarget::Workspace(w.workspace_id));
+            row
+        })
+        .collect();
+    let selected = rows.iter().position(|r| r.selected);
+    let widths = inputs
+        .column_widths
+        .with_agent(derived_agent_width(rows.iter()));
+    let tall_rows: Vec<tall::TallRow<'_>> = rows
+        .iter()
+        .zip(&shown)
+        .map(|(row, w)| tall::TallRow {
+            row,
+            detail: &w.detail,
+        })
+        .collect();
+    let targets = tall::render(
+        f,
+        chunks[2],
+        &tall_rows,
+        selected,
+        &mut state.list_state,
+        widths,
+        tick,
+        theme,
+    );
+    ListClickTargets {
+        pr_chips: targets.pr_chips,
+        focus_rows: targets.rows,
+        unfocus,
+        ..Default::default()
     }
 }
 
@@ -510,6 +672,12 @@ pub fn visible_targets(
     inputs: &DashboardInputs<'_>,
     state: &DashboardState,
 ) -> Vec<SelectionTarget> {
+    if let Some(repo) = focused_repo(inputs, state) {
+        return focused_workspaces(inputs, state, repo.id)
+            .into_iter()
+            .map(|w| SelectionTarget::Workspace(w.workspace_id))
+            .collect();
+    }
     let filter = RowFilter::of(state);
     let shown: Vec<WorkspaceItem<'_>> = inputs
         .workspaces
@@ -950,6 +1118,7 @@ fn render_by_repo<'a>(
     Vec<ratatui::widgets::ListItem<'static>>,
     Vec<PrChipSpan>,
     Vec<by_repo::RepoPrLinkSpan>,
+    Vec<by_repo::RepoPrLinkSpan>,
 ) {
     let filter = RowFilter::of(state);
     let mut views: Vec<RepoView<'a>> = inputs
@@ -1068,8 +1237,8 @@ fn render_by_repo<'a>(
     }
     state.list_state.select(selected_idx);
 
-    let (items, repo_links) = by_repo::render_list(&views, widths, tick, width, theme);
-    (items, chip_spans, repo_links)
+    let list = by_repo::render_list(&views, widths, tick, width, theme);
+    (list.items, chip_spans, list.pr_links, list.names)
 }
 
 fn render_by_attention<'a>(

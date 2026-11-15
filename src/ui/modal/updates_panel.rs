@@ -2628,6 +2628,7 @@ pub(super) mod test_fixtures {
         ago_secs: Option<u64>,
     ) -> WorkspaceItem<'a> {
         WorkspaceItem {
+            detail: Default::default(),
             repo,
             workspace_id: w.id,
             status,

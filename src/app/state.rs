@@ -19,6 +19,14 @@ impl App {
         crate::ui::detail_modules::register_builtins(&mut registry);
         let mut dashboard = DashboardState::default();
         dashboard.load_ordering_prefs(&store);
+        let panel_width = store
+            .get_setting(crate::ui::dashboard::side_panel::WIDTH_SETTING)
+            .ok()
+            .flatten()
+            .and_then(|w| w.parse::<u16>().ok());
+        dashboard.panel.width = panel_width;
+        let mut attached_panel = crate::ui::dashboard::side_panel::SidePanelState::default();
+        attached_panel.width = panel_width;
         // Several tests construct an `App` only incidentally and then create
         // a workspace through it, which writes a setup log. Defaulting those
         // to the real `Dirs::log_dir()` puts `cargo test` in the developer's
@@ -39,7 +47,7 @@ impl App {
             view: View::Dashboard,
             modal: None,
             dashboard,
-            attached_panel: Default::default(),
+            attached_panel,
             repos: Vec::new(),
             workspaces: Vec::new(),
             selectable: Vec::new(),

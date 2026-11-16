@@ -547,6 +547,9 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         // The side panel: `c` toggles it, `1` / `2` pick its tab (opening
         // it if closed).
         (KeyCode::Char('c'), _) => app.dashboard.panel.toggle(),
+        // `→` moves keyboard focus into the panel's Files list (see
+        // `side_panel::focused_key`), opening it there if need be.
+        (KeyCode::Right, _) => app.dashboard.panel.focus_files(),
         (KeyCode::Char('1'), _) => {
             show_panel_tab(app, crate::ui::dashboard::side_panel::PanelTab::Commits);
         }

@@ -75,12 +75,15 @@ fn load(app: &App, shared: &SharedApp) {
     });
 }
 
-/// Step the viewer `d` files along and load the new one.
+/// Step the viewer `d` files along and load the new one, keeping the side
+/// panel's cursor on it.
 fn step(app: &mut App, shared: &SharedApp, d: isize) {
     let Some(Modal::FileDiff(m)) = app.modal.as_mut() else {
         return;
     };
     if m.step(d) {
+        let index = m.index;
+        crate::app::input::active_side_panel(app).set_cursor(index);
         load(app, shared);
     }
 }

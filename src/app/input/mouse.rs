@@ -325,6 +325,13 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
             {
                 // The focus view's `◂ all repos` link, same as Esc / `f`.
                 leave_repo_focus(app);
+            } else if let Some(&(index, _)) = app
+                .side_panel_file_rects
+                .iter()
+                .find(|(_, r)| rect_contains(r, &m))
+            {
+                // A file in the side panel opens its diff.
+                super::side_panel::open_file(app, shared, index);
             } else if let Some(tab) = panel_tab_click_target(app, &m) {
                 // A side-panel tab shows that tab, same as `1` / `2`.
                 show_panel_tab(app, tab);

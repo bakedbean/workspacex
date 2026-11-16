@@ -11,6 +11,7 @@
 //!   [`footer`]     hint bar and the detail bar's reply input
 //!   [`mouse`]      clicks and wheel, including hit-testing
 //!   [`panel`]      the keys that summon, swap, and close panels
+//!   [`side_panel`] keyboard focus in the side panel's Files list
 //!   [`keys`]       key <-> byte encoding and input tracing
 
 pub(crate) mod attached;
@@ -21,6 +22,7 @@ pub(crate) mod leader;
 pub(crate) mod modal;
 pub(crate) mod mouse;
 pub(crate) mod panel;
+pub(crate) mod side_panel;
 
 pub(in crate::app::input) use attached::*;
 pub(in crate::app::input) use dashboard::*;
@@ -164,6 +166,7 @@ pub(in crate::app::input) async fn dispatch_key(
 ) -> Result<()> {
     if app.modal.is_some() {
         handle_key_modal(app, shared, k).await?;
+    } else if side_panel::focused_key(app, shared, k) {
     } else {
         match &app.view {
             View::Dashboard => handle_key_dashboard(app, k).await?,

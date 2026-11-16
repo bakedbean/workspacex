@@ -16,6 +16,7 @@
 ///   - `#` → workspace tags
 ///   - `R` → recap
 ///   - `c` / `C` → side panel / its tab
+///   - `f` → focus the side panel's files
 ///   - `1-9` (digits) → pinned commands
 ///
 /// This is the single source of truth: both the renderer and (in a later
@@ -30,7 +31,7 @@
 pub fn agent_switch_keys(count: usize) -> Vec<char> {
     // Pool excludes every letter the attached `^x` leader already binds
     // (d, x, u, a, e, t, v, g, k, `<` for prompt tags, `#` for workspace tags,
-    // `R` for the recap, `c` / `C` for the side panel) plus all
+    // `R` for the recap, `c` / `C` / `f` for the side panel) plus all
     // digits (pinned chips 1-9).
     const POOL: &[char] = &['q', 'w', 'r', 'y', 'i', 'o', 'p', 's', 'h', 'j'];
     POOL.iter().copied().take(count).collect()
@@ -45,7 +46,9 @@ mod tests {
         // Request the whole pool so the exclusion check covers every key.
         let keys = agent_switch_keys(64);
         // No reserved `^x`-leader letter may appear anywhere in the pool.
-        for reserved in ['d', 'x', 'u', 'a', 'e', 't', 'v', 'g', 'k', 'c', 'C', 'R'] {
+        for reserved in [
+            'd', 'x', 'u', 'a', 'e', 't', 'v', 'g', 'k', 'c', 'C', 'f', 'R',
+        ] {
             assert!(
                 !keys.contains(&reserved),
                 "pool must not contain reserved '{reserved}'"

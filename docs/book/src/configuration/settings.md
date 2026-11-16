@@ -49,6 +49,7 @@ Values are validated the same way as `wsx config set`. Dashboard sort, pin, and 
 | Key | Default | Effect |
 |---|---|---|
 | `editor_cmd` | `$VISUAL`, then `$EDITOR` | Command for `e`. The worktree path is appended unless the command contains `{path}`. |
+| `file_editor_cmd` | `editor_cmd` | Command for `o` on a changed file in the side panel. `{file}` and `{line}` place the file and its line; without `{file}` the file is appended. See [Opening one file](../integrations/editor-terminal-diff.md#opening-one-file). |
 | `terminal_cmd` | `$TERMINAL` | Command for `t`, run in the worktree. `{cmd}` makes it usable for desktop-widget jumps. |
 | `diff_cmd` | unset | Command for `v`. Accepts `{path}` and `{base}`. |
 | `lazygit_cmd` | unset | Command for `g`, run in the worktree. It must open its own window, for example `wezterm start -- lazygit`. |

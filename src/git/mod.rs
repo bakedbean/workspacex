@@ -257,12 +257,13 @@ pub(super) mod tests {
 
     #[test]
     fn parse_numstat_keeps_binary_files() {
-        let files = parse_numstat("12\t3\tsrc/a.rs\n-\t-\tasset.bin\nbogus\n");
+        let files = parse_numstat("12\t3\tsrc/a.rs\0-\t-\tasset.bin\0bogus\0");
         assert_eq!(
             files,
             vec![
                 ChangedFile {
                     path: "src/a.rs".into(),
+                    old_path: None,
                     stats: Some(DiffStats {
                         added: 12,
                         removed: 3
@@ -270,6 +271,7 @@ pub(super) mod tests {
                 },
                 ChangedFile {
                     path: "asset.bin".into(),
+                    old_path: None,
                     stats: None,
                 },
             ]
@@ -1060,8 +1062,21 @@ pub async fn workspace_diff_stats(worktree: &std::path::Path, base: &str) -> Opt
 /// counts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangedFile {
+    /// The file's path on the branch, as a real (unquoted) path.
     pub path: String,
+    /// Where a renamed file came from; `None` when it wasn't renamed.
+    pub old_path: Option<String>,
     pub stats: Option<DiffStats>,
+}
+
+impl ChangedFile {
+    /// The path as the panel shows it: `old → new` for a rename.
+    pub fn display_path(&self) -> String {
+        match &self.old_path {
+            Some(old) => format!("{old} → {}", self.path),
+            None => self.path.clone(),
+        }
+    }
 }
 
 /// Every file changed on HEAD since it left `base` (`git diff --numstat
@@ -1073,6 +1088,8 @@ pub async fn branch_changed_files(worktree: &Path, base: &str) -> Option<Vec<Cha
         .arg(worktree)
         .arg("diff")
         .arg("--numstat")
+        .arg("-z")
+        .arg("--find-renames")
         .arg(format!("{base}...HEAD"))
         .output()
         .await
@@ -1083,29 +1100,42 @@ pub async fn branch_changed_files(worktree: &Path, base: &str) -> Option<Vec<Cha
     Some(parse_numstat(&String::from_utf8_lossy(&out.stdout)))
 }
 
-/// Parse `git diff --numstat` output: `<added>\t<removed>\t<path>`, with
-/// `-` for both counts on a binary file.
+/// Parse `git diff --numstat -z` output. Each entry is
+/// `<added>\t<removed>\t<path>\0`, or for a rename
+/// `<added>\t<removed>\t\0<old>\0<new>\0`; both counts are `-` for a binary
+/// file. Paths come raw, never C-quoted, so they name real files.
 fn parse_numstat(out: &str) -> Vec<ChangedFile> {
-    out.lines()
-        .filter_map(|line| {
-            let mut parts = line.splitn(3, '\t');
-            let added = parts.next()?;
-            let removed = parts.next()?;
-            let path = parts.next()?;
-            let stats = match (added.parse::<u32>(), removed.parse::<u32>()) {
-                (Ok(a), Ok(r)) => Some(DiffStats {
-                    added: a,
-                    removed: r,
-                }),
-                _ if added == "-" && removed == "-" => None,
-                _ => return None,
+    let mut fields = out.split('\0');
+    let mut files = Vec::new();
+    while let Some(entry) = fields.next() {
+        let mut parts = entry.splitn(3, '\t');
+        let (Some(added), Some(removed), Some(path)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        let (path, old_path) = if path.is_empty() {
+            let (Some(old), Some(new)) = (fields.next(), fields.next()) else {
+                break;
             };
-            Some(ChangedFile {
-                path: path.to_string(),
-                stats,
-            })
-        })
-        .collect()
+            (new.to_string(), Some(old.to_string()))
+        } else {
+            (path.to_string(), None)
+        };
+        let stats = match (added.parse::<u32>(), removed.parse::<u32>()) {
+            (Ok(a), Ok(r)) => Some(DiffStats {
+                added: a,
+                removed: r,
+            }),
+            _ if added == "-" && removed == "-" => None,
+            _ => continue,
+        };
+        files.push(ChangedFile {
+            path,
+            old_path,
+            stats,
+        });
+    }
+    files
 }
 
 /// The line counts of `files` keyed by path, binary files left out — the
@@ -1128,6 +1158,56 @@ pub async fn workspace_diff_per_file(
         .map(|f| per_file_stats(&f))
 }
 
+/// One changed file's diff against the branch's base, as the side panel's
+/// diff viewer shows it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FileDiff {
+    /// `git diff base...HEAD -- path`, unified with three lines of context.
+    pub diff: String,
+    /// The file as HEAD has it, so the viewer can show the whole file with
+    /// the changes in place. `None` when HEAD no longer has it (deleted).
+    pub source: Option<String>,
+    /// Git called it binary: there is no text diff to show.
+    pub binary: bool,
+}
+
+/// `file`'s diff on HEAD since it left `base`, and HEAD's copy of it. HEAD
+/// is resolved once so the two can't come from different commits. Paths
+/// are matched literally (no pathspec globbing), and a rename diffs both
+/// sides so its deletions show.
+pub async fn branch_file_diff(worktree: &Path, base: &str, file: &ChangedFile) -> Result<FileDiff> {
+    let head = run(worktree, &["rev-parse", "--verify", "HEAD^{commit}"]).await?;
+    let head = head.trim();
+    let range = format!("{base}...{head}");
+    let mut args = vec![
+        "--literal-pathspecs",
+        "diff",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--find-renames",
+        &range,
+        "--",
+    ];
+    args.extend(file.old_path.as_deref());
+    args.push(&file.path);
+    let diff = run(worktree, &args).await?;
+    let binary = diff
+        .lines()
+        .any(|l| l.starts_with("Binary files ") && l.ends_with(" differ"));
+    let deleted = diff.lines().any(|l| l.starts_with("deleted file mode "));
+    let source = if binary || deleted {
+        None
+    } else {
+        Some(run(worktree, &["show", &format!("{head}:{}", file.path)]).await?)
+    };
+    Ok(FileDiff {
+        diff,
+        source,
+        binary,
+    })
+}
+
 #[cfg(test)]
 mod branch_lists_tests {
     use super::*;
@@ -1136,11 +1216,109 @@ mod branch_lists_tests {
     fn new_sorts_files_by_path() {
         let file = |path: &str| ChangedFile {
             path: path.into(),
+            old_path: None,
             stats: None,
         };
         let lists = BranchLists::new("main", Vec::new(), vec![file("src/z.rs"), file("a.md")]);
         let paths: Vec<_> = lists.files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(paths, ["a.md", "src/z.rs"]);
+    }
+
+    #[test]
+    fn parse_numstat_z_reads_renames_and_raw_paths() {
+        let files =
+            parse_numstat("1\t1\t\0old.txt\0new.txt\0-\t-\tcafé tab\t.bin\x003\t0\ta => b.rs\0");
+        assert_eq!(files.len(), 3);
+        assert_eq!(files[0].path, "new.txt");
+        assert_eq!(files[0].old_path.as_deref(), Some("old.txt"));
+        assert_eq!(files[0].display_path(), "old.txt → new.txt");
+        assert_eq!(
+            (files[1].path.as_str(), files[1].stats),
+            ("café tab\t.bin", None)
+        );
+        assert_eq!(files[2].path, "a => b.rs", "a real name, not a rename");
+        assert_eq!(files[2].old_path, None);
+    }
+
+    /// Through the panel's own file list: an edit, a deletion, an edited
+    /// rename (its deletion must show), a name that is a glob, and a name
+    /// git would C-quote.
+    #[tokio::test]
+    async fn branch_file_diff_reads_the_branch_side() {
+        use std::process::Command as StdCmd;
+        let repo = super::tests::init_repo();
+        let p = repo.path();
+        let git = |args: &[&str]| {
+            assert!(
+                StdCmd::new("git")
+                    .current_dir(p)
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            )
+        };
+        let lines = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n";
+        std::fs::write(p.join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        std::fs::write(p.join("gone.txt"), "bye\n").unwrap();
+        std::fs::write(p.join("old.txt"), lines).unwrap();
+        std::fs::write(p.join("a[1].txt"), "glob\n").unwrap();
+        std::fs::write(p.join("a1.txt"), "plain\n").unwrap();
+        std::fs::write(p.join("café.txt"), "x\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "base"]);
+        git(&["checkout", "-q", "-b", "feature"]);
+        std::fs::write(p.join("a.txt"), "one\nTWO\nthree\n").unwrap();
+        std::fs::remove_file(p.join("gone.txt")).unwrap();
+        git(&["mv", "old.txt", "new.txt"]);
+        std::fs::write(p.join("new.txt"), lines.replace("l4", "L4")).unwrap();
+        std::fs::write(p.join("a[1].txt"), "GLOB\n").unwrap();
+        std::fs::write(p.join("a1.txt"), "PLAIN\n").unwrap();
+        std::fs::write(p.join("café.txt"), "X\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "change"]);
+
+        let files = branch_changed_files(p, "main").await.unwrap();
+        let get = |path: &str| {
+            files
+                .iter()
+                .find(|f| f.path == path)
+                .unwrap_or_else(|| panic!("{path} in {files:?}"))
+        };
+
+        let d = branch_file_diff(p, "main", get("a.txt")).await.unwrap();
+        assert!(
+            d.diff.contains("-two") && d.diff.contains("+TWO"),
+            "{}",
+            d.diff
+        );
+        assert_eq!(d.source.as_deref(), Some("one\nTWO\nthree\n"));
+        assert!(!d.binary);
+
+        let d = branch_file_diff(p, "main", get("gone.txt")).await.unwrap();
+        assert!(d.diff.contains("-bye"), "{}", d.diff);
+        assert_eq!(d.source, None);
+
+        let renamed = get("new.txt");
+        assert_eq!(renamed.old_path.as_deref(), Some("old.txt"));
+        let d = branch_file_diff(p, "main", renamed).await.unwrap();
+        assert!(
+            d.diff.contains("-l4") && d.diff.contains("+L4"),
+            "{}",
+            d.diff
+        );
+        assert!(!d.diff.contains("+l1"), "not all added: {}", d.diff);
+
+        let d = branch_file_diff(p, "main", get("a[1].txt")).await.unwrap();
+        assert!(
+            d.diff.contains("+GLOB") && !d.diff.contains("PLAIN"),
+            "{}",
+            d.diff
+        );
+
+        let d = branch_file_diff(p, "main", get("café.txt")).await.unwrap();
+        assert!(d.diff.contains("+X"), "{}", d.diff);
+        assert_eq!(d.source.as_deref(), Some("X\n"));
     }
 }
 

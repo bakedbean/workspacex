@@ -15,6 +15,11 @@
 //! [`SidePanelState`] and hands [`SidePanelState::carve`] the selected
 //! workspace's [`PanelData`]; the panel takes the right of the area it is
 //! given and returns what is left.
+//!
+//! The Files tab has a cursor. While the panel holds keyboard focus
+//! (`→` on the dashboard, `Ctrl-x f` attached) it is highlighted and moves
+//! with `j` / `k`; Enter, or a click on a file, opens the file's diff, and
+//! `o` opens the file in the editor.
 
 use crate::data::store::WorkspaceId;
 use crate::git::{BranchCommit, ChangedFile};
@@ -65,6 +70,13 @@ pub struct SidePanelState {
     pub tab: PanelTab,
     /// The body's first visible line, clamped on draw.
     pub scroll: usize,
+    /// The Files tab's highlighted file, clamped on draw.
+    pub file_cursor: usize,
+    /// The panel has keyboard focus; see [`Self::is_focused`].
+    pub focused: bool,
+    /// The cursor moved since the last draw, so the draw scrolls it into
+    /// view. The wheel scrolls freely otherwise.
+    follow: bool,
     /// The workspace and tab the panel last drew, so the scroll resets
     /// when either changes.
     anchor: Option<(Option<WorkspaceId>, PanelTab)>,
@@ -72,13 +84,53 @@ pub struct SidePanelState {
 
 impl SidePanelState {
     pub fn toggle(&mut self) {
-        self.open = !self.open;
+        if self.open {
+            self.close();
+        } else {
+            self.open = true;
+        }
+    }
+
+    /// Close the panel. Focus goes with it, so reopening never brings back
+    /// a focus the user didn't ask for.
+    pub fn close(&mut self) {
+        self.open = false;
+        self.focused = false;
+    }
+
+    /// Whether the Files list has keyboard focus: focus is only ever on an
+    /// open panel's Files tab.
+    pub fn is_focused(&self) -> bool {
+        self.focused && self.open && self.tab == PanelTab::Files
+    }
+
+    /// Open the panel on Files with keyboard focus in the list.
+    pub fn focus_files(&mut self) {
+        self.show(PanelTab::Files);
+        self.focused = true;
+        self.follow = true;
+    }
+
+    /// Move the file cursor by `d` files; the draw clamps it to the list.
+    pub fn move_cursor(&mut self, d: isize) {
+        self.file_cursor = self.file_cursor.saturating_add_signed(d);
+        self.follow = true;
+    }
+
+    /// Put the file cursor on file `i` and scroll it into view.
+    pub fn set_cursor(&mut self, i: usize) {
+        self.file_cursor = i;
+        self.follow = true;
     }
 
     /// Open the panel on `tab`.
     pub fn show(&mut self, tab: PanelTab) {
         self.open = true;
         self.tab = tab;
+        // Focus lives on the Files list; another tab drops it.
+        if tab != PanelTab::Files {
+            self.focused = false;
+        }
     }
 
     /// Switch to the other tab, opening the panel if closed.
@@ -126,16 +178,28 @@ impl SidePanelState {
         let anchor = (data.map(|d| d.workspace_id), self.tab);
         if self.anchor != Some(anchor) {
             self.scroll = 0;
+            // A new workspace starts its files at the top; switching tabs
+            // keeps the place.
+            if self.anchor.map(|a| a.0) != Some(anchor.0) {
+                self.file_cursor = 0;
+            }
             self.anchor = Some(anchor);
         }
+        let mut view = PanelView {
+            scroll: self.scroll,
+            cursor: self.file_cursor,
+            focused: self.is_focused(),
+            follow: std::mem::take(&mut self.follow),
+        };
         let targets = render(
             f,
             panel_area,
             self.tab,
             data.map(PanelData::inputs),
-            &mut self.scroll,
+            &mut view,
             theme,
         );
+        (self.scroll, self.file_cursor) = (view.scroll, view.cursor);
         (rest, targets)
     }
 }
@@ -183,22 +247,37 @@ pub struct PanelInputs<'a> {
     pub ahead: Option<u32>,
 }
 
+/// How the panel is scrolled and where its file cursor is, for one draw.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PanelView {
+    /// The body's first visible line, clamped by the draw.
+    pub scroll: usize,
+    /// The Files tab's highlighted file, clamped by the draw.
+    pub cursor: usize,
+    /// The panel has keyboard focus: the cursor shows.
+    pub focused: bool,
+    /// Scroll the cursor into view.
+    pub follow: bool,
+}
+
 /// Click targets in the panel, in screen coordinates.
 #[derive(Debug, Default)]
 pub struct PanelTargets {
     pub tabs: Vec<(PanelTab, Rect)>,
+    /// Each visible row of a file in the Files tab, by the file's index.
+    pub files: Vec<(usize, Rect)>,
     /// The whole panel, for routing the mouse wheel to it.
     pub area: Option<Rect>,
 }
 
 /// Draw the panel into `area`. `selected` is `None` when no workspace is
-/// selected. `scroll` is the body's first visible line, clamped here.
+/// selected. `view`'s scroll and cursor are clamped here.
 pub fn render(
     f: &mut Frame,
     area: Rect,
     tab: PanelTab,
     selected: Option<PanelInputs<'_>>,
-    scroll: &mut usize,
+    view: &mut PanelView,
     theme: &Theme,
 ) -> PanelTargets {
     if area.width < 4 || area.height == 0 {
@@ -278,12 +357,57 @@ pub fn render(
         theme.dim_style(),
     )));
 
-    let body = body_lines(tab, selected, width, theme);
-    let body_h = (inner.height as usize).saturating_sub(head.len());
-    *scroll = (*scroll).min(body.len().saturating_sub(body_h));
+    let files = match (tab, selected.and_then(|s| s.base.and(s.files))) {
+        (PanelTab::Files, Some(files)) if !files.is_empty() => Some(files),
+        _ => None,
+    };
+    view.cursor = view.cursor.min(files.map_or(0, |f| f.len() - 1));
+    // While focused, the bottom row says what the keys do.
+    let hint =
+        (view.focused && files.is_some() && inner.height as usize > head.len() + 1).then(|| {
+            crate::ui::drawer::hint_line(&[("↵", "diff"), ("o", "edit"), ("esc", "back")], theme)
+        });
+    let (body, spans) = match files {
+        Some(files) => file_lines(files, width, view.focused.then_some(view.cursor), theme),
+        None => (body_lines(tab, selected, width, theme), Vec::new()),
+    };
+    let body_h = (inner.height as usize)
+        .saturating_sub(head.len())
+        .saturating_sub(usize::from(hint.is_some()));
+    if view.follow
+        && let Some(&(start, len)) = spans.get(view.cursor)
+    {
+        if start < view.scroll {
+            view.scroll = start;
+        } else if start + len > view.scroll + body_h {
+            view.scroll = (start + len).saturating_sub(body_h);
+        }
+    }
+    view.scroll = view.scroll.min(body.len().saturating_sub(body_h));
+    let body_y = inner.y + head.len() as u16;
+    for (i, &(start, len)) in spans.iter().enumerate() {
+        for line in start..start + len {
+            if line >= view.scroll && line < view.scroll + body_h {
+                let rect = Rect {
+                    y: body_y + (line - view.scroll) as u16,
+                    height: 1,
+                    ..inner
+                };
+                targets.files.push((i, rect));
+            }
+        }
+    }
     let mut lines = head;
-    lines.extend(body.into_iter().skip(*scroll).take(body_h));
+    lines.extend(body.into_iter().skip(view.scroll).take(body_h));
     f.render_widget(Paragraph::new(lines), inner);
+    if let Some(hint) = hint {
+        let row = Rect {
+            y: inner.bottom() - 1,
+            height: 1,
+            ..inner
+        };
+        f.render_widget(Paragraph::new(hint), row);
+    }
     targets
 }
 
@@ -331,7 +455,7 @@ fn body_lines(
         PanelTab::Files => match s.files {
             None => note("loading…"),
             Some([]) => note(&format!("No files changed against {base}.")),
-            Some(files) => file_lines(files, width, theme),
+            Some(files) => file_lines(files, width, None, theme).0,
         },
     }
 }
@@ -364,8 +488,14 @@ fn commit_lines(commits: &[BranchCommit], width: usize, theme: &Theme) -> Vec<Li
 
 /// A total line, then each file's path with its `+N −M` flush right on
 /// the path's first line (`binary` for a binary file, which has no line
-/// counts); long paths wrap rather than truncate.
-fn file_lines(files: &[ChangedFile], width: usize, theme: &Theme) -> Vec<Line<'static>> {
+/// counts); long paths wrap rather than truncate. The file at `cursor` is
+/// highlighted. Also returns each file's first line and line count.
+fn file_lines(
+    files: &[ChangedFile],
+    width: usize,
+    cursor: Option<usize>,
+    theme: &Theme,
+) -> (Vec<Line<'static>>, Vec<(usize, usize)>) {
     let (added, removed) = files
         .iter()
         .filter_map(|f| f.stats)
@@ -391,7 +521,9 @@ fn file_lines(files: &[ChangedFile], width: usize, theme: &Theme) -> Vec<Line<'s
         ));
     }
     let mut out = vec![Line::from(total), Line::default()];
-    for f in files {
+    let mut extents = Vec::with_capacity(files.len());
+    for (fi, f) in files.iter().enumerate() {
+        let start = out.len();
         let counts: Vec<Span<'static>> = match f.stats {
             Some(d) => vec![
                 Span::styled(format!("+{}", d.added), theme.ok_style()),
@@ -402,17 +534,23 @@ fn file_lines(files: &[ChangedFile], width: usize, theme: &Theme) -> Vec<Line<'s
         };
         let cw: usize = counts.iter().map(|s| s.width()).sum();
         let path_w = width.saturating_sub(cw + 2).max(8);
-        for (i, l) in wrap(&f.path, path_w).into_iter().enumerate() {
+        for (i, l) in wrap(&f.display_path(), path_w).into_iter().enumerate() {
             let mut spans = vec![Span::raw(l.clone())];
             if i == 0 {
                 let pad = width.saturating_sub(display_width(&l) + cw);
                 spans.push(Span::raw(" ".repeat(pad.max(1))));
                 spans.extend(counts.iter().cloned());
             }
-            out.push(Line::from(spans));
+            let line = Line::from(spans);
+            out.push(if cursor == Some(fi) {
+                line.style(theme.selected_style())
+            } else {
+                line
+            });
         }
+        extents.push((start, out.len() - start));
     }
-    out
+    (out, extents)
 }
 
 #[cfg(test)]
@@ -426,9 +564,25 @@ mod tests {
         h: u16,
         scroll: &mut usize,
     ) -> (Vec<String>, PanelTargets) {
+        let mut view = PanelView {
+            scroll: *scroll,
+            ..Default::default()
+        };
+        let out = draw_view(tab, selected, w, h, &mut view);
+        *scroll = view.scroll;
+        out
+    }
+
+    fn draw_view(
+        tab: PanelTab,
+        selected: Option<PanelInputs<'_>>,
+        w: u16,
+        h: u16,
+        view: &mut PanelView,
+    ) -> (Vec<String>, PanelTargets) {
         let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
         let mut targets = PanelTargets::default();
-        term.draw(|f| targets = render(f, f.area(), tab, selected, scroll, &Theme::wsx()))
+        term.draw(|f| targets = render(f, f.area(), tab, selected, view, &Theme::wsx()))
             .unwrap();
         let buf = term.backend().buffer().clone();
         let lines = (0..buf.area.height)
@@ -459,6 +613,7 @@ mod tests {
         vec![
             ChangedFile {
                 path: "src/ui/dashboard/tall.rs".into(),
+                old_path: None,
                 stats: Some(DiffStats {
                     added: 412,
                     removed: 63,
@@ -466,6 +621,7 @@ mod tests {
             },
             ChangedFile {
                 path: "docs/book/src/dashboard/a-rather-long-file-name-that-wraps.md".into(),
+                old_path: None,
                 stats: Some(DiffStats {
                     added: 5,
                     removed: 1,
@@ -584,6 +740,7 @@ mod tests {
         let c = commits();
         let f = vec![ChangedFile {
             path: "assets/logo.png".into(),
+            old_path: None,
             stats: None,
         }];
         let inputs = PanelInputs {
@@ -647,5 +804,122 @@ mod tests {
                 "height {h}: {lines:?}"
             );
         }
+    }
+
+    fn many_files(n: usize) -> Vec<ChangedFile> {
+        (0..n)
+            .map(|i| ChangedFile {
+                path: format!("src/file{i:02}.rs"),
+                old_path: None,
+                stats: Some(crate::git::DiffStats {
+                    added: 1,
+                    removed: 0,
+                }),
+            })
+            .collect()
+    }
+
+    fn file_inputs(files: &[ChangedFile]) -> PanelInputs<'_> {
+        PanelInputs {
+            branch: "b",
+            base: Some("main"),
+            commits: Some(&[]),
+            files: Some(files),
+            ahead: Some(0),
+        }
+    }
+
+    /// Focused, the cursor's file is highlighted and a hint names the keys;
+    /// unfocused, neither shows.
+    #[test]
+    fn focus_shows_the_cursor_and_hint() {
+        let files = many_files(3);
+        let mut view = PanelView {
+            cursor: 1,
+            focused: true,
+            ..Default::default()
+        };
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(40, 12)).unwrap();
+        let theme = Theme::wsx();
+        term.draw(|f| {
+            render(
+                f,
+                f.area(),
+                PanelTab::Files,
+                Some(file_inputs(&files)),
+                &mut view,
+                &theme,
+            );
+        })
+        .unwrap();
+        let buf = term.backend().buffer().clone();
+        let row = |y: u16| (0..40).map(|x| buf[(x, y)].symbol()).collect::<String>();
+        let y = (0..12).find(|&y| row(y).contains("file01")).unwrap();
+        assert_eq!(buf[(2, y)].bg, theme.selected_bg);
+        let other = (0..12).find(|&y| row(y).contains("file00")).unwrap();
+        assert_ne!(buf[(2, other)].bg, theme.selected_bg);
+        assert!(
+            row(11).contains("diff") && row(11).contains("back"),
+            "{:?}",
+            row(11)
+        );
+
+        view.focused = false;
+        let (lines, _) = draw_view(
+            PanelTab::Files,
+            Some(file_inputs(&files)),
+            40,
+            12,
+            &mut view,
+        );
+        assert!(!lines[11].contains("back"), "{lines:?}");
+    }
+
+    /// Moving the cursor past the bottom scrolls it into view, the cursor
+    /// clamps to the list, and every visible file row is a click target.
+    #[test]
+    fn the_cursor_scrolls_into_view_and_clamps() {
+        let files = many_files(30);
+        let mut view = PanelView {
+            cursor: 25,
+            focused: true,
+            follow: true,
+            ..Default::default()
+        };
+        let (lines, targets) = draw_view(
+            PanelTab::Files,
+            Some(file_inputs(&files)),
+            40,
+            12,
+            &mut view,
+        );
+        assert!(lines.join("\n").contains("file25"), "{lines:?}");
+        assert!(view.scroll > 0);
+        let (i, r) = targets.files.iter().find(|(i, _)| *i == 25).unwrap();
+        assert!(lines[r.y as usize].contains(&format!("file{i}")));
+
+        view.cursor = 99;
+        draw_view(
+            PanelTab::Files,
+            Some(file_inputs(&files)),
+            40,
+            12,
+            &mut view,
+        );
+        assert_eq!(view.cursor, 29);
+    }
+
+    #[test]
+    fn focus_holds_only_on_an_open_files_tab() {
+        let mut p = SidePanelState::default();
+        p.focus_files();
+        assert!(p.is_focused());
+        p.show(PanelTab::Commits);
+        p.show(PanelTab::Files);
+        assert!(!p.is_focused(), "another tab drops focus for good");
+        p.focus_files();
+        p.toggle();
+        p.toggle();
+        assert!(p.open && !p.is_focused(), "closing drops focus for good");
     }
 }

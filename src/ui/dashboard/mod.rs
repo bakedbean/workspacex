@@ -300,6 +300,8 @@ pub struct ListClickTargets {
     pub panel_tabs: Vec<(side_panel::PanelTab, Rect)>,
     /// The side panel itself, for routing the wheel to it.
     pub panel_area: Option<Rect>,
+    /// The side panel's file rows — a click opens that file's diff.
+    pub panel_files: Vec<(usize, Rect)>,
     /// The focus view's `◂ all repos` link — leaves the focus view.
     pub unfocus: Option<Rect>,
 }
@@ -440,6 +442,7 @@ pub fn render_without_footer(
         );
         return ListClickTargets {
             statuses,
+            panel_files: panel.files,
             panel_tabs: panel.tabs,
             panel_area: panel.area,
             ..Default::default()
@@ -466,6 +469,7 @@ pub fn render_without_footer(
         repo_pr_links: repo_spans(repo_link_spans),
         repo_names: repo_spans(name_spans),
         statuses,
+        panel_files: panel.files,
         panel_tabs: panel.tabs,
         panel_area: panel.area,
         ..Default::default()
@@ -625,6 +629,7 @@ fn render_focus(
         );
         return ListClickTargets {
             unfocus,
+            panel_files: panel_targets.files,
             panel_tabs: panel_targets.tabs,
             panel_area: panel_targets.area,
             ..Default::default()
@@ -692,6 +697,7 @@ fn render_focus(
         focus_rows: targets.rows,
         focus_groups,
         unfocus,
+        panel_files: panel_targets.files,
         panel_tabs: panel_targets.tabs,
         panel_area: panel_targets.area,
         ..Default::default()

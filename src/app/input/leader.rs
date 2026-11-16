@@ -153,6 +153,12 @@ pub(in crate::app::input) async fn dispatch_leader_action(
             app.attached_panel.next_tab();
             Ok(())
         }
+        // `f` opens the panel on Files with keyboard focus in the list;
+        // bare keys then move through the files until focus goes back.
+        KeyCode::Char('f') => {
+            app.attached_panel.focus_files();
+            Ok(())
+        }
         KeyCode::Char(c @ '1'..='9') => {
             let idx = (c as u8 - b'1') as usize;
             if let Some(cmd) = app.pinned_commands_cache.get(idx) {

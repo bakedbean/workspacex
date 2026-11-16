@@ -541,12 +541,15 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         // but only a panel actually on screen; with a terminal too narrow
         // to show it, Esc does what it would without the panel.
         (KeyCode::Esc, _) if app.dashboard.panel.open && app.side_panel_rect.is_some() => {
-            app.dashboard.panel.open = false;
+            app.dashboard.panel.close();
         }
         (KeyCode::Esc, _) if app.dashboard.focused_repo.is_some() => leave_repo_focus(app),
         // The side panel: `c` toggles it, `1` / `2` pick its tab (opening
         // it if closed).
         (KeyCode::Char('c'), _) => app.dashboard.panel.toggle(),
+        // `→` moves keyboard focus into the panel's Files list (see
+        // `side_panel::focused_key`), opening it there if need be.
+        (KeyCode::Right, _) => app.dashboard.panel.focus_files(),
         (KeyCode::Char('1'), _) => {
             show_panel_tab(app, crate::ui::dashboard::side_panel::PanelTab::Commits);
         }

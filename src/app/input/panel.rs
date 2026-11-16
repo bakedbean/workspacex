@@ -256,6 +256,7 @@ fn claims(modal: &Modal, c: char) -> bool {
         | Modal::PromptTag(_)
         | Modal::WorkspaceTags { .. }
         | Modal::NameColorPicker { .. }
+        | Modal::FileDiff(..)
         | Modal::ProcessList { input: Some(_), .. }
         | Modal::UpdatesPanel {
             filter: Some(_), ..

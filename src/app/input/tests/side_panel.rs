@@ -255,3 +255,164 @@ async fn the_wheel_over_the_attached_panel_scrolls_it() {
     assert_eq!(app.attached_panel.scroll, 3);
     assert_eq!(app.dashboard.panel.scroll, 0);
 }
+
+async fn key(app: &mut App, code: KeyCode) {
+    dispatch_key(app, &shared_app(), KeyEvent::new(code, KeyModifiers::NONE))
+        .await
+        .unwrap();
+}
+
+fn diff_modal(app: &App) -> Option<&crate::ui::modal::FileDiffModal> {
+    match &app.modal {
+        Some(crate::ui::modal::Modal::FileDiff(m)) => Some(m),
+        _ => None,
+    }
+}
+
+/// `→` focuses the Files list; `j` / `k` move the cursor instead of the
+/// rows, and Enter opens the cursor's file in the diff viewer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn right_focuses_the_files_and_enter_opens_a_diff() {
+    let (mut app, _, ids) = app();
+    draw(&mut app);
+    key(&mut app, KeyCode::Right).await;
+    let screen = draw(&mut app);
+    assert!(app.dashboard.panel.is_focused());
+    assert!(screen.contains("2 files"), "opens on Files:\n{screen}");
+
+    key(&mut app, KeyCode::Char('j')).await;
+    draw(&mut app);
+    assert_eq!(app.dashboard.panel.file_cursor, 1);
+    assert_eq!(
+        app.dashboard.selection,
+        Some(SelectionTarget::Workspace(ids[0])),
+        "the rows stay put"
+    );
+    key(&mut app, KeyCode::Char('j')).await;
+    draw(&mut app);
+    assert_eq!(app.dashboard.panel.file_cursor, 1, "clamped to the list");
+
+    key(&mut app, KeyCode::Enter).await;
+    let m = diff_modal(&app).expect("diff viewer open");
+    assert_eq!((m.workspace_id, m.index), (ids[0], 1));
+    assert_eq!(m.file().unwrap().path, "src/zeta.rs");
+    assert_eq!(m.base, "origin/main");
+}
+
+/// Esc gives focus back to the rows and leaves the panel open; a key the
+/// panel has no use for drops focus and does what it would without it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn focus_goes_back_on_esc_or_any_other_key() {
+    let (mut app, _, ids) = app();
+    draw(&mut app);
+    key(&mut app, KeyCode::Right).await;
+    draw(&mut app);
+    key(&mut app, KeyCode::Esc).await;
+    assert!(!app.dashboard.panel.is_focused());
+    assert!(app.dashboard.panel.open, "Esc only unfocuses");
+
+    key(&mut app, KeyCode::Right).await;
+    draw(&mut app);
+    key(&mut app, KeyCode::Char('1')).await;
+    assert!(!app.dashboard.panel.is_focused());
+    assert_eq!(
+        app.dashboard.panel.tab,
+        crate::ui::dashboard::side_panel::PanelTab::Commits,
+        "the key still switched the tab"
+    );
+    key(&mut app, KeyCode::Char('j')).await;
+    assert_eq!(
+        app.dashboard.selection,
+        Some(SelectionTarget::Workspace(ids[1])),
+        "j moves the rows again"
+    );
+}
+
+/// A click on a file opens its diff; in the viewer `]` steps to the next
+/// file and the panel's cursor follows, and Esc closes it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn clicking_a_file_opens_it_and_the_viewer_steps_and_closes() {
+    let (mut app, _, _) = app();
+    key(&mut app, KeyCode::Char('2')).await;
+    draw(&mut app);
+    let &(index, r) = app
+        .side_panel_file_rects
+        .iter()
+        .find(|(i, _)| *i == 0)
+        .expect("file rows are click targets");
+    handle_mouse(
+        &mut app,
+        &shared_app(),
+        MouseEvent {
+            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: r.x + 1,
+            row: r.y,
+            modifiers: KeyModifiers::NONE,
+        },
+    )
+    .await;
+    assert_eq!(diff_modal(&app).map(|m| m.index), Some(index));
+    let screen = draw(&mut app);
+    assert!(
+        screen.contains("src/alpha.rs") && screen.contains("1/2"),
+        "{screen}"
+    );
+    assert!(screen.contains("minimap"), "{screen}");
+
+    key(&mut app, KeyCode::Char(']')).await;
+    assert_eq!(diff_modal(&app).map(|m| m.index), Some(1));
+    assert_eq!(app.dashboard.panel.file_cursor, 1);
+    // Summon keys belong to the viewer while it is open.
+    key(&mut app, KeyCode::Char('s')).await;
+    assert!(diff_modal(&app).is_some());
+
+    key(&mut app, KeyCode::Esc).await;
+    assert!(app.modal.is_none());
+    assert!(app.dashboard.panel.open);
+}
+
+/// `Ctrl-x f` opens the attached panel on Files with focus; bare keys then
+/// move the cursor rather than reaching the agent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ctrl_x_f_focuses_the_attached_files() {
+    let (mut app, target) = attached_app();
+    app.view = crate::ui::View::Attached(crate::ui::split::AttachedState::single(target));
+    draw(&mut app);
+    chord(&mut app, target, 'f').await;
+    draw(&mut app);
+    assert!(app.attached_panel.is_focused());
+    assert!(!app.dashboard.panel.open);
+    key(&mut app, KeyCode::Char('j')).await;
+    assert_eq!(app.attached_panel.file_cursor, 1);
+    key(&mut app, KeyCode::Enter).await;
+    let m = diff_modal(&app).expect("diff viewer open");
+    assert_eq!((m.workspace_id, m.index), (target.workspace_id, 1));
+}
+
+/// `o` on a file the worktree doesn't have says so: as an error card from
+/// the focused list, and on the viewer's hint row while it stays open,
+/// cleared by the next key.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn o_on_a_missing_file_explains_itself() {
+    let (mut app, _, _) = app();
+    draw(&mut app);
+    key(&mut app, KeyCode::Right).await;
+    draw(&mut app);
+    key(&mut app, KeyCode::Char('o')).await;
+    match &app.modal {
+        Some(crate::ui::modal::Modal::Error { message }) => {
+            assert!(message.contains("src/alpha.rs is deleted"), "{message}")
+        }
+        other => panic!("expected an error card, got {other:?}"),
+    }
+    key(&mut app, KeyCode::Esc).await;
+
+    key(&mut app, KeyCode::Enter).await;
+    key(&mut app, KeyCode::Char('o')).await;
+    let m = diff_modal(&app).expect("the viewer stays open");
+    assert!(m.notice.as_deref().is_some_and(|n| n.contains("deleted")));
+    let screen = draw(&mut app);
+    assert!(screen.contains("nothing to open"), "{screen}");
+    key(&mut app, KeyCode::Char('j')).await;
+    assert_eq!(diff_modal(&app).unwrap().notice, None);
+}

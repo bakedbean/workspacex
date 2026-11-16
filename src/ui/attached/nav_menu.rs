@@ -87,6 +87,10 @@ pub fn nav_menu_items(multi_pane: bool) -> Vec<NavItem> {
             label: "panel tab",
         },
         NavItem {
+            glyph: "f",
+            label: "browse changed files",
+        },
+        NavItem {
             glyph: "x",
             label: "send literal ^x",
         },

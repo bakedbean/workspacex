@@ -292,7 +292,7 @@ fn tall_rows_show_long_recaps_and_branches_whole() {
     let goal_lines: Vec<usize> = screen
         .lines()
         .enumerate()
-        .filter(|(_, l)| goal.split(' ').any(|w| w.len() > 6 && l.contains(w)))
+        .filter(|(_, l)| goal.split(' ').any(|w| w.len() > 4 && l.contains(w)))
         .map(|(y, _)| y)
         .collect();
     assert!(goal_lines.len() >= 2, "goal wraps:\n{screen}");

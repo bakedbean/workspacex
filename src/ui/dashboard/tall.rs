@@ -1,13 +1,13 @@
 //! Tall rows for the repo focus view: one repo's workspaces as a list in
 //! which each workspace spans several lines.
 //!
-//! On a wide enough terminal each row splits in three: a narrow column of
-//! facts on the left (branch, status and age, git counts, agents, tags), a
-//! PR column beside the branch so PR state scans down the view as on the
-//! list, and the prose on the right (initial prompt, recap goal and state → next,
-//! or the agent's last message), wrapped at a comfortable reading width
-//! rather than across the whole screen. Alternate rows take a background
-//! tint so each workspace reads as one block.
+//! On a wide enough terminal each row has three zones: a strip line of
+//! fixed columns (branch, PR chip, status, ahead, uncommitted, diff, age)
+//! sized once per frame so fields line up down the view; the prose under
+//! the branch (initial prompt, recap goal and state → next, or the agent's
+//! last message), wrapped at a comfortable reading width; and a footer of
+//! agents and tags. Alternate rows take a background tint so each workspace
+//! reads as one block.
 //!
 //! Narrower terminals fall back to a stacked row: the ordinary dashboard
 //! row with its branch column widened, then the prose lines, then a line of
@@ -133,13 +133,8 @@ const PROMPT_MAX_LINES: usize = 2;
 /// Most lines the no-recap fallback text may wrap onto.
 const FALLBACK_MAX_LINES: usize = 2;
 
-/// Narrowest terminal that gets the two-column layout.
+/// Narrowest terminal that gets the strip layout.
 pub const SPLIT_MIN_WIDTH: usize = 96;
-/// Bounds on the facts column's width (after the agent strip and gutter).
-const LEFT_MIN: usize = 30;
-const LEFT_MAX: usize = 44;
-/// Blank cells between the facts and the prose.
-const COLUMN_GAP: usize = 3;
 /// Widest the prose column gets, label included: lines much past ~80
 /// characters of text get tiring to read.
 const PROSE_MAX: usize = 92;
@@ -339,19 +334,12 @@ fn prose_items(row: &RowInputs, detail: &WorkspaceDetail, theme: &Theme) -> Vec<
 pub enum Geometry {
     /// The dashboard row, then prose and git lines under it.
     Stacked { widths: ColumnWidths },
-    /// Facts in a `left`-cell column, the PR chip in a `pr`-cell column,
-    /// prose in a `prose`-cell column.
-    Split {
-        widths: ColumnWidths,
-        left: usize,
-        pr: usize,
-        prose: usize,
-    },
+    /// A strip line of fixed columns, then prose, then a footer.
+    Strip(StripColumns),
 }
 
-/// Pick the layout for `rows` at `width`: split when the terminal is wide
-/// enough, with the facts column sized to the longest branch within its
-/// bounds; stacked otherwise, with the branch column widened.
+/// Pick the layout for `rows` at `width`: the strip when the terminal is
+/// wide enough, stacked otherwise, with the branch column widened.
 pub fn geometry(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -> Geometry {
     if width < SPLIT_MIN_WIDTH {
         return Geometry::Stacked {
@@ -361,30 +349,133 @@ pub fn geometry(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -> Geo
             },
         };
     }
-    // The facts sit two cells in from the status glyph; a branch longer
-    // than the column wraps rather than truncating.
-    let longest = rows
-        .iter()
-        .map(|r| 2 + display_width(&r.row.branch))
-        .max()
-        .unwrap_or(0);
-    let left = longest.clamp(LEFT_MIN, LEFT_MAX);
-    let pr = rows
-        .iter()
-        .filter_map(|r| full_chip(r.row).map(|c| c.width()))
-        .max()
-        .unwrap_or(0)
+    Geometry::Strip(strip_columns(rows, widths, width))
+}
+
+/// Bounds on the strip's branch column, its status glyph included.
+const BRANCH_MIN: usize = 12;
+const BRANCH_MAX: usize = 44;
+/// Blank cells between strip columns.
+const STRIP_GAP: usize = 2;
+
+/// Each strip cell's width, the widest across every row in the frame, so
+/// fields line up down the view. A zero-width column is skipped with its gap.
+#[derive(Debug, Clone, Copy)]
+pub struct StripColumns {
+    pub widths: ColumnWidths,
+    pub branch: usize,
+    pub pr: usize,
+    pub status: usize,
+    pub ahead: usize,
+    pub dirty: usize,
+    pub diff: usize,
+    pub age: usize,
+    pub two_line: bool,
+    pub prose: usize,
+}
+
+/// Size the strip's columns for `rows` at `width`. The branch column fits
+/// the longest branch within its bounds and shrinks so the strip fits on
+/// one line; a longer branch wraps.
+pub fn strip_columns(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -> StripColumns {
+    let max = |f: &dyn Fn(&TallRow<'_>) -> usize| rows.iter().map(f).max().unwrap_or(0);
+    let spans_width = |s: &[Span<'_>]| s.iter().map(Span::width).sum::<usize>();
+    // Styles don't change widths; any theme sizes the cells.
+    let theme = Theme::wsx();
+    let pr = max(&|r| full_chip(r.row).map_or(0, |c| c.width()))
         .clamp(display_width(NO_PR), row::MAX_PR_WIDTH);
-    let prefix = widths.agent + 2;
-    let prose = width
-        .saturating_sub(prefix + left + COLUMN_GAP + pr + COLUMN_GAP)
-        .min(PROSE_MAX);
-    Geometry::Split {
+    let status = max(&|r| spans_width(&status_spans(r.row, 0, &theme)));
+    let ahead = max(&|r| ahead_text(r.detail).map_or(0, |t| display_width(&t)));
+    let dirty = max(&|r| dirty_text(r.detail).map_or(0, |t| display_width(&t)));
+    let diff = max(&|r| spans_width(&diff_spans(r.row, &theme)));
+    let age = max(&|r| display_width(&age_text(r.row)));
+    let prefix = widths.agent + row::GUTTER_WIDTH + 1;
+    let rest: usize = STRIP_GAP
+        + pr
+        + [status, ahead, dirty, diff, age]
+            .iter()
+            .filter(|&&w| w > 0)
+            .map(|w| STRIP_GAP + w)
+            .sum::<usize>();
+    let branch = max(&|r| 2 + display_width(&r.row.branch))
+        .clamp(BRANCH_MIN, BRANCH_MAX)
+        .min(width.saturating_sub(prefix + rest))
+        .max(4);
+    StripColumns {
         widths,
-        left,
+        branch,
         pr,
-        prose,
+        status,
+        ahead,
+        dirty,
+        diff,
+        age,
+        two_line: false,
+        prose: width.saturating_sub(prefix + 2).min(PROSE_MAX),
     }
+}
+
+/// The status cell: report mark and token, process count, lifecycle badge,
+/// and undelivered-mail mark.
+fn status_spans(row: &RowInputs, tick: u32, theme: &Theme) -> Vec<Span<'static>> {
+    use crate::ui::dashboard::status::Status;
+    let mut status: Vec<Span<'static>> = Vec::new();
+    if let Some(col) = row.column.as_ref() {
+        let prefix = if col.reported { "▸ " } else { "└ " };
+        let token_style = if row.status == Status::Stalled && !col.reported {
+            theme.warn_style()
+        } else {
+            theme.status_style(row.status)
+        };
+        status.push(Span::styled(prefix, theme.status_style(row.status)));
+        status.push(Span::styled(col.token.clone(), token_style));
+    }
+    if row.procs > 0 {
+        status.push(Span::styled(
+            format!("  ● {}p", row.procs),
+            theme.status_style(Status::Thinking),
+        ));
+    }
+    if let Some(b) = row.badge {
+        status.push(Span::styled(b.glyph(tick), b.style(theme)));
+    }
+    if row.undelivered_mail {
+        status.push(Span::styled(" ✉!", theme.err_style()));
+    }
+    status
+}
+
+fn ahead_text(detail: &WorkspaceDetail) -> Option<String> {
+    detail
+        .ahead_of_base
+        .map(|n| ahead_label(n, detail.base_branch.as_deref()))
+}
+
+/// `3 mod 1 untr`; `None` for a clean or unknown tree.
+fn dirty_text(detail: &WorkspaceDetail) -> Option<String> {
+    let g = detail.git?;
+    let parts: Vec<String> = [(g.modified, "mod"), (g.untracked, "untr")]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, l)| format!("{n} {l}"))
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
+/// `+184 −22`, or nothing without changes.
+fn diff_spans(row: &RowInputs, theme: &Theme) -> Vec<Span<'static>> {
+    match row.diff.filter(|d| d.added > 0 || d.removed > 0) {
+        Some(d) => vec![
+            Span::styled(format!("+{}", d.added), theme.ok_style()),
+            Span::raw(" "),
+            Span::styled(format!("−{}", d.removed), theme.err_style()),
+        ],
+        None => Vec::new(),
+    }
+}
+
+fn age_text(row: &RowInputs) -> String {
+    crate::ui::dashboard::column_content::format_ago_short(row.ago_secs)
 }
 
 /// The PR column's text for a row without a PR.
@@ -434,118 +525,32 @@ pub struct RowLayout {
     pub pr_hit: Option<(usize, u16, u16)>,
 }
 
-/// Lay out one row under `geo`.
+/// Lay out one row: the strip (branch continuation lines under it), the
+/// prose under the branch, then the agents-and-tags footer.
 pub fn row_layout(
     tall: &TallRow<'_>,
     glyphs: &AgentGlyphs,
-    geo: Geometry,
+    cols: StripColumns,
     tick: u32,
     theme: &Theme,
-    width: usize,
-) -> RowLayout {
-    match geo {
-        Geometry::Stacked { widths } => RowLayout {
-            lines: row_lines(tall, glyphs, widths, tick, theme, width),
-            pr_hit: row::pr_chip_hit_span(tall.row, widths).map(|(dx, w)| (0, dx, w)),
-        },
-        Geometry::Split {
-            widths,
-            left,
-            pr,
-            prose,
-        } => split_layout(tall, glyphs, widths, left, pr, prose, tick, theme),
-    }
-}
-
-/// The split row: facts on the left, the PR chip beside the branch, prose
-/// on the right, each line led by the agent strip (first line) or the
-/// status gutter.
-#[allow(clippy::too_many_arguments)]
-fn split_layout(
-    tall: &TallRow<'_>,
-    glyphs: &AgentGlyphs,
-    widths: ColumnWidths,
-    left: usize,
-    pr: usize,
-    prose: usize,
-    tick: u32,
-    theme: &Theme,
+    _width: usize,
 ) -> RowLayout {
     let row = tall.row;
-    let facts = fact_lines(row, tall.detail, glyphs, left, tick, theme);
-    let (pr_spans, pr_width) = pr_cell(row, pr, theme);
-
-    let text_width = prose.saturating_sub(LABEL_WIDTH).max(8);
-    let mut prose_lines: Vec<Vec<Span<'static>>> = Vec::new();
-    for item in prose_items(row, tall.detail, theme) {
-        for (i, l) in wrap_capped(&item.text, text_width, item.max)
-            .into_iter()
-            .enumerate()
-        {
-            let label = if i == 0 { item.label } else { "" };
-            prose_lines.push(vec![
-                Span::styled(format!("{label:<LABEL_WIDTH$}"), theme.dim_style()),
-                Span::styled(l, item.style),
-            ]);
-        }
-    }
-
+    let widths = cols.widths;
     let gutter = Span::styled(
         if row.selected { "▍" } else { "▎" },
         theme.status_style(row.status),
     );
-    let n = facts.len().max(prose_lines.len());
-    let mut lines = Vec::with_capacity(n);
-    for i in 0..n {
-        let mut spans: Vec<Span<'static>> = if i == 0 {
-            row::agent_strip_spans(row, widths, tick, theme)
-        } else {
-            vec![Span::raw(" ".repeat(widths.agent))]
-        };
-        spans.push(gutter.clone());
-        spans.push(Span::raw(" "));
-        let fact = facts.get(i).cloned().unwrap_or_default();
-        let used: usize = fact.iter().map(|s| s.width()).sum();
-        spans.extend(fact);
-        let prose_line = prose_lines.get(i);
-        if i == 0 || prose_line.is_some() {
-            spans.push(Span::raw(
-                " ".repeat(left.saturating_sub(used) + COLUMN_GAP),
-            ));
-            if i == 0 {
-                spans.extend(pr_spans.iter().cloned());
-            } else {
-                spans.push(Span::raw(" ".repeat(pr)));
-            }
-        }
-        if let Some(p) = prose_line {
-            spans.push(Span::raw(" ".repeat(COLUMN_GAP)));
-            spans.extend(p.iter().cloned());
-        }
-        lines.push(Line::from(spans));
-    }
-    let pr_x = (widths.agent + 2 + left + COLUMN_GAP) as u16;
-    let pr_hit = pr_width.map(|w| (0, pr_x, w));
-    RowLayout { lines, pr_hit }
-}
+    // Every line after the strip: agent padding, gutter, and the indent
+    // that puts content under the branch name.
+    let lead = || {
+        vec![
+            Span::raw(" ".repeat(widths.agent)),
+            gutter.clone(),
+            Span::raw("   "),
+        ]
+    };
 
-/// The facts column, each line at most `left` cells: the status glyph and
-/// branch (wrapping, never truncated), then status word, process count and
-/// age, git counts, agents, and tags. The PR chip has its own column.
-fn fact_lines(
-    row: &RowInputs,
-    detail: &WorkspaceDetail,
-    glyphs: &AgentGlyphs,
-    left: usize,
-    tick: u32,
-    theme: &Theme,
-) -> Vec<Vec<Span<'static>>> {
-    use crate::ui::dashboard::status::Status;
-    let inner = left.saturating_sub(2).max(1);
-    let indent = || Span::raw("  ");
-    let mut out: Vec<Vec<Span<'static>>> = Vec::new();
-
-    // Glyph and branch.
     let (glyph, glyph_style) = if row.status.is_live() {
         (
             crate::ui::dashboard::spinner::frame(tick),
@@ -561,93 +566,94 @@ fn fact_lines(
     if let Some(c) = row.name_color {
         name_style = name_style.fg(c);
     }
-    for (i, part) in wrap(&row.branch, inner).into_iter().enumerate() {
-        let lead = if i == 0 {
-            Span::styled(format!("{glyph} "), glyph_style)
-        } else {
-            indent()
-        };
-        out.push(vec![lead, Span::styled(part, name_style)]);
-    }
+    let name_width = cols.branch.saturating_sub(2).max(1);
+    let mut branch = wrap(&row.branch, name_width).into_iter();
+    let first = branch.next().unwrap_or_default();
 
-    // Status word, processes, and badges, then the age flush with the
-    // column's right edge (on a line of its own if they leave no room).
-    let mut status: Vec<Span<'static>> = Vec::new();
-    if let Some(col) = row.column.as_ref() {
-        let prefix = if col.reported { "▸ " } else { "└ " };
-        let token_style = if row.status == Status::Stalled && !col.reported {
-            theme.warn_style()
-        } else {
-            theme.status_style(row.status)
-        };
-        status.push(Span::styled(prefix, theme.status_style(row.status)));
-        status.push(Span::styled(col.token.clone(), token_style));
-    }
-    if row.procs > 0 {
-        status.push(Span::styled(
-            format!("  ● {}p", row.procs),
-            theme.status_style(Status::Thinking),
-        ));
-    }
-    if let Some(b) = row.badge {
-        status.push(Span::styled(b.glyph(tick), b.style(theme)));
-    }
-    if row.undelivered_mail {
-        status.push(Span::styled(" ✉!", theme.err_style()));
-    }
-    let age = crate::ui::dashboard::column_content::format_ago_short(row.ago_secs);
-    let mut l = vec![indent()];
-    l.extend(status);
-    let used: usize = l.iter().map(|s| s.width()).sum();
-    if used > 2 && used + 1 + display_width(&age) > left {
-        out.push(std::mem::replace(&mut l, vec![indent()]));
-    }
-    let used: usize = l.iter().map(|s| s.width()).sum();
-    l.push(Span::raw(
-        " ".repeat(left.saturating_sub(used + display_width(&age))),
-    ));
-    l.push(Span::styled(age, theme.row_dim_style()));
-    out.push(l);
-
-    // Git counts, packed onto as few lines as fit.
-    let mut git: Vec<Vec<Span<'static>>> = Vec::new();
-    if let Some(n) = detail.ahead_of_base {
-        git.push(vec![Span::styled(
-            ahead_label(n, detail.base_branch.as_deref()),
-            theme.row_dim_style(),
-        )]);
-    }
-    // A clean tree says nothing; only uncommitted changes are listed.
-    if let Some(g) = detail.git {
-        if g.modified > 0 {
-            git.push(vec![Span::styled(
-                format!("{} modified", g.modified),
-                theme.row_dim_style(),
-            )]);
+    let mut strip = row::agent_strip_spans(row, widths, tick, theme);
+    strip.push(gutter.clone());
+    strip.push(Span::raw(" "));
+    strip.push(Span::styled(format!("{glyph} "), glyph_style));
+    let pad = name_width.saturating_sub(display_width(&first));
+    strip.push(Span::styled(first, name_style));
+    strip.push(Span::raw(" ".repeat(pad + STRIP_GAP)));
+    let (pr_spans, pr_width) = pr_cell(row, cols.pr, theme);
+    strip.extend(pr_spans);
+    let cells = [
+        (cols.status, status_spans(row, tick, theme), false),
+        (cols.ahead, dim_cell(ahead_text(tall.detail), theme), false),
+        (cols.dirty, dim_cell(dirty_text(tall.detail), theme), false),
+        (cols.diff, diff_spans(row, theme), false),
+        (
+            cols.age,
+            vec![Span::styled(age_text(row), theme.row_dim_style())],
+            true,
+        ),
+    ];
+    for (w, spans, right) in cells {
+        if w == 0 {
+            continue;
         }
-        if g.untracked > 0 {
-            git.push(vec![Span::styled(
-                format!("{} untracked", g.untracked),
-                theme.row_dim_style(),
-            )]);
+        let pad = w.saturating_sub(spans.iter().map(Span::width).sum());
+        strip.push(Span::raw(" ".repeat(STRIP_GAP)));
+        if right {
+            strip.push(Span::raw(" ".repeat(pad)));
+            strip.extend(spans);
+        } else {
+            strip.extend(spans);
+            strip.push(Span::raw(" ".repeat(pad)));
         }
     }
-    if let Some(d) = row.diff.filter(|d| d.added > 0 || d.removed > 0) {
-        git.push(vec![
-            Span::styled(format!("+{}", d.added), theme.ok_style()),
-            Span::raw(" "),
-            Span::styled(format!("−{}", d.removed), theme.err_style()),
-        ]);
-    }
-    let sep = Span::styled(" · ", theme.dim_style());
-    for l in pack(git, &sep, inner) {
-        let mut line = vec![indent()];
-        line.extend(l);
-        out.push(line);
+    let mut lines = vec![Line::from(strip)];
+    for part in branch {
+        let mut l = lead();
+        l.push(Span::styled(part, name_style));
+        lines.push(Line::from(l));
     }
 
-    // Agents, primary first, each led by its icon.
-    let agents: Vec<Vec<Span<'static>>> = std::iter::once((row.agent, false))
+    let text_width = cols.prose.saturating_sub(LABEL_WIDTH).max(8);
+    for item in prose_items(row, tall.detail, theme) {
+        for (i, text) in wrap_capped(&item.text, text_width, item.max)
+            .into_iter()
+            .enumerate()
+        {
+            let label = if i == 0 { item.label } else { "" };
+            let mut l = lead();
+            l.push(Span::styled(
+                format!("{label:<LABEL_WIDTH$}"),
+                theme.dim_style(),
+            ));
+            l.push(Span::styled(text, item.style));
+            lines.push(Line::from(l));
+        }
+    }
+
+    for part in pack(
+        footer_parts(row, glyphs, theme),
+        &Span::raw("  "),
+        cols.prose,
+    ) {
+        let mut l = lead();
+        l.extend(part);
+        lines.push(Line::from(l));
+    }
+
+    let pr_x = (widths.agent + row::GUTTER_WIDTH + 1 + cols.branch + STRIP_GAP) as u16;
+    RowLayout {
+        lines,
+        pr_hit: pr_width.map(|w| (0, pr_x, w)),
+    }
+}
+
+fn dim_cell(text: Option<String>, theme: &Theme) -> Vec<Span<'static>> {
+    text.map(|t| vec![Span::styled(t, theme.row_dim_style())])
+        .unwrap_or_default()
+}
+
+/// Agents (primary first, each led by its icon; active peers in their
+/// hue), then tags, as parts for [`pack`].
+fn footer_parts(row: &RowInputs, glyphs: &AgentGlyphs, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+    let agents = std::iter::once((row.agent, false))
         .chain(row.peers.iter().map(|p| (p.agent, p.active)))
         .map(|(kind, active)| {
             let mut a = Vec::new();
@@ -661,19 +667,15 @@ fn fact_lines(
             };
             a.push(Span::styled(kind.display_name().to_string(), label_style));
             a
-        })
-        .collect();
-    for l in pack(agents, &Span::raw("  "), inner) {
-        let mut line = vec![indent()];
-        line.extend(l);
-        out.push(line);
-    }
-
-    let tags = fit_tags(&row.tags, inner);
-    if !tags.is_empty() {
-        out.push(vec![indent(), Span::styled(tags, theme.row_dim_style())]);
-    }
-    out
+        });
+    let tags = row.tags.iter().map(|t| {
+        let tag = fit_tags(std::slice::from_ref(t), usize::MAX);
+        vec![Span::styled(
+            tag.trim_start().to_string(),
+            theme.row_dim_style(),
+        )]
+    });
+    agents.chain(tags).collect()
 }
 
 /// `↑4 vs main`: commits ahead of the base branch, named without its
@@ -752,10 +754,16 @@ pub fn render(
             lines.push(Line::default());
         }
         let (entry, pr_hit) = match e {
-            TallEntry::Row(r) => {
-                let l = row_layout(r, glyphs, geo, tick, theme, width);
-                (l.lines, l.pr_hit)
-            }
+            TallEntry::Row(r) => match geo {
+                Geometry::Strip(cols) => {
+                    let l = row_layout(r, glyphs, cols, tick, theme, width);
+                    (l.lines, l.pr_hit)
+                }
+                Geometry::Stacked { widths } => (
+                    row_lines(r, glyphs, widths, tick, theme, width),
+                    row::pr_chip_hit_span(r.row, widths).map(|(dx, w)| (0, dx, w)),
+                ),
+            },
             TallEntry::Group(line) | TallEntry::Section(line) => (vec![line.clone()], None),
         };
         spans.push((lines.len(), entry.len()));
@@ -1754,53 +1762,8 @@ mod tests {
         (lines, targets, buf)
     }
 
-    /// On a wide terminal the facts take a narrow left column and the
-    /// prose starts beside them on the row's first line, wrapped well short
-    /// of the screen edge.
-    #[test]
-    fn wide_rows_split_facts_from_prose() {
-        let mut row = base_row("bakedbean/repo-focus-view");
-        row.lifecycle = Some(crate::git::forge::BranchLifecycle::PrOpen);
-        row.pr_number = Some(461);
-        let detail = WorkspaceDetail {
-            recap: Some(WorkspaceRecap {
-                goal: Some("word ".repeat(60)),
-                ..Default::default()
-            }),
-            ahead_of_base: Some(4),
-            base_branch: Some("origin/main".into()),
-            ..Default::default()
-        };
-        let entries = [TallEntry::Row(TallRow {
-            row: &row,
-            detail: &detail,
-        })];
-        let (lines, targets, _) = split_render(&entries, 220, 20);
-        let goal_col = lines[0].find("goal").expect("prose on the first line");
-        assert!(lines[0].contains("bakedbean/repo-focus-view"), "{lines:?}");
-        let pr_col = lines[0].find("#461").expect("PR beside the branch");
-        let branch_end = lines[0].find("repo-focus-view").unwrap() + "repo-focus-view".len();
-        assert!(branch_end < pr_col && pr_col < goal_col, "{lines:?}");
-        assert!(lines.iter().any(|l| l.contains("↑4 vs main")), "{lines:?}");
-        for l in &lines {
-            let chars: Vec<char> = l.chars().collect();
-            let end = l.trim_end().chars().count();
-            assert!(end <= goal_col + PROSE_MAX, "prose wraps short: {l:?}");
-            let facts: String = chars[..goal_col.min(chars.len())].iter().collect();
-            assert!(!facts.contains("word"), "prose stays right: {l:?}");
-        }
-        // The PR chip's click target sits over the painted chip.
-        let (_, r) = targets.pr_chips[0];
-        let chip: String = lines[r.y as usize]
-            .chars()
-            .skip(r.x as usize)
-            .take(r.width as usize)
-            .collect();
-        assert!(chip.contains("#461"), "{chip:?}");
-    }
-
     /// The PR chip carries the same review mark and unresolved count as
-    /// the dashboard list, in both the wide (split) and narrow layouts,
+    /// the dashboard list, in both the wide (strip) and narrow layouts,
     /// colored by the verdict rather than the lifecycle.
     #[test]
     fn pr_chip_shows_the_review_mark() {
@@ -1858,64 +1821,202 @@ mod tests {
         }
     }
 
-    /// Every row's PR state sits on its first line at the same column, so
-    /// it scans down the view as on the list; a row without a PR says so
-    /// there, and the age moves beside the status word.
+    /// Each row's lines at `width`, laid out with one shared set of
+    /// strip columns as `render` does.
+    fn strip_rows(rows: &[TallRow<'_>], width: usize) -> Vec<Vec<String>> {
+        let cols = strip_columns(rows, ColumnWidths::default(), width);
+        rows.iter()
+            .map(|r| {
+                row_layout(r, &AgentGlyphs::default(), cols, 0, &Theme::wsx(), width)
+                    .lines
+                    .iter()
+                    .map(text)
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Cell column where `needle` starts in `line`.
+    fn col(line: &str, needle: &str) -> usize {
+        display_width(
+            &line[..line
+                .find(needle)
+                .unwrap_or_else(|| panic!("{needle:?} in {line:?}"))],
+        )
+    }
+
     #[test]
-    fn pr_column_lines_up_across_rows() {
-        use crate::git::forge::{BranchLifecycle, ReviewDecision};
+    fn strip_fields_line_up_across_rows() {
+        use crate::git::forge::BranchLifecycle;
         let mut a = base_row("bakedbean/short");
         a.lifecycle = Some(BranchLifecycle::PrOpen);
         a.pr_number = Some(7);
-        a.review = Some(ReviewDecision::ChangesRequested);
-        a.unresolved = Some(12);
-        let mut b = base_row("bakedbean/a-much-longer-branch-name");
+        a.diff = Some(crate::git::DiffStats {
+            added: 10,
+            removed: 2,
+        });
+        let mut b = base_row("bakedbean/a-much-longer-branch");
         b.workspace_id = WorkspaceId(2);
-        b.lifecycle = Some(BranchLifecycle::PrMerged);
-        b.pr_number = Some(1234);
-        let mut c = base_row("bakedbean/no-pr-yet");
-        c.workspace_id = WorkspaceId(3);
-        let detail = WorkspaceDetail {
-            recap: Some(WorkspaceRecap {
-                goal: Some("GOAL text".into()),
-                ..Default::default()
-            }),
+        let none = WorkspaceDetail::default();
+        let ahead = WorkspaceDetail {
+            ahead_of_base: Some(3),
+            base_branch: Some("origin/main".into()),
             ..Default::default()
         };
-        let entries = [&a, &b, &c].map(|row| {
-            TallEntry::Row(TallRow {
-                row,
-                detail: &detail,
-            })
-        });
-        let (lines, targets, _) = split_render(&entries, 160, 20);
+        let rows = [
+            TallRow {
+                row: &a,
+                detail: &none,
+            },
+            TallRow {
+                row: &b,
+                detail: &ahead,
+            },
+        ];
+        let (lines, targets, _) = split_render(&rows.clone().map(TallEntry::Row), 140, 20);
         let firsts: Vec<&String> = targets
             .rows
             .iter()
             .map(|(_, r)| &lines[r.y as usize])
             .collect();
-        let col = |l: &str, needle: &str| l[..l.find(needle).unwrap()].chars().count();
-        let x = col(firsts[0], "#7");
-        assert!(firsts[0].contains("✗ 12"), "{lines:?}");
-        assert_eq!(col(firsts[1], "#1234"), x, "{lines:?}");
-        assert_eq!(col(firsts[2], "no PR"), x - 2, "{lines:?}");
-        // The goal column starts at the same place on every row too.
-        let g = col(firsts[0], "GOAL");
-        assert!(firsts.iter().all(|l| col(l, "GOAL") == g), "{lines:?}");
-        // Only real chips are clickable, each over its painted text.
-        assert_eq!(targets.pr_chips.len(), 2);
-        for (_, r) in &targets.pr_chips {
-            assert_eq!(r.x as usize, x - 2, "chip target at the column");
+        let chip_x = targets.pr_chips[0].1.x as usize;
+        assert_eq!(col(firsts[1], "no PR"), chip_x, "{lines:#?}");
+        assert!(col(firsts[0], "#7") > chip_x, "{lines:#?}");
+        assert_eq!(
+            col(firsts[0], "working"),
+            col(firsts[1], "working"),
+            "{lines:#?}"
+        );
+        assert!(firsts[0].contains("+10 −2") && firsts[1].contains("↑3 vs main"));
+        let age = |l: &str| display_width(&l[..l.rfind("1m").unwrap()]);
+        assert_eq!(age(firsts[0]), age(firsts[1]), "{lines:#?}");
+    }
+
+    #[test]
+    fn long_branch_wraps_without_moving_the_strip() {
+        use crate::git::forge::BranchLifecycle;
+        let long = "bakedbean/a-branch-name-much-longer-than-the-branch-column-allows";
+        let mut a = base_row(long);
+        a.lifecycle = Some(BranchLifecycle::PrOpen);
+        a.pr_number = Some(8);
+        let mut b = base_row("bakedbean/short");
+        b.lifecycle = Some(BranchLifecycle::PrOpen);
+        b.pr_number = Some(9);
+        let detail = WorkspaceDetail::default();
+        let rows = [
+            TallRow {
+                row: &a,
+                detail: &detail,
+            },
+            TallRow {
+                row: &b,
+                detail: &detail,
+            },
+        ];
+        let out = strip_rows(&rows, 140);
+        assert_eq!(col(&out[0][0], "#8"), col(&out[1][0], "#9"), "{out:#?}");
+        assert!(out[0][0].contains("working"), "strip on line 1: {out:#?}");
+        let joined: String = out[0][..2]
+            .iter()
+            .map(|l| {
+                l.split_whitespace()
+                    .find(|w| w.starts_with("bakedbean") || w.contains("allows"))
+                    .unwrap_or("")
+            })
+            .collect();
+        assert_eq!(joined, long, "{out:#?}");
+        for l in out.iter().flatten() {
+            assert!(display_width(l) <= 140, "too wide: {l:?}");
+            assert!(!l.contains('…'), "no ellipsis: {l:?}");
         }
-        // Age rides the status line, right-aligned in the facts column.
-        let status = lines.iter().find(|l| l.contains("working")).unwrap();
-        assert!(status.contains("1m"), "{lines:?}");
+    }
+
+    #[test]
+    fn row_has_strip_then_prose_then_footer() {
+        let mut row = base_row("bakedbean/zones");
+        row.peers = vec![crate::ui::dashboard::row::PeerIndicator {
+            agent: AgentKind::Codex,
+            active: true,
+        }];
+        row.tags = vec!["tag".into()];
+        let detail = WorkspaceDetail {
+            first_prompt: Some("the PROMPT".into()),
+            recap: Some(WorkspaceRecap {
+                goal: Some("the GOAL".into()),
+                state: Some("STATE".into()),
+                next: Some("NEXT".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let rows = [TallRow {
+            row: &row,
+            detail: &detail,
+        }];
+        let lines = &strip_rows(&rows, 140)[0];
+        assert!(lines[0].contains("bakedbean/zones") && lines[0].contains("1m"));
+        // After the agent strip and gutter.
+        let body = |l: &String| {
+            l.chars()
+                .skip(2)
+                .collect::<String>()
+                .trim_start()
+                .to_string()
+        };
+        let labels: Vec<String> = lines[1..4].iter().map(body).collect();
+        assert!(labels[0].starts_with("prompt"), "{lines:#?}");
+        assert!(labels[1].starts_with("goal"), "{lines:#?}");
+        assert!(labels[2].starts_with("now"), "{lines:#?}");
+        let x = col(&lines[0], "bakedbean");
+        assert_eq!(col(&lines[1], "prompt"), x, "prose under the branch");
+        let last = lines.last().unwrap();
+        assert_eq!(lines.len(), 5, "{lines:#?}");
+        assert!(last.contains("claude") && last.contains("codex") && last.contains("#tag"));
+    }
+
+    #[test]
+    fn dirty_counts_are_short_and_skip_clean() {
+        let row = base_row("b");
+        let dirty = WorkspaceDetail {
+            git: Some(WorkspaceStatus {
+                modified: 3,
+                untracked: 1,
+                ahead: 0,
+                behind: 0,
+            }),
+            ..Default::default()
+        };
+        let clean = WorkspaceDetail {
+            git: Some(WorkspaceStatus::default()),
+            ..Default::default()
+        };
+        let lines = &strip_rows(
+            &[TallRow {
+                row: &row,
+                detail: &dirty,
+            }],
+            140,
+        )[0];
+        assert!(lines[0].contains("3 mod 1 untr"), "{lines:#?}");
+        let lines = &strip_rows(
+            &[TallRow {
+                row: &row,
+                detail: &clean,
+            }],
+            140,
+        )[0];
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.contains("mod") || l.contains("untr")),
+            "{lines:#?}"
+        );
     }
 
     /// A chip wider than the column drops its lifecycle word to fit; the
     /// click target ends where the painted chip does, not at the padding.
     #[test]
-    fn oversized_chip_target_ends_at_the_painted_text() {
+    fn pr_target_matches_the_painted_chip() {
         use crate::git::forge::{BranchLifecycle, ReviewDecision};
         let mut row = base_row("b");
         row.lifecycle = Some(BranchLifecycle::PrOpen);
@@ -1927,7 +2028,7 @@ mod tests {
             row: &row,
             detail: &detail,
         })];
-        let (lines, targets, _) = split_render(&entries, 160, 12);
+        let (lines, targets, _) = split_render(&entries, 140, 12);
         let (_, r) = targets.pr_chips[0];
         let chars: Vec<char> = lines[r.y as usize].chars().collect();
         let x = r.x as usize;
@@ -1935,24 +2036,6 @@ mod tests {
         let chip: String = chars[x..end].iter().collect();
         assert_eq!(chip, "⏺ #1234567890 ✗ 12345", "{lines:?}");
         assert_eq!(chars[end], ' ', "first cell past the target is padding");
-    }
-
-    /// A branch longer than the facts column wraps instead of truncating.
-    #[test]
-    fn split_wraps_a_long_branch() {
-        let row = base_row("bakedbean/a-branch-name-much-longer-than-the-facts-column-allows");
-        let detail = WorkspaceDetail::default();
-        let entries = [TallEntry::Row(TallRow {
-            row: &row,
-            detail: &detail,
-        })];
-        let (lines, _, _) = split_render(&entries, 160, 12);
-        let joined: String = lines.iter().map(|l| l.trim()).collect::<Vec<_>>().join("");
-        assert!(joined.contains("facts-column-allows"), "{lines:?}");
-        assert!(
-            !lines.iter().any(|l| l.contains('…')),
-            "no ellipsis: {lines:?}"
-        );
     }
 
     /// Every other workspace takes the alternate background; a group line

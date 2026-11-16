@@ -1067,3 +1067,181 @@ async fn hidden_groups_trail_the_sections() {
     assert!(!s.contains("── Done"), "{s}");
     assert_eq!(app.focus_section_starts, vec![0, 1, 2, 4]);
 }
+
+/// Selection (by workspace id) after each key press, drawing in between.
+async fn press_drawn(app: &mut App, code: KeyCode) -> Option<WorkspaceId> {
+    press(app, code).await;
+    draw(app);
+    selected_ws(app)
+}
+
+/// Sections: No PR [b], Draft [c], Open [a, e], Done [d].
+fn app_with_sections() -> (App, Vec<WorkspaceId>) {
+    use BranchLifecycle::*;
+    let (mut app, repo, _, ids) = app();
+    set_lifecycles(
+        &mut app,
+        &ids,
+        &[
+            Some(PrOpen),
+            None,
+            Some(PrDraft),
+            Some(PrMerged),
+            Some(PrConflicted),
+        ],
+    );
+    app.dashboard.focus_repo(repo);
+    draw(&mut app);
+    (app, ids)
+}
+
+#[tokio::test]
+async fn close_brace_jumps_to_next_section() {
+    let (mut app, ids) = app_with_sections();
+    let (a, b, c, d) = (ids[0], ids[1], ids[2], ids[3]);
+    app.select_index(
+        app.selectable
+            .iter()
+            .position(|t| *t == SelectionTarget::Workspace(b))
+            .unwrap(),
+    );
+    draw(&mut app);
+    assert_eq!(press_drawn(&mut app, KeyCode::Char('}')).await, Some(c));
+    assert_eq!(press_drawn(&mut app, KeyCode::Char('}')).await, Some(a));
+    assert_eq!(press_drawn(&mut app, KeyCode::Char('}')).await, Some(d));
+    assert_eq!(press_drawn(&mut app, KeyCode::Char('}')).await, Some(d));
+}
+
+#[tokio::test]
+async fn open_brace_goes_to_section_top_then_previous() {
+    let (mut app, ids) = app_with_sections();
+    let (a, b, c, e) = (ids[0], ids[1], ids[2], ids[4]);
+    app.select_index(
+        app.selectable
+            .iter()
+            .position(|t| *t == SelectionTarget::Workspace(e))
+            .unwrap(),
+    );
+    draw(&mut app);
+    assert_eq!(press_drawn(&mut app, KeyCode::Char('{')).await, Some(a));
+    assert_eq!(press_drawn(&mut app, KeyCode::Char('{')).await, Some(c));
+    assert_eq!(press_drawn(&mut app, KeyCode::Char('{')).await, Some(b));
+    assert_eq!(press_drawn(&mut app, KeyCode::Char('{')).await, Some(b));
+}
+
+#[tokio::test]
+async fn section_keys_with_one_section_are_noops() {
+    let (mut app, repo, _, ids) = app();
+    set_lifecycles(&mut app, &ids, &[Some(BranchLifecycle::PrOpen); 5]);
+    app.dashboard.focus_repo(repo);
+    draw(&mut app);
+    app.select_index(2);
+    draw(&mut app);
+    assert_eq!(
+        press_drawn(&mut app, KeyCode::Char('}')).await,
+        Some(ids[2])
+    );
+    assert_eq!(
+        press_drawn(&mut app, KeyCode::Char('{')).await,
+        Some(ids[0])
+    );
+    assert_eq!(
+        press_drawn(&mut app, KeyCode::Char('{')).await,
+        Some(ids[0])
+    );
+
+    // No workspaces at all: nothing to select, nothing to panic on.
+    let store = Store::open_in_memory().unwrap();
+    let rid = store
+        .add_repo(std::path::Path::new("/tmp/e"), "e", "")
+        .unwrap();
+    let mut empty = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    empty.view = crate::ui::View::Dashboard;
+    empty.refresh().unwrap();
+    empty.dashboard.focus_repo(rid);
+    draw(&mut empty);
+    press(&mut empty, KeyCode::Char('}')).await;
+    press(&mut empty, KeyCode::Char('{')).await;
+    assert!(empty.selectable.is_empty());
+}
+
+#[tokio::test]
+async fn section_starts_follow_the_filter() {
+    let (mut app, ids) = app_with_sections();
+    for id in [ids[0], ids[1], ids[3], ids[4]] {
+        app.store.add_workspace_tag(id, "keep").unwrap();
+    }
+    app.refresh().unwrap();
+    // The refresh above drops the seeded lifecycles' polling state.
+    let (a, b, c, d, e) = (ids[0], ids[1], ids[2], ids[3], ids[4]);
+    app.pr_lifecycle.insert(a, BranchLifecycle::PrOpen);
+    app.pr_lifecycle.insert(c, BranchLifecycle::PrDraft);
+    app.pr_lifecycle.insert(d, BranchLifecycle::PrMerged);
+    app.pr_lifecycle.insert(e, BranchLifecycle::PrConflicted);
+    app.pr_lifecycle.remove(&b);
+    app.dashboard.filter = Some("#keep".into());
+    draw(&mut app);
+    app.select_index(
+        app.selectable
+            .iter()
+            .position(|t| *t == SelectionTarget::Workspace(ids[1]))
+            .unwrap(),
+    );
+    draw(&mut app);
+    // Draft is filtered out, so `}` from b lands on the Open section. A
+    // live `/` buffer types the key instead, so call the jump directly.
+    super::super::dashboard::jump_focus_section(&mut app, true);
+    draw(&mut app);
+    assert_eq!(selected_ws(&app), Some(ids[0]));
+}
+
+#[tokio::test]
+async fn section_keys_do_nothing_outside_focus() {
+    let (mut app, _, _, _) = app();
+    draw(&mut app);
+    let before = app.dashboard.selection.clone();
+    press(&mut app, KeyCode::Char('}')).await;
+    press(&mut app, KeyCode::Char('{')).await;
+    assert_eq!(app.dashboard.selection, before);
+}
+
+#[tokio::test]
+async fn jump_reveals_the_section_header() {
+    use BranchLifecycle::*;
+    let store = Store::open_in_memory().unwrap();
+    let names: Vec<String> = (0..12).map(|i| format!("w{i:02}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let ids = seed_workspaces(&store, &refs);
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    app.view = crate::ui::View::Dashboard;
+    app.refresh().unwrap();
+    let repo = app.repos[0].id;
+    let lcs: Vec<_> = (0..12)
+        .map(|i| if i < 4 { None } else { Some(PrMerged) })
+        .collect();
+    set_lifecycles(&mut app, &ids, &lcs);
+    app.dashboard.focus_repo(repo);
+    let draw20 = |app: &mut App| {
+        let mut term = Terminal::new(TestBackend::new(120, 20)).unwrap();
+        term.draw(|f| crate::app::render::draw_for_test(f, app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    // Last row, then `{` back to the Done section's top, which scrolls up
+    // from below the fold; its header must come with it.
+    app.select_index(app.selectable.len() - 1);
+    draw20(&mut app);
+    press(&mut app, KeyCode::Char('{')).await;
+    draw20(&mut app);
+    let s = draw20(&mut app);
+    assert!(s.contains("── Done · 8"), "{s}");
+    assert!(s.contains("repo/w04"), "{s}");
+}

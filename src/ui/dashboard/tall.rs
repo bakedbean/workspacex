@@ -763,7 +763,18 @@ pub fn render(
         lines.extend(entry);
     }
     let height = area.height as usize;
-    let sel_span = selected.and_then(|i| spans.get(i).copied());
+    // A row right under a section header scrolls as one block with it
+    // (header, blank gap, row), so the header comes into view too.
+    let sel_span = selected.and_then(|i| {
+        let (top, len) = spans.get(i).copied()?;
+        match i.checked_sub(1).and_then(|p| entries.get(p)) {
+            Some(TallEntry::Section(_)) => {
+                let header_top = spans[i - 1].0;
+                Some((header_top, top + len - header_top))
+            }
+            _ => Some((top, len)),
+        }
+    });
     *scroll = scroll_for(*scroll, sel_span, height, lines.len(), follow);
 
     let visible: Vec<Line<'static>> = lines.into_iter().skip(*scroll).take(height).collect();

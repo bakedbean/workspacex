@@ -196,6 +196,31 @@ pub(in crate::app::input) fn cycle_repo_focus(app: &mut App, forward: bool) {
     enter_repo_focus(app, rid);
 }
 
+/// `}` / `{`: jump to the next section's first row, or back to the
+/// current section's top (then the previous one). Stops at the ends.
+pub(in crate::app::input) fn jump_focus_section(app: &mut App, forward: bool) {
+    if app.dashboard.focused_repo.is_none() {
+        return;
+    }
+    let Some(cur) = app
+        .selected_target()
+        .and_then(|t| app.selectable.iter().position(|s| *s == t))
+    else {
+        return;
+    };
+    let starts = &app.focus_section_starts;
+    // Backward: the largest start below `cur` is this section's top when
+    // mid-section, the previous section's top when already on one.
+    let target = if forward {
+        starts.iter().copied().find(|&s| s > cur)
+    } else {
+        starts.iter().copied().rev().find(|&s| s < cur)
+    };
+    if let Some(i) = target {
+        app.select_index(i);
+    }
+}
+
 /// The workspace whose focus-view row a click landed on.
 pub(crate) fn focus_row_click_target(
     app: &App,
@@ -566,6 +591,12 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         (KeyCode::PageUp, _) if app.dashboard.focused_repo.is_some() => {
             let page = app.dashboard.focus_page_lines();
             app.dashboard.scroll_focus(-page);
+        }
+        (KeyCode::Char('}'), _) if app.dashboard.focused_repo.is_some() => {
+            jump_focus_section(app, true);
+        }
+        (KeyCode::Char('{'), _) if app.dashboard.focused_repo.is_some() => {
+            jump_focus_section(app, false);
         }
         (KeyCode::Char('['), _) => cycle_repo_focus(app, false),
         (KeyCode::Char(']'), _) => cycle_repo_focus(app, true),

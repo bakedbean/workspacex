@@ -43,6 +43,12 @@ pub(super) fn draw_modal(f: &mut ratatui::Frame, app: &mut App, area: ratatui::l
         }
         return;
     }
+    // The diff viewer covers the whole screen, not the drawer, and records
+    // its scroll clamp and pane rects back onto the modal.
+    if let Some(modal::Modal::FileDiff(m)) = &mut app.modal {
+        modal::render_file_diff(f, area, m, &app.theme);
+        return;
+    }
     let Some(m) = &app.modal else {
         return;
     };

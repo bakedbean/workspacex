@@ -12,8 +12,10 @@
 //!   [`remote`]     shared-workspace browsing on another host
 //!   [`pickers`]    name color, workspace tags, usage window, hide rules
 //!   [`prompt_tag`]  the XML prompt-tag picker and body box
+//!   [`file_diff`]   the side panel's full-screen diff viewer
 
 pub(super) mod agents;
+pub(in crate::app::input) mod file_diff;
 pub(super) mod panels;
 pub(super) mod pickers;
 pub(super) mod prompt_tag;
@@ -141,6 +143,7 @@ pub(in crate::app::input) async fn handle_key_modal(
                 }
             }
         }
+        Modal::FileDiff(..) => file_diff::keys(app, shared, k),
         Modal::UsageWindowPicker { selected } => {
             pickers::usage_window_picker(app, shared, k, selected).await?
         }

@@ -1239,12 +1239,20 @@ mod branch_lists_tests {
         std::fs::remove_file(repo.path().join("gone.txt")).unwrap();
         git(&["commit", "-q", "-am", "change"]);
 
-        let d = branch_file_diff(repo.path(), "main", "a.txt").await.unwrap();
-        assert!(d.diff.contains("-two") && d.diff.contains("+TWO"), "{}", d.diff);
+        let d = branch_file_diff(repo.path(), "main", "a.txt")
+            .await
+            .unwrap();
+        assert!(
+            d.diff.contains("-two") && d.diff.contains("+TWO"),
+            "{}",
+            d.diff
+        );
         assert_eq!(d.source.as_deref(), Some("one\nTWO\nthree\n"));
         assert!(!d.binary);
 
-        let d = branch_file_diff(repo.path(), "main", "gone.txt").await.unwrap();
+        let d = branch_file_diff(repo.path(), "main", "gone.txt")
+            .await
+            .unwrap();
         assert!(d.diff.contains("-bye"), "{}", d.diff);
         assert_eq!(d.source, None);
     }

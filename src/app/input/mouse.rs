@@ -87,6 +87,11 @@ pub(in crate::app::input) fn adjust_detail_scroll(
 }
 
 pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedApp, m: MouseEvent) {
+    // The diff viewer covers the screen: every mouse event is its own.
+    if matches!(app.modal, Some(Modal::FileDiff(..))) {
+        super::modal::file_diff::mouse(app, m);
+        return;
+    }
     // The wheel over the side panel scrolls the panel, on whichever view
     // drew it (the dashboard or the attached view).
     if matches!(

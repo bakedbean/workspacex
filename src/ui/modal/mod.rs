@@ -11,6 +11,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use std::collections::{HashMap, HashSet};
 
 mod agents_panel;
+pub mod file_diff;
 mod global_settings;
 mod name_color_picker;
 mod process_list;
@@ -26,6 +27,7 @@ pub mod workspace_tags;
 
 // Panel renderers called from app::render via `crate::ui::modal::*`.
 pub use agents_panel::render_agents_panel;
+pub use file_diff::{FileDiffModal, render_file_diff};
 pub use global_settings::render_global_settings;
 pub use name_color_picker::{Dir, move_selection, render_name_color_picker};
 pub use process_list::render_process_list;
@@ -175,6 +177,9 @@ pub enum Modal {
         /// Rows scrolled from the top; the renderer clamps and writes it back.
         scroll: usize,
     },
+    /// The side panel's diff viewer: one changed file full screen, beside
+    /// its minimap. Boxed: it is far larger than the other variants.
+    FileDiff(Box<FileDiffModal>),
     UsageWindowPicker {
         /// Index into `UsageWindow::ALL` for the cursor selection. The current
         /// (applied) window is read separately from the store at render time.
@@ -344,6 +349,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
             | Modal::GlobalSettings { .. }
             | Modal::AgentsPanel { .. }
             | Modal::Recap { .. }
+            | Modal::FileDiff(..)
             | Modal::UsageWindowPicker { .. }
             | Modal::NameColorPicker { .. }
             | Modal::RemoteWorkspaceList { .. }
@@ -483,6 +489,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
         Modal::SetupLog { .. } => unreachable!("SetupLog must not reach render()"),
         Modal::AgentsPanel { .. } => unreachable!("AgentsPanel must not reach render()"),
         Modal::Recap { .. } => unreachable!("Recap must not reach render()"),
+        Modal::FileDiff(..) => unreachable!("FileDiff must not reach render()"),
         Modal::UsageWindowPicker { .. } => {
             unreachable!("UsageWindowPicker must not reach render()")
         }

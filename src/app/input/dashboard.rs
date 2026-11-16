@@ -808,11 +808,10 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             // Dashboard focus; PM-focused 'r' is handled above.
             nudge_status_refresh(app);
         }
-        (KeyCode::Char('G'), _) => {
-            // Grouping has nothing to act on in a single repo, so leave focus.
-            leave_repo_focus(app);
-            app.dashboard.toggle_group_mode();
+        (KeyCode::Char('G'), _) if app.dashboard.focused_repo.is_some() => {
+            app.dashboard.toggle_focus_grouping(&app.store);
         }
+        (KeyCode::Char('G'), _) => app.dashboard.toggle_group_mode(),
         (KeyCode::Char('o'), _) => {
             app.dashboard.cycle_sort_mode(&app.store);
         }

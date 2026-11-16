@@ -125,10 +125,15 @@ pub struct DashboardState {
     /// The commits / files side panel, shared by the list and the focus
     /// view.
     pub panel: side_panel::SidePanelState,
+    /// Whether the focus view sections workspaces by PR state (`G` toggles;
+    /// `dashboard_focus_group_by_pr` setting) or keeps the list's order.
+    pub focus_group_by_pr: bool,
 }
 
 /// Settings key holding the by-repo sort mode.
 pub const SORT_MODE_SETTING: &str = "dashboard_sort_mode";
+/// Settings key for the focus view's PR-state grouping (on/off).
+pub const FOCUS_GROUP_BY_PR_SETTING: &str = "dashboard_focus_group_by_pr";
 /// Settings key holding how long a blocked row keeps its pin, in seconds.
 pub const BLOCKED_PIN_SETTING: &str = "dashboard_blocked_pin_max_age_secs";
 /// Settings key holding the tags exempt from tag hide rules in the top bar.
@@ -169,6 +174,16 @@ impl DashboardState {
         self.top_bar_show_tags = get(TOP_BAR_SHOW_TAGS_SETTING)
             .map(|v| parse_show_tags(&v))
             .unwrap_or_default();
+        self.focus_group_by_pr =
+            crate::config::settings::toggle_on(store, FOCUS_GROUP_BY_PR_SETTING);
+    }
+
+    /// Flip the focus view between PR-state sections and the list's order,
+    /// and remember it.
+    pub fn toggle_focus_grouping(&mut self, store: &crate::data::store::Store) {
+        self.focus_group_by_pr = !self.focus_group_by_pr;
+        let value = if self.focus_group_by_pr { "on" } else { "off" };
+        let _ = store.set_setting(FOCUS_GROUP_BY_PR_SETTING, value);
     }
 
     /// Flip between repo and attention grouping. Shared by the dashboard's
@@ -220,6 +235,7 @@ impl Default for DashboardState {
         Self {
             list_state: ListState::default(),
             group_mode: GroupMode::default(),
+            focus_group_by_pr: true,
             sort_mode: SortMode::default(),
             blocked_pin_max_age_secs: BLOCKED_PIN_MAX_AGE_DEFAULT_SECS,
             top_bar_show_tags: Vec::new(),
@@ -502,8 +518,13 @@ fn focused_workspaces<'w, 'a>(
         .filter(|w| hidden_by(w, filter).is_none())
         .map(NavRow::from)
         .collect();
-    // No freshly-blocked pinning here: sections already order by PR state.
-    order_workspaces(&mut rows, state.sort_mode, 0);
+    // Sections already order by PR state, so pinning applies only ungrouped.
+    let pin = if state.focus_group_by_pr {
+        0
+    } else {
+        state.blocked_pin_max_age_secs
+    };
+    order_workspaces(&mut rows, state.sort_mode, pin);
     let by_id: HashMap<crate::data::store::WorkspaceId, &WorkspaceItem<'a>> = inputs
         .workspaces
         .iter()
@@ -590,11 +611,16 @@ fn focus_entries<'w, 'a>(
     state: &DashboardState,
     repo: &Repo,
 ) -> Vec<FocusEntry<'w, 'a>> {
-    let mut buckets: [Vec<&'w WorkspaceItem<'a>>; 4] = Default::default();
-    for w in focused_workspaces(inputs, state, repo.id) {
-        buckets[section_of(w.row.lifecycle) as usize].push(w);
-    }
+    let shown = focused_workspaces(inputs, state, repo.id);
     let mut out: Vec<FocusEntry<'w, 'a>> = Vec::new();
+    let mut buckets: [Vec<&'w WorkspaceItem<'a>>; 4] = Default::default();
+    if state.focus_group_by_pr {
+        for w in shown {
+            buckets[section_of(w.row.lifecycle) as usize].push(w);
+        }
+    } else {
+        out.extend(shown.into_iter().map(FocusEntry::Workspace));
+    }
     for (section, rows) in [
         FocusSection::NoPr,
         FocusSection::Draft,
@@ -908,10 +934,15 @@ pub fn focus_section_starts(inputs: &DashboardInputs<'_>, state: &DashboardState
     let Some(repo) = focused_repo(inputs, state) else {
         return Vec::new();
     };
+    let entries = focus_entries(inputs, state, repo);
     let mut starts = Vec::new();
+    // Ungrouped, the workspaces before any hidden group form one section.
+    if matches!(entries.first(), Some(FocusEntry::Workspace(_))) && !state.focus_group_by_pr {
+        starts.push(0);
+    }
     let mut seen = 0;
     let mut in_tail = false;
-    for e in focus_entries(inputs, state, repo) {
+    for e in entries {
         match e {
             FocusEntry::Section { .. } => starts.push(seen),
             FocusEntry::Group(_) if !in_tail => {

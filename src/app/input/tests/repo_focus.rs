@@ -181,11 +181,48 @@ async fn n_in_an_empty_focus_view_creates_in_the_focused_repo() {
 }
 
 #[tokio::test]
-async fn g_leaves_the_focus_view() {
+async fn g_toggles_pr_grouping_and_remembers_it() {
+    use crate::ui::dashboard::FOCUS_GROUP_BY_PR_SETTING;
     let (mut app, repo, _, _) = app();
+    let group_mode = app.dashboard.group_mode;
     app.dashboard.focus_repo(repo);
+    assert!(app.dashboard.focus_group_by_pr, "grouped by default");
     press(&mut app, KeyCode::Char('G')).await;
-    assert_eq!(app.dashboard.focused_repo, None);
+    assert_eq!(app.dashboard.focused_repo, Some(repo), "stays focused");
+    assert!(!app.dashboard.focus_group_by_pr);
+    assert_eq!(
+        app.dashboard.group_mode, group_mode,
+        "list grouping untouched"
+    );
+    assert_eq!(
+        app.store
+            .get_setting(FOCUS_GROUP_BY_PR_SETTING)
+            .unwrap()
+            .as_deref(),
+        Some("off")
+    );
+    press(&mut app, KeyCode::Char('G')).await;
+    assert!(app.dashboard.focus_group_by_pr);
+}
+
+#[tokio::test]
+async fn g_outside_the_focus_view_still_flips_list_grouping() {
+    let (mut app, _, _, _) = app();
+    let before = app.dashboard.group_mode;
+    press(&mut app, KeyCode::Char('G')).await;
+    assert_ne!(app.dashboard.group_mode, before);
+    assert!(app.dashboard.focus_group_by_pr);
+}
+
+#[test]
+fn the_grouping_setting_loads_at_startup() {
+    use crate::ui::dashboard::FOCUS_GROUP_BY_PR_SETTING;
+    let store = Store::open_in_memory().unwrap();
+    store
+        .set_setting(FOCUS_GROUP_BY_PR_SETTING, "off\n")
+        .unwrap();
+    let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    assert!(!app.dashboard.focus_group_by_pr);
 }
 
 #[test]
@@ -1309,4 +1346,78 @@ async fn narrow_focus_view_keeps_sections_and_whole_branches() {
         }
         assert_eq!(joined, branch, "\n{screen}");
     }
+}
+
+#[tokio::test]
+async fn natural_order_drops_headers_and_keeps_list_order() {
+    let (mut app, _) = app_with_sections();
+    app.dashboard.focus_group_by_pr = false;
+    let s = draw(&mut app);
+    assert!(!s.contains("── No PR") && !s.contains("── Open"), "{s}");
+    let lines: Vec<usize> = ["repo/a", "repo/b", "repo/c", "repo/d", "repo/e"]
+        .iter()
+        .map(|n| line_of(&s, n))
+        .collect();
+    assert!(lines.windows(2).all(|w| w[0] < w[1]), "list order:\n{s}");
+    assert_eq!(app.focus_section_starts, vec![0]);
+}
+
+#[tokio::test]
+async fn natural_order_pins_freshly_blocked_rows() {
+    use crate::activity::events::{EventKind, EventSnapshot, StopReason, WorkspaceEvents};
+    use crate::ui::dashboard::sort::SortMode;
+    let (mut app, repo, _, ids) = app();
+    let now = crate::util::time::now_ms();
+    let latest = |ago_ms: i64| {
+        Some(EventSnapshot {
+            kind: EventKind::AssistantText,
+            display: "x".into(),
+            timestamp_ms: now - ago_ms,
+        })
+    };
+    app.workspace_events.insert(
+        ids[2],
+        WorkspaceEvents {
+            last_stop_reason: Some(StopReason::EndTurn),
+            last_assistant_text: Some("Which approach?".into()),
+            latest: latest(600_000),
+            ..Default::default()
+        },
+    );
+    app.workspace_events.insert(
+        ids[3],
+        WorkspaceEvents {
+            latest: latest(5_000),
+            ..Default::default()
+        },
+    );
+    app.dashboard.sort_mode = SortMode::Recency;
+    app.dashboard.blocked_pin_max_age_secs = 3600;
+    app.dashboard.focus_group_by_pr = false;
+    app.dashboard.focus_repo(repo);
+    let s = draw(&mut app);
+    assert!(
+        line_of(&s, "repo/c") < line_of(&s, "repo/d"),
+        "c pinned:\n{s}"
+    );
+}
+
+#[tokio::test]
+async fn natural_order_braces_go_to_top_and_hidden_groups() {
+    let (mut app, repo, _) = app_with_parked_group();
+    app.dashboard.focus_group_by_pr = false;
+    app.dashboard.focus_repo(repo);
+    draw(&mut app);
+    let first = app.selectable[0].clone();
+    press(&mut app, KeyCode::Char('j')).await;
+    draw(&mut app);
+    press(&mut app, KeyCode::Char('{')).await;
+    assert_eq!(app.selected_target(), Some(first.clone()), "{{ goes to top");
+    draw(&mut app);
+    press(&mut app, KeyCode::Char('}')).await;
+    assert_eq!(
+        app.selected_target(),
+        Some(parked(repo)),
+        "}} goes to hidden groups"
+    );
 }

@@ -199,6 +199,12 @@ pub const SETTINGS: &[SettingDef] = &[
         &["recency", "status"],
         "Workspace order within a repo; `o` toggles it too.",
     ),
+    toggle(
+        "dashboard_focus_group_by_pr",
+        "Dashboard",
+        true,
+        "Section the repo focus view by PR state; `G` there toggles it too.",
+    ),
     text(
         "dashboard_blocked_pin_max_age_secs",
         "Dashboard",
@@ -451,6 +457,7 @@ mod tests {
             "dashboard_branch_width",
             "dashboard_pr_width",
             "dashboard_sort_mode",
+            "dashboard_focus_group_by_pr",
             "dashboard_blocked_pin_max_age_secs",
             "top_bar_show_tags",
             "coding_agent",

@@ -20,6 +20,7 @@ Every key in the wsx TUI, grouped by where you press it. Capital letters mean `S
 | `f`                     | Show only the selected repo, [in detail](repo-focus.md); `f` or `esc` goes back |
 | `[` / `]` (focus view)  | Previous / next repo                                   |
 | `{` / `}` (focus view)  | Previous / next [section](repo-focus.md#sections)      |
+| `G` (focus view)        | Sections by PR state, or the list's order (saved)      |
 | `PgUp` / `PgDn` (focus view) | Scroll the [focus view](repo-focus.md) a page      |
 | `c`                     | Toggle the [side panel](side-panel.md) (commits and changed files); `esc` closes it |
 | `1` / `2`               | Side panel: Commits / Files                            |

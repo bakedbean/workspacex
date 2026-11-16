@@ -48,6 +48,8 @@ A header line (`── Open · 2 ───…`, with the workspace count) starts
 
 Sections with no workspaces are left out. Within a section the dashboard's sort applies, but the focus view doesn't pin workspaces that just started asking or stalled to the top, as the list does; the sections already order the view by PR state. Hidden groups (see [Filters and hiding](#filters-and-hiding)) come after all the sections, as they are on the list. Headers are not selectable: `j` and `k` step over them.
 
+Press `G` to turn the sections off and see the workspaces in the list's own order instead, with no headers and with workspaces that just started asking or stalled pinned to the top again. `G` again brings the sections back. The choice is saved (the `dashboard_focus_group_by_pr` [setting](../configuration/settings.md#dashboard)). Without sections, `{` goes to the first workspace and `}` to the hidden groups.
+
 ## The row
 
 Each row has three zones.
@@ -96,4 +98,4 @@ The view keeps the selected workspace on screen. To read a workspace taller than
 
 The `/` filter and the [status filter](status-indicators.md#filtering-by-status) narrow the view the same way they narrow the list. Workspaces a [hide rule](tags-and-hiding.md#hiding-workspaces) hides collapse into a summary row per rule after the other workspaces (`▸ #parked  ·  2 hidden`), as they do under the repo's header on the list, rather than being sorted into the sections. `enter` or `l` on the row, or a click, shows its workspaces under it; `h` on the row or on one of them hides them again. A group left open in one view is open in the other. A `/` filter shows hidden workspaces among the others, as it does on the list.
 
-The focus view lasts until you leave it or quit wsx. Pressing `G` leaves it, since grouping has nothing to act on in a single repo.
+The focus view lasts until you leave it or quit wsx.

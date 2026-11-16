@@ -595,7 +595,10 @@ fn fit_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
             left -= w;
             out.push(s);
         } else {
-            out.push(Span::styled(truncate(&s.content, left), s.style));
+            // The input overflows, so even a span that fills `left` exactly
+            // is cut: the marker forces truncate's ellipsis.
+            let cut = truncate(&format!("{}…", s.content), left);
+            out.push(Span::styled(cut, s.style));
             break;
         }
     }
@@ -2226,6 +2229,21 @@ mod tests {
         .unwrap();
         assert_eq!(scroll, 2, "row's first line at the top");
         assert_eq!(targets.rows.len(), 1);
+    }
+
+    #[test]
+    fn fit_spans_marks_every_cut() {
+        let text =
+            |v: Vec<Span<'static>>| v.iter().map(|s| s.content.to_string()).collect::<String>();
+        let diff = || vec![Span::raw("+1234"), Span::raw(" "), Span::raw("−567")];
+        assert_eq!(text(fit_spans(diff(), 10)), "+1234 −567", "fits: untouched");
+        assert_eq!(
+            text(fit_spans(diff(), 5)),
+            "+123…",
+            "cut on a span boundary"
+        );
+        assert_eq!(text(fit_spans(diff(), 7)), "+1234 …");
+        assert_eq!(text(fit_spans(diff(), 3)), "+1…");
     }
 
     #[test]

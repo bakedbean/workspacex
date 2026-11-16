@@ -1128,6 +1128,70 @@ pub async fn workspace_diff_per_file(
         .map(|f| per_file_stats(&f))
 }
 
+/// One changed file's diff against the branch's base, as the side panel's
+/// diff viewer shows it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FileDiff {
+    /// `git diff base...HEAD -- path`, unified with three lines of context.
+    pub diff: String,
+    /// The file as HEAD has it, so the viewer can show the whole file with
+    /// the changes in place. `None` when HEAD no longer has it (deleted).
+    pub source: Option<String>,
+    /// Git called it binary: there is no text diff to show.
+    pub binary: bool,
+}
+
+/// The path a `git diff --numstat` entry names on the branch side. Numstat
+/// writes a rename as `old => new`, or `pre/{old => new}/post` when the two
+/// share a prefix or suffix.
+pub fn numstat_new_path(path: &str) -> String {
+    if let (Some(open), Some(close)) = (path.find('{'), path.rfind('}'))
+        && open < close
+        && let Some((_, new)) = path[open + 1..close].split_once(" => ")
+    {
+        let joined = format!("{}{new}{}", &path[..open], &path[close + 1..]);
+        // `{old => }` (moved up a directory) leaves a doubled slash.
+        return joined.replace("//", "/");
+    }
+    match path.split_once(" => ") {
+        Some((_, new)) => new.to_string(),
+        None => path.to_string(),
+    }
+}
+
+/// `path`'s diff on HEAD since it left `base`, and HEAD's copy of it. `path`
+/// is a numstat path, renames included.
+pub async fn branch_file_diff(worktree: &Path, base: &str, path: &str) -> Result<FileDiff> {
+    let path = numstat_new_path(path);
+    let range = format!("{base}...HEAD");
+    let diff = run(
+        worktree,
+        &[
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--find-renames",
+            &range,
+            "--",
+            &path,
+        ],
+    )
+    .await?;
+    let binary = diff
+        .lines()
+        .any(|l| l.starts_with("Binary files ") && l.ends_with(" differ"));
+    let source = if binary {
+        None
+    } else {
+        run(worktree, &["show", &format!("HEAD:{path}")]).await.ok()
+    };
+    Ok(FileDiff {
+        diff,
+        source,
+        binary,
+    })
+}
+
 #[cfg(test)]
 mod branch_lists_tests {
     use super::*;
@@ -1141,6 +1205,48 @@ mod branch_lists_tests {
         let lists = BranchLists::new("main", Vec::new(), vec![file("src/z.rs"), file("a.md")]);
         let paths: Vec<_> = lists.files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(paths, ["a.md", "src/z.rs"]);
+    }
+
+    #[test]
+    fn numstat_new_path_reads_renames() {
+        assert_eq!(numstat_new_path("src/a.rs"), "src/a.rs");
+        assert_eq!(numstat_new_path("old.rs => new.rs"), "new.rs");
+        assert_eq!(numstat_new_path("src/{a => b}/x.rs"), "src/b/x.rs");
+        assert_eq!(numstat_new_path("src/{a => }/x.rs"), "src/x.rs");
+        assert_eq!(numstat_new_path("src/{ => b}/x.rs"), "src/b/x.rs");
+    }
+
+    #[tokio::test]
+    async fn branch_file_diff_reads_the_branch_side() {
+        use std::process::Command as StdCmd;
+        let repo = super::tests::init_repo();
+        let git = |args: &[&str]| {
+            assert!(
+                StdCmd::new("git")
+                    .current_dir(repo.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            )
+        };
+        std::fs::write(repo.path().join("a.txt"), "one\ntwo\nthree\n").unwrap();
+        std::fs::write(repo.path().join("gone.txt"), "bye\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "base"]);
+        git(&["checkout", "-q", "-b", "feature"]);
+        std::fs::write(repo.path().join("a.txt"), "one\nTWO\nthree\n").unwrap();
+        std::fs::remove_file(repo.path().join("gone.txt")).unwrap();
+        git(&["commit", "-q", "-am", "change"]);
+
+        let d = branch_file_diff(repo.path(), "main", "a.txt").await.unwrap();
+        assert!(d.diff.contains("-two") && d.diff.contains("+TWO"), "{}", d.diff);
+        assert_eq!(d.source.as_deref(), Some("one\nTWO\nthree\n"));
+        assert!(!d.binary);
+
+        let d = branch_file_diff(repo.path(), "main", "gone.txt").await.unwrap();
+        assert!(d.diff.contains("-bye"), "{}", d.diff);
+        assert_eq!(d.source, None);
     }
 }
 

@@ -3,29 +3,35 @@
 The focus view shows one repo on the dashboard and gives each of its workspaces several lines instead of one, laid out to be read at a glance. Workspaces are grouped into sections by pull request state, each row starts with a strip of fixed columns that line up down the view, and what the workspace is for and doing sits under its branch. Every other workspace has a faint background tint so each reads as one block.
 
 ```text
-◂ all repos / workspacex  /tmp/r  ─────────────────────────────────────────────────────────────────────────  · 4    4 ws
+◂ all repos / workspacex  ~/src/workspacex  ───────────────────────────────────────────────────────────  ● 1  ? 1    4 ws
 
 ── No PR · 1 ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-▎▍ · bakedbean/try-new-parser     no PR          └ idle  ↑1 vs main                          —
- ▍   goal    Spike a faster recap parser
- ▍   ▎ claude
+▎▎ ⠋ bakedbean/try-new-parser     no PR          ▸ working  ● 2p  ↑1 vs main                           2m
+ ▎   prompt  Spike a faster parser for agent recaps; measure it against the current one on a few
+ ▎           real session logs before changing anything.
+ ▎   goal    Spike a faster recap parser
+ ▎   now     benchmarking the streaming approach → compare against the regex version
+ ▎   ▎ claude  #spike
 
 ── Draft · 1 ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-▎▎ · bakedbean/detail-bar-scroll  ⏷ #459 draft   └ idle  ↑2 vs main                +61 −8    —
+▎▎ ? bakedbean/detail-bar-scroll  ⏷ #459 draft   └ asking         ↑2 vs main                +61 −8    14m
+ ▎   prompt  The detail bar containers should scroll independently
+ ▎   last    Should the scroll offsets be kept per workspace or shared across the whole detail
+ ▎           bar?
  ▎   ▎ claude
 
 ── Open · 1 ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-▎▎ · bakedbean/repo-focus-view    ⏺ #461 open    └ idle  ↑4 vs main  3 mod 1 untr  +184 −22  —
+▎▎ · bakedbean/repo-focus-view    ⏺ #461 open ✓  ▸ idle           ↑4 vs main  3 mod 1 untr  +184 −22   3h
  ▎   goal    Single-repo dashboard view with richer per-workspace detail
- ▎   now     mapping dashboard code → draft design options
- ▎   ▎ claude
+ ▎   now     implemented sections and the strip → write the docs
+ ▎   ▎ claude  #ui
 
 ── Done · 1 ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-▎▎ · bakedbean/fix-flaky-poller   ⏺ #455 merged  └ idle  ↑0 vs main                          —
+▎▎ ✓ bakedbean/fix-flaky-poller   ⏺ #455 merged  ▸ done           ↑0 vs main                          48h
  ▎   ▎ claude
 ```
 

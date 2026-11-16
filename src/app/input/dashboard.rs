@@ -254,8 +254,8 @@ pub(in crate::app::input) fn show_panel_tab(
     app: &mut App,
     tab: crate::ui::dashboard::side_panel::PanelTab,
 ) {
-    app.dashboard.panel_open = true;
-    app.dashboard.panel_tab = tab;
+    app.dashboard.panel.open = true;
+    app.dashboard.panel.tab = tab;
 }
 
 /// The side-panel tab a click landed on.
@@ -263,7 +263,7 @@ pub(crate) fn panel_tab_click_target(
     app: &App,
     m: &crossterm::event::MouseEvent,
 ) -> Option<crate::ui::dashboard::side_panel::PanelTab> {
-    app.dashboard_panel_tab_rects
+    app.side_panel_tab_rects
         .iter()
         .find(|(_, r)| rect_contains(r, m))
         .map(|(t, _)| *t)
@@ -532,16 +532,16 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         // leaves the view straight away.
         (KeyCode::Esc, _)
             if app.dashboard.focused_repo.is_some()
-                && app.dashboard.panel_open
-                && app.dashboard_panel_rect.is_some() =>
+                && app.dashboard.panel.open
+                && app.side_panel_rect.is_some() =>
         {
-            app.dashboard.panel_open = false;
+            app.dashboard.panel.open = false;
         }
         (KeyCode::Esc, _) if app.dashboard.focused_repo.is_some() => leave_repo_focus(app),
         // The side panel: `c` toggles it, `1` / `2` pick its tab (opening
         // it if closed).
         (KeyCode::Char('c'), _) if app.dashboard.focused_repo.is_some() => {
-            app.dashboard.panel_open = !app.dashboard.panel_open;
+            app.dashboard.panel.toggle();
         }
         (KeyCode::Char('1'), _) if app.dashboard.focused_repo.is_some() => {
             show_panel_tab(app, crate::ui::dashboard::side_panel::PanelTab::Commits);

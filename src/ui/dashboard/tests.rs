@@ -113,6 +113,7 @@ fn render_to_strings_with(
         github_remotes: &Default::default(),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
+        panel: None,
     };
     let mut state = DashboardState {
         group_mode: group,
@@ -158,6 +159,7 @@ fn repo_pr_link_rects_land_on_rendered_glyphs() {
         github_remotes: &github,
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
+        panel: None,
     };
     let mut state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -213,6 +215,7 @@ fn repo_pr_link_rect_survives_a_wide_repo_name() {
         github_remotes: &github,
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
+        panel: None,
     };
     let mut state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -284,6 +287,7 @@ fn assert_pr_rects_match_buffer(group: GroupMode, height: u16, select_last: bool
         github_remotes: &Default::default(),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
+        panel: None,
     };
     let mut state = DashboardState {
         group_mode: group,
@@ -402,6 +406,7 @@ fn footer_row_paints_chip_bg_but_no_bar_bg() {
         github_remotes: &Default::default(),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
+        panel: None,
     };
     let mut state = DashboardState::default();
     let theme = Theme::wsx();
@@ -466,6 +471,7 @@ fn render_sets_list_state_to_selected_workspace_index() {
         github_remotes: &Default::default(),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
+        panel: None,
     };
     let mut state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -513,6 +519,7 @@ fn selected_workspace_row_renders_with_thicker_gutter() {
         github_remotes: &Default::default(),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
+        panel: None,
     };
     let mut state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -573,6 +580,7 @@ fn visible_targets_by_repo_matches_render_order() {
         github_remotes: &Default::default(),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
+        panel: None,
     };
     let state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -694,6 +702,7 @@ fn visible_targets_matches_rendered_row_order_under_recency() {
         github_remotes: &Default::default(),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
+        panel: None,
     };
     let mut state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -798,6 +807,7 @@ fn repo_order_breaks_sort_order_ties_by_id_in_lockstep() {
         github_remotes: &Default::default(),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
+        panel: None,
     };
     let state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -1003,6 +1013,7 @@ fn fixture_dashboard_inputs() -> DashboardInputs<'static> {
         github_remotes: Box::leak(Box::default()),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
+        panel: None,
     }
 }
 
@@ -1153,6 +1164,7 @@ fn render_empty_body(repos: &[Repo], group: GroupMode, filter: Option<&str>) -> 
         github_remotes: &Default::default(),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
+        panel: None,
     };
     let mut state = DashboardState {
         group_mode: group,
@@ -1470,6 +1482,7 @@ mod hide_rules {
             github_remotes: Box::leak(Box::default()),
             nerd_fonts: false,
             fleet: crate::ui::bar::fleet::empty(),
+            panel: None,
         }
     }
 

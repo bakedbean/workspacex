@@ -113,8 +113,8 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.dashboard_repo_name_rects.clear();
     app.dashboard_focus_row_rects.clear();
     app.dashboard_focus_group_rects.clear();
-    app.dashboard_panel_tab_rects.clear();
-    app.dashboard_panel_rect = None;
+    app.side_panel_tab_rects.clear();
+    app.side_panel_rect = None;
     app.dashboard_unfocus_rect = None;
     app.procs_link_rect = None;
     app.usage_graph_rect = None;

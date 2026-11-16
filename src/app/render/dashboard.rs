@@ -93,6 +93,13 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
         github_remotes: &app.github_remotes,
         nerd_fonts,
         fleet: &fleet,
+        // Copied only while the panel is open to show them.
+        panel: match app.selected_target() {
+            Some(SelectionTarget::Workspace(id)) if app.dashboard.panel.open => {
+                side_panel_data(app, id)
+            }
+            _ => None,
+        },
     };
     // Rebuild `selectable` in the V5 visible order (repos ordered
     // by persisted `sort_order`, priority-sort within repo, hide
@@ -144,8 +151,8 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     app.dashboard_repo_name_rects = click_targets.repo_names;
     app.dashboard_focus_row_rects = click_targets.focus_rows;
     app.dashboard_focus_group_rects = click_targets.focus_groups;
-    app.dashboard_panel_tab_rects = click_targets.panel_tabs;
-    app.dashboard_panel_rect = click_targets.panel_area;
+    app.side_panel_tab_rects = click_targets.panel_tabs;
+    app.side_panel_rect = click_targets.panel_area;
     app.dashboard_unfocus_rect = click_targets.unfocus;
     if let Some(pm_area) = pm_area {
         let digest = app.build_pm_digest();
@@ -308,6 +315,34 @@ pub(crate) fn lifecycle_badge_for(
     }
 }
 
+/// The side panel's data for workspace `id`: its branch, its repo's base,
+/// and the commit and file lists — only lists polled against the current
+/// base, so a changed Base branch never shows the old base's lists.
+/// Shared by the dashboard and the attached view.
+pub(crate) fn side_panel_data(
+    app: &App,
+    id: crate::data::store::WorkspaceId,
+) -> Option<crate::ui::dashboard::side_panel::PanelData> {
+    let (rid, ws) = app.workspaces.iter().find(|(_, w)| w.id == id)?;
+    let repo = app.repos.iter().find(|r| r.id == *rid)?;
+    let lists = app
+        .workspace_branch_lists
+        .get(&id)
+        .filter(|l| Some(&l.base) == repo.base_branch.as_ref());
+    Some(crate::ui::dashboard::side_panel::PanelData {
+        workspace_id: id,
+        branch: ws.branch.clone(),
+        base: repo.base_branch.clone(),
+        commits: lists.map(|l| l.commits.clone()),
+        files: lists.map(|l| {
+            let mut v = l.files.clone();
+            v.sort_by(|a, b| a.path.cmp(&b.path));
+            v
+        }),
+        ahead: app.workspace_ahead_of_base.get(&id).copied(),
+    })
+}
+
 /// Build one workspace's dashboard row inputs: status classification, live
 /// peer agents, activity age, and the assorted per-row cache lookups the
 /// renderer needs. Extracted from the per-workspace loop in `draw` so it's
@@ -377,11 +412,6 @@ pub(crate) fn build_workspace_items<'a>(
                 continue;
             }
             let row = build_row_inputs(app, ws, now_ms, nerd_fonts);
-            let selected = app.dashboard.selection == Some(SelectionTarget::Workspace(ws.id));
-            let lists = app.workspace_branch_lists.get(&ws.id).filter(|l| {
-                // Copied only while the panel is open to show them.
-                selected && app.dashboard.panel_open && Some(&l.base) == repo.base_branch.as_ref()
-            });
             workspaces.push(crate::ui::dashboard::WorkspaceItem {
                 repo,
                 workspace_id: ws.id,
@@ -399,14 +429,6 @@ pub(crate) fn build_workspace_items<'a>(
                             .workspace_events
                             .get(&ws.id)
                             .and_then(|e| e.first_user_text.clone()),
-                        // The side panel shows only the selected workspace,
-                        // and only lists polled against the current base.
-                        commits: lists.map(|l| l.commits.clone()),
-                        files: lists.map(|l| {
-                            let mut v = l.files.clone();
-                            v.sort_by(|a, b| a.path.cmp(&b.path));
-                            v
-                        }),
                     }
                 } else {
                     Default::default()

@@ -104,16 +104,8 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
         // session pane on the dashboard for it to scroll instead.
         if app.dashboard.focused_repo.is_some() && app.modal.is_none() {
             let up = matches!(m.kind, MouseEventKind::ScrollUp);
-            if app
-                .dashboard_panel_rect
-                .is_some_and(|r| rect_contains(&r, &m))
-            {
-                let s = &mut app.dashboard.panel_scroll;
-                *s = if up {
-                    s.saturating_sub(3)
-                } else {
-                    s.saturating_add(3)
-                };
+            if app.side_panel_rect.is_some_and(|r| rect_contains(&r, &m)) {
+                app.dashboard.panel.scroll_by(3, up);
             } else {
                 app.dashboard.scroll_focus(if up { -3 } else { 3 });
             }

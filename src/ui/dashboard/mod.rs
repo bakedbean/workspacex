@@ -62,6 +62,9 @@ pub struct DashboardInputs<'a> {
     pub nerd_fonts: bool,
     /// Fleet variables for theme modules, built once per frame.
     pub fleet: &'a crate::ui::bar::segment::SegmentMap,
+    /// The side panel's data for the selected workspace; `None` when the
+    /// panel is closed or no workspace is selected.
+    pub panel: Option<side_panel::PanelData>,
 }
 
 #[derive(Debug)]
@@ -118,15 +121,9 @@ pub struct DashboardState {
     pub focus_scroll_anchor: Option<SelectionTarget>,
     /// Lines the focus view's rows had last frame, for paging.
     pub focus_page: usize,
-    /// Whether the focus view's side panel is showing.
-    pub panel_open: bool,
-    /// The side panel's tab, kept while it is closed.
-    pub panel_tab: side_panel::PanelTab,
-    /// The side panel body's first visible line.
-    pub panel_scroll: usize,
-    /// The selection and tab the panel last drew, so its scroll resets
-    /// when either changes.
-    pub panel_anchor: Option<(Option<SelectionTarget>, side_panel::PanelTab)>,
+    /// The commits / files side panel, shared by the list and the focus
+    /// view.
+    pub panel: side_panel::SidePanelState,
 }
 
 /// Settings key holding the by-repo sort mode.
@@ -237,10 +234,7 @@ impl Default for DashboardState {
             focus_scroll: 0,
             focus_scroll_anchor: None,
             focus_page: 0,
-            panel_open: false,
-            panel_tab: side_panel::PanelTab::default(),
-            panel_scroll: 0,
-            panel_anchor: None,
+            panel: Default::default(),
         }
     }
 }
@@ -607,44 +601,9 @@ fn render_focus(
 
     // The side panel takes the right of the body when open and there's
     // room; the rows get the rest.
-    let mut rows_area = chunks[2];
-    let mut panel_targets = side_panel::PanelTargets::default();
-    if state.panel_open && rows_area.width >= side_panel::PANEL_MIN_TOTAL {
-        let w = side_panel::panel_width(rows_area.width);
-        let panel_area = Rect {
-            x: rows_area.x + rows_area.width - w,
-            width: w,
-            ..rows_area
-        };
-        rows_area.width -= w + 1;
-        let selected_ws = match &state.selection {
-            Some(SelectionTarget::Workspace(id)) => inputs
-                .workspaces
-                .iter()
-                .find(|w| w.workspace_id == *id && w.repo.id == repo.id),
-            _ => None,
-        };
-        let anchor = (state.selection.clone(), state.panel_tab);
-        if state.panel_anchor.as_ref() != Some(&anchor) {
-            state.panel_scroll = 0;
-            state.panel_anchor = Some(anchor);
-        }
-        let panel_inputs = selected_ws.map(|w| side_panel::PanelInputs {
-            branch: &w.row.branch,
-            base: repo.base_branch.as_deref(),
-            commits: w.detail.commits.as_deref(),
-            files: w.detail.files.as_deref(),
-            ahead: w.detail.ahead_of_base,
-        });
-        panel_targets = side_panel::render(
-            f,
-            panel_area,
-            state.panel_tab,
-            panel_inputs,
-            &mut state.panel_scroll,
-            theme,
-        );
-    }
+    let (rows_area, panel_targets) = state
+        .panel
+        .carve(f, chunks[2], inputs.panel.as_ref(), theme);
 
     if entries.is_empty() {
         let msg = if RowFilter::of(state).is_active() {

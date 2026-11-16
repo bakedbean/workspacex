@@ -60,8 +60,8 @@ impl App {
             dashboard_repo_name_rects: Vec::new(),
             dashboard_focus_row_rects: Vec::new(),
             dashboard_focus_group_rects: Vec::new(),
-            dashboard_panel_tab_rects: Vec::new(),
-            dashboard_panel_rect: None,
+            side_panel_tab_rects: Vec::new(),
+            side_panel_rect: None,
             dashboard_unfocus_rect: None,
             procs_link_rect: None,
             github_remotes: Default::default(),
@@ -897,8 +897,6 @@ pub struct App {
     /// order, consumed by `handle_mouse` to apply a clicked option. Cleared each
     /// frame; only populated while the picker modal is open.
     pub usage_window_option_rects: Vec<ratatui::layout::Rect>,
-    /// `(palette index, rect)` per swatch drawn by the open name-color picker,
-    /// consumed by `handle_mouse` to apply a clicked color. Cleared each frame;
     /// Hidden-group rows in the repo focus view — a click expands or
     /// collapses the group.
     pub dashboard_focus_group_rects: Vec<(
@@ -908,13 +906,17 @@ pub struct App {
         ),
         ratatui::layout::Rect,
     )>,
-    /// The focus view side panel's tabs — a click shows that tab.
-    pub dashboard_panel_tab_rects: Vec<(
+    /// The side panel's tabs, on whichever view drew it — a click shows
+    /// that tab.
+    pub side_panel_tab_rects: Vec<(
         crate::ui::dashboard::side_panel::PanelTab,
         ratatui::layout::Rect,
     )>,
-    /// The focus view side panel — the wheel over it scrolls it.
-    pub dashboard_panel_rect: Option<ratatui::layout::Rect>,
+    /// The side panel, on whichever view drew it — the wheel over it
+    /// scrolls it.
+    pub side_panel_rect: Option<ratatui::layout::Rect>,
+    /// `(palette index, rect)` per swatch drawn by the open name-color picker,
+    /// consumed by `handle_mouse` to apply a clicked color. Cleared each frame;
     /// only populated while that modal is open.
     pub name_color_swatch_rects: Vec<(u8, ratatui::layout::Rect)>,
     /// Resolved pinned commands from the last draw tick (matches `chip_rects`).

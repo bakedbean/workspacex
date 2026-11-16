@@ -203,6 +203,10 @@ async fn g_toggles_pr_grouping_and_remembers_it() {
     );
     press(&mut app, KeyCode::Char('G')).await;
     assert!(app.dashboard.focus_group_by_pr);
+    assert_eq!(
+        app.dashboard.focus_scroll_anchor, None,
+        "the next frame scrolls the reordered selection into view"
+    );
 }
 
 #[tokio::test]

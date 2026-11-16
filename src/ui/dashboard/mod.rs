@@ -182,6 +182,8 @@ impl DashboardState {
     /// and remember it.
     pub fn toggle_focus_grouping(&mut self, store: &crate::data::store::Store) {
         self.focus_group_by_pr = !self.focus_group_by_pr;
+        // Rows reorder, so the next frame scrolls the selection into view.
+        self.focus_scroll_anchor = None;
         let value = if self.focus_group_by_pr { "on" } else { "off" };
         let _ = store.set_setting(FOCUS_GROUP_BY_PR_SETTING, value);
     }

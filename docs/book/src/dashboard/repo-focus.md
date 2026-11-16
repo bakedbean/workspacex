@@ -72,9 +72,9 @@ Each row has three zones.
 
 The prose is wrapped at a comfortable reading width instead of across the whole screen.
 
-**The footer** is a dim line of the workspace's agents, each named with its icon from the theme's [`[agent_bar.symbols]`](../configuration/themes.md) table (or the `▎` bar when the theme has none), followed by its tags. It is always shown.
+**The footer** is a dim line of the workspace's agents, each named with its icon from the theme's [`[agent_bar.symbols]`](../configuration/themes.md) table (or the `▎` bar when the theme has none), then `◇ shared` for a [shared](../integrations/shared-workspaces.md) workspace (red `shared, no session` when its tmux session is gone) and `layout` when it has a saved multi-pane layout, followed by its tags. It is always shown.
 
-When the strip doesn't fit on one line, it breaks in two. Line 1 keeps the glyph, branch, PR chip and age; the status, commits ahead, uncommitted changes and diff move to line 2, under the branch. Every row breaks at the same point, so the columns still line up.
+When the strip doesn't fit on one line, it breaks up. Line 1 keeps the glyph, branch, PR chip and age; the status, commits ahead, uncommitted changes and diff move under the branch, usually onto one line, more when the terminal is narrow. Every row breaks at the same points, so the columns still line up. A field wider than the whole line, such as a very long base branch name, is cut short with `…`.
 
 In the focus view the [detail bar](detail-bar.md) shrinks to its reply row, so the workspaces get nearly the full height. Press `Tab` to type a message to the selected workspace's agent, as you would on the list.
 

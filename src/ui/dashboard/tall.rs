@@ -271,23 +271,41 @@ pub fn strip_columns(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -
     let one_line =
         prefix + natural + STRIP_GAP + pr + cells_width([status, ahead, dirty, diff, age]);
     let two_line = one_line > width;
-    let branch = if two_line {
-        let line1 = prefix + STRIP_GAP + pr + cells_width([age]);
-        natural.min(width.saturating_sub(line1)).max(BRANCH_MIN)
-    } else {
-        natural
-    };
+    let prose = width.saturating_sub(prefix + 2).min(PROSE_MAX);
+    if !two_line {
+        return StripColumns {
+            widths,
+            branch: natural,
+            pr,
+            status,
+            ahead,
+            dirty,
+            diff,
+            age,
+            two_line,
+            prose,
+        };
+    }
+    // Line 1 holds branch, PR and age: the branch gives way first, then the
+    // PR chip (which drops its lifecycle word when fitted narrower).
+    let room = width.saturating_sub(prefix + STRIP_GAP + cells_width([age]));
+    let branch = natural.min(room.saturating_sub(pr)).max(BRANCH_MIN);
+    let pr = pr
+        .min(room.saturating_sub(branch))
+        .max(display_width(NO_PR));
+    // Below the branch, a field wider than the line is cut to fit it.
+    let fit = |w: usize| w.min(prose);
     StripColumns {
         widths,
         branch,
         pr,
-        status,
-        ahead,
-        dirty,
-        diff,
+        status: fit(status),
+        ahead: fit(ahead),
+        dirty: fit(dirty),
+        diff: fit(diff),
         age,
         two_line,
-        prose: width.saturating_sub(prefix + 2).min(PROSE_MAX),
+        prose,
     }
 }
 
@@ -500,7 +518,8 @@ pub fn row_layout(
             continue;
         }
         let mut cells = Vec::new();
-        push_cells(&mut cells, group.into_iter().map(|(w, s)| (w, s, false)));
+        let fitted = group.into_iter().map(|(w, s)| (w, fit_spans(s, w), false));
+        push_cells(&mut cells, fitted);
         let mut l = lead();
         // Drop the leading gap: the lead already indents to the branch.
         l.extend(cells.into_iter().skip(1));
@@ -563,6 +582,26 @@ fn push_cells(
     }
 }
 
+/// Cut `spans` to `width` cells, ending in `…` when anything was dropped.
+fn fit_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+    if spans.iter().map(Span::width).sum::<usize>() <= width {
+        return spans;
+    }
+    let mut out = Vec::new();
+    let mut left = width;
+    for s in spans {
+        let w = s.width();
+        if w < left {
+            left -= w;
+            out.push(s);
+        } else {
+            out.push(Span::styled(truncate(&s.content, left), s.style));
+            break;
+        }
+    }
+    out
+}
+
 /// Cells taken by columns of widths `ws`, each with its leading gap.
 fn cells_width(ws: impl IntoIterator<Item = usize>) -> usize {
     ws.into_iter()
@@ -577,13 +616,15 @@ fn dim_cell(text: Option<String>, theme: &Theme) -> Vec<Span<'static>> {
 }
 
 /// Agents (primary first, each led by its icon; active peers in their
-/// hue), then tags each fitted to `width`, as parts for [`pack`].
+/// hue), shared/layout badges, then tags each fitted to `width`, as parts
+/// for [`pack`].
 fn footer_parts(
     row: &RowInputs,
     glyphs: &AgentGlyphs,
     theme: &Theme,
     width: usize,
 ) -> Vec<Vec<Span<'static>>> {
+    use crate::ui::dashboard::status::Status;
     let agents = std::iter::once((row.agent, false))
         .chain(row.peers.iter().map(|p| (p.agent, p.active)))
         .map(|(kind, active)| {
@@ -599,12 +640,31 @@ fn footer_parts(
             a.push(Span::styled(kind.display_name().to_string(), label_style));
             a
         });
+    // Shared-session and layout badges, as the dashboard row draws them.
+    let mut badges = Vec::new();
+    if row.shared {
+        let (glyph, label, style) = match (row.nerd_fonts, row.shared_active) {
+            (true, true) => ("\u{f0c53}", "shared", theme.status_style(Status::Complete)),
+            (true, false) => ("\u{f015b}", "shared, no session", theme.err_style()),
+            (false, true) => ("◇", "shared", theme.status_style(Status::Complete)),
+            (false, false) => ("◇", "shared, no session", theme.err_style()),
+        };
+        badges.push(vec![Span::styled(format!("{glyph} {label}"), style)]);
+    }
+    if row.has_multi_pane_layout {
+        let label = if row.nerd_fonts {
+            "\u{f0db} layout"
+        } else {
+            "layout"
+        };
+        badges.push(vec![Span::styled(label, theme.row_dim_style())]);
+    }
     // Each tag fits the footer on its own, so `pack` never spills one.
     let tags = row.tags.iter().map(|t| {
         let tag = truncate(&format!("#{t}"), width);
         vec![Span::styled(tag, theme.row_dim_style())]
     });
-    agents.chain(tags).collect()
+    agents.chain(badges).chain(tags).collect()
 }
 
 /// `↑4 vs main`: commits ahead of the base branch, named without its
@@ -693,14 +753,15 @@ pub fn render(
         pr_hits.push(pr_hit);
         lines.extend(entry);
     }
-    let height = area.height as usize;
     // On follow frames a row right under a section header scrolls as one
     // block with it, so the header comes into view too. Manual scrolls
     // keep only the row's own lines pinned.
+    let height = area.height as usize;
     let sel_span = selected.and_then(|i| {
         let (top, len) = spans.get(i).copied()?;
         match i.checked_sub(1).and_then(|p| entries.get(p)) {
-            Some(TallEntry::Section(_)) if follow => {
+            // Only when header, gap and the row's first line all fit.
+            Some(TallEntry::Section(_)) if follow && top - spans[i - 1].0 < height => {
                 let header_top = spans[i - 1].0;
                 Some((header_top, top + len - header_top))
             }
@@ -2080,6 +2141,91 @@ mod tests {
             }
             assert!(out.last().unwrap().contains("#xxx"), "{out:#?}");
         }
+    }
+
+    /// A side panel dragged wide leaves the rows 40 cells; a long base
+    /// branch must not push any field past the edge.
+    #[test]
+    fn strip_fits_at_40_with_a_long_base_branch() {
+        let row = busy_row("bakedbean/a-rather-long-branch-name");
+        let mut detail = busy_detail();
+        detail.base_branch = Some(format!("release/{}", "x".repeat(100)));
+        let rows = [TallRow {
+            row: &row,
+            detail: &detail,
+        }];
+        let out = &strip_rows(&rows, 40)[0];
+        for l in out {
+            assert!(display_width(l) <= 40, "too wide: {l:?}");
+        }
+        let all = out.join("\n");
+        assert!(
+            all.contains("↑3 vs release/x") && all.contains('…'),
+            "{all}"
+        );
+        assert!(all.contains("#1234") && all.contains("1m"), "{all}");
+    }
+
+    #[test]
+    fn footer_shows_shared_and_layout_badges() {
+        let detail = WorkspaceDetail::default();
+        let footer = |row: &RowInputs| {
+            let rows = [TallRow {
+                row,
+                detail: &detail,
+            }];
+            strip_rows(&rows, 120)[0].last().unwrap().clone()
+        };
+        let mut row = base_row("b");
+        row.shared = true;
+        row.shared_active = true;
+        assert!(footer(&row).contains("◇ shared"), "{}", footer(&row));
+        row.shared_active = false;
+        assert!(
+            footer(&row).contains("◇ shared, no session"),
+            "{}",
+            footer(&row)
+        );
+        row.shared = false;
+        row.has_multi_pane_layout = true;
+        assert!(footer(&row).contains("layout"), "{}", footer(&row));
+        row.has_multi_pane_layout = false;
+        assert!(!footer(&row).contains("shared") && !footer(&row).contains("layout"));
+    }
+
+    /// In a viewport too short for header, gap and the row's first line,
+    /// following the selection shows the row, not just its header.
+    #[test]
+    fn follow_skips_the_header_when_the_row_would_not_show() {
+        let row = base_row("b");
+        let detail = WorkspaceDetail::default();
+        let entries = [
+            TallEntry::Section(Line::from("── Open · 1 ──")),
+            TallEntry::Row(TallRow {
+                row: &row,
+                detail: &detail,
+            }),
+        ];
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 2)).unwrap();
+        let mut scroll = 0;
+        let mut targets = TallTargets::default();
+        term.draw(|f| {
+            targets = render(
+                f,
+                f.area(),
+                &entries,
+                &AgentGlyphs::default(),
+                Some(1),
+                &mut scroll,
+                true,
+                ColumnWidths::default(),
+                0,
+                &Theme::wsx(),
+            );
+        })
+        .unwrap();
+        assert_eq!(scroll, 2, "row's first line at the top");
+        assert_eq!(targets.rows.len(), 1);
     }
 
     #[test]

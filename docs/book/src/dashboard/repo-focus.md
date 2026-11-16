@@ -5,25 +5,27 @@ The focus view shows one repo on the dashboard and gives each of its workspaces 
 ```text
 ◂ all repos / workspacex  ~/src/workspacex  ──────────────────────────  ● 2  ? 1    5 ws
 
-▎▍ ⠋ bakedbean/repo-focus-view      ⏺ #461 open ✓    prompt  I want to design a new dashboard
- ▍   ▸ working  ● 2p              2m                    feature for how workspaces are…
- ▍   ↑4 vs main · 3 modified                    goal    Single-repo dashboard view with
- ▍   1 untracked · +184 −22                             richer per-workspace detail
- ▍    claude   codex                          now     mapping dashboard code → draft
- ▍   #ui                                                design options
+▎▍ ⠋ bakedbean/repo-focus-view      ⏺ #461 open ✓   prompt  I want to design a new dashboard feature for
+ ▍   ▸ working  ● 2p           2m                           how workspaces are displayed. I want to be…
+ ▍   ↑4 vs main · 3 modified                        goal    Single-repo dashboard view with richer
+ ▍   1 untracked · +184 −22                                 per-workspace detail
+ ▍   ▎ claude                                       now     mapping dashboard code → draft design
+ ▍    #ui                                                   options
 
-▎▎ ? bakedbean/detail-bar-scroll    ⏺ #459 draft     prompt  The detail bar containers should
- ▎   └ asking  ● 1p              14m                    scroll independently
- ▎   ↑2 vs main · +61 −8                        goal    Scroll detail-bar containers
- ▎    claude                                          independently
+▎▎ ? bakedbean/detail-bar-scroll    ⏷ #459 draft    prompt  The detail bar containers should scroll
+ ▎   └ asking  ● 1p           14m                           independently
+ ▎   ↑2 vs main · +61 −8                            goal    Scroll detail-bar containers independently
+ ▎   ▎ claude                                       now     keep scroll offsets per workspace or global?
 
-▎▎ · bakedbean/try-new-parser       no PR            goal    Spike a faster recap parser
+▎▎ · bakedbean/try-new-parser       no PR           goal    Spike a faster recap parser
+ ▎   └ idle                    3h
+ ▎   ▎ claude
 ```
 
 The left column, top to bottom:
 
 - **The branch**, after the status glyph (a spinner while the agent works). A branch longer than the column wraps onto the next line; it is never shortened.
-- **The status word**, as on the dashboard row, with the running-process count, any badge, and how long ago the workspace was active.
+- **The status word**, as on the dashboard row, with the running-process count, any badge, and how long ago the workspace was active (on a line of its own when the status leaves no room).
 - **Git**: commits ahead of the repo's base branch (`↑4 vs main`, from the repo's **Base branch** setting; absent when it isn't set), uncommitted changes (nothing is shown for a clean tree), and the diff.
 - **Agents**: every agent in the workspace, named with its icon from the theme's [`[agent_bar.symbols]`](../configuration/themes.md) table, or the `▎` bar when the theme has none.
 - **Tags**.
@@ -36,7 +38,7 @@ The right column:
 - **goal**: the recap goal in full.
 - **now**: the recap state, then the next step after `→`. Without a recap, a **last** line takes its place: the status text the dashboard row would have clipped, usually the agent's last message, cut to two lines. When that text is just the initial prompt, it isn't repeated.
 
-Below 96 columns there's no room for two columns, so each workspace stacks instead: the dashboard row (its branch column widened to fit the longest branch, up to 80 cells), the prose lines under it, and a `git` line with the git counts, agents and tags.
+Below 96 columns there's no room for side-by-side columns, so each workspace stacks instead: the dashboard row (its branch column widened to fit the longest branch, up to 80 cells), the prose lines under it, and a `git` line with the git counts, agents and tags.
 
 In the focus view the [detail bar](detail-bar.md) shrinks to its reply row, so the workspaces get nearly the full height. Press `Tab` to type a message to the selected workspace's agent, as you would on the list.
 

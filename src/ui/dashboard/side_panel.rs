@@ -18,7 +18,8 @@
 //!
 //! The Files tab has a cursor. While the panel holds keyboard focus
 //! (`→` on the dashboard, `Ctrl-x f` attached) it is highlighted and moves
-//! with `j` / `k`; Enter, or a click on a file, opens the file's diff.
+//! with `j` / `k`; Enter, or a click on a file, opens the file's diff, and
+//! `o` opens the file in the editor.
 
 use crate::data::store::WorkspaceId;
 use crate::git::{BranchCommit, ChangedFile};
@@ -347,8 +348,10 @@ pub fn render(
     };
     view.cursor = view.cursor.min(files.map_or(0, |f| f.len() - 1));
     // While focused, the bottom row says what the keys do.
-    let hint = (view.focused && files.is_some() && inner.height as usize > head.len() + 1)
-        .then(|| crate::ui::drawer::hint_line(&[("↵", "diff"), ("esc", "back")], theme));
+    let hint =
+        (view.focused && files.is_some() && inner.height as usize > head.len() + 1).then(|| {
+            crate::ui::drawer::hint_line(&[("↵", "diff"), ("o", "edit"), ("esc", "back")], theme)
+        });
     let (body, spans) = match files {
         Some(files) => file_lines(files, width, view.focused.then_some(view.cursor), theme),
         None => (body_lines(tab, selected, width, theme), Vec::new()),

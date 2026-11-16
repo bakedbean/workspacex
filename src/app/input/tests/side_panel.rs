@@ -388,3 +388,31 @@ async fn ctrl_x_f_focuses_the_attached_files() {
     let m = diff_modal(&app).expect("diff viewer open");
     assert_eq!((m.workspace_id, m.index), (target.workspace_id, 1));
 }
+
+/// `o` on a file the worktree doesn't have says so: as an error card from
+/// the focused list, and on the viewer's hint row while it stays open,
+/// cleared by the next key.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn o_on_a_missing_file_explains_itself() {
+    let (mut app, _, _) = app();
+    draw(&mut app);
+    key(&mut app, KeyCode::Right).await;
+    draw(&mut app);
+    key(&mut app, KeyCode::Char('o')).await;
+    match &app.modal {
+        Some(crate::ui::modal::Modal::Error { message }) => {
+            assert!(message.contains("src/alpha.rs is deleted"), "{message}")
+        }
+        other => panic!("expected an error card, got {other:?}"),
+    }
+    key(&mut app, KeyCode::Esc).await;
+
+    key(&mut app, KeyCode::Enter).await;
+    key(&mut app, KeyCode::Char('o')).await;
+    let m = diff_modal(&app).expect("the viewer stays open");
+    assert!(m.notice.as_deref().is_some_and(|n| n.contains("deleted")));
+    let screen = draw(&mut app);
+    assert!(screen.contains("nothing to open"), "{screen}");
+    key(&mut app, KeyCode::Char('j')).await;
+    assert_eq!(diff_modal(&app).unwrap().notice, None);
+}

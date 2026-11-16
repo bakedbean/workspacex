@@ -71,6 +71,8 @@ pub struct FileDiffModal {
     pub minimap: bool,
     /// Diff lines the last frame showed, which a page moves by.
     pub view_h: usize,
+    /// A message for the hint row (a failed `o`), cleared by the next key.
+    pub notice: Option<String>,
     /// The diff and minimap panes' insides as last drawn, for the mouse.
     pub diff_rect: Rect,
     pub minimap_rect: Rect,
@@ -94,6 +96,7 @@ impl FileDiffModal {
             scroll: 0,
             minimap: true,
             view_h: 0,
+            notice: None,
             diff_rect: Rect::default(),
             minimap_rect: Rect::default(),
         }
@@ -101,6 +104,16 @@ impl FileDiffModal {
 
     pub fn file(&self) -> Option<&ChangedFile> {
         self.files.get(self.index)
+    }
+
+    /// The line of HEAD's copy at the top of the diff pane (the first
+    /// numbered line at or below it), where `o` opens the editor.
+    pub fn top_line(&self) -> usize {
+        let lines = self.lines();
+        lines[self.scroll.min(lines.len())..]
+            .iter()
+            .find_map(|l| l.n)
+            .unwrap_or(1)
     }
 
     pub fn lines(&self) -> &[DiffLine] {
@@ -303,6 +316,7 @@ const HINTS: &[Hint] = &[
     ("J K", "page"),
     ("g G", "top/bottom"),
     ("[ ]", "file"),
+    ("o", "open in editor"),
     ("m", "minimap"),
 ];
 
@@ -329,7 +343,10 @@ pub fn render_file_diff(f: &mut Frame, area: Rect, m: &mut FileDiffModal, theme:
         x: area.x + 1,
         width: area.width - 1,
     };
-    f.render_widget(crate::ui::drawer::hint_line(HINTS, theme), hint_row);
+    match &m.notice {
+        Some(n) => f.render_widget(Span::styled(n.clone(), theme.err_style()), hint_row),
+        None => f.render_widget(crate::ui::drawer::hint_line(HINTS, theme), hint_row),
+    }
 
     let mm_w = if m.minimap && body.width >= MIN_DIFF_WIDTH + MINIMAP_WIDTH {
         MINIMAP_WIDTH
@@ -734,6 +751,19 @@ mod tests {
         let before = m.scroll;
         m.jump_to_minimap(0, 0);
         assert_eq!(m.scroll, before);
+    }
+
+    #[test]
+    fn top_line_is_the_first_numbered_line_on_screen() {
+        let mut m = modal(1);
+        assert_eq!(m.top_line(), 1, "nothing loaded");
+        m.load = DiffLoad::Ready(Arc::new(diff_lines(&FileDiff {
+            diff: DIFF.into(),
+            source: Some("one\nTWO\nthree\nfour\n".into()),
+            binary: false,
+        })));
+        m.scroll = 1; // the deleted `-two`, which has no number
+        assert_eq!(m.top_line(), 2);
     }
 
     #[test]

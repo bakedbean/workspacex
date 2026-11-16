@@ -10,6 +10,40 @@ pub fn open_in_editor(worktree: &Path, configured: Option<&str>) -> Result<()> {
     spawn_with_path_arg(&cmd, worktree)
 }
 
+/// Resolve and launch the user's editor on `file` inside `worktree`, with
+/// cwd=`worktree`. The command may use `{path}` (the worktree), `{file}`
+/// (the file's absolute path) and `{line}` (the line to start on). Unless
+/// it uses `{file}`, the file is appended as the last argument, so an
+/// `editor_cmd` written for `e` (`code`, `… --dir={path} nvim`) opens the
+/// file as it would the worktree.
+pub fn open_file_in_editor(
+    worktree: &Path,
+    file: &Path,
+    line: usize,
+    configured: Option<&str>,
+) -> Result<()> {
+    let cmd = resolve_editor_cmd(configured)?;
+    let parts = file_editor_argv(&cmd, worktree, file, line)?;
+    spawn_parts(parts, worktree)
+}
+
+fn file_editor_argv(cmd: &str, worktree: &Path, file: &Path, line: usize) -> Result<Vec<String>> {
+    let (path, file, line) = (
+        worktree.to_string_lossy(),
+        file.to_string_lossy(),
+        line.to_string(),
+    );
+    let mut parts = resolve_argv(
+        cmd,
+        &[("path", &path), ("file", &file), ("line", &line)],
+        None,
+    )?;
+    if !cmd.contains("{file}") {
+        parts.push(file.into_owned());
+    }
+    Ok(parts)
+}
+
 /// Resolve and launch the user's terminal with cwd=`worktree`.
 pub fn open_in_terminal(worktree: &Path, configured: Option<&str>) -> Result<()> {
     let cmd = resolve_terminal_cmd(configured)?;
@@ -381,6 +415,23 @@ mod tests {
         let dir = std::env::temp_dir();
         let r = spawn_with_cwd(true_path(), &dir);
         assert!(r.is_ok());
+    }
+
+    #[test]
+    fn file_editor_argv_appends_the_file_unless_placed() {
+        let (wt, f) = (Path::new("/wt"), Path::new("/wt/src/a.rs"));
+        assert_eq!(
+            file_editor_argv("code", wt, f, 7).unwrap(),
+            ["code", "/wt/src/a.rs"]
+        );
+        assert_eq!(
+            file_editor_argv("term --dir={path} nvim", wt, f, 7).unwrap(),
+            ["term", "--dir=/wt", "nvim", "/wt/src/a.rs"]
+        );
+        assert_eq!(
+            file_editor_argv("nvim +{line} {file}", wt, f, 7).unwrap(),
+            ["nvim", "+7", "/wt/src/a.rs"]
+        );
     }
 
     #[test]

@@ -2,7 +2,8 @@
 //!
 //! `→` on the dashboard, or `Ctrl-x f` attached, opens the panel on Files
 //! with focus in the list. While it has focus, `j` / `k` move the file
-//! cursor, `g` / `G` jump to the ends, Enter opens the file's diff, and
+//! cursor, `g` / `G` jump to the ends, Enter opens the file's diff, `o`
+//! opens the file in the editor, and
 //! `←` / Esc hand focus back to the rows or the agent. Any other key drops
 //! focus and goes where it would have without it, so the panel never
 //! swallows a key it has no use for.
@@ -12,6 +13,49 @@ use crate::app::{App, SelectionTarget, SharedApp};
 use crate::data::store::WorkspaceId;
 use crate::ui::View;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::path::Path;
+
+/// Open changed file `path` (a numstat path, renames included) of the
+/// worktree at `worktree` in the configured editor, at `line`. A file the
+/// branch deleted has nothing to open.
+pub(in crate::app::input) fn edit_file(
+    app: &App,
+    worktree: &Path,
+    path: &str,
+    line: usize,
+) -> std::result::Result<(), String> {
+    let rel = crate::git::numstat_new_path(path);
+    let file = worktree.join(&rel);
+    if !file.exists() {
+        return Err(format!("{rel} is deleted on this branch; nothing to open"));
+    }
+    let cmd = app.store.get_setting("editor_cmd").ok().flatten();
+    crate::commands::external::open_file_in_editor(worktree, &file, line, cmd.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+/// `o` in the focused list: the cursor's file in the editor.
+fn edit_cursor_file(app: &mut App) {
+    let Some(ws) = side_panel_workspace(app) else {
+        return;
+    };
+    let Some(lists) = crate::app::render::dashboard::side_panel_data(app, ws).and_then(|d| d.lists)
+    else {
+        return;
+    };
+    let cursor = super::active_side_panel(app).file_cursor;
+    let (Some(file), Some(worktree)) = (
+        lists
+            .files
+            .get(cursor.min(lists.files.len().saturating_sub(1))),
+        app.workspace_path(ws),
+    ) else {
+        return;
+    };
+    if let Err(message) = edit_file(app, &worktree, &file.path, 1) {
+        app.modal = Some(crate::ui::modal::Modal::Error { message });
+    }
+}
 
 /// The workspace the side panel on screen shows: the selected row on the
 /// dashboard, the focused pane's workspace attached.
@@ -63,6 +107,7 @@ pub(in crate::app::input) fn focused_key(app: &mut App, shared: &SharedApp, k: K
             let cursor = panel.file_cursor;
             open_file(app, shared, cursor);
         }
+        KeyCode::Char('o') if !ctrl => edit_cursor_file(app),
         KeyCode::Esc | KeyCode::Left => panel.focused = false,
         // The `Ctrl-x` leader keeps focus: its chord may be for the panel.
         KeyCode::Char('x') if ctrl => return false,

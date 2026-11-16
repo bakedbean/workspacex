@@ -88,8 +88,25 @@ fn step(app: &mut App, shared: &SharedApp, d: isize) {
     }
 }
 
+/// `o`: the shown file in the editor, at the line atop the diff pane.
+fn edit(app: &mut App) {
+    let Some(Modal::FileDiff(m)) = &app.modal else {
+        return;
+    };
+    let Some(file) = m.file() else {
+        return;
+    };
+    let r = crate::app::input::side_panel::edit_file(app, &m.worktree, &file.path, m.top_line());
+    if let (Err(e), Some(Modal::FileDiff(m))) = (r, app.modal.as_mut()) {
+        m.notice = Some(e);
+    }
+}
+
 pub(in crate::app::input) fn keys(app: &mut App, shared: &SharedApp, k: KeyEvent) {
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+    if let Some(Modal::FileDiff(m)) = app.modal.as_mut() {
+        m.notice = None;
+    }
     match k.code {
         KeyCode::Esc | KeyCode::Char('q') => {
             app.modal = None;
@@ -97,6 +114,7 @@ pub(in crate::app::input) fn keys(app: &mut App, shared: &SharedApp, k: KeyEvent
         }
         KeyCode::Char('[') | KeyCode::Left => return step(app, shared, -1),
         KeyCode::Char(']') | KeyCode::Right => return step(app, shared, 1),
+        KeyCode::Char('o') if !ctrl => return edit(app),
         _ => {}
     }
     let Some(Modal::FileDiff(m)) = app.modal.as_mut() else {

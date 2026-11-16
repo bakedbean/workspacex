@@ -30,6 +30,7 @@ Press `→` to move the keyboard into the Files list, opening the panel on Files
 | `j` / `k`     | Move the cursor (`↓` / `↑` also work)    |
 | `g` / `G`     | First / last file                        |
 | `enter`       | Open the file's [diff](#the-diff-viewer) |
+| `o`           | Open the file in your [editor](../integrations/editor-terminal-diff.md#opening-one-file) |
 | `←` / `esc`   | Give the keys back to the workspace list |
 
 Any other key also gives focus back and then does what it normally does, so `n` still makes a new workspace and `c` still closes the panel. `l` still opens the selected workspace. Clicking a file opens its diff without moving focus.
@@ -53,6 +54,7 @@ The diff viewer fills the screen with one file's changes against the base branch
 | `Ctrl-d` / `Ctrl-u`         | Scroll half a page                  |
 | `g` / `G`                   | Top / bottom                        |
 | `[` / `]`, `←` / `→`        | Previous / next changed file        |
+| `o`                         | Open the file in your [editor](../integrations/editor-terminal-diff.md#opening-one-file), at the top line on screen |
 | `m`                         | Hide or show the minimap            |
 | `esc` / `q`                 | Close                               |
 

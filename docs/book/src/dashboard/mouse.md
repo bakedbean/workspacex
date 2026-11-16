@@ -10,6 +10,7 @@ Hold `Shift` while you drag. Most terminals (Alacritty, Kitty, WezTerm, iTerm2, 
 
 - The wheel scrolls the attached pane's history. If the agent handles the mouse itself, the wheel goes to the agent; hold `Shift` to scroll wsx's history instead. Over the [side panel](side-panel.md#in-the-attached-view) it scrolls the panel.
 - On the dashboard, the wheel over a [detail bar](detail-bar.md) container scrolls that container, and over the [side panel](side-panel.md) scrolls the panel. Elsewhere in the [focus view](repo-focus.md) it scrolls the workspaces.
+- In the side panel's [diff viewer](side-panel.md#the-diff-viewer), the wheel scrolls the diff, and a click or drag on the minimap jumps there.
 
 ## Clickable targets
 
@@ -23,6 +24,7 @@ Hold `Shift` while you drag. Most terminals (Alacritty, Kitty, WezTerm, iTerm2, 
 | A workspace in the focus view | Attaches to it                                          |
 | `◂ all repos` in the focus view | Goes back to every repo                               |
 | A [side-panel](side-panel.md) tab, on the dashboard or attached | Shows that tab        |
+| A file in the side panel's Files tab | Opens its [diff](side-panel.md#the-diff-viewer) full screen |
 | A row's process count (`● 2p`) | Opens the [process list](process-tracking.md)          |
 | A pinned-command chip        | Sends that [pinned command](../attached-view/pinned-commands.md) |
 | A prompt-tag chip            | Opens that [prompt tag](../attached-view/prompt-tags.md)'s body box |

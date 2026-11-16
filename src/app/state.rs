@@ -63,6 +63,7 @@ impl App {
             dashboard_focus_group_rects: Vec::new(),
             side_panel_tab_rects: Vec::new(),
             side_panel_rect: None,
+            side_panel_file_rects: Vec::new(),
             dashboard_unfocus_rect: None,
             procs_link_rect: None,
             github_remotes: Default::default(),
@@ -922,6 +923,9 @@ pub struct App {
     /// The side panel, on whichever view drew it — the wheel over it
     /// scrolls it.
     pub side_panel_rect: Option<ratatui::layout::Rect>,
+    /// The side panel's file rows by file index, on whichever view drew
+    /// it — a click opens that file's diff.
+    pub side_panel_file_rects: Vec<(usize, ratatui::layout::Rect)>,
     /// `(palette index, rect)` per swatch drawn by the open name-color picker,
     /// consumed by `handle_mouse` to apply a clicked color. Cleared each frame;
     /// only populated while that modal is open.

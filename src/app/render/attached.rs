@@ -425,6 +425,7 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
     app.prompt_tags_cache = data.tags;
     app.side_panel_tab_rects = panel.tabs;
     app.side_panel_rect = panel.area;
+    app.side_panel_file_rects = panel.files;
 }
 
 /// The single full-screen pane of an ssh-attached remote workspace.

@@ -4,6 +4,7 @@
 use super::common::*;
 use super::*;
 use crate::data::store::{RepoId, Store, WorkspaceId};
+use crate::git::forge::BranchLifecycle;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -180,11 +181,52 @@ async fn n_in_an_empty_focus_view_creates_in_the_focused_repo() {
 }
 
 #[tokio::test]
-async fn g_leaves_the_focus_view() {
+async fn g_toggles_pr_grouping_and_remembers_it() {
+    use crate::ui::dashboard::FOCUS_GROUP_BY_PR_SETTING;
     let (mut app, repo, _, _) = app();
+    let group_mode = app.dashboard.group_mode;
     app.dashboard.focus_repo(repo);
+    assert!(app.dashboard.focus_group_by_pr, "grouped by default");
     press(&mut app, KeyCode::Char('G')).await;
-    assert_eq!(app.dashboard.focused_repo, None);
+    assert_eq!(app.dashboard.focused_repo, Some(repo), "stays focused");
+    assert!(!app.dashboard.focus_group_by_pr);
+    assert_eq!(
+        app.dashboard.group_mode, group_mode,
+        "list grouping untouched"
+    );
+    assert_eq!(
+        app.store
+            .get_setting(FOCUS_GROUP_BY_PR_SETTING)
+            .unwrap()
+            .as_deref(),
+        Some("off")
+    );
+    press(&mut app, KeyCode::Char('G')).await;
+    assert!(app.dashboard.focus_group_by_pr);
+    assert_eq!(
+        app.dashboard.focus_scroll_anchor, None,
+        "the next frame scrolls the reordered selection into view"
+    );
+}
+
+#[tokio::test]
+async fn g_outside_the_focus_view_still_flips_list_grouping() {
+    let (mut app, _, _, _) = app();
+    let before = app.dashboard.group_mode;
+    press(&mut app, KeyCode::Char('G')).await;
+    assert_ne!(app.dashboard.group_mode, before);
+    assert!(app.dashboard.focus_group_by_pr);
+}
+
+#[test]
+fn the_grouping_setting_loads_at_startup() {
+    use crate::ui::dashboard::FOCUS_GROUP_BY_PR_SETTING;
+    let store = Store::open_in_memory().unwrap();
+    store
+        .set_setting(FOCUS_GROUP_BY_PR_SETTING, "off\n")
+        .unwrap();
+    let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    assert!(!app.dashboard.focus_group_by_pr);
 }
 
 #[test]
@@ -291,7 +333,7 @@ fn tall_rows_show_long_recaps_and_branches_whole() {
     let goal_lines: Vec<usize> = screen
         .lines()
         .enumerate()
-        .filter(|(_, l)| goal.split(' ').any(|w| w.len() > 6 && l.contains(w)))
+        .filter(|(_, l)| goal.split(' ').any(|w| w.len() > 4 && l.contains(w)))
         .map(|(y, _)| y)
         .collect();
     assert!(goal_lines.len() >= 2, "goal wraps:\n{screen}");
@@ -887,4 +929,499 @@ async fn binary_files_show_in_the_files_tab() {
     let screen = draw(&mut app);
     assert!(screen.contains("assets/logo.png"), "{screen}");
     assert!(screen.contains("1 binary"), "{screen}");
+}
+
+/// Index of the first drawn line containing `needle`.
+fn line_of(screen: &str, needle: &str) -> usize {
+    screen
+        .lines()
+        .position(|l| l.contains(needle))
+        .unwrap_or_else(|| panic!("`{needle}` not drawn:\n{screen}"))
+}
+
+fn set_lifecycles(app: &mut App, ids: &[WorkspaceId], lcs: &[Option<BranchLifecycle>]) {
+    for (id, lc) in ids.iter().zip(lcs) {
+        match lc {
+            Some(lc) => app.pr_lifecycle.insert(*id, *lc),
+            None => app.pr_lifecycle.remove(id),
+        };
+    }
+}
+
+#[tokio::test]
+async fn sections_follow_pr_lifecycle() {
+    use BranchLifecycle::*;
+    let (mut app, repo, _, ids) = app();
+    set_lifecycles(
+        &mut app,
+        &ids,
+        &[
+            Some(PrOpen),
+            None,
+            Some(PrDraft),
+            Some(PrMerged),
+            Some(PrConflicted),
+        ],
+    );
+    app.dashboard.focus_repo(repo);
+    let s = draw(&mut app);
+    let (no_pr, draft, open, done) = (
+        line_of(&s, "── No PR · 1"),
+        line_of(&s, "── Draft · 1"),
+        line_of(&s, "── Open · 2"),
+        line_of(&s, "── Done · 1"),
+    );
+    assert!(no_pr < draft && draft < open && open < done, "{s}");
+    let b = line_of(&s, "repo/b");
+    assert!(no_pr < b && b < draft, "{s}");
+    let e = line_of(&s, "repo/e");
+    assert!(open < e && e < done, "{s}");
+}
+
+#[tokio::test]
+async fn empty_sections_are_omitted() {
+    let (mut app, repo, _, ids) = app();
+    set_lifecycles(&mut app, &ids, &[Some(BranchLifecycle::PrOpen); 5]);
+    app.dashboard.focus_repo(repo);
+    let s = draw(&mut app);
+    assert!(s.contains("── Open · 5"), "{s}");
+    for other in ["No PR", "Draft", "Done"] {
+        assert!(!s.contains(&format!("── {other}")), "{s}");
+    }
+}
+
+#[tokio::test]
+async fn unpolled_rows_sit_under_no_pr() {
+    let (mut app, repo, _, _) = app();
+    app.dashboard.focus_repo(repo);
+    let s = draw(&mut app);
+    assert!(s.contains("── No PR · 5"), "{s}");
+    assert!(s.contains("no PR"), "{s}");
+    assert!(app.dashboard_pr_rects.is_empty(), "no PR chip to click");
+}
+
+#[tokio::test]
+async fn headers_are_not_selectable() {
+    use BranchLifecycle::*;
+    let (mut app, repo, _, ids) = app();
+    set_lifecycles(
+        &mut app,
+        &ids,
+        &[Some(PrOpen), None, Some(PrDraft), Some(PrMerged), None],
+    );
+    app.dashboard.focus_repo(repo);
+    draw(&mut app);
+    assert_eq!(app.selectable.len(), 5);
+    assert!(
+        app.selectable
+            .iter()
+            .all(|t| matches!(t, SelectionTarget::Workspace(_)))
+    );
+    // No PR holds b and e; j from the second lands on the Draft row.
+    app.select_index(1);
+    draw(&mut app);
+    press(&mut app, KeyCode::Char('j')).await;
+    draw(&mut app);
+    assert_eq!(selected_ws(&app), Some(ids[2]));
+    assert_eq!(app.focus_section_starts, vec![0, 2, 3, 4]);
+}
+
+#[tokio::test]
+async fn focus_view_does_not_pin_blocked() {
+    use crate::activity::events::{EventKind, EventSnapshot, StopReason, WorkspaceEvents};
+    use crate::ui::dashboard::sort::SortMode;
+    let (mut app, repo, _, ids) = app();
+    set_lifecycles(&mut app, &ids, &[Some(BranchLifecycle::PrMerged); 5]);
+    let now = crate::util::time::now_ms();
+    let latest = |ago_ms: i64| {
+        Some(EventSnapshot {
+            kind: EventKind::AssistantText,
+            display: "x".into(),
+            timestamp_ms: now - ago_ms,
+        })
+    };
+    // c is blocked but older than d; pinning would float it above d.
+    app.workspace_events.insert(
+        ids[2],
+        WorkspaceEvents {
+            last_stop_reason: Some(StopReason::EndTurn),
+            last_assistant_text: Some("Which approach?".into()),
+            latest: latest(600_000),
+            ..Default::default()
+        },
+    );
+    app.workspace_events.insert(
+        ids[3],
+        WorkspaceEvents {
+            latest: latest(5_000),
+            ..Default::default()
+        },
+    );
+    app.dashboard.sort_mode = SortMode::Recency;
+    app.dashboard.blocked_pin_max_age_secs = 3600;
+    app.dashboard.focus_repo(repo);
+    let s = draw(&mut app);
+    let (d, c) = (line_of(&s, "repo/d"), line_of(&s, "repo/c"));
+    assert!(line_of(&s, "── Done") < d && d < c, "c is not pinned:\n{s}");
+}
+
+#[tokio::test]
+async fn selection_follows_a_workspace_across_sections() {
+    use BranchLifecycle::*;
+    let (mut app, repo, _, ids) = app();
+    set_lifecycles(&mut app, &ids, &[Some(PrOpen); 5]);
+    set_lifecycles(&mut app, &ids[2..3], &[Some(PrDraft)]);
+    app.dashboard.focus_repo(repo);
+    draw(&mut app);
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[2]));
+    draw(&mut app);
+    set_lifecycles(&mut app, &ids[2..3], &[Some(PrOpen)]);
+    let s = draw(&mut app);
+    assert_eq!(selected_ws(&app), Some(ids[2]));
+    assert!(!s.contains("── Draft"), "{s}");
+    assert!(line_of(&s, "── Open · 5") < line_of(&s, "repo/c"), "{s}");
+}
+
+#[tokio::test]
+async fn hidden_groups_trail_the_sections() {
+    use BranchLifecycle::*;
+    let (mut app, repo, _, ids) = app();
+    app.store
+        .set_repo_hide_rules(
+            repo,
+            &crate::data::hide_rules::HideRules::parse(Some("pr:merged")),
+        )
+        .unwrap();
+    app.refresh().unwrap();
+    set_lifecycles(
+        &mut app,
+        &ids,
+        &[
+            Some(PrOpen),
+            None,
+            Some(PrDraft),
+            Some(PrMerged),
+            Some(PrOpen),
+        ],
+    );
+    app.dashboard.focus_repo(repo);
+    let s = draw(&mut app);
+    assert!(line_of(&s, "hidden") > line_of(&s, "── Open"), "{s}");
+    assert!(!s.contains("── Done"), "{s}");
+    assert_eq!(app.focus_section_starts, vec![0, 1, 2, 4]);
+}
+
+/// Selection (by workspace id) after each key press, drawing in between.
+async fn press_drawn(app: &mut App, code: KeyCode) -> Option<WorkspaceId> {
+    press(app, code).await;
+    draw(app);
+    selected_ws(app)
+}
+
+/// Sections: No PR [b], Draft [c], Open [a, e], Done [d].
+fn app_with_sections() -> (App, Vec<WorkspaceId>) {
+    use BranchLifecycle::*;
+    let (mut app, repo, _, ids) = app();
+    set_lifecycles(
+        &mut app,
+        &ids,
+        &[
+            Some(PrOpen),
+            None,
+            Some(PrDraft),
+            Some(PrMerged),
+            Some(PrConflicted),
+        ],
+    );
+    app.dashboard.focus_repo(repo);
+    draw(&mut app);
+    (app, ids)
+}
+
+#[tokio::test]
+async fn close_brace_jumps_to_next_section() {
+    let (mut app, ids) = app_with_sections();
+    let (a, b, c, d) = (ids[0], ids[1], ids[2], ids[3]);
+    app.select_index(
+        app.selectable
+            .iter()
+            .position(|t| *t == SelectionTarget::Workspace(b))
+            .unwrap(),
+    );
+    draw(&mut app);
+    assert_eq!(press_drawn(&mut app, KeyCode::Char('}')).await, Some(c));
+    assert_eq!(press_drawn(&mut app, KeyCode::Char('}')).await, Some(a));
+    assert_eq!(press_drawn(&mut app, KeyCode::Char('}')).await, Some(d));
+    assert_eq!(press_drawn(&mut app, KeyCode::Char('}')).await, Some(d));
+}
+
+#[tokio::test]
+async fn open_brace_goes_to_section_top_then_previous() {
+    let (mut app, ids) = app_with_sections();
+    let (a, b, c, e) = (ids[0], ids[1], ids[2], ids[4]);
+    app.select_index(
+        app.selectable
+            .iter()
+            .position(|t| *t == SelectionTarget::Workspace(e))
+            .unwrap(),
+    );
+    draw(&mut app);
+    assert_eq!(press_drawn(&mut app, KeyCode::Char('{')).await, Some(a));
+    assert_eq!(press_drawn(&mut app, KeyCode::Char('{')).await, Some(c));
+    assert_eq!(press_drawn(&mut app, KeyCode::Char('{')).await, Some(b));
+    assert_eq!(press_drawn(&mut app, KeyCode::Char('{')).await, Some(b));
+}
+
+#[tokio::test]
+async fn section_keys_with_one_section_are_noops() {
+    let (mut app, repo, _, ids) = app();
+    set_lifecycles(&mut app, &ids, &[Some(BranchLifecycle::PrOpen); 5]);
+    app.dashboard.focus_repo(repo);
+    draw(&mut app);
+    app.select_index(2);
+    draw(&mut app);
+    assert_eq!(
+        press_drawn(&mut app, KeyCode::Char('}')).await,
+        Some(ids[2])
+    );
+    assert_eq!(
+        press_drawn(&mut app, KeyCode::Char('{')).await,
+        Some(ids[0])
+    );
+    assert_eq!(
+        press_drawn(&mut app, KeyCode::Char('{')).await,
+        Some(ids[0])
+    );
+
+    // No workspaces at all: nothing to select, nothing to panic on.
+    let store = Store::open_in_memory().unwrap();
+    let rid = store
+        .add_repo(std::path::Path::new("/tmp/e"), "e", "")
+        .unwrap();
+    let mut empty = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    empty.view = crate::ui::View::Dashboard;
+    empty.refresh().unwrap();
+    empty.dashboard.focus_repo(rid);
+    draw(&mut empty);
+    press(&mut empty, KeyCode::Char('}')).await;
+    press(&mut empty, KeyCode::Char('{')).await;
+    assert!(empty.selectable.is_empty());
+}
+
+#[tokio::test]
+async fn section_starts_follow_the_filter() {
+    let (mut app, ids) = app_with_sections();
+    for id in [ids[0], ids[1], ids[3], ids[4]] {
+        app.store.add_workspace_tag(id, "keep").unwrap();
+    }
+    app.refresh().unwrap();
+    // The refresh above drops the seeded lifecycles' polling state.
+    let (a, b, c, d, e) = (ids[0], ids[1], ids[2], ids[3], ids[4]);
+    app.pr_lifecycle.insert(a, BranchLifecycle::PrOpen);
+    app.pr_lifecycle.insert(c, BranchLifecycle::PrDraft);
+    app.pr_lifecycle.insert(d, BranchLifecycle::PrMerged);
+    app.pr_lifecycle.insert(e, BranchLifecycle::PrConflicted);
+    app.pr_lifecycle.remove(&b);
+    app.dashboard.filter = Some("#keep".into());
+    draw(&mut app);
+    app.select_index(
+        app.selectable
+            .iter()
+            .position(|t| *t == SelectionTarget::Workspace(ids[1]))
+            .unwrap(),
+    );
+    draw(&mut app);
+    // Draft is filtered out, so `}` from b lands on the Open section. A
+    // live `/` buffer types the key instead, so call the jump directly.
+    super::super::dashboard::jump_focus_section(&mut app, true);
+    draw(&mut app);
+    assert_eq!(selected_ws(&app), Some(ids[0]));
+}
+
+#[tokio::test]
+async fn section_keys_do_nothing_outside_focus() {
+    let (mut app, _, _, _) = app();
+    draw(&mut app);
+    let before = app.dashboard.selection.clone();
+    press(&mut app, KeyCode::Char('}')).await;
+    press(&mut app, KeyCode::Char('{')).await;
+    assert_eq!(app.dashboard.selection, before);
+}
+
+#[tokio::test]
+async fn jump_reveals_the_section_header() {
+    use BranchLifecycle::*;
+    let store = Store::open_in_memory().unwrap();
+    let names: Vec<String> = (0..12).map(|i| format!("w{i:02}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let ids = seed_workspaces(&store, &refs);
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    app.view = crate::ui::View::Dashboard;
+    app.refresh().unwrap();
+    let repo = app.repos[0].id;
+    let lcs: Vec<_> = (0..12)
+        .map(|i| if i < 4 { None } else { Some(PrMerged) })
+        .collect();
+    set_lifecycles(&mut app, &ids, &lcs);
+    app.dashboard.focus_repo(repo);
+    let draw20 = |app: &mut App| {
+        let mut term = Terminal::new(TestBackend::new(120, 20)).unwrap();
+        term.draw(|f| crate::app::render::draw_for_test(f, app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    // Last row, then `{` back to the Done section's top, which scrolls up
+    // from below the fold; its header must come with it.
+    app.select_index(app.selectable.len() - 1);
+    draw20(&mut app);
+    press(&mut app, KeyCode::Char('{')).await;
+    draw20(&mut app);
+    let s = draw20(&mut app);
+    assert!(s.contains("── Done · 8"), "{s}");
+    assert!(s.contains("repo/w04"), "{s}");
+}
+
+/// At 80 columns the focus view still shows its section headers and every
+/// branch name whole, wrapped within the branch column.
+#[tokio::test]
+async fn narrow_focus_view_keeps_sections_and_whole_branches() {
+    use BranchLifecycle::*;
+    let store = Store::open_in_memory().unwrap();
+    let names = [
+        "short",
+        "a-considerably-longer-workspace-name-that-has-to-wrap",
+        "another-fairly-long-name-for-the-branch-column",
+    ];
+    let ids = seed_workspaces(&store, &names);
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    app.view = crate::ui::View::Dashboard;
+    app.refresh().unwrap();
+    let repo = app.repos.iter().find(|r| r.name == "repo").unwrap().id;
+    set_lifecycles(&mut app, &ids, &[None, Some(PrOpen), Some(PrMerged)]);
+    app.dashboard.selection = Some(SelectionTarget::Repo(repo));
+    let mut term = Terminal::new(TestBackend::new(80, 60)).unwrap();
+    let mut draw80 = |app: &mut App| {
+        term.draw(|f| crate::app::render::draw_for_test(f, app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+    };
+    draw80(&mut app);
+    press(&mut app, KeyCode::Char('f')).await;
+    draw80(&mut app);
+    let lines = draw80(&mut app);
+    let screen = lines.join("\n");
+    for header in ["── No PR · 1", "── Open · 1", "── Done · 1"] {
+        assert!(screen.contains(header), "{header:?}:\n{screen}");
+    }
+    // The word starting at `x` on line `y`, if one starts there.
+    let word_at = |y: usize, x: usize| -> Option<String> {
+        let cells: Vec<char> = lines[y].chars().collect();
+        (x < cells.len() && cells[x] != ' ' && (x == 0 || cells[x - 1] == ' '))
+            .then(|| cells[x..].iter().take_while(|c| **c != ' ').collect())
+    };
+    for name in names {
+        let branch = format!("repo/{name}");
+        let head = format!("repo/{}", &name[..name.len().min(8)]);
+        let y = line_of(&screen, &head);
+        let x = lines[y].chars().collect::<String>()[..lines[y].find(&head).unwrap()]
+            .chars()
+            .count();
+        let mut joined = word_at(y, x).unwrap();
+        for next in y + 1..lines.len() {
+            match word_at(next, x) {
+                Some(w) if branch.starts_with(&format!("{joined}{w}")) => joined.push_str(&w),
+                _ => break,
+            }
+        }
+        assert_eq!(joined, branch, "\n{screen}");
+    }
+}
+
+#[tokio::test]
+async fn natural_order_drops_headers_and_keeps_list_order() {
+    let (mut app, _) = app_with_sections();
+    app.dashboard.focus_group_by_pr = false;
+    let s = draw(&mut app);
+    assert!(!s.contains("── No PR") && !s.contains("── Open"), "{s}");
+    let lines: Vec<usize> = ["repo/a", "repo/b", "repo/c", "repo/d", "repo/e"]
+        .iter()
+        .map(|n| line_of(&s, n))
+        .collect();
+    assert!(lines.windows(2).all(|w| w[0] < w[1]), "list order:\n{s}");
+    assert_eq!(app.focus_section_starts, vec![0]);
+}
+
+#[tokio::test]
+async fn natural_order_pins_freshly_blocked_rows() {
+    use crate::activity::events::{EventKind, EventSnapshot, StopReason, WorkspaceEvents};
+    use crate::ui::dashboard::sort::SortMode;
+    let (mut app, repo, _, ids) = app();
+    let now = crate::util::time::now_ms();
+    let latest = |ago_ms: i64| {
+        Some(EventSnapshot {
+            kind: EventKind::AssistantText,
+            display: "x".into(),
+            timestamp_ms: now - ago_ms,
+        })
+    };
+    app.workspace_events.insert(
+        ids[2],
+        WorkspaceEvents {
+            last_stop_reason: Some(StopReason::EndTurn),
+            last_assistant_text: Some("Which approach?".into()),
+            latest: latest(600_000),
+            ..Default::default()
+        },
+    );
+    app.workspace_events.insert(
+        ids[3],
+        WorkspaceEvents {
+            latest: latest(5_000),
+            ..Default::default()
+        },
+    );
+    app.dashboard.sort_mode = SortMode::Recency;
+    app.dashboard.blocked_pin_max_age_secs = 3600;
+    app.dashboard.focus_group_by_pr = false;
+    app.dashboard.focus_repo(repo);
+    let s = draw(&mut app);
+    assert!(
+        line_of(&s, "repo/c") < line_of(&s, "repo/d"),
+        "c pinned:\n{s}"
+    );
+}
+
+#[tokio::test]
+async fn natural_order_braces_go_to_top_and_hidden_groups() {
+    let (mut app, repo, _) = app_with_parked_group();
+    app.dashboard.focus_group_by_pr = false;
+    app.dashboard.focus_repo(repo);
+    draw(&mut app);
+    let first = app.selectable[0].clone();
+    press(&mut app, KeyCode::Char('j')).await;
+    draw(&mut app);
+    press(&mut app, KeyCode::Char('{')).await;
+    assert_eq!(app.selected_target(), Some(first.clone()), "{{ goes to top");
+    draw(&mut app);
+    press(&mut app, KeyCode::Char('}')).await;
+    assert_eq!(
+        app.selected_target(),
+        Some(parked(repo)),
+        "}} goes to hidden groups"
+    );
 }

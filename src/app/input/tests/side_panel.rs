@@ -115,14 +115,14 @@ async fn esc_closes_the_panel_on_the_list() {
 #[tokio::test]
 async fn the_wheel_over_the_panel_scrolls_it() {
     let (mut app, _, ids) = app();
-    let mut lists = branch_lists("origin/main");
+    let mut lists = std::sync::Arc::unwrap_or_clone(branch_lists("origin/main"));
     lists.commits = (0..80)
         .map(|i| crate::git::BranchCommit {
             hash: format!("{i:07}"),
             subject: format!("commit {i}"),
         })
         .collect();
-    app.workspace_branch_lists.insert(ids[0], lists);
+    app.workspace_branch_lists.insert(ids[0], lists.into());
     press(&mut app, KeyCode::Char('c')).await;
     draw(&mut app);
     let panel = app.side_panel_rect.unwrap();
@@ -202,10 +202,22 @@ async fn ctrl_x_c_opens_the_panel_beside_the_agent_pane() {
         "C switches tab:\n{screen}"
     );
 
-    // A tab click shows that tab in the attached panel.
-    let (tab, _) = app.side_panel_tab_rects[0];
-    show_panel_tab(&mut app, tab);
+    // A click on the Commits tab shows it in the attached panel.
+    let (tab, r) = app.side_panel_tab_rects[0];
+    assert_eq!(tab, crate::ui::dashboard::side_panel::PanelTab::Commits);
+    handle_mouse(
+        &mut app,
+        &shared_app(),
+        MouseEvent {
+            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: r.x,
+            row: r.y,
+            modifiers: KeyModifiers::NONE,
+        },
+    )
+    .await;
     assert_eq!(app.attached_panel.tab, tab);
+    assert!(draw(&mut app).contains("UNIQUE-COMMIT-SUBJECT"));
 
     chord(&mut app, target, 'c').await;
     draw(&mut app);
@@ -217,7 +229,7 @@ async fn ctrl_x_c_opens_the_panel_beside_the_agent_pane() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_wheel_over_the_attached_panel_scrolls_it() {
     let (mut app, target) = attached_app();
-    let mut lists = branch_lists("origin/main");
+    let mut lists = std::sync::Arc::unwrap_or_clone(branch_lists("origin/main"));
     lists.commits = (0..80)
         .map(|i| crate::git::BranchCommit {
             hash: format!("{i:07}"),
@@ -225,7 +237,7 @@ async fn the_wheel_over_the_attached_panel_scrolls_it() {
         })
         .collect();
     app.workspace_branch_lists
-        .insert(target.workspace_id, lists);
+        .insert(target.workspace_id, lists.into());
     chord(&mut app, target, 'c').await;
     draw(&mut app);
     let panel = app.side_panel_rect.unwrap();

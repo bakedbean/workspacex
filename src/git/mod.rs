@@ -980,7 +980,21 @@ pub struct BranchLists {
     /// The base branch these were computed against.
     pub base: String,
     pub commits: Vec<BranchCommit>,
+    /// Sorted by path.
     pub files: Vec<ChangedFile>,
+}
+
+impl BranchLists {
+    /// Lists polled against `base`, with `files` sorted by path once here
+    /// rather than on every frame that draws them.
+    pub fn new(base: &str, commits: Vec<BranchCommit>, mut files: Vec<ChangedFile>) -> Self {
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        Self {
+            base: base.to_string(),
+            commits,
+            files,
+        }
+    }
 }
 
 /// Most commits `branch_commits` returns: a long-running branch can carry
@@ -1112,6 +1126,22 @@ pub async fn workspace_diff_per_file(
     branch_changed_files(worktree, base)
         .await
         .map(|f| per_file_stats(&f))
+}
+
+#[cfg(test)]
+mod branch_lists_tests {
+    use super::*;
+
+    #[test]
+    fn new_sorts_files_by_path() {
+        let file = |path: &str| ChangedFile {
+            path: path.into(),
+            stats: None,
+        };
+        let lists = BranchLists::new("main", Vec::new(), vec![file("src/z.rs"), file("a.md")]);
+        let paths: Vec<_> = lists.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["a.md", "src/z.rs"]);
+    }
 }
 
 #[cfg(test)]

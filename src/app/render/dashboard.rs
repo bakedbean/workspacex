@@ -85,7 +85,7 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     let (window, activity) = usage_sparkline(app);
     let fleet = crate::ui::bar::fleet::FleetStats::collect(app).to_vars();
     let column_widths = read_column_widths(&app.store);
-    let inputs = dashboard::DashboardInputs {
+    let mut inputs = dashboard::DashboardInputs {
         repos: app.repos.iter().collect(),
         workspaces,
         activity: &activity,
@@ -93,13 +93,8 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
         github_remotes: &app.github_remotes,
         nerd_fonts,
         fleet: &fleet,
-        // Copied only while the panel is open to show them.
-        panel: match app.selected_target() {
-            Some(SelectionTarget::Workspace(id)) if app.dashboard.panel.open => {
-                side_panel_data(app, id)
-            }
-            _ => None,
-        },
+        // Filled below, once the selection is reconciled.
+        panel: None,
     };
     // Rebuild `selectable` in the V5 visible order (repos ordered
     // by persisted `sort_order`, priority-sort within repo, hide
@@ -136,6 +131,14 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     app.selectable = new_selectable;
     app.dashboard.selection = selection;
     app.dashboard.selected = selected;
+    // Gathered after reconciling, so a workspace a hide rule just folded
+    // into its group never shows in the panel for that frame.
+    inputs.panel = match app.dashboard.selection {
+        Some(SelectionTarget::Workspace(id)) if app.dashboard.panel.open => {
+            side_panel_data(app, id)
+        }
+        _ => None,
+    };
     let click_targets = dashboard::render_without_footer(
         f,
         dashboard_area,
@@ -328,17 +331,13 @@ pub(crate) fn side_panel_data(
     let lists = app
         .workspace_branch_lists
         .get(&id)
-        .filter(|l| Some(&l.base) == repo.base_branch.as_ref());
+        .filter(|l| Some(&l.base) == repo.base_branch.as_ref())
+        .cloned();
     Some(crate::ui::dashboard::side_panel::PanelData {
         workspace_id: id,
         branch: ws.branch.clone(),
         base: repo.base_branch.clone(),
-        commits: lists.map(|l| l.commits.clone()),
-        files: lists.map(|l| {
-            let mut v = l.files.clone();
-            v.sort_by(|a, b| a.path.cmp(&b.path));
-            v
-        }),
+        lists,
         ahead: app.workspace_ahead_of_base.get(&id).copied(),
     })
 }

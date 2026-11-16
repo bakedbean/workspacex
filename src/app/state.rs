@@ -781,13 +781,16 @@ pub struct App {
     /// Commits on the workspace branch not on its base. Same poller and
     /// throttle as `workspace_diff`; feeds the `pr:none` hide exemption.
     pub workspace_ahead_of_base: std::collections::HashMap<crate::data::store::WorkspaceId, u32>,
-    /// Each workspace branch's commits and changed files against its base,
-    /// for the focus view's side panel, tagged with the base they were
+    /// Each workspace branch's commits and changed files (sorted by path)
+    /// against its base, for the side panel, shared so a frame copies a
+    /// pointer rather than the lists, and tagged with the base they were
     /// computed against so a changed Base branch setting never shows the
     /// old base's lists as current. Same poller and throttle as
     /// `workspace_ahead_of_base`; dropped when a refresh fails.
-    pub workspace_branch_lists:
-        std::collections::HashMap<crate::data::store::WorkspaceId, crate::git::BranchLists>,
+    pub workspace_branch_lists: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        std::sync::Arc<crate::git::BranchLists>,
+    >,
     /// Per-file diff stats keyed by `WorkspaceId`, then by path relative
     /// to the worktree root (as `git diff --numstat` emits them).
     /// Populated by the same poller that maintains `workspace_diff`.

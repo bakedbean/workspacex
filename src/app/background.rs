@@ -1118,11 +1118,7 @@ async fn refresh_local(app: SharedApp, t: PollTarget) {
                 (Some(commits), Some(files)) => {
                     g.workspace_branch_lists.insert(
                         id,
-                        crate::git::BranchLists {
-                            base: base.to_string(),
-                            commits,
-                            files,
-                        },
+                        std::sync::Arc::new(crate::git::BranchLists::new(base, commits, files)),
                     );
                 }
                 _ => {

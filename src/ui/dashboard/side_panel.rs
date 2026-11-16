@@ -147,9 +147,9 @@ pub struct PanelData {
     pub workspace_id: WorkspaceId,
     pub branch: String,
     pub base: Option<String>,
-    pub commits: Option<Vec<BranchCommit>>,
-    /// Sorted by path.
-    pub files: Option<Vec<ChangedFile>>,
+    /// The branch's commits and changed files (sorted by path), polled
+    /// against `base`; `None` until then.
+    pub lists: Option<std::sync::Arc<crate::git::BranchLists>>,
     pub ahead: Option<u32>,
 }
 
@@ -158,8 +158,8 @@ impl PanelData {
         PanelInputs {
             branch: &self.branch,
             base: self.base.as_deref(),
-            commits: self.commits.as_deref(),
-            files: self.files.as_deref(),
+            commits: self.lists.as_deref().map(|l| l.commits.as_slice()),
+            files: self.lists.as_deref().map(|l| l.files.as_slice()),
             ahead: self.ahead,
         }
     }

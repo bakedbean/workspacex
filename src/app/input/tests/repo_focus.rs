@@ -654,11 +654,12 @@ async fn moving_the_selection_scrolls_it_back_into_view() {
 
 /// Two commits and two changed files (one binary-free), polled against
 /// `base`.
-pub(super) fn branch_lists(base: &str) -> crate::git::BranchLists {
+/// Two commits and two changed files, polled against `base`.
+pub(super) fn branch_lists(base: &str) -> std::sync::Arc<crate::git::BranchLists> {
     use crate::git::{BranchCommit, ChangedFile, DiffStats};
-    crate::git::BranchLists {
-        base: base.into(),
-        commits: vec![
+    std::sync::Arc::new(crate::git::BranchLists::new(
+        base,
+        vec![
             BranchCommit {
                 hash: "a1b2c3d".into(),
                 subject: "UNIQUE-COMMIT-SUBJECT".into(),
@@ -668,7 +669,7 @@ pub(super) fn branch_lists(base: &str) -> crate::git::BranchLists {
                 subject: "earlier commit".into(),
             },
         ],
-        files: vec![
+        vec![
             ChangedFile {
                 path: "src/zeta.rs".into(),
                 stats: Some(DiffStats {
@@ -684,7 +685,7 @@ pub(super) fn branch_lists(base: &str) -> crate::git::BranchLists {
                 }),
             },
         ],
-    }
+    ))
 }
 
 /// The focus view with `a` selected, a base branch set, and two commits and
@@ -861,12 +862,12 @@ async fn esc_on_a_hidden_panel_leaves_focus() {
 #[tokio::test]
 async fn binary_files_show_in_the_files_tab() {
     let (mut app, _, ids) = app_with_branch_data();
-    let mut lists = branch_lists("origin/main");
+    let mut lists = std::sync::Arc::unwrap_or_clone(branch_lists("origin/main"));
     lists.files = vec![crate::git::ChangedFile {
         path: "assets/logo.png".into(),
         stats: None,
     }];
-    app.workspace_branch_lists.insert(ids[0], lists);
+    app.workspace_branch_lists.insert(ids[0], lists.into());
     press(&mut app, KeyCode::Char('2')).await;
     let screen = draw(&mut app);
     assert!(screen.contains("assets/logo.png"), "{screen}");

@@ -1,33 +1,34 @@
 # Repo focus view
 
-The focus view shows one repo on the dashboard and gives each of its workspaces several lines instead of one, laid out to be read at a glance. On a terminal at least 96 columns wide each workspace splits in two: its facts in a narrow column on the left, and what it's for and doing on the right, wrapped at a comfortable reading width instead of across the whole screen. Every other workspace has a faint background tint so each reads as one block.
+The focus view shows one repo on the dashboard and gives each of its workspaces several lines instead of one, laid out to be read at a glance. On a terminal at least 96 columns wide each workspace splits into columns: its facts in a narrow column on the left, its PR in a column of its own beside the branch, and what it's for and doing on the right, wrapped at a comfortable reading width instead of across the whole screen. Every other workspace has a faint background tint so each reads as one block.
 
 ```text
 ◂ all repos / workspacex  ~/src/workspacex  ──────────────────────────  ● 2  ? 1    5 ws
 
-▎▍ ⠋ bakedbean/repo-focus-view          prompt  I want to design a new dashboard feature for how
- ▍   ⏺ #461 open ✓                  2m          workspaces are displayed. I want to be able to…
- ▍   ▸ working  ● 2p                    goal    Single-repo dashboard view with richer
- ▍   ↑4 vs main · 3 modified                    per-workspace detail
- ▍   1 untracked · +184 −22             now     mapping dashboard code → draft design options
- ▍    claude   codex
- ▍   #ui
+▎▍ ⠋ bakedbean/repo-focus-view      ⏺ #461 open ✓    prompt  I want to design a new dashboard
+ ▍   ▸ working  ● 2p              2m                    feature for how workspaces are…
+ ▍   ↑4 vs main · 3 modified                    goal    Single-repo dashboard view with
+ ▍   1 untracked · +184 −22                             richer per-workspace detail
+ ▍    claude   codex                          now     mapping dashboard code → draft
+ ▍   #ui                                                design options
 
-▎▎ ? bakedbean/detail-bar-scroll        prompt  The detail bar containers should scroll
- ▎   ⏺ #459 draft                   14m         independently
- ▎   └ asking  ● 1p                     goal    Scroll detail-bar containers independently
- ▎   ↑2 vs main · +61 −8                now     keep scroll offsets per workspace or global?
- ▎    claude
+▎▎ ? bakedbean/detail-bar-scroll    ⏺ #459 draft     prompt  The detail bar containers should
+ ▎   └ asking  ● 1p              14m                    scroll independently
+ ▎   ↑2 vs main · +61 −8                        goal    Scroll detail-bar containers
+ ▎    claude                                          independently
+
+▎▎ · bakedbean/try-new-parser       no PR            goal    Spike a faster recap parser
 ```
 
 The left column, top to bottom:
 
 - **The branch**, after the status glyph (a spinner while the agent works). A branch longer than the column wraps onto the next line; it is never shortened.
-- **The PR chip** and how long ago the workspace was active.
-- **The status word**, as on the dashboard row, with the running-process count and any badge.
+- **The status word**, as on the dashboard row, with the running-process count, any badge, and how long ago the workspace was active.
 - **Git**: commits ahead of the repo's base branch (`↑4 vs main`, from the repo's **Base branch** setting; absent when it isn't set), uncommitted changes (nothing is shown for a clean tree), and the diff.
 - **Agents**: every agent in the workspace, named with its icon from the theme's [`[agent_bar.symbols]`](../configuration/themes.md) table, or the `▎` bar when the theme has none.
 - **Tags**.
+
+The PR column holds the same chip as the dashboard list's PR column (number, state, and the review mark with its unresolved-thread count), on each workspace's first line, so PR state reads straight down the view. A workspace without a PR shows a dim `no PR`. The column is as wide as the longest chip, up to 24 cells.
 
 The right column:
 

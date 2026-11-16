@@ -654,7 +654,7 @@ async fn moving_the_selection_scrolls_it_back_into_view() {
 
 /// Two commits and two changed files (one binary-free), polled against
 /// `base`.
-fn branch_lists(base: &str) -> crate::git::BranchLists {
+pub(super) fn branch_lists(base: &str) -> crate::git::BranchLists {
     use crate::git::{BranchCommit, ChangedFile, DiffStats};
     crate::git::BranchLists {
         base: base.into(),

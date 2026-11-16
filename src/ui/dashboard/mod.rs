@@ -296,7 +296,7 @@ pub struct ListClickTargets {
     /// Each hidden-group summary row in the focus view — expands or
     /// collapses that group.
     pub focus_groups: Vec<((RepoId, HideRule), Rect)>,
-    /// The focus view side panel's tabs — a click shows that tab.
+    /// The side panel's tabs — a click shows that tab.
     pub panel_tabs: Vec<(side_panel::PanelTab, Rect)>,
     /// The side panel itself, for routing the wheel to it.
     pub panel_area: Option<Rect>,
@@ -366,7 +366,6 @@ pub fn render_without_footer(
             Constraint::Min(0),                   // main list
         ])
         .split(area);
-    let width = chunks[3].width as usize;
 
     let global_counts = StatusCounts::from_iter(inputs.workspaces.iter().map(|w| w.status));
 
@@ -408,6 +407,12 @@ pub fn render_without_footer(
         return targets;
     }
 
+    // The side panel takes the right of the list when open and there's
+    // room, as in the focus view.
+    let (list_area, panel) = state
+        .panel
+        .carve(f, chunks[3], inputs.panel.as_ref(), theme);
+    let width = list_area.width as usize;
     let (items, chip_spans, repo_link_spans, name_spans) = match state.group_mode {
         GroupMode::Repo => render_by_repo(inputs, state, tick, width, theme),
         GroupMode::Attention => {
@@ -431,20 +436,21 @@ pub fn render_without_footer(
         };
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(msg.to_string(), theme.dim_style()))),
-            chunks[3],
+            list_area,
         );
         return ListClickTargets {
             statuses,
+            panel_tabs: panel.tabs,
+            panel_area: panel.area,
             ..Default::default()
         };
     }
     let list = List::new(items).highlight_style(theme.selected_bg_style());
-    f.render_stateful_widget(list, chunks[3], &mut state.list_state);
+    f.render_stateful_widget(list, list_area, &mut state.list_state);
 
     // Convert flat-index spans into screen rects. The list has just
     // rendered, so `list_state.offset()` reflects this frame's scroll
     // position.
-    let list_area = chunks[3];
     let offset = state.list_state.offset();
     let repo_spans = |spans: Vec<by_repo::RepoPrLinkSpan>| {
         spans_to_rects(
@@ -460,6 +466,8 @@ pub fn render_without_footer(
         repo_pr_links: repo_spans(repo_link_spans),
         repo_names: repo_spans(name_spans),
         statuses,
+        panel_tabs: panel.tabs,
+        panel_area: panel.area,
         ..Default::default()
     }
 }

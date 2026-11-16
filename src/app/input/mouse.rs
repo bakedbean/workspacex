@@ -100,15 +100,16 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
             adjust_detail_scroll(app, slot, 3, up);
             return;
         }
+        let up = matches!(m.kind, MouseEventKind::ScrollUp);
+        // The wheel over the side panel scrolls the panel.
+        if app.modal.is_none() && app.side_panel_rect.is_some_and(|r| rect_contains(&r, &m)) {
+            app.dashboard.panel.scroll_by(3, up);
+            return;
+        }
         // In the repo focus view the wheel scrolls the rows: there is no
         // session pane on the dashboard for it to scroll instead.
         if app.dashboard.focused_repo.is_some() && app.modal.is_none() {
-            let up = matches!(m.kind, MouseEventKind::ScrollUp);
-            if app.side_panel_rect.is_some_and(|r| rect_contains(&r, &m)) {
-                app.dashboard.panel.scroll_by(3, up);
-            } else {
-                app.dashboard.scroll_focus(if up { -3 } else { 3 });
-            }
+            app.dashboard.scroll_focus(if up { -3 } else { 3 });
             return;
         }
     }

@@ -41,22 +41,7 @@ In the focus view the [detail bar](detail-bar.md) shrinks to its reply row, so t
 
 ## Side panel
 
-Press `c` to open a panel on the right showing the selected workspace's branch in more depth, one tab at a time:
-
-- **Commits**: the commits on the branch that the repo's base branch doesn't have, newest first, as a short hash and its full subject. The tab counts them all, but the list stops at the newest 200 and says how many older ones it left out.
-- **Files**: each file the branch changed against its base, with its `+N −M` line counts (`binary` for a binary file), under a total. Paths wrap rather than being shortened. These are committed changes; uncommitted ones are counted in the left column.
-
-```text
-│  Commits 2   Files 7
-│ bakedbean/repo-focus-view vs main
-│ ──────────────────────────────────
-│ cda7649  fix(dashboard): name the base
-│          branch in the focus view's
-│          ahead count
-│ 392b182  fix(dashboard): drop "clean"
-```
-
-Press `1` for Commits and `2` for Files, or click a tab; either opens the panel if it's closed. The mouse wheel over the panel scrolls it. `c` or `esc` closes it, and it remembers its tab. The panel needs the repo's **Base branch** setting (repo settings, `s`) to know what to compare against. After you change that setting, the panel shows `loading…` until the lists against the new base arrive (within about ten seconds); it never shows the old base's lists in their place. The panel stays hidden on terminals under 100 columns wide.
+Press `c` to open the [side panel](side-panel.md) on the right: the selected workspace's commits and changed files against the repo's base branch. It works here as it does on the list; `esc` closes it before it leaves the focus view.
 
 ## Opening and closing it
 

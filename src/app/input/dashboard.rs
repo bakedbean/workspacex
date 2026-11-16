@@ -248,14 +248,13 @@ pub(in crate::app::input) fn toggle_focus_group(
     }
 }
 
-/// Open the focus view's side panel on `tab` — `1` / `2`, or a click on
+/// Open the dashboard's side panel on `tab` — `1` / `2`, or a click on
 /// the tab.
 pub(in crate::app::input) fn show_panel_tab(
     app: &mut App,
     tab: crate::ui::dashboard::side_panel::PanelTab,
 ) {
-    app.dashboard.panel.open = true;
-    app.dashboard.panel.tab = tab;
+    app.dashboard.panel.show(tab);
 }
 
 /// The side-panel tab a click landed on.
@@ -527,26 +526,20 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         (KeyCode::Esc, _) if app.dashboard.status_filter.is_some() => {
             app.dashboard.status_filter = None;
         }
-        // Esc closes the side panel before it leaves the focus view — but
-        // only a panel actually on screen; a terminal too narrow to show it
-        // leaves the view straight away.
-        (KeyCode::Esc, _)
-            if app.dashboard.focused_repo.is_some()
-                && app.dashboard.panel.open
-                && app.side_panel_rect.is_some() =>
-        {
+        // Esc closes the side panel — before it leaves the focus view —
+        // but only a panel actually on screen; with a terminal too narrow
+        // to show it, Esc does what it would without the panel.
+        (KeyCode::Esc, _) if app.dashboard.panel.open && app.side_panel_rect.is_some() => {
             app.dashboard.panel.open = false;
         }
         (KeyCode::Esc, _) if app.dashboard.focused_repo.is_some() => leave_repo_focus(app),
         // The side panel: `c` toggles it, `1` / `2` pick its tab (opening
         // it if closed).
-        (KeyCode::Char('c'), _) if app.dashboard.focused_repo.is_some() => {
-            app.dashboard.panel.toggle();
-        }
-        (KeyCode::Char('1'), _) if app.dashboard.focused_repo.is_some() => {
+        (KeyCode::Char('c'), _) => app.dashboard.panel.toggle(),
+        (KeyCode::Char('1'), _) => {
             show_panel_tab(app, crate::ui::dashboard::side_panel::PanelTab::Commits);
         }
-        (KeyCode::Char('2'), _) if app.dashboard.focused_repo.is_some() => {
+        (KeyCode::Char('2'), _) => {
             show_panel_tab(app, crate::ui::dashboard::side_panel::PanelTab::Files);
         }
         (KeyCode::Char('f'), _) => toggle_repo_focus(app),

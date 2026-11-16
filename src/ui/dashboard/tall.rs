@@ -401,8 +401,13 @@ fn full_chip(row: &RowInputs) -> Option<crate::ui::theme::PrChip> {
 
 /// The PR column's cell, exactly `pr` cells wide, and the chip's painted
 /// width (`None` for the dim `no PR` placeholder, which isn't clickable).
+/// The width comes from the chip fitted to `pr`, as painted: fitting can
+/// drop the lifecycle word, leaving padding that must not open the PR.
 fn pr_cell(row: &RowInputs, pr: usize, theme: &Theme) -> (Vec<Span<'static>>, Option<u16>) {
-    match full_chip(row) {
+    let fitted = row.lifecycle.and_then(|lc| {
+        crate::ui::theme::pr_chip(lc, row.pr_number, row.review, row.unresolved, pr)
+    });
+    match fitted {
         Some(c) => (
             row::pr_chip_spans(
                 row.lifecycle,
@@ -1888,6 +1893,31 @@ mod tests {
         // Age rides the status line, right-aligned in the facts column.
         let status = lines.iter().find(|l| l.contains("working")).unwrap();
         assert!(status.contains("1m"), "{lines:?}");
+    }
+
+    /// A chip wider than the column drops its lifecycle word to fit; the
+    /// click target ends where the painted chip does, not at the padding.
+    #[test]
+    fn oversized_chip_target_ends_at_the_painted_text() {
+        use crate::git::forge::{BranchLifecycle, ReviewDecision};
+        let mut row = base_row("b");
+        row.lifecycle = Some(BranchLifecycle::PrOpen);
+        row.pr_number = Some(1_234_567_890);
+        row.review = Some(ReviewDecision::ChangesRequested);
+        row.unresolved = Some(12_345);
+        let detail = WorkspaceDetail::default();
+        let entries = [TallEntry::Row(TallRow {
+            row: &row,
+            detail: &detail,
+        })];
+        let (lines, targets, _) = split_render(&entries, 160, 12);
+        let (_, r) = targets.pr_chips[0];
+        let chars: Vec<char> = lines[r.y as usize].chars().collect();
+        let x = r.x as usize;
+        let end = x + r.width as usize;
+        let chip: String = chars[x..end].iter().collect();
+        assert_eq!(chip, "⏺ #1234567890 ✗ 12345", "{lines:?}");
+        assert_eq!(chars[end], ' ', "first cell past the target is padding");
     }
 
     /// A branch longer than the facts column wraps instead of truncating.

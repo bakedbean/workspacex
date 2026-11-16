@@ -694,12 +694,13 @@ pub fn render(
         lines.extend(entry);
     }
     let height = area.height as usize;
-    // A row right under a section header scrolls as one block with it
-    // (header, blank gap, row), so the header comes into view too.
+    // On follow frames a row right under a section header scrolls as one
+    // block with it, so the header comes into view too. Manual scrolls
+    // keep only the row's own lines pinned.
     let sel_span = selected.and_then(|i| {
         let (top, len) = spans.get(i).copied()?;
         match i.checked_sub(1).and_then(|p| entries.get(p)) {
-            Some(TallEntry::Section(_)) => {
+            Some(TallEntry::Section(_)) if follow => {
                 let header_top = spans[i - 1].0;
                 Some((header_top, top + len - header_top))
             }
@@ -974,7 +975,7 @@ mod tests {
             detail: &detail,
         };
         let draw = |t: &TallRow<'_>| layout(t, &AgentGlyphs::default(), 120);
-        // Head, two fallback lines, git.
+        // Strip, two `last` lines, footer.
         assert_eq!(draw(&tall).len(), 4);
 
         let detail = WorkspaceDetail {
@@ -1129,8 +1130,8 @@ mod tests {
             detail: &detail,
         };
         let lines = layout(&tall, &glyphs, 120);
-        let git = text(lines.last().unwrap());
-        assert!(git.contains("C claude  codex  ▎ pi"), "{git:?}");
+        let footer = text(lines.last().unwrap());
+        assert!(footer.contains("C claude  codex  ▎ pi"), "{footer:?}");
     }
 
     #[test]
@@ -1974,6 +1975,41 @@ mod tests {
         assert_eq!(col(&out[0][0], "1m"), col(&out[1][0], "1m"));
     }
 
+    /// A manual scroll never leaves the selected row fully below the fold,
+    /// even when it sits right under a section header.
+    #[test]
+    fn manual_scroll_keeps_a_line_of_the_row_under_a_header() {
+        let row = base_row("b");
+        let detail = WorkspaceDetail::default();
+        let entries = [
+            TallEntry::Section(Line::from("── Open · 1 ──")),
+            TallEntry::Row(TallRow {
+                row: &row,
+                detail: &detail,
+            }),
+        ];
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 2)).unwrap();
+        let mut scroll = 0;
+        let mut targets = TallTargets::default();
+        term.draw(|f| {
+            targets = render(
+                f,
+                f.area(),
+                &entries,
+                &AgentGlyphs::default(),
+                Some(1),
+                &mut scroll,
+                false,
+                ColumnWidths::default(),
+                0,
+                &Theme::wsx(),
+            );
+        })
+        .unwrap();
+        assert!(scroll >= 1, "scroll {scroll}");
+        assert_eq!(targets.rows.len(), 1, "row still clickable on screen");
+    }
+
     #[test]
     fn narrow_strip_breaks_and_pr_target_matches_chip() {
         let row = busy_row("bakedbean/a-rather-long-branch-name-that-wraps");
@@ -1983,6 +2019,7 @@ mod tests {
             detail: &detail,
         }];
         let (lines, targets, _) = split_render(&rows.clone().map(TallEntry::Row), 80, 20);
+        assert!(strip_columns(&rows, ColumnWidths::default(), 80).two_line);
         let (_, r) = targets.pr_chips[0];
         let chars: Vec<char> = lines[r.y as usize].chars().collect();
         let (x, end) = (r.x as usize, (r.x + r.width) as usize);

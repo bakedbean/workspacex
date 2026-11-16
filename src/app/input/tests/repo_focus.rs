@@ -890,7 +890,7 @@ async fn binary_files_show_in_the_files_tab() {
     assert!(screen.contains("1 binary"), "{screen}");
 }
 
-/// Draw lines containing `needle`, as (line index) positions in `screen`.
+/// Index of the first drawn line containing `needle`.
 fn line_of(screen: &str, needle: &str) -> usize {
     screen
         .lines()
@@ -955,6 +955,8 @@ async fn unpolled_rows_sit_under_no_pr() {
     app.dashboard.focus_repo(repo);
     let s = draw(&mut app);
     assert!(s.contains("── No PR · 5"), "{s}");
+    assert!(s.contains("no PR"), "{s}");
+    assert!(app.dashboard_pr_rects.is_empty(), "no PR chip to click");
 }
 
 #[tokio::test]

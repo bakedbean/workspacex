@@ -717,9 +717,10 @@ fn render_focus(
         };
     }
     let selection = state.selection.clone();
-    let selected = entries
-        .iter()
-        .position(|e| e.target(repo.id).is_some() && e.target(repo.id) == selection);
+    let selected = entries.iter().position(|e| {
+        e.target(repo.id)
+            .is_some_and(|t| Some(&t) == selection.as_ref())
+    });
     // Mark the selected row the way the list does, so the row composer
     // paints the thicker gutter.
     let rows: Vec<Option<RowInputs>> = entries

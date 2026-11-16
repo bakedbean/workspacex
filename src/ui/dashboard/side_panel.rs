@@ -56,10 +56,28 @@ impl PanelTab {
 /// both the rows and a useful panel, so the panel stays hidden.
 pub const PANEL_MIN_TOTAL: u16 = 100;
 
-/// The panel's width for a `total`-cell body: about a third, kept within
-/// bounds that hold a commit subject or a path without crowding the rows.
-pub fn panel_width(total: u16) -> u16 {
-    (total / 3).clamp(36, 64)
+/// The setting holding the dragged width.
+pub const WIDTH_SETTING: &str = "side_panel_width";
+
+/// Narrowest a dragged panel gets.
+pub const PANEL_MIN_WIDTH: u16 = 24;
+
+/// Columns a dragged panel always leaves the surface's own content.
+const REST_MIN_WIDTH: u16 = 40;
+
+/// The panel's width for a `total`-cell body: the user's dragged `chosen`
+/// width when set, kept clear of the rows; otherwise about a third, kept
+/// within bounds that hold a commit subject or a path.
+pub fn panel_width(total: u16, chosen: Option<u16>) -> u16 {
+    match chosen {
+        Some(w) => w.clamp(
+            PANEL_MIN_WIDTH,
+            total
+                .saturating_sub(REST_MIN_WIDTH + 1)
+                .max(PANEL_MIN_WIDTH),
+        ),
+        None => (total / 3).clamp(36, 64),
+    }
 }
 
 /// One surface's panel: whether it shows, its tab, and its scroll.
@@ -74,12 +92,19 @@ pub struct SidePanelState {
     pub file_cursor: usize,
     /// The panel has keyboard focus; see [`Self::is_focused`].
     pub focused: bool,
+    /// The width the user dragged the panel to; `None` sizes it to the
+    /// surface. Shared by both surfaces and kept in `side_panel_width`.
+    pub width: Option<u16>,
+    /// The left edge is being dragged: it draws highlighted.
+    pub resizing: bool,
     /// The cursor moved since the last draw, so the draw scrolls it into
     /// view. The wheel scrolls freely otherwise.
     follow: bool,
     /// The workspace and tab the panel last drew, so the scroll resets
     /// when either changes.
     anchor: Option<(Option<WorkspaceId>, PanelTab)>,
+    /// The body width of the last draw, for clamping a dragged width.
+    body_width: u16,
 }
 
 impl SidePanelState {
@@ -96,6 +121,7 @@ impl SidePanelState {
     pub fn close(&mut self) {
         self.open = false;
         self.focused = false;
+        self.resizing = false;
     }
 
     /// Whether the Files list has keyboard focus: focus is only ever on an
@@ -155,6 +181,11 @@ impl SidePanelState {
     /// wide enough, for the workspace in `data` (`None`: none selected).
     /// Returns the area left for the surface's own content — all of `area`
     /// when the panel isn't drawn — and the panel's click targets.
+    /// `width` clamped as the last draw's body would draw it.
+    pub fn clamp_width(&self, width: u16) -> u16 {
+        panel_width(self.body_width, Some(width))
+    }
+
     pub fn carve(
         &mut self,
         f: &mut Frame,
@@ -165,7 +196,8 @@ impl SidePanelState {
         if !self.open || area.width < PANEL_MIN_TOTAL {
             return (area, PanelTargets::default());
         }
-        let w = panel_width(area.width);
+        self.body_width = area.width;
+        let w = panel_width(area.width, self.width);
         let panel_area = Rect {
             x: area.x + area.width - w,
             width: w,
@@ -190,6 +222,7 @@ impl SidePanelState {
             cursor: self.file_cursor,
             focused: self.is_focused(),
             follow: std::mem::take(&mut self.follow),
+            resizing: self.resizing,
         };
         let targets = render(
             f,
@@ -258,6 +291,8 @@ pub struct PanelView {
     pub focused: bool,
     /// Scroll the cursor into view.
     pub follow: bool,
+    /// The left edge is being dragged.
+    pub resizing: bool,
 }
 
 /// Click targets in the panel, in screen coordinates.
@@ -283,9 +318,15 @@ pub fn render(
     if area.width < 4 || area.height == 0 {
         return PanelTargets::default();
     }
-    // A rule down the left edge separates the panel from the rows.
+    // A rule down the left edge separates the panel from the rows; drag
+    // it to resize the panel.
+    let edge_style = if view.resizing {
+        theme.selected_style()
+    } else {
+        theme.dim_style()
+    };
     let edge: Vec<Line<'static>> = (0..area.height)
-        .map(|_| Line::from(Span::styled("│", theme.dim_style())))
+        .map(|_| Line::from(Span::styled("│", edge_style)))
         .collect();
     f.render_widget(Paragraph::new(edge), Rect { width: 1, ..area });
     let inner = Rect {
@@ -632,9 +673,13 @@ mod tests {
 
     #[test]
     fn panel_width_stays_in_bounds() {
-        assert_eq!(panel_width(90), 36);
-        assert_eq!(panel_width(150), 50);
-        assert_eq!(panel_width(400), 64);
+        assert_eq!(panel_width(90, None), 36);
+        assert_eq!(panel_width(150, None), 50);
+        assert_eq!(panel_width(400, None), 64);
+        // A dragged width holds, within its own bounds.
+        assert_eq!(panel_width(150, Some(80)), 80);
+        assert_eq!(panel_width(150, Some(5)), PANEL_MIN_WIDTH);
+        assert_eq!(panel_width(150, Some(140)), 109);
     }
 
     #[test]

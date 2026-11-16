@@ -4,6 +4,7 @@
 use super::common::*;
 use super::*;
 use crate::data::store::{RepoId, Store, WorkspaceId};
+use crate::git::forge::BranchLifecycle;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -887,4 +888,182 @@ async fn binary_files_show_in_the_files_tab() {
     let screen = draw(&mut app);
     assert!(screen.contains("assets/logo.png"), "{screen}");
     assert!(screen.contains("1 binary"), "{screen}");
+}
+
+/// Draw lines containing `needle`, as (line index) positions in `screen`.
+fn line_of(screen: &str, needle: &str) -> usize {
+    screen
+        .lines()
+        .position(|l| l.contains(needle))
+        .unwrap_or_else(|| panic!("`{needle}` not drawn:\n{screen}"))
+}
+
+fn set_lifecycles(app: &mut App, ids: &[WorkspaceId], lcs: &[Option<BranchLifecycle>]) {
+    for (id, lc) in ids.iter().zip(lcs) {
+        match lc {
+            Some(lc) => app.pr_lifecycle.insert(*id, *lc),
+            None => app.pr_lifecycle.remove(id),
+        };
+    }
+}
+
+#[tokio::test]
+async fn sections_follow_pr_lifecycle() {
+    use BranchLifecycle::*;
+    let (mut app, repo, _, ids) = app();
+    set_lifecycles(
+        &mut app,
+        &ids,
+        &[
+            Some(PrOpen),
+            None,
+            Some(PrDraft),
+            Some(PrMerged),
+            Some(PrConflicted),
+        ],
+    );
+    app.dashboard.focus_repo(repo);
+    let s = draw(&mut app);
+    let (no_pr, draft, open, done) = (
+        line_of(&s, "── No PR · 1"),
+        line_of(&s, "── Draft · 1"),
+        line_of(&s, "── Open · 2"),
+        line_of(&s, "── Done · 1"),
+    );
+    assert!(no_pr < draft && draft < open && open < done, "{s}");
+    let b = line_of(&s, "repo/b");
+    assert!(no_pr < b && b < draft, "{s}");
+    let e = line_of(&s, "repo/e");
+    assert!(open < e && e < done, "{s}");
+}
+
+#[tokio::test]
+async fn empty_sections_are_omitted() {
+    let (mut app, repo, _, ids) = app();
+    set_lifecycles(&mut app, &ids, &[Some(BranchLifecycle::PrOpen); 5]);
+    app.dashboard.focus_repo(repo);
+    let s = draw(&mut app);
+    assert!(s.contains("── Open · 5"), "{s}");
+    for other in ["No PR", "Draft", "Done"] {
+        assert!(!s.contains(&format!("── {other}")), "{s}");
+    }
+}
+
+#[tokio::test]
+async fn unpolled_rows_sit_under_no_pr() {
+    let (mut app, repo, _, _) = app();
+    app.dashboard.focus_repo(repo);
+    let s = draw(&mut app);
+    assert!(s.contains("── No PR · 5"), "{s}");
+}
+
+#[tokio::test]
+async fn headers_are_not_selectable() {
+    use BranchLifecycle::*;
+    let (mut app, repo, _, ids) = app();
+    set_lifecycles(
+        &mut app,
+        &ids,
+        &[Some(PrOpen), None, Some(PrDraft), Some(PrMerged), None],
+    );
+    app.dashboard.focus_repo(repo);
+    draw(&mut app);
+    assert_eq!(app.selectable.len(), 5);
+    assert!(
+        app.selectable
+            .iter()
+            .all(|t| matches!(t, SelectionTarget::Workspace(_)))
+    );
+    // No PR holds b and e; j from the second lands on the Draft row.
+    app.select_index(1);
+    draw(&mut app);
+    press(&mut app, KeyCode::Char('j')).await;
+    draw(&mut app);
+    assert_eq!(selected_ws(&app), Some(ids[2]));
+    assert_eq!(app.focus_section_starts, vec![0, 2, 3, 4]);
+}
+
+#[tokio::test]
+async fn focus_view_does_not_pin_blocked() {
+    use crate::activity::events::{EventKind, EventSnapshot, StopReason, WorkspaceEvents};
+    use crate::ui::dashboard::sort::SortMode;
+    let (mut app, repo, _, ids) = app();
+    set_lifecycles(&mut app, &ids, &[Some(BranchLifecycle::PrMerged); 5]);
+    let now = crate::util::time::now_ms();
+    let latest = |ago_ms: i64| {
+        Some(EventSnapshot {
+            kind: EventKind::AssistantText,
+            display: "x".into(),
+            timestamp_ms: now - ago_ms,
+        })
+    };
+    // c is blocked but older than d; pinning would float it above d.
+    app.workspace_events.insert(
+        ids[2],
+        WorkspaceEvents {
+            last_stop_reason: Some(StopReason::EndTurn),
+            last_assistant_text: Some("Which approach?".into()),
+            latest: latest(600_000),
+            ..Default::default()
+        },
+    );
+    app.workspace_events.insert(
+        ids[3],
+        WorkspaceEvents {
+            latest: latest(5_000),
+            ..Default::default()
+        },
+    );
+    app.dashboard.sort_mode = SortMode::Recency;
+    app.dashboard.blocked_pin_max_age_secs = 3600;
+    app.dashboard.focus_repo(repo);
+    let s = draw(&mut app);
+    let (d, c) = (line_of(&s, "repo/d"), line_of(&s, "repo/c"));
+    assert!(line_of(&s, "── Done") < d && d < c, "c is not pinned:\n{s}");
+}
+
+#[tokio::test]
+async fn selection_follows_a_workspace_across_sections() {
+    use BranchLifecycle::*;
+    let (mut app, repo, _, ids) = app();
+    set_lifecycles(&mut app, &ids, &[Some(PrOpen); 5]);
+    set_lifecycles(&mut app, &ids[2..3], &[Some(PrDraft)]);
+    app.dashboard.focus_repo(repo);
+    draw(&mut app);
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[2]));
+    draw(&mut app);
+    set_lifecycles(&mut app, &ids[2..3], &[Some(PrOpen)]);
+    let s = draw(&mut app);
+    assert_eq!(selected_ws(&app), Some(ids[2]));
+    assert!(!s.contains("── Draft"), "{s}");
+    assert!(line_of(&s, "── Open · 5") < line_of(&s, "repo/c"), "{s}");
+}
+
+#[tokio::test]
+async fn hidden_groups_trail_the_sections() {
+    use BranchLifecycle::*;
+    let (mut app, repo, _, ids) = app();
+    app.store
+        .set_repo_hide_rules(
+            repo,
+            &crate::data::hide_rules::HideRules::parse(Some("pr:merged")),
+        )
+        .unwrap();
+    app.refresh().unwrap();
+    set_lifecycles(
+        &mut app,
+        &ids,
+        &[
+            Some(PrOpen),
+            None,
+            Some(PrDraft),
+            Some(PrMerged),
+            Some(PrOpen),
+        ],
+    );
+    app.dashboard.focus_repo(repo);
+    let s = draw(&mut app);
+    assert!(line_of(&s, "hidden") > line_of(&s, "── Open"), "{s}");
+    assert!(!s.contains("── Done"), "{s}");
+    assert_eq!(app.focus_section_starts, vec![0, 1, 2, 4]);
 }

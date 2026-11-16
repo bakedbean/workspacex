@@ -20,6 +20,7 @@ pub mod tall;
 use crate::app::SelectionTarget;
 use crate::data::hide_rules::{HideRule, HideSubject};
 use crate::data::store::{Repo, RepoId};
+use crate::git::forge::BranchLifecycle;
 use crate::ui::dashboard::by_attention::{FlatRow, QuietRepo};
 use crate::ui::dashboard::by_repo::RepoView;
 use crate::ui::dashboard::hidden::HiddenGroupView;
@@ -501,7 +502,8 @@ fn focused_workspaces<'w, 'a>(
         .filter(|w| hidden_by(w, filter).is_none())
         .map(NavRow::from)
         .collect();
-    order_workspaces(&mut rows, state.sort_mode, state.blocked_pin_max_age_secs);
+    // No freshly-blocked pinning here: sections already order by PR state.
+    order_workspaces(&mut rows, state.sort_mode, 0);
     let by_id: HashMap<crate::data::store::WorkspaceId, &WorkspaceItem<'a>> = inputs
         .workspaces
         .iter()
@@ -513,8 +515,67 @@ fn focused_workspaces<'w, 'a>(
         .collect()
 }
 
+/// The PR-state sections of the focus view, in display order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum FocusSection {
+    NoPr,
+    Draft,
+    Open,
+    Done,
+}
+
+impl FocusSection {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            FocusSection::NoPr => "No PR",
+            FocusSection::Draft => "Draft",
+            FocusSection::Open => "Open",
+            FocusSection::Done => "Done",
+        }
+    }
+}
+
+/// The section a workspace sits in; an unpolled branch counts as no PR.
+pub(crate) fn section_of(lc: Option<BranchLifecycle>) -> FocusSection {
+    match lc {
+        None | Some(BranchLifecycle::NoPr) => FocusSection::NoPr,
+        Some(BranchLifecycle::PrDraft) => FocusSection::Draft,
+        Some(BranchLifecycle::PrOpen | BranchLifecycle::PrConflicted) => FocusSection::Open,
+        Some(BranchLifecycle::PrMerged | BranchLifecycle::PrClosed) => FocusSection::Done,
+    }
+}
+
+/// `── Open · 2 ───…` to `width`; label and count take the lifecycle color.
+fn section_header_line(
+    section: FocusSection,
+    count: usize,
+    width: usize,
+    theme: &Theme,
+) -> Line<'static> {
+    let lc = match section {
+        FocusSection::Open => Some(BranchLifecycle::PrOpen),
+        FocusSection::Done => Some(BranchLifecycle::PrMerged),
+        _ => None,
+    };
+    let hot = theme
+        .lifecycle_style(lc)
+        .unwrap_or_else(|| theme.dim_style());
+    let label = format!("{} · {} ", section.label(), count);
+    let rule = width.saturating_sub(3 + label.chars().count());
+    Line::from(vec![
+        Span::styled("── ", theme.dim_style()),
+        Span::styled(label, hot),
+        Span::styled("─".repeat(rule), theme.dim_style()),
+    ])
+}
+
 /// One entry in the focus view, in display order.
 enum FocusEntry<'w, 'a> {
+    /// A PR-state header; never a selection or click target.
+    Section {
+        section: FocusSection,
+        count: usize,
+    },
     Workspace(&'w WorkspaceItem<'a>),
     /// A hide rule's summary row, with its rows ordered for display.
     Group(HiddenGroupView),
@@ -529,10 +590,29 @@ fn focus_entries<'w, 'a>(
     state: &DashboardState,
     repo: &Repo,
 ) -> Vec<FocusEntry<'w, 'a>> {
-    let mut out: Vec<FocusEntry<'w, 'a>> = focused_workspaces(inputs, state, repo.id)
-        .into_iter()
-        .map(FocusEntry::Workspace)
-        .collect();
+    let mut buckets: [Vec<&'w WorkspaceItem<'a>>; 4] = Default::default();
+    for w in focused_workspaces(inputs, state, repo.id) {
+        buckets[section_of(w.row.lifecycle) as usize].push(w);
+    }
+    let mut out: Vec<FocusEntry<'w, 'a>> = Vec::new();
+    for (section, rows) in [
+        FocusSection::NoPr,
+        FocusSection::Draft,
+        FocusSection::Open,
+        FocusSection::Done,
+    ]
+    .into_iter()
+    .zip(buckets)
+    {
+        if rows.is_empty() {
+            continue;
+        }
+        out.push(FocusEntry::Section {
+            section,
+            count: rows.len(),
+        });
+        out.extend(rows.into_iter().map(FocusEntry::Workspace));
+    }
     let by_id: HashMap<crate::data::store::WorkspaceId, &'w WorkspaceItem<'a>> = inputs
         .workspaces
         .iter()
@@ -556,13 +636,14 @@ fn focus_entries<'w, 'a>(
 }
 
 impl FocusEntry<'_, '_> {
-    fn target(&self, repo: RepoId) -> SelectionTarget {
+    fn target(&self, repo: RepoId) -> Option<SelectionTarget> {
         match self {
-            FocusEntry::Workspace(w) => SelectionTarget::Workspace(w.workspace_id),
-            FocusEntry::Group(g) => SelectionTarget::HiddenGroup {
+            FocusEntry::Section { .. } => None,
+            FocusEntry::Workspace(w) => Some(SelectionTarget::Workspace(w.workspace_id)),
+            FocusEntry::Group(g) => Some(SelectionTarget::HiddenGroup {
                 repo,
                 rule: g.rule.clone(),
-            },
+            }),
         }
     }
 }
@@ -638,7 +719,7 @@ fn render_focus(
     let selection = state.selection.clone();
     let selected = entries
         .iter()
-        .position(|e| Some(e.target(repo.id)) == selection);
+        .position(|e| e.target(repo.id).is_some() && e.target(repo.id) == selection);
     // Mark the selected row the way the list does, so the row composer
     // paints the thicker gutter.
     let rows: Vec<Option<RowInputs>> = entries
@@ -649,7 +730,7 @@ fn render_focus(
                 row.selected = selection == Some(SelectionTarget::Workspace(w.workspace_id));
                 Some(row)
             }
-            FocusEntry::Group(_) => None,
+            FocusEntry::Group(_) | FocusEntry::Section { .. } => None,
         })
         .collect();
     let widths = inputs
@@ -663,6 +744,9 @@ fn render_focus(
                 row,
                 detail: &w.detail,
             }),
+            (FocusEntry::Section { section, count }, _) => tall::TallEntry::Section(
+                section_header_line(*section, *count, rows_area.width as usize, theme),
+            ),
             (FocusEntry::Group(g), _) => {
                 tall::TallEntry::Group(hidden::hidden_group_line(g, None, inputs.nerd_fonts, theme))
             }
@@ -689,7 +773,7 @@ fn render_focus(
         .into_iter()
         .filter_map(|(i, rect)| match &entries[i] {
             FocusEntry::Group(g) => Some(((repo.id, g.rule.clone()), rect)),
-            FocusEntry::Workspace(_) => None,
+            FocusEntry::Workspace(_) | FocusEntry::Section { .. } => None,
         })
         .collect();
     ListClickTargets {
@@ -817,6 +901,29 @@ impl sort::SortRow for NavRow {
     }
 }
 
+/// Where each focus-view section starts in `visible_targets`, in display
+/// order; the hidden-groups tail counts as a section. Empty when unfocused.
+pub fn focus_section_starts(inputs: &DashboardInputs<'_>, state: &DashboardState) -> Vec<usize> {
+    let Some(repo) = focused_repo(inputs, state) else {
+        return Vec::new();
+    };
+    let mut starts = Vec::new();
+    let mut seen = 0;
+    let mut in_tail = false;
+    for e in focus_entries(inputs, state, repo) {
+        match e {
+            FocusEntry::Section { .. } => starts.push(seen),
+            FocusEntry::Group(_) if !in_tail => {
+                in_tail = true;
+                starts.push(seen);
+                seen += 1;
+            }
+            _ => seen += 1,
+        }
+    }
+    starts
+}
+
 pub fn visible_targets(
     inputs: &DashboardInputs<'_>,
     state: &DashboardState,
@@ -824,7 +931,7 @@ pub fn visible_targets(
     if let Some(repo) = focused_repo(inputs, state) {
         return focus_entries(inputs, state, repo)
             .iter()
-            .map(|e| e.target(repo.id))
+            .filter_map(|e| e.target(repo.id))
             .collect();
     }
     let filter = RowFilter::of(state);

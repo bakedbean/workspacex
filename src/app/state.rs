@@ -51,6 +51,7 @@ impl App {
             repos: Vec::new(),
             workspaces: Vec::new(),
             selectable: Vec::new(),
+            focus_section_starts: Vec::new(),
             worktree_base,
             leader_pending: false,
             leader_selected: 0,
@@ -656,6 +657,8 @@ pub struct App {
     pub repos: Vec<Repo>,
     pub workspaces: Vec<(crate::data::store::RepoId, Workspace)>,
     pub selectable: Vec<SelectionTarget>,
+    /// Indices into `selectable` where each focus-view section starts.
+    pub focus_section_starts: Vec<usize>,
     pub worktree_base: PathBuf,
     pub leader_pending: bool,
     /// Highlighted row in the Ctrl-x navigation overlay. Reset to 0 each time

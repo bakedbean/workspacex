@@ -117,6 +117,8 @@ pub struct TallTargets {
 pub enum TallEntry<'a> {
     Row(TallRow<'a>),
     Group(Line<'static>),
+    /// A PR-state header line; never a target.
+    Section(Line<'static>),
 }
 
 /// Width of the label column on detail lines (`prompt  `, `goal    `, …):
@@ -736,7 +738,7 @@ pub fn render(
         .iter()
         .filter_map(|e| match e {
             TallEntry::Row(r) => Some(r.clone()),
-            TallEntry::Group(_) => None,
+            TallEntry::Group(_) | TallEntry::Section(_) => None,
         })
         .collect();
     let geo = geometry(&rows, widths, width);
@@ -754,7 +756,7 @@ pub fn render(
                 let l = row_layout(r, glyphs, geo, tick, theme, width);
                 (l.lines, l.pr_hit)
             }
-            TallEntry::Group(line) => (vec![line.clone()], None),
+            TallEntry::Group(line) | TallEntry::Section(line) => (vec![line.clone()], None),
         };
         spans.push((lines.len(), entry.len()));
         pr_hits.push(pr_hit);
@@ -774,6 +776,9 @@ pub fn render(
     let mut row_ordinal = 0usize;
     for (i, &(top, len)) in spans.iter().enumerate() {
         let is_row = matches!(entries[i], TallEntry::Row(_));
+        if matches!(entries[i], TallEntry::Section(_)) {
+            row_ordinal = 0;
+        }
         let tinted = is_row && row_ordinal % 2 == 1;
         if is_row {
             row_ordinal += 1;
@@ -796,6 +801,7 @@ pub fn render(
                 targets.groups.push((i, rect));
                 continue;
             }
+            TallEntry::Section(_) => continue,
         };
         targets.rows.push((r.workspace_id, rect));
         // The PR chip is clickable only while its line is on screen.
@@ -1973,6 +1979,42 @@ mod tests {
         assert_ne!(bg(1), alt, "first row plain");
         assert_eq!(bg(2), alt, "second row tinted despite the group between");
         assert_ne!(bg(3), alt, "third row plain");
+    }
+
+    /// A section header restarts the alternate tint: the first row under it
+    /// is plain.
+    #[test]
+    fn section_header_restarts_the_tint() {
+        let mk = |id: i64, name: &str| {
+            let mut r = base_row(name);
+            r.workspace_id = WorkspaceId(id);
+            r
+        };
+        let (a, b, c) = (mk(1, "a"), mk(2, "b"), mk(3, "c"));
+        let detail = WorkspaceDetail::default();
+        let row = |r| {
+            TallEntry::Row(TallRow {
+                row: r,
+                detail: &detail,
+            })
+        };
+        let entries = [
+            TallEntry::Section(Line::from("── Open · 2 ──")),
+            row(&a),
+            row(&b),
+            TallEntry::Section(Line::from("── Done · 1 ──")),
+            row(&c),
+        ];
+        let (_, targets, buf) = split_render(&entries, 160, 40);
+        let bg = |id: i64| {
+            let r = targets.rows.iter().find(|(w, _)| w.0 == id).unwrap().1;
+            buf[(r.x + 100, r.y)].bg
+        };
+        let alt = Theme::wsx().bg_alt;
+        assert_ne!(bg(1), alt, "first row of a section is plain");
+        assert_eq!(bg(2), alt);
+        assert_ne!(bg(3), alt, "first row after the next header is plain");
+        assert!(targets.groups.is_empty(), "headers are not click targets");
     }
 
     /// A clean working tree adds nothing to the git facts, in either layout.

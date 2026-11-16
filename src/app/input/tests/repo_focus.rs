@@ -1245,3 +1245,66 @@ async fn jump_reveals_the_section_header() {
     assert!(s.contains("── Done · 8"), "{s}");
     assert!(s.contains("repo/w04"), "{s}");
 }
+
+/// At 80 columns the focus view still shows its section headers and every
+/// branch name whole, wrapped within the branch column.
+#[tokio::test]
+async fn narrow_focus_view_keeps_sections_and_whole_branches() {
+    use BranchLifecycle::*;
+    let store = Store::open_in_memory().unwrap();
+    let names = [
+        "short",
+        "a-considerably-longer-workspace-name-that-has-to-wrap",
+        "another-fairly-long-name-for-the-branch-column",
+    ];
+    let ids = seed_workspaces(&store, &names);
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    app.view = crate::ui::View::Dashboard;
+    app.refresh().unwrap();
+    let repo = app.repos.iter().find(|r| r.name == "repo").unwrap().id;
+    set_lifecycles(&mut app, &ids, &[None, Some(PrOpen), Some(PrMerged)]);
+    app.dashboard.selection = Some(SelectionTarget::Repo(repo));
+    let mut term = Terminal::new(TestBackend::new(80, 60)).unwrap();
+    let mut draw80 = |app: &mut App| {
+        term.draw(|f| crate::app::render::draw_for_test(f, app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+    };
+    draw80(&mut app);
+    press(&mut app, KeyCode::Char('f')).await;
+    draw80(&mut app);
+    let lines = draw80(&mut app);
+    let screen = lines.join("\n");
+    for header in ["── No PR · 1", "── Open · 1", "── Done · 1"] {
+        assert!(screen.contains(header), "{header:?}:\n{screen}");
+    }
+    // The word starting at `x` on line `y`, if one starts there.
+    let word_at = |y: usize, x: usize| -> Option<String> {
+        let cells: Vec<char> = lines[y].chars().collect();
+        (x < cells.len() && cells[x] != ' ' && (x == 0 || cells[x - 1] == ' '))
+            .then(|| cells[x..].iter().take_while(|c| **c != ' ').collect())
+    };
+    for name in names {
+        let branch = format!("repo/{name}");
+        let head = format!("repo/{}", &name[..name.len().min(8)]);
+        let y = line_of(&screen, &head);
+        let x = lines[y].chars().collect::<String>()[..lines[y].find(&head).unwrap()]
+            .chars()
+            .count();
+        let mut joined = word_at(y, x).unwrap();
+        for next in y + 1..lines.len() {
+            match word_at(next, x) {
+                Some(w) if branch.starts_with(&format!("{joined}{w}")) => joined.push_str(&w),
+                _ => break,
+            }
+        }
+        assert_eq!(joined, branch, "\n{screen}");
+    }
+}

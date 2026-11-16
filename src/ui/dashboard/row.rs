@@ -35,10 +35,6 @@ pub const MAX_PR_WIDTH: usize = 24;
 const PROCS_WIDTH: usize = 6;
 pub const DIFF_WIDTH: usize = 12;
 const AGE_WIDTH: usize = 10;
-/// Every fixed-width column except the agent strip, branch and PR chip —
-/// what a caller sizing the branch column must leave room for.
-pub(crate) const FIXED_COLUMNS_WIDTH: usize =
-    GUTTER_WIDTH + ELBOW_WIDTH + GLYPH_WIDTH + PROCS_WIDTH + DIFF_WIDTH + AGE_WIDTH;
 pub(crate) const GUTTER_WIDTH: usize = 1;
 const ELBOW_WIDTH: usize = 3;
 const GLYPH_WIDTH: usize = 2;

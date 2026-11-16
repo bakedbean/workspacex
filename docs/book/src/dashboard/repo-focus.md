@@ -5,7 +5,7 @@ The focus view shows one repo on the dashboard and gives each of its workspaces 
 ```text
 ◂ all repos / workspacex  ~/src/workspacex  ───────────────────────────────────────────────────────────  ● 1  ? 1    4 ws
 
-── No PR · 1 ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+━━ No PR · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ▎▎ ⠋ bakedbean/try-new-parser     no PR          ▸ working  ● 2p  ↑1 vs main                           2m
  ▎   prompt  Spike a faster parser for agent recaps; measure it against the current one on a few
@@ -14,7 +14,7 @@ The focus view shows one repo on the dashboard and gives each of its workspaces 
  ▎   now     benchmarking the streaming approach → compare against the regex version
  ▎   ▎ claude  #spike
 
-── Draft · 1 ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+━━ Draft · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ▎▎ ? bakedbean/detail-bar-scroll  ⏷ #459 draft   └ asking         ↑2 vs main                +61 −8    14m
  ▎   prompt  The detail bar containers should scroll independently
@@ -22,14 +22,14 @@ The focus view shows one repo on the dashboard and gives each of its workspaces 
  ▎           bar?
  ▎   ▎ claude
 
-── Open · 1 ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+━━ Open · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ▎▎ · bakedbean/repo-focus-view    ⏺ #461 open ✓  ▸ idle           ↑4 vs main  3 mod 1 untr  +184 −22   3h
  ▎   goal    Single-repo dashboard view with richer per-workspace detail
  ▎   now     implemented sections and the strip → write the docs
  ▎   ▎ claude  #ui
 
-── Done · 1 ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+━━ Done · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ▎▎ ✓ bakedbean/fix-flaky-poller   ⏺ #455 merged  ▸ done           ↑0 vs main                          48h
  ▎   ▎ claude
@@ -37,7 +37,7 @@ The focus view shows one repo on the dashboard and gives each of its workspaces 
 
 ## Sections
 
-A header line (`── Open · 2 ───…`, with the workspace count) starts each section:
+A header line (`━━ Open · 2 ━━━…`, with the workspace count, bold and in the section's color) starts each section:
 
 | Section | Holds |
 | --- | --- |

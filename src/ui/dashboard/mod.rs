@@ -568,27 +568,31 @@ pub(crate) fn section_of(lc: Option<BranchLifecycle>) -> FocusSection {
     }
 }
 
-/// `── Open · 2 ───…` to `width`; label and count take the lifecycle color.
+/// The color a section's header is drawn in; every section gets one so the
+/// headers stand out from the rows' dim sub-lines.
+fn section_color(section: FocusSection, theme: &Theme) -> Color {
+    match section {
+        FocusSection::NoPr => theme.header_fg,
+        FocusSection::Draft => theme.waiting,
+        FocusSection::Open => theme.ok,
+        FocusSection::Done => theme.merged,
+    }
+}
+
+/// `━━ Open · 2 ━━━…` to `width`, all in the section's color, label bold.
 fn section_header_line(
     section: FocusSection,
     count: usize,
     width: usize,
     theme: &Theme,
 ) -> Line<'static> {
-    let lc = match section {
-        FocusSection::Open => Some(BranchLifecycle::PrOpen),
-        FocusSection::Done => Some(BranchLifecycle::PrMerged),
-        _ => None,
-    };
-    let hot = theme
-        .lifecycle_style(lc)
-        .unwrap_or_else(|| theme.dim_style());
+    let color = Style::default().fg(section_color(section, theme));
     let label = format!("{} · {} ", section.label(), count);
     let rule = width.saturating_sub(3 + label.chars().count());
     Line::from(vec![
-        Span::styled("── ", theme.dim_style()),
-        Span::styled(label, hot),
-        Span::styled("─".repeat(rule), theme.dim_style()),
+        Span::styled("━━ ", color),
+        Span::styled(label, color.add_modifier(Modifier::BOLD)),
+        Span::styled("━".repeat(rule), color),
     ])
 }
 
@@ -1781,5 +1785,34 @@ mod reconcile_selection_tests {
         let (sel, idx) = reconcile_selection(None, 5, &new, |_| true);
         assert_eq!(idx, 1, "clamped to last");
         assert_eq!(sel, Some(ws(1)));
+    }
+}
+
+#[cfg(test)]
+mod section_header_tests {
+    use super::*;
+
+    /// Every section's header is colored throughout with a bold label, so
+    /// No PR and Draft stand out as much as Open and Done.
+    #[test]
+    fn every_section_header_is_colored_and_bold() {
+        let theme = Theme::wsx();
+        let mut seen = Vec::new();
+        for section in [
+            FocusSection::NoPr,
+            FocusSection::Draft,
+            FocusSection::Open,
+            FocusSection::Done,
+        ] {
+            let line = section_header_line(section, 2, 40, &theme);
+            let fg = section_color(section, &theme);
+            assert_ne!(fg, theme.dim, "{section:?} falls back to dim");
+            assert!(line.spans.iter().all(|s| s.style.fg == Some(fg)));
+            assert!(line.spans[1].style.add_modifier.contains(Modifier::BOLD));
+            assert_eq!(line.width(), 40);
+            seen.push(fg);
+        }
+        seen.dedup();
+        assert_eq!(seen.len(), 4, "sections share a color: {seen:?}");
     }
 }

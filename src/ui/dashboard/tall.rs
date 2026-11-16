@@ -1739,6 +1739,67 @@ mod tests {
         assert!(chip.contains("#461"), "{chip:?}");
     }
 
+    /// The PR chip carries the same review mark and unresolved count as
+    /// the dashboard list, in both the wide (split) and narrow layouts,
+    /// colored by the verdict rather than the lifecycle.
+    #[test]
+    fn pr_chip_shows_the_review_mark() {
+        use crate::git::forge::{BranchLifecycle, ReviewDecision};
+        let theme = Theme::wsx();
+        for (verdict, glyph) in [
+            (ReviewDecision::Approved, "✓"),
+            (ReviewDecision::ChangesRequested, "✗ 3"),
+            (ReviewDecision::ReviewRequired, "◌ 3"),
+        ] {
+            let mut row = base_row("bakedbean/review-mark");
+            row.lifecycle = Some(BranchLifecycle::PrOpen);
+            row.pr_number = Some(462);
+            row.review = Some(verdict);
+            row.unresolved = (verdict != ReviewDecision::Approved).then_some(3);
+            let detail = WorkspaceDetail::default();
+            let tall = TallRow {
+                row: &row,
+                detail: &detail,
+            };
+
+            // Wide: the chip sits under the branch in the facts column.
+            let entries = [TallEntry::Row(TallRow {
+                row: &row,
+                detail: &detail,
+            })];
+            let (lines, _, _) = split_render(&entries, 220, 20);
+            assert!(
+                lines
+                    .iter()
+                    .any(|l| l.contains("#462") && l.contains(glyph)),
+                "{verdict:?} wide: {lines:?}"
+            );
+            let facts = fact_lines(&row, &detail, &AgentGlyphs::default(), 40, 0, &theme);
+            let mark = facts
+                .0
+                .iter()
+                .flatten()
+                .find(|s| s.content.contains(glyph))
+                .unwrap_or_else(|| panic!("{verdict:?}: no mark span"));
+            assert_eq!(mark.style.fg, theme.review_style(verdict).fg, "{verdict:?}");
+
+            // Narrow: the chip is in the ordinary row line at the top.
+            let narrow = row_lines(
+                &tall,
+                &AgentGlyphs::default(),
+                ColumnWidths::default(),
+                0,
+                &theme,
+                120,
+            );
+            let head = text(&narrow[0]);
+            assert!(
+                head.contains("#462") && head.contains(glyph),
+                "{verdict:?} narrow: {head:?}"
+            );
+        }
+    }
+
     /// A branch longer than the facts column wraps instead of truncating.
     #[test]
     fn split_wraps_a_long_branch() {

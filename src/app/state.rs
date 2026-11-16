@@ -39,6 +39,7 @@ impl App {
             view: View::Dashboard,
             modal: None,
             dashboard,
+            attached_panel: Default::default(),
             repos: Vec::new(),
             workspaces: Vec::new(),
             selectable: Vec::new(),
@@ -60,8 +61,8 @@ impl App {
             dashboard_repo_name_rects: Vec::new(),
             dashboard_focus_row_rects: Vec::new(),
             dashboard_focus_group_rects: Vec::new(),
-            dashboard_panel_tab_rects: Vec::new(),
-            dashboard_panel_rect: None,
+            side_panel_tab_rects: Vec::new(),
+            side_panel_rect: None,
             dashboard_unfocus_rect: None,
             procs_link_rect: None,
             github_remotes: Default::default(),
@@ -640,6 +641,9 @@ pub struct App {
     /// drain again on the next tick rather than waiting for a sibling commit.
     pub share_drain_pending: bool,
     pub dashboard: DashboardState,
+    /// The attached view's commits / files side panel (`Ctrl-x c`), apart
+    /// from the dashboard's so opening one doesn't narrow the other.
+    pub attached_panel: crate::ui::dashboard::side_panel::SidePanelState,
     pub repos: Vec<Repo>,
     pub workspaces: Vec<(crate::data::store::RepoId, Workspace)>,
     pub selectable: Vec<SelectionTarget>,
@@ -777,13 +781,16 @@ pub struct App {
     /// Commits on the workspace branch not on its base. Same poller and
     /// throttle as `workspace_diff`; feeds the `pr:none` hide exemption.
     pub workspace_ahead_of_base: std::collections::HashMap<crate::data::store::WorkspaceId, u32>,
-    /// Each workspace branch's commits and changed files against its base,
-    /// for the focus view's side panel, tagged with the base they were
+    /// Each workspace branch's commits and changed files (sorted by path)
+    /// against its base, for the side panel, shared so a frame copies a
+    /// pointer rather than the lists, and tagged with the base they were
     /// computed against so a changed Base branch setting never shows the
     /// old base's lists as current. Same poller and throttle as
     /// `workspace_ahead_of_base`; dropped when a refresh fails.
-    pub workspace_branch_lists:
-        std::collections::HashMap<crate::data::store::WorkspaceId, crate::git::BranchLists>,
+    pub workspace_branch_lists: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        std::sync::Arc<crate::git::BranchLists>,
+    >,
     /// Per-file diff stats keyed by `WorkspaceId`, then by path relative
     /// to the worktree root (as `git diff --numstat` emits them).
     /// Populated by the same poller that maintains `workspace_diff`.
@@ -897,8 +904,6 @@ pub struct App {
     /// order, consumed by `handle_mouse` to apply a clicked option. Cleared each
     /// frame; only populated while the picker modal is open.
     pub usage_window_option_rects: Vec<ratatui::layout::Rect>,
-    /// `(palette index, rect)` per swatch drawn by the open name-color picker,
-    /// consumed by `handle_mouse` to apply a clicked color. Cleared each frame;
     /// Hidden-group rows in the repo focus view — a click expands or
     /// collapses the group.
     pub dashboard_focus_group_rects: Vec<(
@@ -908,13 +913,17 @@ pub struct App {
         ),
         ratatui::layout::Rect,
     )>,
-    /// The focus view side panel's tabs — a click shows that tab.
-    pub dashboard_panel_tab_rects: Vec<(
+    /// The side panel's tabs, on whichever view drew it — a click shows
+    /// that tab.
+    pub side_panel_tab_rects: Vec<(
         crate::ui::dashboard::side_panel::PanelTab,
         ratatui::layout::Rect,
     )>,
-    /// The focus view side panel — the wheel over it scrolls it.
-    pub dashboard_panel_rect: Option<ratatui::layout::Rect>,
+    /// The side panel, on whichever view drew it — the wheel over it
+    /// scrolls it.
+    pub side_panel_rect: Option<ratatui::layout::Rect>,
+    /// `(palette index, rect)` per swatch drawn by the open name-color picker,
+    /// consumed by `handle_mouse` to apply a clicked color. Cleared each frame;
     /// only populated while that modal is open.
     pub name_color_swatch_rects: Vec<(u8, ratatui::layout::Rect)>,
     /// Resolved pinned commands from the last draw tick (matches `chip_rects`).

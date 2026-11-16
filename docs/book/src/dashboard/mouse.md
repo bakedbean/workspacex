@@ -8,8 +8,8 @@ Hold `Shift` while you drag. Most terminals (Alacritty, Kitty, WezTerm, iTerm2, 
 
 ## Scrolling
 
-- The wheel scrolls the attached pane's history. If the agent handles the mouse itself, the wheel goes to the agent; hold `Shift` to scroll wsx's history instead.
-- On the dashboard, the wheel over a [detail bar](detail-bar.md) container scrolls that container. In the [focus view](repo-focus.md) it scrolls the workspaces, or the side panel when over it.
+- The wheel scrolls the attached pane's history. If the agent handles the mouse itself, the wheel goes to the agent; hold `Shift` to scroll wsx's history instead. Over the [side panel](side-panel.md#in-the-attached-view) it scrolls the panel.
+- On the dashboard, the wheel over a [detail bar](detail-bar.md) container scrolls that container, and over the [side panel](side-panel.md) scrolls the panel. Elsewhere in the [focus view](repo-focus.md) it scrolls the workspaces.
 
 ## Clickable targets
 
@@ -22,7 +22,7 @@ Hold `Shift` while you drag. Most terminals (Alacritty, Kitty, WezTerm, iTerm2, 
 | A repo header's name         | Shows only that repo, in the [focus view](repo-focus.md) |
 | A workspace in the focus view | Attaches to it                                          |
 | `◂ all repos` in the focus view | Goes back to every repo                               |
-| A side-panel tab in the focus view | Shows that tab                                      |
+| A [side-panel](side-panel.md) tab, on the dashboard or attached | Shows that tab        |
 | A row's process count (`● 2p`) | Opens the [process list](process-tracking.md)          |
 | A pinned-command chip        | Sends that [pinned command](../attached-view/pinned-commands.md) |
 | A prompt-tag chip            | Opens that [prompt tag](../attached-view/prompt-tags.md)'s body box |

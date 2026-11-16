@@ -5,5 +5,6 @@ Press `Enter` on a dashboard row to attach to a workspace's agent full-screen. C
 - [Updates panel and split panes](updates-and-splits.md): switch workspaces and tile several in one view.
 - [Pinned commands](pinned-commands.md): fire saved prompts from a chip row.
 - [Prompt tags](prompt-tags.md): wrap prompt sections in XML tags.
+- [Side panel](../dashboard/side-panel.md#in-the-attached-view): `Ctrl-x c` shows the branch's commits and changed files beside the agent.
 
 To send a literal `Ctrl-x` to the agent, press `Ctrl-x x`. [Keybindings](../dashboard/keybindings.md) lists every attached-view key.

@@ -47,13 +47,6 @@ pub struct WorkspaceDetail {
     /// The first prompt the workspace's agent was given, from its session
     /// log; `None` until the log is scanned or when it has none.
     pub first_prompt: Option<String>,
-    /// The branch's commits ahead of its base, newest first, for the side
-    /// panel. Filled only for the selected workspace, and only from a poll
-    /// against the current base; `None` until then.
-    pub commits: Option<Vec<crate::git::BranchCommit>>,
-    /// The branch's changed files against its base, binary files included,
-    /// sorted by path, for the side panel. Filled as `commits` is.
-    pub files: Option<Vec<crate::git::ChangedFile>>,
 }
 
 /// Each agent kind's icon, as the theme's `[agent_bar.symbols]` table
@@ -1144,8 +1137,6 @@ mod tests {
             ahead_of_base: Some(4),
             base_branch: Some("origin/main".into()),
             first_prompt: None,
-            commits: None,
-            files: None,
         };
         let tall = TallRow {
             row: &row,

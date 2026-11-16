@@ -654,11 +654,12 @@ async fn moving_the_selection_scrolls_it_back_into_view() {
 
 /// Two commits and two changed files (one binary-free), polled against
 /// `base`.
-fn branch_lists(base: &str) -> crate::git::BranchLists {
+/// Two commits and two changed files, polled against `base`.
+pub(super) fn branch_lists(base: &str) -> std::sync::Arc<crate::git::BranchLists> {
     use crate::git::{BranchCommit, ChangedFile, DiffStats};
-    crate::git::BranchLists {
-        base: base.into(),
-        commits: vec![
+    std::sync::Arc::new(crate::git::BranchLists::new(
+        base,
+        vec![
             BranchCommit {
                 hash: "a1b2c3d".into(),
                 subject: "UNIQUE-COMMIT-SUBJECT".into(),
@@ -668,7 +669,7 @@ fn branch_lists(base: &str) -> crate::git::BranchLists {
                 subject: "earlier commit".into(),
             },
         ],
-        files: vec![
+        vec![
             ChangedFile {
                 path: "src/zeta.rs".into(),
                 stats: Some(DiffStats {
@@ -684,7 +685,7 @@ fn branch_lists(base: &str) -> crate::git::BranchLists {
                 }),
             },
         ],
-    }
+    ))
 }
 
 /// The focus view with `a` selected, a base branch set, and two commits and
@@ -710,7 +711,7 @@ async fn c_toggles_the_side_panel_showing_commits() {
         !screen.contains("UNIQUE-COMMIT-SUBJECT"),
         "closed by default"
     );
-    assert!(app.dashboard_panel_rect.is_none());
+    assert!(app.side_panel_rect.is_none());
 
     press(&mut app, KeyCode::Char('c')).await;
     let screen = draw(&mut app);
@@ -721,28 +722,28 @@ async fn c_toggles_the_side_panel_showing_commits() {
         screen.contains("a1b2c3d  UNIQUE-COMMIT-SUBJECT"),
         "{screen}"
     );
-    let panel = app.dashboard_panel_rect.expect("panel drawn");
+    let panel = app.side_panel_rect.expect("panel drawn");
     for (_, r) in &app.dashboard_focus_row_rects {
         assert!(r.x + r.width <= panel.x, "rows stay left of the panel");
     }
 
     press(&mut app, KeyCode::Char('c')).await;
     draw(&mut app);
-    assert!(app.dashboard_panel_rect.is_none(), "c closes it");
+    assert!(app.side_panel_rect.is_none(), "c closes it");
 }
 
 #[tokio::test]
 async fn number_keys_and_clicks_switch_tabs() {
     let (mut app, _, _) = app_with_branch_data();
     press(&mut app, KeyCode::Char('2')).await;
-    assert!(app.dashboard.panel_open, "2 opens the panel");
+    assert!(app.dashboard.panel.open, "2 opens the panel");
     let screen = draw(&mut app);
     assert!(screen.contains("2 files  +43 −3"), "{screen}");
     let alpha = screen.find("src/alpha.rs").unwrap();
     let zeta = screen.find("src/zeta.rs").unwrap();
     assert!(alpha < zeta, "sorted by path:\n{screen}");
 
-    let (tab, r) = app.dashboard_panel_tab_rects[0];
+    let (tab, r) = app.side_panel_tab_rects[0];
     assert_eq!(tab, crate::ui::dashboard::side_panel::PanelTab::Commits);
     assert_eq!(panel_tab_click_target(&app, &click(r.x, r.y)), Some(tab));
     show_panel_tab(&mut app, tab);
@@ -752,7 +753,7 @@ async fn number_keys_and_clicks_switch_tabs() {
     press(&mut app, KeyCode::Char('c')).await;
     press(&mut app, KeyCode::Char('c')).await;
     assert_eq!(
-        app.dashboard.panel_tab,
+        app.dashboard.panel.tab,
         crate::ui::dashboard::side_panel::PanelTab::Files,
         "the tab survives closing"
     );
@@ -765,7 +766,7 @@ async fn esc_closes_the_panel_before_leaving_focus() {
     press(&mut app, KeyCode::Char('c')).await;
     draw(&mut app);
     press(&mut app, KeyCode::Esc).await;
-    assert!(!app.dashboard.panel_open);
+    assert!(!app.dashboard.panel.open);
     assert_eq!(app.dashboard.focused_repo, Some(repo));
     press(&mut app, KeyCode::Esc).await;
     assert_eq!(app.dashboard.focused_repo, None);
@@ -796,8 +797,8 @@ async fn a_narrow_terminal_hides_the_panel() {
     let mut term = Terminal::new(TestBackend::new(90, 30)).unwrap();
     term.draw(|f| crate::app::render::draw_for_test(f, &mut app))
         .unwrap();
-    assert!(app.dashboard_panel_rect.is_none());
-    assert!(app.dashboard.panel_open, "stays open for when there's room");
+    assert!(app.side_panel_rect.is_none());
+    assert!(app.dashboard.panel.open, "stays open for when there's room");
 }
 
 /// Lists polled against a different base than the repo's current one are
@@ -861,12 +862,12 @@ async fn esc_on_a_hidden_panel_leaves_focus() {
 #[tokio::test]
 async fn binary_files_show_in_the_files_tab() {
     let (mut app, _, ids) = app_with_branch_data();
-    let mut lists = branch_lists("origin/main");
+    let mut lists = std::sync::Arc::unwrap_or_clone(branch_lists("origin/main"));
     lists.files = vec![crate::git::ChangedFile {
         path: "assets/logo.png".into(),
         stats: None,
     }];
-    app.workspace_branch_lists.insert(ids[0], lists);
+    app.workspace_branch_lists.insert(ids[0], lists.into());
     press(&mut app, KeyCode::Char('2')).await;
     let screen = draw(&mut app);
     assert!(screen.contains("assets/logo.png"), "{screen}");

@@ -38,6 +38,7 @@ mod repo_focus;
 mod repo_pr_link_click;
 mod restore_layout;
 mod setup_log_modal;
+mod side_panel;
 mod sort_mode;
 mod spawn;
 mod status_filter;

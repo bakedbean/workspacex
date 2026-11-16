@@ -10,9 +10,13 @@
 //! │ 9f8e7d6  fix(dashboard): drop "clean"
 //! ```
 //!
-//! Pure layout and painting; the caller owns which tab is showing, the
-//! scroll offset, and the data.
+//! Shared by every surface that offers it — the dashboard list, the repo
+//! focus view and the attached view. Each surface keeps its own
+//! [`SidePanelState`] and hands [`SidePanelState::carve`] the selected
+//! workspace's [`PanelData`]; the panel takes the right of the area it is
+//! given and returns what is left.
 
+use crate::data::store::WorkspaceId;
 use crate::git::{BranchCommit, ChangedFile};
 use crate::ui::dashboard::tall::wrap;
 use crate::ui::dashboard::tall::wrap_capped;
@@ -51,6 +55,114 @@ pub const PANEL_MIN_TOTAL: u16 = 100;
 /// bounds that hold a commit subject or a path without crowding the rows.
 pub fn panel_width(total: u16) -> u16 {
     (total / 3).clamp(36, 64)
+}
+
+/// One surface's panel: whether it shows, its tab, and its scroll.
+#[derive(Debug, Clone, Default)]
+pub struct SidePanelState {
+    pub open: bool,
+    /// The tab, kept while the panel is closed.
+    pub tab: PanelTab,
+    /// The body's first visible line, clamped on draw.
+    pub scroll: usize,
+    /// The workspace and tab the panel last drew, so the scroll resets
+    /// when either changes.
+    anchor: Option<(Option<WorkspaceId>, PanelTab)>,
+}
+
+impl SidePanelState {
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
+    }
+
+    /// Open the panel on `tab`.
+    pub fn show(&mut self, tab: PanelTab) {
+        self.open = true;
+        self.tab = tab;
+    }
+
+    /// Switch to the other tab, opening the panel if closed.
+    pub fn next_tab(&mut self) {
+        let next = match self.tab {
+            PanelTab::Commits => PanelTab::Files,
+            PanelTab::Files => PanelTab::Commits,
+        };
+        self.show(next);
+    }
+
+    /// Move the body by `lines`, up when `up`.
+    pub fn scroll_by(&mut self, lines: usize, up: bool) {
+        self.scroll = if up {
+            self.scroll.saturating_sub(lines)
+        } else {
+            self.scroll.saturating_add(lines)
+        };
+    }
+
+    /// Draw the panel on the right of `area` when it is open and `area` is
+    /// wide enough, for the workspace in `data` (`None`: none selected).
+    /// Returns the area left for the surface's own content — all of `area`
+    /// when the panel isn't drawn — and the panel's click targets.
+    pub fn carve(
+        &mut self,
+        f: &mut Frame,
+        area: Rect,
+        data: Option<&PanelData>,
+        theme: &Theme,
+    ) -> (Rect, PanelTargets) {
+        if !self.open || area.width < PANEL_MIN_TOTAL {
+            return (area, PanelTargets::default());
+        }
+        let w = panel_width(area.width);
+        let panel_area = Rect {
+            x: area.x + area.width - w,
+            width: w,
+            ..area
+        };
+        let rest = Rect {
+            width: area.width - w - 1,
+            ..area
+        };
+        let anchor = (data.map(|d| d.workspace_id), self.tab);
+        if self.anchor != Some(anchor) {
+            self.scroll = 0;
+            self.anchor = Some(anchor);
+        }
+        let targets = render(
+            f,
+            panel_area,
+            self.tab,
+            data.map(PanelData::inputs),
+            &mut self.scroll,
+            theme,
+        );
+        (rest, targets)
+    }
+}
+
+/// The panel's data for one workspace, owned so a surface can gather it
+/// before borrowing its own state mutably.
+#[derive(Debug, Clone)]
+pub struct PanelData {
+    pub workspace_id: WorkspaceId,
+    pub branch: String,
+    pub base: Option<String>,
+    /// The branch's commits and changed files (sorted by path), polled
+    /// against `base`; `None` until then.
+    pub lists: Option<std::sync::Arc<crate::git::BranchLists>>,
+    pub ahead: Option<u32>,
+}
+
+impl PanelData {
+    pub fn inputs(&self) -> PanelInputs<'_> {
+        PanelInputs {
+            branch: &self.branch,
+            base: self.base.as_deref(),
+            commits: self.lists.as_deref().map(|l| l.commits.as_slice()),
+            files: self.lists.as_deref().map(|l| l.files.as_slice()),
+            ahead: self.ahead,
+        }
+    }
 }
 
 /// What the panel shows for the selected workspace.

@@ -143,6 +143,16 @@ pub(in crate::app::input) async fn dispatch_leader_action(
         KeyCode::Char('<') => Panel::PromptTag.open(app, Surface::Attached(id)),
         KeyCode::Char('#') => Panel::WorkspaceTags.open(app, Surface::Attached(id)),
         KeyCode::Char('R') => Panel::Recap.open(app, Surface::Attached(id)),
+        // The commits / files side panel: `c` toggles it, `C` switches its
+        // tab (opening it if closed).
+        KeyCode::Char('c') => {
+            app.attached_panel.toggle();
+            Ok(())
+        }
+        KeyCode::Char('C') => {
+            app.attached_panel.next_tab();
+            Ok(())
+        }
         KeyCode::Char(c @ '1'..='9') => {
             let idx = (c as u8 - b'1') as usize;
             if let Some(cmd) = app.pinned_commands_cache.get(idx) {

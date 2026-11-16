@@ -62,6 +62,9 @@ pub struct DashboardInputs<'a> {
     pub nerd_fonts: bool,
     /// Fleet variables for theme modules, built once per frame.
     pub fleet: &'a crate::ui::bar::segment::SegmentMap,
+    /// The side panel's data for the selected workspace; `None` when the
+    /// panel is closed or no workspace is selected.
+    pub panel: Option<side_panel::PanelData>,
 }
 
 #[derive(Debug)]
@@ -118,15 +121,9 @@ pub struct DashboardState {
     pub focus_scroll_anchor: Option<SelectionTarget>,
     /// Lines the focus view's rows had last frame, for paging.
     pub focus_page: usize,
-    /// Whether the focus view's side panel is showing.
-    pub panel_open: bool,
-    /// The side panel's tab, kept while it is closed.
-    pub panel_tab: side_panel::PanelTab,
-    /// The side panel body's first visible line.
-    pub panel_scroll: usize,
-    /// The selection and tab the panel last drew, so its scroll resets
-    /// when either changes.
-    pub panel_anchor: Option<(Option<SelectionTarget>, side_panel::PanelTab)>,
+    /// The commits / files side panel, shared by the list and the focus
+    /// view.
+    pub panel: side_panel::SidePanelState,
 }
 
 /// Settings key holding the by-repo sort mode.
@@ -237,10 +234,7 @@ impl Default for DashboardState {
             focus_scroll: 0,
             focus_scroll_anchor: None,
             focus_page: 0,
-            panel_open: false,
-            panel_tab: side_panel::PanelTab::default(),
-            panel_scroll: 0,
-            panel_anchor: None,
+            panel: Default::default(),
         }
     }
 }
@@ -302,7 +296,7 @@ pub struct ListClickTargets {
     /// Each hidden-group summary row in the focus view — expands or
     /// collapses that group.
     pub focus_groups: Vec<((RepoId, HideRule), Rect)>,
-    /// The focus view side panel's tabs — a click shows that tab.
+    /// The side panel's tabs — a click shows that tab.
     pub panel_tabs: Vec<(side_panel::PanelTab, Rect)>,
     /// The side panel itself, for routing the wheel to it.
     pub panel_area: Option<Rect>,
@@ -372,7 +366,6 @@ pub fn render_without_footer(
             Constraint::Min(0),                   // main list
         ])
         .split(area);
-    let width = chunks[3].width as usize;
 
     let global_counts = StatusCounts::from_iter(inputs.workspaces.iter().map(|w| w.status));
 
@@ -414,6 +407,12 @@ pub fn render_without_footer(
         return targets;
     }
 
+    // The side panel takes the right of the list when open and there's
+    // room, as in the focus view.
+    let (list_area, panel) = state
+        .panel
+        .carve(f, chunks[3], inputs.panel.as_ref(), theme);
+    let width = list_area.width as usize;
     let (items, chip_spans, repo_link_spans, name_spans) = match state.group_mode {
         GroupMode::Repo => render_by_repo(inputs, state, tick, width, theme),
         GroupMode::Attention => {
@@ -437,20 +436,21 @@ pub fn render_without_footer(
         };
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(msg.to_string(), theme.dim_style()))),
-            chunks[3],
+            list_area,
         );
         return ListClickTargets {
             statuses,
+            panel_tabs: panel.tabs,
+            panel_area: panel.area,
             ..Default::default()
         };
     }
     let list = List::new(items).highlight_style(theme.selected_bg_style());
-    f.render_stateful_widget(list, chunks[3], &mut state.list_state);
+    f.render_stateful_widget(list, list_area, &mut state.list_state);
 
     // Convert flat-index spans into screen rects. The list has just
     // rendered, so `list_state.offset()` reflects this frame's scroll
     // position.
-    let list_area = chunks[3];
     let offset = state.list_state.offset();
     let repo_spans = |spans: Vec<by_repo::RepoPrLinkSpan>| {
         spans_to_rects(
@@ -466,6 +466,8 @@ pub fn render_without_footer(
         repo_pr_links: repo_spans(repo_link_spans),
         repo_names: repo_spans(name_spans),
         statuses,
+        panel_tabs: panel.tabs,
+        panel_area: panel.area,
         ..Default::default()
     }
 }
@@ -607,44 +609,9 @@ fn render_focus(
 
     // The side panel takes the right of the body when open and there's
     // room; the rows get the rest.
-    let mut rows_area = chunks[2];
-    let mut panel_targets = side_panel::PanelTargets::default();
-    if state.panel_open && rows_area.width >= side_panel::PANEL_MIN_TOTAL {
-        let w = side_panel::panel_width(rows_area.width);
-        let panel_area = Rect {
-            x: rows_area.x + rows_area.width - w,
-            width: w,
-            ..rows_area
-        };
-        rows_area.width -= w + 1;
-        let selected_ws = match &state.selection {
-            Some(SelectionTarget::Workspace(id)) => inputs
-                .workspaces
-                .iter()
-                .find(|w| w.workspace_id == *id && w.repo.id == repo.id),
-            _ => None,
-        };
-        let anchor = (state.selection.clone(), state.panel_tab);
-        if state.panel_anchor.as_ref() != Some(&anchor) {
-            state.panel_scroll = 0;
-            state.panel_anchor = Some(anchor);
-        }
-        let panel_inputs = selected_ws.map(|w| side_panel::PanelInputs {
-            branch: &w.row.branch,
-            base: repo.base_branch.as_deref(),
-            commits: w.detail.commits.as_deref(),
-            files: w.detail.files.as_deref(),
-            ahead: w.detail.ahead_of_base,
-        });
-        panel_targets = side_panel::render(
-            f,
-            panel_area,
-            state.panel_tab,
-            panel_inputs,
-            &mut state.panel_scroll,
-            theme,
-        );
-    }
+    let (rows_area, panel_targets) = state
+        .panel
+        .carve(f, chunks[2], inputs.panel.as_ref(), theme);
 
     if entries.is_empty() {
         let msg = if RowFilter::of(state).is_active() {

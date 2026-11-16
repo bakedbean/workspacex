@@ -287,7 +287,19 @@ fn tall_rows_show_long_recaps_and_branches_whole() {
         .find(|(id, _)| *id == ids[0])
         .unwrap()
         .1;
-    assert!(r.height >= 4, "head, wrapped goal, git line: {r:?}");
+    // The row's rect covers every line the wrapped goal landed on.
+    let goal_lines: Vec<usize> = screen
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| goal.split(' ').any(|w| w.len() > 6 && l.contains(w)))
+        .map(|(y, _)| y)
+        .collect();
+    assert!(goal_lines.len() >= 2, "goal wraps:\n{screen}");
+    let rows = r.y as usize..(r.y + r.height) as usize;
+    assert!(
+        goal_lines.iter().all(|y| rows.contains(y)),
+        "{r:?}\n{screen}"
+    );
 }
 
 /// The focus view keeps only the detail bar's reply row: no header or

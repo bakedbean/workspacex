@@ -568,11 +568,12 @@ pub(crate) fn section_of(lc: Option<BranchLifecycle>) -> FocusSection {
     }
 }
 
-/// The color a section's header is drawn in; every section gets one so the
-/// headers stand out from the rows' dim sub-lines.
+/// The color a section's header is drawn in; every section gets its own so
+/// the headers stand out from the rows' dim sub-lines. No PR takes the plain
+/// foreground: `header_fg` matches Draft or Done in some themes.
 fn section_color(section: FocusSection, theme: &Theme) -> Color {
     match section {
-        FocusSection::NoPr => theme.header_fg,
+        FocusSection::NoPr => theme.selected_fg,
         FocusSection::Draft => theme.waiting,
         FocusSection::Open => theme.ok,
         FocusSection::Done => theme.merged,
@@ -1792,27 +1793,28 @@ mod reconcile_selection_tests {
 mod section_header_tests {
     use super::*;
 
-    /// Every section's header is colored throughout with a bold label, so
-    /// No PR and Draft stand out as much as Open and Done.
+    /// In every built-in theme, each section's header is colored throughout
+    /// with a bold label, in a color no other section shares.
     #[test]
     fn every_section_header_is_colored_and_bold() {
-        let theme = Theme::wsx();
-        let mut seen = Vec::new();
-        for section in [
-            FocusSection::NoPr,
-            FocusSection::Draft,
-            FocusSection::Open,
-            FocusSection::Done,
-        ] {
-            let line = section_header_line(section, 2, 40, &theme);
-            let fg = section_color(section, &theme);
-            assert_ne!(fg, theme.dim, "{section:?} falls back to dim");
-            assert!(line.spans.iter().all(|s| s.style.fg == Some(fg)));
-            assert!(line.spans[1].style.add_modifier.contains(Modifier::BOLD));
-            assert_eq!(line.width(), 40);
-            seen.push(fg);
+        for name in ["wsx", "ansi", "dracula", "jellybeans", "nord"] {
+            let theme = Theme::by_name(name);
+            let mut seen: Vec<Color> = Vec::new();
+            for section in [
+                FocusSection::NoPr,
+                FocusSection::Draft,
+                FocusSection::Open,
+                FocusSection::Done,
+            ] {
+                let line = section_header_line(section, 2, 40, &theme);
+                let fg = section_color(section, &theme);
+                assert_ne!(fg, theme.dim, "{name}: {section:?} falls back to dim");
+                assert!(!seen.contains(&fg), "{name}: {section:?} shares {fg:?}");
+                assert!(line.spans.iter().all(|s| s.style.fg == Some(fg)));
+                assert!(line.spans[1].style.add_modifier.contains(Modifier::BOLD));
+                assert_eq!(line.width(), 40);
+                seen.push(fg);
+            }
         }
-        seen.dedup();
-        assert_eq!(seen.len(), 4, "sections share a color: {seen:?}");
     }
 }

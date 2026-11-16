@@ -225,6 +225,13 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
                 return;
             }
 
+            // A press on the side panel's left edge (or the gutter beside
+            // it) starts dragging it to a new width.
+            if app.side_panel_rect.is_some_and(|r| on_panel_edge(&r, &m)) {
+                active_side_panel(app).resizing = true;
+                return;
+            }
+
             // Footer keybind hint click → behave exactly like pressing the
             // printed key. The footer row doesn't overlap any other click
             // target, so this is checked first and returns early.
@@ -397,6 +404,39 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
                 });
             }
         }
+        MouseEventKind::Drag(MouseButton::Left) if active_side_panel(app).resizing => {
+            if let Some(r) = app.side_panel_rect {
+                let right = r.x.saturating_add(r.width);
+                set_side_panel_width(app, right.saturating_sub(m.column));
+            }
+        }
+        MouseEventKind::Up(MouseButton::Left) if active_side_panel(app).resizing => {
+            active_side_panel(app).resizing = false;
+            // Keep the width as drawn, which the draw clamped to the screen.
+            if let Some(r) = app.side_panel_rect {
+                set_side_panel_width(app, r.width);
+                if let Err(e) = app.store.set_setting(
+                    crate::ui::dashboard::side_panel::WIDTH_SETTING,
+                    &r.width.to_string(),
+                ) {
+                    tracing::warn!(error = %e, "failed to persist side_panel_width");
+                }
+            }
+        }
         _ => {}
     }
+}
+
+/// Whether `m` is on the panel at `r`'s left edge or the gutter left of it.
+fn on_panel_edge(r: &ratatui::layout::Rect, m: &MouseEvent) -> bool {
+    (m.column == r.x || m.column.saturating_add(1) == r.x)
+        && m.row >= r.y
+        && m.row < r.y.saturating_add(r.height)
+}
+
+/// Size both surfaces' panels to `width`, so the dashboard and the attached
+/// view agree; the next draw clamps it.
+fn set_side_panel_width(app: &mut App, width: u16) {
+    app.dashboard.panel.width = Some(width);
+    app.attached_panel.width = Some(width);
 }

@@ -25,6 +25,7 @@ Hold `Shift` while you drag. Most terminals (Alacritty, Kitty, WezTerm, iTerm2, 
 | `◂ all repos` in the focus view | Goes back to every repo                               |
 | A [side-panel](side-panel.md) tab, on the dashboard or attached | Shows that tab        |
 | A file in the side panel's Files tab | Opens its [diff](side-panel.md#the-diff-viewer) full screen |
+| The side panel's left edge (drag) | Resizes the panel                                    |
 | A row's process count (`● 2p`) | Opens the [process list](process-tracking.md)          |
 | A pinned-command chip        | Sends that [pinned command](../attached-view/pinned-commands.md) |
 | A prompt-tag chip            | Opens that [prompt tag](../attached-view/prompt-tags.md)'s body box |

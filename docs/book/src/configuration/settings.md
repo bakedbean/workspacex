@@ -77,6 +77,7 @@ Bell values are `off`, `single`, `double` or `triple`. `off` silences the bell b
 | `top_bar_show_tags` | unset | Tags, separated by commas or spaces, that keep a workspace in the attached view's top bar when a tag hide rule hides it from the dashboard. A workspace with any listed tag ignores every tag rule; PR hide rules still apply. Names are lowercased, and invalid ones are ignored. After `wsx config set`, restart wsx to apply; the `,` drawer applies it at once. |
 | `dashboard_branch_width` | `28` | Width of the branch column, clamped to 10–80. |
 | `dashboard_pr_width` | `16` | Width of the PR column, clamped to 8–24. |
+| `side_panel_width` | about a third of the screen, 36–64 | Width of the [side panel](../dashboard/side-panel.md), set by dragging its left edge. It always leaves the rows at least 40 columns. |
 | `detail_bar_config` | built-in | JSON for the detail pane. See [Detail bar](../dashboard/detail-bar.md) for the schema. |
 | `usage_graph_window` | `24h` | Window of the `$usage` activity graph: `24h`, `1w` or `1mo`. Shown only when a [theme](themes.md) places `$usage`. |
 | `pinned_commands` | unset | `Label=command` lines shown as chips. See [Pinned commands](../attached-view/pinned-commands.md). |

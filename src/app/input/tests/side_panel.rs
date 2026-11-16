@@ -416,3 +416,84 @@ async fn o_on_a_missing_file_explains_itself() {
     key(&mut app, KeyCode::Char('j')).await;
     assert_eq!(diff_modal(&app).unwrap().notice, None);
 }
+
+fn left(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+    MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    }
+}
+
+/// Dragging the panel's left edge resizes it, on both surfaces, and the
+/// width is kept for the next run.
+#[tokio::test]
+async fn dragging_the_edge_resizes_the_panel() {
+    use crossterm::event::MouseButton;
+    let (mut app, _, _) = app();
+    press(&mut app, KeyCode::Char('c')).await;
+    draw(&mut app);
+    let before = app.side_panel_rect.unwrap();
+    let right = before.x + before.width;
+    let shared = shared_app();
+
+    handle_mouse(
+        &mut app,
+        &shared,
+        left(MouseEventKind::Down(MouseButton::Left), before.x, 10),
+    )
+    .await;
+    assert!(app.dashboard.panel.resizing);
+    handle_mouse(
+        &mut app,
+        &shared,
+        left(MouseEventKind::Drag(MouseButton::Left), before.x - 20, 12),
+    )
+    .await;
+    draw(&mut app);
+    let after = app.side_panel_rect.unwrap();
+    assert_eq!(after.width, before.width + 20);
+    assert_eq!(after.x + after.width, right, "the right edge stays put");
+
+    // Far past the rows' minimum: clamped, and the clamped width is kept.
+    handle_mouse(
+        &mut app,
+        &shared,
+        left(MouseEventKind::Drag(MouseButton::Left), 0, 12),
+    )
+    .await;
+    draw(&mut app);
+    handle_mouse(
+        &mut app,
+        &shared,
+        left(MouseEventKind::Up(MouseButton::Left), 0, 12),
+    )
+    .await;
+    let clamped = app.side_panel_rect.unwrap().width;
+    assert_eq!(clamped, 140 - 41);
+    assert!(!app.dashboard.panel.resizing);
+    assert_eq!(app.attached_panel.width, Some(clamped), "both surfaces");
+    assert_eq!(
+        app.store.get_setting("side_panel_width").unwrap(),
+        Some(clamped.to_string())
+    );
+}
+
+/// A press inside the panel, off its edge, doesn't start a drag.
+#[tokio::test]
+async fn a_press_inside_the_panel_is_not_a_drag() {
+    use crossterm::event::MouseButton;
+    let (mut app, _, _) = app();
+    press(&mut app, KeyCode::Char('c')).await;
+    draw(&mut app);
+    let panel = app.side_panel_rect.unwrap();
+    let shared = shared_app();
+    handle_mouse(
+        &mut app,
+        &shared,
+        left(MouseEventKind::Down(MouseButton::Left), panel.x + 5, 10),
+    )
+    .await;
+    assert!(!app.dashboard.panel.resizing);
+}

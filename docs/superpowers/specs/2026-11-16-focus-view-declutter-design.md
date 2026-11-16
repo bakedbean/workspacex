@@ -190,3 +190,13 @@ The breadcrumb header (`◂ all repos / name …`) is unchanged.
   dim where not.
 - Splitting the work into logical commits (suggested: sections + nav; new
   row layout; narrow degradation; docs).
+
+## Addendum: optional grouping (approved 2026-11-16)
+
+`G` in the focus view toggles PR-state sections off and on (it used to leave
+the view and flip list grouping, which `G` on the list still does). Off = the
+list's natural order for the repo: no headers, freshly-blocked pinning back,
+hidden groups still trail, `{` to the top and `}` to the hidden groups. Saved
+as the `dashboard_focus_group_by_pr` toggle setting, on by default. Rejected:
+a new key (keys are scarce, `G` already means grouping) and folding it into
+the `o` sort cycle (grouping isn't sorting).

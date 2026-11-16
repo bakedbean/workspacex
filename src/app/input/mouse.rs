@@ -87,6 +87,9 @@ pub(in crate::app::input) fn adjust_detail_scroll(
 }
 
 pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedApp, m: MouseEvent) {
+    if side_panel_resize(app, &m) {
+        return;
+    }
     // The diff viewer covers the screen: every mouse event is its own.
     if matches!(app.modal, Some(Modal::FileDiff(..))) {
         super::modal::file_diff::mouse(app, m);
@@ -404,25 +407,6 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
                 });
             }
         }
-        MouseEventKind::Drag(MouseButton::Left) if active_side_panel(app).resizing => {
-            if let Some(r) = app.side_panel_rect {
-                let right = r.x.saturating_add(r.width);
-                set_side_panel_width(app, right.saturating_sub(m.column));
-            }
-        }
-        MouseEventKind::Up(MouseButton::Left) if active_side_panel(app).resizing => {
-            active_side_panel(app).resizing = false;
-            // Keep the width as drawn, which the draw clamped to the screen.
-            if let Some(r) = app.side_panel_rect {
-                set_side_panel_width(app, r.width);
-                if let Err(e) = app.store.set_setting(
-                    crate::ui::dashboard::side_panel::WIDTH_SETTING,
-                    &r.width.to_string(),
-                ) {
-                    tracing::warn!(error = %e, "failed to persist side_panel_width");
-                }
-            }
-        }
         _ => {}
     }
 }
@@ -434,9 +418,48 @@ fn on_panel_edge(r: &ratatui::layout::Rect, m: &MouseEvent) -> bool {
         && m.row < r.y.saturating_add(r.height)
 }
 
-/// Size both surfaces' panels to `width`, so the dashboard and the attached
-/// view agree; the next draw clamps it.
-fn set_side_panel_width(app: &mut App, width: u16) {
+/// Route `m` to an in-flight side-panel drag; returns whether it was
+/// consumed. Drags are input-only (the run loop coalesces events between
+/// draws), so each event sets the width from its own column. A modal, a
+/// view switch, a hidden panel, or a fresh press (a release lost outside
+/// the terminal) cancels the drag and lets the event through.
+fn side_panel_resize(app: &mut App, m: &MouseEvent) -> bool {
+    if !(app.dashboard.panel.resizing || app.attached_panel.resizing) {
+        return false;
+    }
+    let rect = app.side_panel_rect;
+    let live = app.modal.is_none() && active_side_panel(app).resizing;
+    let (Some(r), true) = (rect, live) else {
+        cancel_side_panel_resize(app);
+        return false;
+    };
+    let release = match m.kind {
+        MouseEventKind::Drag(MouseButton::Left) => false,
+        MouseEventKind::Up(MouseButton::Left) => true,
+        MouseEventKind::Down(_) => {
+            cancel_side_panel_resize(app);
+            return false;
+        }
+        _ => return false,
+    };
+    // The right edge holds still while the left one follows the pointer.
+    let right = r.x.saturating_add(r.width);
+    let width = active_side_panel(app).clamp_width(right.saturating_sub(m.column));
     app.dashboard.panel.width = Some(width);
     app.attached_panel.width = Some(width);
+    if release {
+        cancel_side_panel_resize(app);
+        if let Err(e) = app.store.set_setting(
+            crate::ui::dashboard::side_panel::WIDTH_SETTING,
+            &width.to_string(),
+        ) {
+            tracing::warn!(error = %e, "failed to persist side_panel_width");
+        }
+    }
+    true
+}
+
+fn cancel_side_panel_resize(app: &mut App) {
+    app.dashboard.panel.resizing = false;
+    app.attached_panel.resizing = false;
 }

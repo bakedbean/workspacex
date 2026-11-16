@@ -497,3 +497,86 @@ async fn a_press_inside_the_panel_is_not_a_drag() {
     .await;
     assert!(!app.dashboard.panel.resizing);
 }
+
+/// The run loop coalesces events between draws: a release right after a
+/// drag keeps the drag's width, clamped, without a draw in between.
+#[tokio::test]
+async fn a_release_without_a_draw_keeps_the_dragged_width() {
+    use crossterm::event::MouseButton;
+    let (mut app, _, _) = app();
+    press(&mut app, KeyCode::Char('c')).await;
+    draw(&mut app);
+    let r = app.side_panel_rect.unwrap();
+    let shared = shared_app();
+    for (kind, col) in [
+        (MouseEventKind::Down(MouseButton::Left), r.x),
+        (MouseEventKind::Drag(MouseButton::Left), r.x - 10),
+        (MouseEventKind::Up(MouseButton::Left), r.x - 20),
+    ] {
+        handle_mouse(&mut app, &shared, left(kind, col, 10)).await;
+    }
+    assert_eq!(app.dashboard.panel.width, Some(r.width + 20));
+    assert_eq!(
+        app.store.get_setting("side_panel_width").unwrap(),
+        Some((r.width + 20).to_string())
+    );
+}
+
+/// A modal opening mid-drag, or a press after a release that never
+/// arrived, ends the drag rather than resizing the panel.
+#[tokio::test]
+async fn a_modal_or_a_fresh_press_cancels_the_drag() {
+    use crossterm::event::MouseButton;
+    let (mut app, _, _) = app();
+    press(&mut app, KeyCode::Char('c')).await;
+    draw(&mut app);
+    let r = app.side_panel_rect.unwrap();
+    let shared = shared_app();
+    let down = |col| left(MouseEventKind::Down(MouseButton::Left), col, 10);
+    let drag = |col| left(MouseEventKind::Drag(MouseButton::Left), col, 10);
+
+    handle_mouse(&mut app, &shared, down(r.x)).await;
+    app.modal = Some(crate::ui::modal::Modal::Error {
+        message: "x".into(),
+    });
+    handle_mouse(&mut app, &shared, drag(r.x - 10)).await;
+    assert!(!app.dashboard.panel.resizing);
+    assert_eq!(app.dashboard.panel.width, None);
+    app.modal = None;
+
+    handle_mouse(&mut app, &shared, down(r.x)).await;
+    handle_mouse(&mut app, &shared, down(r.x + 5)).await;
+    assert!(!app.dashboard.panel.resizing, "the lost release is dropped");
+    handle_mouse(&mut app, &shared, drag(r.x - 10)).await;
+    assert_eq!(app.dashboard.panel.width, None);
+}
+
+/// Switching views mid-drag drops the drag on both surfaces.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_view_switch_cancels_the_drag() {
+    use crossterm::event::MouseButton;
+    let (mut app, target) = attached_app();
+    chord(&mut app, target, 'c').await;
+    draw(&mut app);
+    let r = app.side_panel_rect.unwrap();
+    let shared = shared_app();
+    handle_mouse(
+        &mut app,
+        &shared,
+        left(MouseEventKind::Down(MouseButton::Left), r.x, 10),
+    )
+    .await;
+    assert!(app.attached_panel.resizing);
+
+    app.view = crate::ui::View::Dashboard;
+    app.dashboard.panel.open = true;
+    draw(&mut app);
+    handle_mouse(
+        &mut app,
+        &shared,
+        left(MouseEventKind::Up(MouseButton::Left), r.x - 10, 10),
+    )
+    .await;
+    assert!(!app.attached_panel.resizing && !app.dashboard.panel.resizing);
+    assert_eq!(app.attached_panel.width, None);
+}

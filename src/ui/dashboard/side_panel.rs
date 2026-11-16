@@ -103,6 +103,8 @@ pub struct SidePanelState {
     /// The workspace and tab the panel last drew, so the scroll resets
     /// when either changes.
     anchor: Option<(Option<WorkspaceId>, PanelTab)>,
+    /// The body width of the last draw, for clamping a dragged width.
+    body_width: u16,
 }
 
 impl SidePanelState {
@@ -119,6 +121,7 @@ impl SidePanelState {
     pub fn close(&mut self) {
         self.open = false;
         self.focused = false;
+        self.resizing = false;
     }
 
     /// Whether the Files list has keyboard focus: focus is only ever on an
@@ -178,6 +181,11 @@ impl SidePanelState {
     /// wide enough, for the workspace in `data` (`None`: none selected).
     /// Returns the area left for the surface's own content — all of `area`
     /// when the panel isn't drawn — and the panel's click targets.
+    /// `width` clamped as the last draw's body would draw it.
+    pub fn clamp_width(&self, width: u16) -> u16 {
+        panel_width(self.body_width, Some(width))
+    }
+
     pub fn carve(
         &mut self,
         f: &mut Frame,
@@ -188,6 +196,7 @@ impl SidePanelState {
         if !self.open || area.width < PANEL_MIN_TOTAL {
             return (area, PanelTargets::default());
         }
+        self.body_width = area.width;
         let w = panel_width(area.width, self.width);
         let panel_area = Rect {
             x: area.x + area.width - w,

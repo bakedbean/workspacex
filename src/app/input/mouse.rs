@@ -87,6 +87,18 @@ pub(in crate::app::input) fn adjust_detail_scroll(
 }
 
 pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedApp, m: MouseEvent) {
+    // The wheel over the side panel scrolls the panel, on whichever view
+    // drew it (the dashboard or the attached view).
+    if matches!(
+        m.kind,
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+    ) && app.modal.is_none()
+        && app.side_panel_rect.is_some_and(|r| rect_contains(&r, &m))
+    {
+        let up = matches!(m.kind, MouseEventKind::ScrollUp);
+        active_side_panel(app).scroll_by(3, up);
+        return;
+    }
     // Detail-bar container scroll: consume wheel events on the Dashboard
     // view when the cursor is over a container rect. Fall through for
     // wheel events elsewhere (existing scroll_active routing).
@@ -101,11 +113,6 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
             return;
         }
         let up = matches!(m.kind, MouseEventKind::ScrollUp);
-        // The wheel over the side panel scrolls the panel.
-        if app.modal.is_none() && app.side_panel_rect.is_some_and(|r| rect_contains(&r, &m)) {
-            app.dashboard.panel.scroll_by(3, up);
-            return;
-        }
         // In the repo focus view the wheel scrolls the rows: there is no
         // session pane on the dashboard for it to scroll instead.
         if app.dashboard.focused_repo.is_some() && app.modal.is_none() {

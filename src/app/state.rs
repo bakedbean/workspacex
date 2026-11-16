@@ -39,6 +39,7 @@ impl App {
             view: View::Dashboard,
             modal: None,
             dashboard,
+            attached_panel: Default::default(),
             repos: Vec::new(),
             workspaces: Vec::new(),
             selectable: Vec::new(),
@@ -640,6 +641,9 @@ pub struct App {
     /// drain again on the next tick rather than waiting for a sibling commit.
     pub share_drain_pending: bool,
     pub dashboard: DashboardState,
+    /// The attached view's commits / files side panel (`Ctrl-x c`), apart
+    /// from the dashboard's so opening one doesn't narrow the other.
+    pub attached_panel: crate::ui::dashboard::side_panel::SidePanelState,
     pub repos: Vec<Repo>,
     pub workspaces: Vec<(crate::data::store::RepoId, Workspace)>,
     pub selectable: Vec<SelectionTarget>,

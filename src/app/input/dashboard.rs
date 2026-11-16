@@ -248,13 +248,24 @@ pub(in crate::app::input) fn toggle_focus_group(
     }
 }
 
-/// Open the dashboard's side panel on `tab` — `1` / `2`, or a click on
-/// the tab.
+/// The side panel of the view on screen: the attached view's while
+/// attached, else the dashboard's.
+pub(in crate::app::input) fn active_side_panel(
+    app: &mut App,
+) -> &mut crate::ui::dashboard::side_panel::SidePanelState {
+    match app.view {
+        crate::ui::View::Attached(_) => &mut app.attached_panel,
+        _ => &mut app.dashboard.panel,
+    }
+}
+
+/// Open the side panel of the view on screen on `tab` — `1` / `2` on the
+/// dashboard, or a click on the tab in either view.
 pub(in crate::app::input) fn show_panel_tab(
     app: &mut App,
     tab: crate::ui::dashboard::side_panel::PanelTab,
 ) {
-    app.dashboard.panel.show(tab);
+    active_side_panel(app).show(tab);
 }
 
 /// The side-panel tab a click landed on.

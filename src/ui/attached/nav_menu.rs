@@ -79,6 +79,14 @@ pub fn nav_menu_items(multi_pane: bool) -> Vec<NavItem> {
             label: "recap",
         },
         NavItem {
+            glyph: "c",
+            label: "commits & files",
+        },
+        NavItem {
+            glyph: "C",
+            label: "panel tab",
+        },
+        NavItem {
             glyph: "x",
             label: "send literal ^x",
         },

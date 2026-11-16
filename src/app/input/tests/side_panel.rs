@@ -1,4 +1,5 @@
-//! The side panel outside the repo focus view: on the dashboard list.
+//! The side panel outside the repo focus view: on the dashboard list and
+//! in the attached view.
 //! (The focus view's own panel tests live in `repo_focus`.)
 
 use super::common::*;
@@ -140,4 +141,105 @@ async fn the_wheel_over_the_panel_scrolls_it() {
     assert_eq!(app.dashboard.panel.scroll, 3);
     let screen = draw(&mut app);
     assert!(!screen.contains("0000000  commit 0"), "{screen}");
+}
+
+/// An attached workspace with a base branch set and lists cached for it.
+fn attached_app() -> (App, crate::ui::split::AttachTarget) {
+    let store = Store::open_in_memory().unwrap();
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    let ws_id = spawn_attached_workspace(&mut app);
+    app.refresh().unwrap();
+    let repo = app.repos.iter().find(|r| r.name == "scratch").unwrap().id;
+    app.store
+        .set_repo_base_branch(repo, Some("origin/main"))
+        .unwrap();
+    app.refresh().unwrap();
+    app.workspace_branch_lists
+        .insert(ws_id, branch_lists("origin/main"));
+    let target = test_target(&app, ws_id);
+    (app, target)
+}
+
+async fn chord(app: &mut App, target: crate::ui::split::AttachTarget, c: char) {
+    handle_key_attached(
+        app,
+        target,
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+    )
+    .await
+    .unwrap();
+    handle_key_attached(
+        app,
+        target,
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ctrl_x_c_opens_the_panel_beside_the_agent_pane() {
+    let (mut app, target) = attached_app();
+    draw(&mut app);
+    assert!(app.side_panel_rect.is_none(), "closed by default");
+    let full = app.attached_pane_rects[0].1;
+
+    chord(&mut app, target, 'c').await;
+    assert!(!app.leader_pending);
+    let screen = draw(&mut app);
+    assert!(screen.contains("Commits 2"), "{screen}");
+    assert!(screen.contains("UNIQUE-COMMIT-SUBJECT"), "{screen}");
+    let panel = app.side_panel_rect.expect("panel drawn");
+    let pane = app.attached_pane_rects[0].1;
+    assert!(pane.x + pane.width <= panel.x, "pane left of the panel");
+    assert!(pane.width < full.width, "the pane narrows for the panel");
+    assert!(!app.dashboard.panel.open, "the dashboard's panel is apart");
+
+    chord(&mut app, target, 'C').await;
+    let screen = draw(&mut app);
+    assert!(
+        screen.contains("2 files  +43 −3"),
+        "C switches tab:\n{screen}"
+    );
+
+    // A tab click shows that tab in the attached panel.
+    let (tab, _) = app.side_panel_tab_rects[0];
+    show_panel_tab(&mut app, tab);
+    assert_eq!(app.attached_panel.tab, tab);
+
+    chord(&mut app, target, 'c').await;
+    draw(&mut app);
+    assert!(app.side_panel_rect.is_none(), "c closes it");
+    assert_eq!(app.attached_pane_rects[0].1, full, "the pane gets it back");
+}
+
+/// The wheel over the attached panel scrolls the panel, not the agent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_wheel_over_the_attached_panel_scrolls_it() {
+    let (mut app, target) = attached_app();
+    let mut lists = branch_lists("origin/main");
+    lists.commits = (0..80)
+        .map(|i| crate::git::BranchCommit {
+            hash: format!("{i:07}"),
+            subject: format!("commit {i}"),
+        })
+        .collect();
+    app.workspace_branch_lists
+        .insert(target.workspace_id, lists);
+    chord(&mut app, target, 'c').await;
+    draw(&mut app);
+    let panel = app.side_panel_rect.unwrap();
+    handle_mouse(
+        &mut app,
+        &shared_app(),
+        MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: panel.x + 3,
+            row: panel.y + 5,
+            modifiers: KeyModifiers::NONE,
+        },
+    )
+    .await;
+    assert_eq!(app.attached_panel.scroll, 3);
+    assert_eq!(app.dashboard.panel.scroll, 0);
 }

@@ -151,6 +151,8 @@ Keys go to the agent, except chords after `Ctrl-x`. Pressing `Ctrl-x` alone show
 | `Ctrl-x <`           | [Prompt tag](../attached-view/prompt-tags.md) picker    |
 | `Ctrl-x #`           | [Workspace tags](tags-and-hiding.md) editor             |
 | `Ctrl-x R`           | Workspace recap (goal / state / next); `j`/`k` scroll; `esc` closes |
+| `Ctrl-x c`           | Toggle the [side panel](side-panel.md#in-the-attached-view) (commits and changed files) |
+| `Ctrl-x C`           | Side panel: switch between Commits and Files            |
 | `Ctrl-x 1`–`9`       | Send a pinned command                                   |
 | `Ctrl-x x`           | Send a literal `Ctrl-x` to the agent                    |
 | `Ctrl-x esc`         | Dismiss the menu                                        |

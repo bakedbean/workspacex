@@ -300,6 +300,18 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
     let (info_area, separator_area, pane_area, chip_area) =
         attached::layout_chrome(area, !app.theme_active);
 
+    // The side panel takes the right of the panes when open and there's
+    // room, for the focused pane's workspace; the panes (and their PTYs)
+    // get the rest.
+    let panel_data = if app.attached_panel.open {
+        super::dashboard::side_panel_data(app, focused_id)
+    } else {
+        None
+    };
+    let (pane_area, panel) =
+        app.attached_panel
+            .carve(f, pane_area, panel_data.as_ref(), &app.theme);
+
     let crate::ui::split::LayoutResult { panes, dividers } = state.layout(pane_area);
     let multi_pane = panes.len() > 1;
 
@@ -411,6 +423,8 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
     app.tag_chip_rects = out.tag_chip_rects;
     app.tags_manager_rect = out.tags_manager_rect;
     app.prompt_tags_cache = data.tags;
+    app.side_panel_tab_rects = panel.tabs;
+    app.side_panel_rect = panel.area;
 }
 
 /// The single full-screen pane of an ssh-attached remote workspace.

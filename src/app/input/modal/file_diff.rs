@@ -48,27 +48,25 @@ pub(in crate::app::input) fn open(
 }
 
 /// Load the open viewer's current file in the background. The result lands
-/// only if the viewer still shows that file when it arrives.
+/// only on the same request (`load_gen`): a reopened viewer, or one that
+/// stepped away and back, ignores an older load still in flight.
 fn load(app: &App, shared: &SharedApp) {
     let Some(Modal::FileDiff(m)) = &app.modal else {
         return;
     };
-    let Some(file) = m.file() else {
+    let Some(file) = m.file().cloned() else {
         return;
     };
-    let (ws, index, path) = (m.workspace_id, m.index, file.path.clone());
-    let (worktree, base) = (m.worktree.clone(), m.base.clone());
+    let (gen_id, worktree, base) = (m.load_gen, m.worktree.clone(), m.base.clone());
     let shared = shared.clone();
     tokio::spawn(async move {
-        let load = match crate::git::branch_file_diff(&worktree, &base, &path).await {
-            Ok(d) => DiffLoad::Ready(Arc::new(diff_lines(&d))),
+        let load = match crate::git::branch_file_diff(&worktree, &base, &file).await {
+            Ok(d) => DiffLoad::ready(diff_lines(&d)),
             Err(e) => DiffLoad::Failed(e.to_string()),
         };
         let mut g = shared.lock().await;
         if let Some(Modal::FileDiff(m)) = g.modal.as_mut()
-            && m.workspace_id == ws
-            && m.index == index
-            && m.file().is_some_and(|f| f.path == path)
+            && m.load_gen == gen_id
         {
             m.load = load;
         }
@@ -96,7 +94,7 @@ fn edit(app: &mut App) {
     let Some(file) = m.file() else {
         return;
     };
-    let r = crate::app::input::side_panel::edit_file(app, &m.worktree, &file.path, m.top_line());
+    let r = crate::app::input::side_panel::edit_file(app, &m.worktree, file, m.top_line());
     if let (Err(e), Some(Modal::FileDiff(m))) = (r, app.modal.as_mut()) {
         m.notice = Some(e);
     }

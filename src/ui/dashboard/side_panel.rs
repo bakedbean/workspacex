@@ -84,7 +84,18 @@ pub struct SidePanelState {
 
 impl SidePanelState {
     pub fn toggle(&mut self) {
-        self.open = !self.open;
+        if self.open {
+            self.close();
+        } else {
+            self.open = true;
+        }
+    }
+
+    /// Close the panel. Focus goes with it, so reopening never brings back
+    /// a focus the user didn't ask for.
+    pub fn close(&mut self) {
+        self.open = false;
+        self.focused = false;
     }
 
     /// Whether the Files list has keyboard focus: focus is only ever on an
@@ -116,6 +127,10 @@ impl SidePanelState {
     pub fn show(&mut self, tab: PanelTab) {
         self.open = true;
         self.tab = tab;
+        // Focus lives on the Files list; another tab drops it.
+        if tab != PanelTab::Files {
+            self.focused = false;
+        }
     }
 
     /// Switch to the other tab, opening the panel if closed.
@@ -519,7 +534,7 @@ fn file_lines(
         };
         let cw: usize = counts.iter().map(|s| s.width()).sum();
         let path_w = width.saturating_sub(cw + 2).max(8);
-        for (i, l) in wrap(&f.path, path_w).into_iter().enumerate() {
+        for (i, l) in wrap(&f.display_path(), path_w).into_iter().enumerate() {
             let mut spans = vec![Span::raw(l.clone())];
             if i == 0 {
                 let pad = width.saturating_sub(display_width(&l) + cw);
@@ -598,6 +613,7 @@ mod tests {
         vec![
             ChangedFile {
                 path: "src/ui/dashboard/tall.rs".into(),
+                old_path: None,
                 stats: Some(DiffStats {
                     added: 412,
                     removed: 63,
@@ -605,6 +621,7 @@ mod tests {
             },
             ChangedFile {
                 path: "docs/book/src/dashboard/a-rather-long-file-name-that-wraps.md".into(),
+                old_path: None,
                 stats: Some(DiffStats {
                     added: 5,
                     removed: 1,
@@ -723,6 +740,7 @@ mod tests {
         let c = commits();
         let f = vec![ChangedFile {
             path: "assets/logo.png".into(),
+            old_path: None,
             stats: None,
         }];
         let inputs = PanelInputs {
@@ -792,6 +810,7 @@ mod tests {
         (0..n)
             .map(|i| ChangedFile {
                 path: format!("src/file{i:02}.rs"),
+                old_path: None,
                 stats: Some(crate::git::DiffStats {
                     added: 1,
                     removed: 0,
@@ -896,9 +915,11 @@ mod tests {
         p.focus_files();
         assert!(p.is_focused());
         p.show(PanelTab::Commits);
-        assert!(!p.is_focused());
         p.show(PanelTab::Files);
+        assert!(!p.is_focused(), "another tab drops focus for good");
+        p.focus_files();
         p.toggle();
-        assert!(!p.is_focused());
+        p.toggle();
+        assert!(p.open && !p.is_focused(), "closing drops focus for good");
     }
 }

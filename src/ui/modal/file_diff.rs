@@ -46,12 +46,62 @@ pub struct DiffLine {
     pub text: String,
 }
 
+/// A loaded file's diff lines, with the figures every frame needs worked
+/// out once.
+#[derive(Debug)]
+pub struct LoadedDiff {
+    pub lines: Vec<DiffLine>,
+    /// The widest line in columns, which sets the minimap's scale.
+    widest: usize,
+    /// The largest line number, which sets the gutter's width.
+    max_n: usize,
+}
+
+impl LoadedDiff {
+    pub fn new(lines: Vec<DiffLine>) -> Self {
+        let widest = lines.iter().map(|l| text_width(&l.text)).max().unwrap_or(0);
+        let max_n = lines.iter().filter_map(|l| l.n).max().unwrap_or(0);
+        Self {
+            lines,
+            widest,
+            max_n,
+        }
+    }
+}
+
+fn text_width(text: &str) -> usize {
+    text.chars()
+        .map(|c| if c == '\t' { 4 } else { c.width().unwrap_or(0) })
+        .sum()
+}
+
 /// Where the file's diff is.
 #[derive(Debug, Clone)]
 pub enum DiffLoad {
     Loading,
-    Ready(Arc<Vec<DiffLine>>),
+    Ready(Arc<LoadedDiff>),
     Failed(String),
+}
+
+impl DiffLoad {
+    pub fn ready(lines: Vec<DiffLine>) -> Self {
+        Self::Ready(Arc::new(LoadedDiff::new(lines)))
+    }
+}
+
+/// A fresh id for a load, so a result only lands on the request that asked
+/// for it.
+fn next_load_gen() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The minimap's dots and colors for one load at one size; only the
+/// visible-window shading changes from frame to frame.
+#[derive(Debug, Clone)]
+struct MinimapRaster {
+    key: (u16, u16, u64),
+    rows: Arc<Vec<(Color, String)>>,
 }
 
 /// The open viewer.
@@ -66,6 +116,9 @@ pub struct FileDiffModal {
     pub files: Arc<Vec<ChangedFile>>,
     pub index: usize,
     pub load: DiffLoad,
+    /// The load in flight or shown; a result for any other is dropped.
+    pub load_gen: u64,
+    minimap_cache: Option<MinimapRaster>,
     /// The diff pane's first line, clamped on draw.
     pub scroll: usize,
     pub minimap: bool,
@@ -93,6 +146,8 @@ impl FileDiffModal {
             index: index.min(files.len().saturating_sub(1)),
             files,
             load: DiffLoad::Loading,
+            load_gen: next_load_gen(),
+            minimap_cache: None,
             scroll: 0,
             minimap: true,
             view_h: 0,
@@ -118,7 +173,7 @@ impl FileDiffModal {
 
     pub fn lines(&self) -> &[DiffLine] {
         match &self.load {
-            DiffLoad::Ready(l) => l,
+            DiffLoad::Ready(l) => &l.lines,
             _ => &[],
         }
     }
@@ -155,6 +210,7 @@ impl FileDiffModal {
         }
         self.index = next;
         self.load = DiffLoad::Loading;
+        self.load_gen = next_load_gen();
         self.scroll = 0;
         true
     }
@@ -394,7 +450,7 @@ fn diff_title(m: &FileDiffModal, theme: &Theme) -> Line<'static> {
         return Line::from(" no files ");
     };
     let mut spans = vec![
-        Span::styled(format!(" {} ", file.path), theme.header_style()),
+        Span::styled(format!(" {} ", file.display_path()), theme.header_style()),
         Span::styled(
             format!(" {}/{} ", m.index + 1, m.files.len()),
             theme.dim_style(),
@@ -426,12 +482,8 @@ fn draw_diff(f: &mut Frame, inner: Rect, m: &FileDiffModal, theme: &Theme) {
         }
         DiffLoad::Ready(l) => l,
     };
-    let digits = lines
-        .iter()
-        .filter_map(|l| l.n)
-        .max()
-        .map_or(1, |n| n.to_string().len())
-        .max(3);
+    let digits = lines.max_n.to_string().len().max(3);
+    let lines = &lines.lines;
     let blank = " ".repeat(digits + 1);
     let rows: Vec<Line> = lines
         .iter()
@@ -509,6 +561,10 @@ fn slot(
             } else {
                 ch.width().unwrap_or(0)
             };
+            // Past the last dot column nothing more can show.
+            if col / scale >= cols {
+                break;
+            }
             if !ch.is_whitespace() {
                 for d in (col..col + w).map(|c| c / scale).take_while(|&d| d < cols) {
                     (s.dots[d], any) = (true, true);
@@ -523,26 +579,13 @@ fn slot(
     s
 }
 
-fn draw_minimap(f: &mut Frame, inner: Rect, m: &FileDiffModal, theme: &Theme) {
-    let lines = m.lines();
-    let (w, h) = (inner.width as usize, inner.height);
-    if w == 0 || h == 0 || lines.is_empty() {
-        return;
-    }
+/// The minimap's rows for `loaded` at `w`×`h`: each row's color and its
+/// `w` braille cells.
+fn raster(loaded: &LoadedDiff, w: usize, h: u16, theme: &Theme) -> Vec<(Color, String)> {
+    let lines = &loaded.lines;
     let per = per_slot(lines.len(), h);
-    let widest = lines
-        .iter()
-        .map(|l| {
-            l.text
-                .chars()
-                .map(|c| if c == '\t' { 4 } else { c.width().unwrap_or(0) })
-                .sum::<usize>()
-        })
-        .max()
-        .unwrap_or(0);
-    let scale = widest.div_ceil(2 * w).clamp(1, MAX_SCALE);
-    let (top, bottom) = (m.scroll, m.scroll + m.view_h.max(1));
-    let buf = f.buffer_mut();
+    let scale = loaded.widest.div_ceil(2 * w).clamp(1, MAX_SCALE);
+    let mut rows = Vec::new();
     for row in 0..h as usize {
         let first = 4 * row * per;
         if first >= lines.len() {
@@ -556,25 +599,60 @@ fn draw_minimap(f: &mut Frame, inner: Rect, m: &FileDiffModal, theme: &Theme) {
             .iter()
             .max_by_key(|s| s.rank)
             .map_or(Color::Reset, |s| s.color);
+        let cells = (0..w)
+            .map(|x| {
+                let bits: u32 = (0..4)
+                    .flat_map(|d| (0..2).map(move |c| (d, c)))
+                    .filter(|&(d, c)| slots[d].dots[2 * x + c])
+                    .map(|(d, c)| DOTS[d][c])
+                    .sum();
+                if bits == 0 {
+                    ' '
+                } else {
+                    char::from_u32(0x2800 + bits).unwrap_or(' ')
+                }
+            })
+            .collect();
+        rows.push((fg, cells));
+    }
+    rows
+}
+
+fn draw_minimap(f: &mut Frame, inner: Rect, m: &mut FileDiffModal, theme: &Theme) {
+    let DiffLoad::Ready(loaded) = &m.load else {
+        return;
+    };
+    let (w, h) = (inner.width, inner.height);
+    if w == 0 || h == 0 || loaded.lines.is_empty() {
+        return;
+    }
+    let key = (w, h, m.load_gen);
+    let rows = match &m.minimap_cache {
+        Some(c) if c.key == key => Arc::clone(&c.rows),
+        _ => {
+            let rows = Arc::new(raster(loaded, w as usize, h, theme));
+            m.minimap_cache = Some(MinimapRaster {
+                key,
+                rows: Arc::clone(&rows),
+            });
+            rows
+        }
+    };
+    let per = per_slot(loaded.lines.len(), h);
+    let (top, bottom) = (m.scroll, m.scroll + m.view_h.max(1));
+    let buf = f.buffer_mut();
+    for (row, (fg, cells)) in rows.iter().enumerate() {
+        let first = 4 * row * per;
         let bg = if first < bottom && first + 4 * per > top {
             theme.selected_bg
         } else {
             theme.bg_alt
         };
-        for x in 0..w {
-            let bits: u32 = (0..4)
-                .flat_map(|d| (0..2).map(move |c| (d, c)))
-                .filter(|&(d, c)| slots[d].dots[2 * x + c])
-                .map(|(d, c)| DOTS[d][c])
-                .sum();
-            let sym = if bits == 0 {
-                ' '
-            } else {
-                char::from_u32(0x2800 + bits).unwrap_or(' ')
-            };
+        let style = Style::default().fg(*fg).bg(bg);
+        for (x, sym) in cells.chars().enumerate() {
             buf[(inner.x + x as u16, inner.y + row as u16)]
                 .set_char(sym)
-                .set_style(Style::default().fg(fg).bg(bg));
+                .set_style(style);
         }
     }
 }
@@ -601,6 +679,7 @@ mod tests {
         let files = (0..files)
             .map(|i| ChangedFile {
                 path: format!("src/f{i}.rs"),
+                old_path: None,
                 stats: Some(DiffStats {
                     added: 1,
                     removed: 1,
@@ -676,11 +755,11 @@ mod tests {
     #[test]
     fn renders_diff_title_minimap_and_hints() {
         let mut m = modal(3);
-        m.load = DiffLoad::Ready(Arc::new(diff_lines(&FileDiff {
+        m.load = DiffLoad::ready(diff_lines(&FileDiff {
             diff: DIFF.into(),
             source: Some("one\nTWO\nthree\nfour\n".into()),
             binary: false,
-        })));
+        }));
         let lines = draw(&mut m, 100, 12);
         let all = lines.join("\n");
         assert!(
@@ -720,7 +799,7 @@ mod tests {
                 text: format!(" line {n}"),
             })
             .collect();
-        m.load = DiffLoad::Ready(Arc::new(many));
+        m.load = DiffLoad::ready(many);
         draw(&mut m, 100, 22);
         m.scroll_by(1000);
         assert_eq!(m.scroll, 100 - m.view_h);
@@ -741,7 +820,7 @@ mod tests {
                 text: format!(" line {n}"),
             })
             .collect();
-        m.load = DiffLoad::Ready(Arc::new(many));
+        m.load = DiffLoad::ready(many);
         draw(&mut m, 100, 22);
         let r = m.minimap_rect;
         m.jump_to_minimap(r.x, r.y + r.height / 2);
@@ -757,13 +836,47 @@ mod tests {
     fn top_line_is_the_first_numbered_line_on_screen() {
         let mut m = modal(1);
         assert_eq!(m.top_line(), 1, "nothing loaded");
-        m.load = DiffLoad::Ready(Arc::new(diff_lines(&FileDiff {
+        m.load = DiffLoad::ready(diff_lines(&FileDiff {
             diff: DIFF.into(),
             source: Some("one\nTWO\nthree\nfour\n".into()),
             binary: false,
-        })));
+        }));
         m.scroll = 1; // the deleted `-two`, which has no number
         assert_eq!(m.top_line(), 2);
+    }
+
+    /// Each load is its own request: stepping away and back, or a new
+    /// viewer on the same file, never reuses an id an older load holds.
+    #[test]
+    fn every_load_gets_a_fresh_id() {
+        let mut m = modal(2);
+        let first = m.load_gen;
+        m.step(1);
+        m.step(-1);
+        assert_ne!(m.load_gen, first);
+        assert_ne!(modal(2).load_gen, m.load_gen);
+    }
+
+    /// The minimap's dots are worked out once per load and size; scrolling
+    /// only moves the shading.
+    #[test]
+    fn the_minimap_raster_is_cached() {
+        let mut m = modal(1);
+        let many = (1..=400)
+            .map(|n| DiffLine {
+                n: Some(n),
+                kind: LineKind::Ctx,
+                text: format!(" line {n}"),
+            })
+            .collect();
+        m.load = DiffLoad::ready(many);
+        draw(&mut m, 100, 22);
+        let rows = Arc::clone(&m.minimap_cache.as_ref().unwrap().rows);
+        m.scroll_by(50);
+        draw(&mut m, 100, 22);
+        assert!(Arc::ptr_eq(&rows, &m.minimap_cache.as_ref().unwrap().rows));
+        draw(&mut m, 100, 30);
+        assert!(!Arc::ptr_eq(&rows, &m.minimap_cache.as_ref().unwrap().rows));
     }
 
     #[test]

@@ -15,22 +15,31 @@ use crate::ui::View;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::path::Path;
 
-/// Open changed file `path` (a numstat path, renames included) of the
-/// worktree at `worktree` in the configured editor, at `line`. A file the
-/// branch deleted has nothing to open.
+/// Open changed `file` of the worktree at `worktree` in the editor, at
+/// `line`: `file_editor_cmd`, else `editor_cmd`. A file the branch deleted
+/// has nothing to open.
 pub(in crate::app::input) fn edit_file(
     app: &App,
     worktree: &Path,
-    path: &str,
+    file: &crate::git::ChangedFile,
     line: usize,
 ) -> std::result::Result<(), String> {
-    let rel = crate::git::numstat_new_path(path);
-    let file = worktree.join(&rel);
-    if !file.exists() {
-        return Err(format!("{rel} is deleted on this branch; nothing to open"));
+    let abs = worktree.join(&file.path);
+    if !abs.exists() {
+        return Err(format!(
+            "{} is deleted on this branch; nothing to open",
+            file.path
+        ));
     }
-    let cmd = app.store.get_setting("editor_cmd").ok().flatten();
-    crate::commands::external::open_file_in_editor(worktree, &file, line, cmd.as_deref())
+    let setting = |key| {
+        app.store
+            .get_setting(key)
+            .ok()
+            .flatten()
+            .filter(|c: &String| !c.trim().is_empty())
+    };
+    let cmd = setting("file_editor_cmd").or_else(|| setting("editor_cmd"));
+    crate::commands::external::open_file_in_editor(worktree, &abs, line, cmd.as_deref())
         .map_err(|e| e.to_string())
 }
 
@@ -52,7 +61,7 @@ fn edit_cursor_file(app: &mut App) {
     ) else {
         return;
     };
-    if let Err(message) = edit_file(app, &worktree, &file.path, 1) {
+    if let Err(message) = edit_file(app, &worktree, file, 1) {
         app.modal = Some(crate::ui::modal::Modal::Error { message });
     }
 }

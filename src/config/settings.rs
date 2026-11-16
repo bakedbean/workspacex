@@ -128,6 +128,13 @@ pub const SETTINGS: &[SettingDef] = &[
         "Command for `e`; the worktree path is appended unless it contains {path}.",
     ),
     text(
+        "file_editor_cmd",
+        "Editor and tools",
+        "editor_cmd",
+        "txt",
+        "Command for `o` on a changed file; {file} and {line} place it, else the file is appended.",
+    ),
+    text(
         "terminal_cmd",
         "Editor and tools",
         "$TERMINAL",
@@ -423,6 +430,7 @@ mod tests {
             "process_doctrine_extra",
             "nerd_fonts",
             "editor_cmd",
+            "file_editor_cmd",
             "terminal_cmd",
             "diff_cmd",
             "lazygit_cmd",

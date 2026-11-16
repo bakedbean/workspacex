@@ -672,6 +672,7 @@ pub(super) fn branch_lists(base: &str) -> std::sync::Arc<crate::git::BranchLists
         vec![
             ChangedFile {
                 path: "src/zeta.rs".into(),
+                old_path: None,
                 stats: Some(DiffStats {
                     added: 3,
                     removed: 1,
@@ -679,6 +680,7 @@ pub(super) fn branch_lists(base: &str) -> std::sync::Arc<crate::git::BranchLists
             },
             ChangedFile {
                 path: "src/alpha.rs".into(),
+                old_path: None,
                 stats: Some(DiffStats {
                     added: 40,
                     removed: 2,
@@ -865,6 +867,7 @@ async fn binary_files_show_in_the_files_tab() {
     let mut lists = std::sync::Arc::unwrap_or_clone(branch_lists("origin/main"));
     lists.files = vec![crate::git::ChangedFile {
         path: "assets/logo.png".into(),
+        old_path: None,
         stats: None,
     }];
     app.workspace_branch_lists.insert(ids[0], lists.into());

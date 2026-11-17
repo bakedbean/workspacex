@@ -40,7 +40,7 @@ pub(in crate::cli) fn parse_workspace(it: &mut Args) -> Result<CliAction> {
             let repo = it.next().ok_or_else(|| Error::Usage {
                 group: None,
                 msg:
-                    "workspace create <repo> [--name <slug>] [--yolo] [--shared] [--start [--json]] [--agent claude|pi|hermes|codex|omp] [--prompt <text>]"
+                    "workspace create <repo> [--name <slug>] [--yolo] [--shared] [--start [--json]] [--agent claude|pi|hermes|codex|omp] [--prompt <text>] [--continues <slug>]"
                         .into(),
             })?;
             let mut name: Option<String> = None;
@@ -50,8 +50,16 @@ pub(in crate::cli) fn parse_workspace(it: &mut Args) -> Result<CliAction> {
             let mut prompt: Option<String> = None;
             let mut start = false;
             let mut json = false;
+            let mut continues: Option<String> = None;
             while let Some(arg) = it.next() {
                 match arg.as_str() {
+                    "--continues" => {
+                        continues = Some(it.next().ok_or_else(|| Error::Usage {
+                            group: None,
+                            msg: "--continues needs value (the slug of the workspace this continues)"
+                                .into(),
+                        })?);
+                    }
                     "--name" => {
                         name = Some(it.next().ok_or_else(|| Error::Usage {
                             group: None,
@@ -123,6 +131,7 @@ pub(in crate::cli) fn parse_workspace(it: &mut Args) -> Result<CliAction> {
                 prompt,
                 start,
                 json,
+                continues,
             })
         }
         Some("list") => {

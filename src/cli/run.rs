@@ -508,6 +508,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
             prompt,
             start,
             json,
+            continues,
         } => {
             // With `--json`, stdout carries only the record, so the remote
             // picker can parse it; the human report moves to stderr.
@@ -517,6 +518,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 };
             }
             let r = lookup_repo(&store, &repo)?;
+            let continues_parent = resolve_continues(&store, &r, continues.as_deref())?;
             let worktree_base = dirs.app_dir().join("worktrees");
             std::fs::create_dir_all(&worktree_base)?;
             // Inherit yolo + agent kind from the workspace this command runs
@@ -545,6 +547,28 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 created.workspace.name,
                 created.workspace.worktree_path.display()
             );
+            if let Some(p) = &continues_parent {
+                let j = store.continue_series(p.id, created.workspace.id)?;
+                if j.started {
+                    say!(
+                        "started a series: {} is part 1, {} is part 2 (no title yet; set one with wsx series title)",
+                        p.name,
+                        created.workspace.name
+                    );
+                } else {
+                    let title = store
+                        .series_for_workspace(created.workspace.id)?
+                        .map(|s| s.display_title().to_string())
+                        .unwrap_or_default();
+                    say!(
+                        "continues {}/{} as part {} of \"{}\"",
+                        r.name,
+                        p.name,
+                        j.part,
+                        title
+                    );
+                }
+            }
             if let Some(p) = &parent {
                 let mut inherited: Vec<String> = Vec::new();
                 if effective_yolo && !yolo {
@@ -1244,6 +1268,30 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 return Ok(());
             }
             print!("{}", crate::commands::inspect::render_recap(&view));
+        }
+        CliAction::SeriesShow { workspace, json } => {
+            let ws = target_workspace(&store, workspace.as_deref())?;
+            let Some(series) = store.series_for_workspace(ws.id)? else {
+                println!("not part of a series");
+                return Ok(());
+            };
+            let view = crate::commands::series::SeriesView::from(&series);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&view)?);
+            } else {
+                print!("{}", crate::commands::series::render_series(&view));
+            }
+        }
+        CliAction::SeriesTitle { title, workspace } => {
+            let ws = target_workspace(&store, workspace.as_deref())?;
+            let series = store
+                .series_for_workspace(ws.id)?
+                .ok_or_else(|| Error::UserInput(format!("{} is not part of a series", ws.name)))?;
+            store.set_series_title(series.id, Some(&title))?;
+            match title.trim() {
+                "" => println!("series title cleared"),
+                t => println!("series title set: {t}"),
+            }
         }
         CliAction::RecapClear => {
             let ws = resolve_current_workspace(&store)?;

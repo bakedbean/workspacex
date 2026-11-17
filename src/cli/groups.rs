@@ -22,7 +22,7 @@ pub static GROUPS: &[GroupInfo] = &[
         blurb: "Create, list, rename, and archive workspaces",
         commands: &[
             CmdInfo {
-                usage: "create <repo> [--name <slug>] [--yolo] [--shared] [--start [--json]] [--agent <kind>] [--prompt <text>]",
+                usage: "create <repo> [--name <slug>] [--yolo] [--shared] [--start [--json]] [--agent <kind>] [--prompt <text>] [--continues <slug>]",
                 blurb: "Create a workspace (branch + worktree), optionally seeding its agent",
             },
             CmdInfo {
@@ -291,6 +291,20 @@ pub static GROUPS: &[GroupInfo] = &[
             CmdInfo {
                 usage: "clear",
                 blurb: "Delete the recap",
+            },
+        ],
+    },
+    GroupInfo {
+        name: "series",
+        blurb: "The numbered chain of workspaces a feature ships through (joined via `workspace create --continues`)",
+        commands: &[
+            CmdInfo {
+                usage: "[show] [--workspace <repo>/<slug>] [--json]",
+                blurb: "Print the series' title and parts, here or in another workspace (bare `series` = show)",
+            },
+            CmdInfo {
+                usage: "title <text> [--workspace <repo>/<slug>]",
+                blurb: "Name the feature the series builds (empty text clears it)",
             },
         ],
     },

@@ -10,6 +10,12 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-17-focus-diff-commit-bars-design.md`
 
+> **Superseded in part:** Task 1 below adds `--shortstat` to the 200-commit
+> `branch_commits` log. Review found that diffed up to 200 commits every
+> 10s poll, so the shipped code keeps that log diff-free and fetches stats
+> with a separate `recent_commit_stats` (`git log -n8 --shortstat`). The
+> spec describes the final design; don't restore the version in Task 1.
+
 ## Global Constraints
 
 - Up to `DIFF_BARS = 8` bars: the 8 newest commits, oldest on the left.

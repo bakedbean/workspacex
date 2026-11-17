@@ -52,6 +52,115 @@ pub struct WorkspaceDetail {
     /// Lines each of the branch's newest commits changed, newest first, at
     /// most `DIFF_BARS`; `None` for a commit git gave no stat for.
     pub commit_sizes: Vec<Option<DiffStats>>,
+    /// The workspace's place in its series; `None` outside one.
+    pub series: Option<SeriesSlice>,
+}
+
+/// An earlier part as the `part` line shows it: its PR, or its slug when
+/// it has none.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PriorPart {
+    pub pr: Option<(u32, Option<crate::git::forge::BranchLifecycle>)>,
+    pub slug: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SeriesSlice {
+    pub part: u32,
+    pub title: String,
+    /// Parts before this one, oldest first.
+    pub prior: Vec<PriorPart>,
+    pub newest_part: u32,
+}
+
+/// `ws`'s slice of `series`, or `None` when it isn't a part. Live parts
+/// take `live_pr` (the dashboard's PR state) over their stored snapshot.
+pub fn series_slice(
+    series: &crate::data::series::Series,
+    ws: WorkspaceId,
+    live_pr: impl Fn(WorkspaceId) -> Option<(u32, crate::git::forge::BranchLifecycle)>,
+) -> Option<SeriesSlice> {
+    let me = series.parts.iter().find(|p| p.workspace_id == ws)?;
+    let prior = series
+        .parts
+        .iter()
+        .filter(|p| p.part < me.part)
+        .map(|p| {
+            let live = p
+                .archived_at
+                .is_none()
+                .then(|| live_pr(p.workspace_id))
+                .flatten();
+            PriorPart {
+                pr: live
+                    .map(|(n, lc)| (n, Some(lc)))
+                    .or(p.pr_number.map(|n| (n, p.pr_lifecycle))),
+                slug: p.slug.clone(),
+            }
+        })
+        .collect();
+    Some(SeriesSlice {
+        part: me.part,
+        title: series.display_title().to_string(),
+        prior,
+        newest_part: series.parts.iter().map(|p| p.part).max().unwrap_or(me.part),
+    })
+}
+
+/// The title keeps at least this many cells before earlier parts collapse.
+const SERIES_TITLE_MIN: usize = 12;
+
+/// `4 · <title>  #466 ⏺  #467 ⏺  → part 5` fitted to `width` on one line:
+/// the oldest earlier parts fold into `+k` first, then the title is cut.
+fn part_line(s: &SeriesSlice, width: usize, theme: &Theme) -> Vec<Span<'static>> {
+    use crate::ui::theme::lifecycle_chip;
+    let head = format!("{} · ", s.part);
+    let tail = (s.newest_part > s.part).then(|| format!("  → part {}", s.newest_part));
+    let items: Vec<Span<'static>> = s
+        .prior
+        .iter()
+        .map(|p| match p.pr {
+            Some((n, lc)) => {
+                let glyph = lc.map(|l| lifecycle_chip(l).0).unwrap_or_default();
+                let text = format!("#{n} {glyph}").trim_end().to_string();
+                let style = theme
+                    .lifecycle_style(lc)
+                    .unwrap_or_else(|| theme.dim_style());
+                Span::styled(text, style)
+            }
+            None => Span::styled(p.slug.clone(), theme.dim_style()),
+        })
+        .collect();
+    let folded = |k: usize| (k > 0).then(|| format!("+{k}"));
+    let prior_w = |k: usize| {
+        items[k..].iter().map(|i| 2 + i.width()).sum::<usize>()
+            + folded(k).map_or(0, |f| 2 + f.len())
+    };
+    let fixed = display_width(&head) + tail.as_deref().map_or(0, display_width);
+    let title_min = display_width(&s.title).min(SERIES_TITLE_MIN);
+    let mut k = 0;
+    while k < items.len() && fixed + title_min + prior_w(k) > width {
+        k += 1;
+    }
+    let room = width.saturating_sub(fixed + prior_w(k));
+    let mut out = vec![
+        Span::raw(head),
+        Span::styled(
+            truncate(&s.title, room),
+            Style::default().add_modifier(ratatui::style::Modifier::BOLD),
+        ),
+    ];
+    if let Some(f) = folded(k) {
+        out.push(Span::styled(format!("  {f}"), theme.dim_style()));
+    }
+    for item in items.into_iter().skip(k) {
+        out.push(Span::raw("  "));
+        out.push(item);
+    }
+    if let Some(t) = tail {
+        out.push(Span::styled(t, theme.dim_style()));
+    }
+    out
 }
 
 /// Each agent kind's icon, as the theme's `[agent_bar.symbols]` table
@@ -685,6 +794,15 @@ pub fn row_layout(
     }
 
     let text_width = cols.prose.saturating_sub(LABEL_WIDTH).max(8);
+    if let Some(series) = &tall.detail.series {
+        let mut l = lead();
+        l.push(Span::styled(
+            format!("{:<LABEL_WIDTH$}", "part"),
+            theme.dim_style(),
+        ));
+        l.extend(part_line(series, text_width, theme));
+        lines.push(Line::from(l));
+    }
     for item in prose_items(row, tall.detail, theme) {
         let mut texts: Vec<Vec<Span<'static>>> = wrap_capped(&item.text, text_width, item.max)
             .into_iter()
@@ -1180,6 +1298,172 @@ mod tests {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
     }
 
+    fn merged(n: u32) -> PriorPart {
+        PriorPart {
+            pr: Some((n, Some(crate::git::forge::BranchLifecycle::PrMerged))),
+            slug: format!("s{n}"),
+        }
+    }
+
+    fn with_series(slice: SeriesSlice) -> WorkspaceDetail {
+        WorkspaceDetail {
+            series: Some(slice),
+            recap: Some(WorkspaceRecap {
+                goal: Some("the goal".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn series_texts(detail: &WorkspaceDetail, width: usize) -> Vec<String> {
+        let row = base_row("b");
+        let tall = TallRow { row: &row, detail };
+        layout(&tall, &AgentGlyphs::default(), width)
+            .iter()
+            .map(text)
+            .collect()
+    }
+
+    #[test]
+    fn part_line_leads_the_prose() {
+        let detail = with_series(SeriesSlice {
+            part: 4,
+            title: "Focus view".into(),
+            prior: vec![merged(466), merged(467), merged(468)],
+            newest_part: 4,
+        });
+        let t = series_texts(&detail, 120);
+        assert!(
+            t[1].contains("part") && t[1].contains("4 · Focus view"),
+            "{t:?}"
+        );
+        assert!(t[1].contains("#466") && t[1].contains("#468"), "{t:?}");
+        assert!(!t[1].contains('→'), "no later part: {t:?}");
+        assert!(t[2].contains("goal"), "{t:?}");
+    }
+
+    #[test]
+    fn part_line_absent_outside_a_series() {
+        let detail = WorkspaceDetail {
+            recap: Some(WorkspaceRecap {
+                goal: Some("the goal".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(
+            series_texts(&detail, 120)
+                .iter()
+                .all(|l| !l.contains("part "))
+        );
+    }
+
+    #[test]
+    fn part_line_shows_newer_part() {
+        let detail = with_series(SeriesSlice {
+            part: 1,
+            title: "T".into(),
+            prior: vec![],
+            newest_part: 3,
+        });
+        let t = series_texts(&detail, 120);
+        assert!(t[1].trim_end().ends_with("→ part 3"), "{t:?}");
+        assert!(!t[1].contains('#'), "{t:?}");
+    }
+
+    #[test]
+    fn part_line_shows_slug_for_a_part_without_pr() {
+        let detail = with_series(SeriesSlice {
+            part: 2,
+            title: "T".into(),
+            prior: vec![PriorPart {
+                pr: None,
+                slug: "spike-it".into(),
+            }],
+            newest_part: 2,
+        });
+        assert!(series_texts(&detail, 120)[1].contains("spike-it"));
+    }
+
+    #[test]
+    fn part_line_fits_one_line_when_crowded() {
+        let detail = with_series(SeriesSlice {
+            part: 21,
+            title: "word ".repeat(40),
+            prior: (100..120).map(merged).collect(),
+            newest_part: 22,
+        });
+        let t = series_texts(&detail, 60);
+        let lines: Vec<&String> = t.iter().filter(|l| l.contains("part ")).collect();
+        assert_eq!(lines.len(), 1, "{t:?}");
+        let l = lines[0];
+        assert!(l.contains('+'), "older parts collapse: {l}");
+        assert!(l.contains("#119"), "newest prior kept: {l}");
+        assert!(l.contains('…'), "title cut: {l}");
+        assert!(l.trim_end().ends_with("→ part 22"), "{l}");
+        assert!(display_width(l.trim_end()) <= 60, "{l}");
+    }
+
+    fn sample_series(title: Option<&str>) -> crate::data::series::Series {
+        use crate::data::series::{Series, SeriesId, SeriesPart};
+        use crate::git::forge::BranchLifecycle::*;
+        let part = |n: u32,
+                    slug: &str,
+                    pr: Option<(u32, crate::git::forge::BranchLifecycle)>,
+                    archived: bool| SeriesPart {
+            series_id: SeriesId(1),
+            part: n,
+            workspace_id: WorkspaceId(n as i64),
+            slug: slug.into(),
+            branch: format!("x/{slug}"),
+            pr_number: pr.map(|p| p.0),
+            pr_lifecycle: pr.map(|p| p.1),
+            archived_at: archived.then_some(1),
+        };
+        Series {
+            id: SeriesId(1),
+            repo_id: crate::data::store::RepoId(1),
+            title: title.map(Into::into),
+            parts: vec![
+                part(1, "focus-view-declutter", Some((466, PrMerged)), true),
+                part(2, "bars", Some((12, PrOpen)), false),
+                part(3, "next", None, false),
+            ],
+        }
+    }
+
+    #[test]
+    fn part_line_falls_back_to_part_one_slug() {
+        let s = series_slice(&sample_series(None), WorkspaceId(3), |_| None).unwrap();
+        assert_eq!(s.title, "focus-view-declutter");
+        assert_eq!((s.part, s.newest_part), (3, 3));
+        assert_eq!(s.prior.len(), 2);
+        let t = series_texts(&with_series(s), 120);
+        assert!(t[1].contains("3 · focus-view-declutter"), "{t:?}");
+    }
+
+    #[test]
+    fn series_slice_prefers_live_pr() {
+        use crate::git::forge::BranchLifecycle::*;
+        let live = |id: WorkspaceId| (id == WorkspaceId(2)).then_some((12, PrMerged));
+        let s = series_slice(&sample_series(Some("T")), WorkspaceId(3), live).unwrap();
+        assert_eq!(
+            s.prior[0].pr,
+            Some((466, Some(PrMerged))),
+            "archived uses snapshot"
+        );
+        assert_eq!(
+            s.prior[1].pr,
+            Some((12, Some(PrMerged))),
+            "live beats snapshot"
+        );
+        let s1 = series_slice(&sample_series(Some("T")), WorkspaceId(1), |_| None).unwrap();
+        assert!(s1.prior.is_empty());
+        assert_eq!(s1.newest_part, 3);
+        assert!(series_slice(&sample_series(None), WorkspaceId(9), |_| None).is_none());
+    }
+
     #[test]
     fn wrap_capped_ellipsizes_past_the_limit() {
         let text = "one two three four five six seven eight nine ten";
@@ -1262,6 +1546,7 @@ mod tests {
             first_prompt: None,
             recap_age_secs: None,
             commit_sizes: Vec::new(),
+            series: None,
         };
         let tall = TallRow {
             row: &row,

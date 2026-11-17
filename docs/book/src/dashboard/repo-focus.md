@@ -66,7 +66,7 @@ Each row has three zones.
 - where the branch stands against its remote: `⇡2 unpushed` for commits not pushed yet and `⇣3 behind` for commits on the remote the workspace doesn't have, or a dim `not pushed` for a branch with commits but no upstream and no PR. Nothing when it is in sync,
 - uncommitted changes (`3 mod 1 untr`; nothing when the tree is clean),
 - the diff, led by a bar sized against the largest diff in the view, green for the share of lines added and red for those removed. The scale is logarithmic, so a small change still shows next to a large one,
-- how long ago the workspace was active.
+- how long ago the workspace was active, toned by hour range so quiet workspaces fade: bright under 1h, plain under 6h, dim under 24h, and faintest from 24h on.
 
 **The prose** sits under the branch:
 

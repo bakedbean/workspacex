@@ -481,6 +481,23 @@ fn diff_bar(added: u32, removed: u32, max: u32, theme: &Theme) -> Vec<Span<'stat
     out
 }
 
+/// The age cell's tone by the hour range it falls in (the cell itself
+/// counts in seconds, minutes, then hours, never days): bright and bold
+/// under 1h, plain under 6h, the rows' dim text under 24h, and faintest
+/// from 24h on or when unknown, so live workspaces stand out and abandoned
+/// ones fade.
+fn age_style(ago_secs: Option<u64>, theme: &Theme) -> Style {
+    const HOUR: u64 = 3600;
+    match ago_secs.map(|s| s / HOUR) {
+        Some(0) => Style::default()
+            .fg(theme.selected_fg)
+            .add_modifier(ratatui::style::Modifier::BOLD),
+        Some(1..6) => Style::default().fg(theme.selected_fg),
+        Some(6..24) => theme.row_dim_style(),
+        _ => theme.dim_style(),
+    }
+}
+
 fn age_text(row: &RowInputs) -> String {
     crate::ui::dashboard::column_content::format_ago_short(row.ago_secs)
 }
@@ -594,7 +611,7 @@ pub fn row_layout(
     ];
     let age = (
         cols.age,
-        vec![Span::styled(age_text(row), theme.row_dim_style())],
+        vec![Span::styled(age_text(row), age_style(row.ago_secs, theme))],
         true,
     );
     // Two-line strips keep only the age on line 1; the rest go under the
@@ -1959,6 +1976,39 @@ mod tests {
                 .any(|l| l.contains("mod") || l.contains("untr")),
             "{lines:#?}"
         );
+    }
+
+    /// The age cell fades as the workspace goes quiet.
+    #[test]
+    fn age_fades_with_inactivity() {
+        let theme = Theme::wsx();
+        let age_span = |ago: Option<u64>| {
+            let mut row = base_row("b");
+            row.ago_secs = ago;
+            let detail = WorkspaceDetail::default();
+            let tall = TallRow {
+                row: &row,
+                detail: &detail,
+            };
+            let lines = layout(&tall, &AgentGlyphs::default(), 140);
+            let want = crate::ui::dashboard::column_content::format_ago_short(ago);
+            lines[0]
+                .spans
+                .iter()
+                .rfind(|s| s.content == want)
+                .unwrap()
+                .style
+        };
+        let fresh = age_span(Some(5 * 60));
+        assert_eq!(fresh.fg, Some(theme.selected_fg));
+        assert!(fresh.add_modifier.contains(ratatui::style::Modifier::BOLD));
+        assert_eq!(
+            age_span(Some(3 * 3600)),
+            Style::default().fg(theme.selected_fg)
+        );
+        assert_eq!(age_span(Some(12 * 3600)), theme.row_dim_style());
+        assert_eq!(age_span(Some(30 * 3600)), theme.dim_style());
+        assert_eq!(age_span(None), theme.dim_style());
     }
 
     /// The view's largest diff fills the bar; a small one still shows; the

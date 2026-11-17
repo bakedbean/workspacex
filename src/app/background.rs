@@ -1194,7 +1194,11 @@ where
                 }
             })
             .await;
-        settle_archived_parts(&app, &fetch_pr, now_ms).await;
+        // Settling only keeps number + lifecycle, so skip the review probes.
+        let basic = |path: std::path::PathBuf, n: String| async move {
+            crate::git::forge::fetch_pr_status_basic(&path, &n).await
+        };
+        settle_archived_parts(&app, &basic, now_ms).await;
     }
 }
 

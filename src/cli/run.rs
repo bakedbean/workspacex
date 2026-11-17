@@ -558,7 +558,9 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                     ),
                     Ok(j) => {
                         let display = store
-                            .series_for_workspace(created.workspace.id)?
+                            .series_for_workspace(created.workspace.id)
+                            .ok()
+                            .flatten()
                             .map(|s| s.display_title().to_string())
                             .unwrap_or_default();
                         say!(

@@ -145,9 +145,9 @@ Adds, removes or lists [workspace tags](../dashboard/tags-and-hiding.md) on the 
 wsx series [show] [--workspace <repo>/<slug>] [--json]
 ```
 
-Prints the series the workspace belongs to: its title, then one line per part with the part number, slug, branch, PR, and `archived` for parts whose workspace is gone. Prints `not part of a series` for a workspace outside one.
+Prints the series the workspace belongs to: its title, then one line per part with the part number, slug, branch, PR, and `archived` for parts whose workspace is gone. Prints `not part of a series` for a workspace outside one, or `null` with `--json`.
 
-A series is the numbered chain of workspaces a feature ships through, one small PR each. A workspace joins one when it is created with `--continues`, which the `handoff` skill passes. Parts keep their number, branch and last PR after their workspace is archived, and the dashboard keeps checking an archived part's PR until it is merged or closed. The [repo focus view](../dashboard/repo-focus.md#the-row) shows each workspace's part.
+A series is the numbered chain of workspaces a feature ships through, one small PR each. A workspace joins one when it is created with `--continues`, which the `handoff` skill passes. Parts keep their number, branch and last PR after their workspace is archived, and the dashboard keeps checking an archived part's PR by number until it is merged or closed. A part archived before wsx ever saw its PR has no number to check, so it shows no PR. The [repo focus view](../dashboard/repo-focus.md#the-row) shows each workspace's part.
 
 ```
 Focus view declutter

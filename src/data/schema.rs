@@ -18,7 +18,7 @@ use crate::error::Result;
 
 /// The `user_version` the last step of `migrate()` sets. Bump it with each
 /// new step.
-pub(crate) const SCHEMA_VERSION: i64 = 30;
+pub(crate) const SCHEMA_VERSION: i64 = 31;
 
 impl Store {
     pub(crate) fn migrate(&self) -> Result<()> {
@@ -259,6 +259,10 @@ impl Store {
             self.conn().execute_batch(SCHEMA_V30_WORKSPACE_TAGS)?;
             self.conn().execute("PRAGMA user_version = 30", [])?;
         }
+        if v < 31 {
+            self.conn().execute_batch(SCHEMA_V31_SERIES)?;
+            self.conn().execute("PRAGMA user_version = 31", [])?;
+        }
         debug_assert_eq!(
             self.conn()
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))?,
@@ -393,6 +397,27 @@ CREATE TABLE IF NOT EXISTS workspace_tags (
     workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
     tag          TEXT NOT NULL,
     PRIMARY KEY (workspace_id, tag)
+);
+";
+
+// No FK to `workspaces`: parts outlive archiving (see `data::series`).
+const SCHEMA_V31_SERIES: &str = "
+CREATE TABLE IF NOT EXISTS series (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id    INTEGER NOT NULL REFERENCES repos(id),
+    title      TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS series_parts (
+    series_id    INTEGER NOT NULL REFERENCES series(id),
+    part         INTEGER NOT NULL,
+    workspace_id INTEGER NOT NULL UNIQUE,
+    slug         TEXT NOT NULL,
+    branch       TEXT NOT NULL,
+    pr_number    INTEGER,
+    pr_lifecycle TEXT,
+    archived_at  INTEGER,
+    PRIMARY KEY (series_id, part)
 );
 ";
 

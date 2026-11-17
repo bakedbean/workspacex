@@ -12,6 +12,7 @@ pub mod progress;
 pub mod repo;
 pub mod repo_lock;
 pub mod scm_cache;
+pub mod series;
 pub mod setup;
 pub mod setup_log;
 pub mod share_requests;

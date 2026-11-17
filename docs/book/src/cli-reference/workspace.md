@@ -5,7 +5,7 @@ Commands that create, inspect and retire workspaces. Each workspace is a git wor
 ## wsx workspace create
 
 ```
-wsx workspace create <repo> [--name <slug>] [--yolo] [--shared] [--start [--json]] [--agent <kind>] [--prompt <text>]
+wsx workspace create <repo> [--name <slug>] [--yolo] [--shared] [--start [--json]] [--agent <kind>] [--prompt <text>] [--continues <slug>]
 ```
 
 Creates a branch and worktree in `<repo>`, like `n` on the dashboard.
@@ -19,6 +19,7 @@ Creates a branch and worktree in `<repo>`, like `n` on the dashboard.
 | `--json` | With `--start` only: print the workspace record on stdout, even when the start fails. |
 | `--agent <kind>` | `claude`, `pi`, `hermes`, `codex` or `omp`. Overrides the `coding_agent` setting. See [Coding agents](../agents/coding-agents.md). |
 | `--prompt <text>` | Queue a first task for the primary agent, like an immediate [`wsx agent send`](agent.md#wsx-agent-send). |
+| `--continues <slug>` | Join `<slug>`'s [series](#wsx-series-show) as its next part, starting a series if `<slug>` isn't in one. `<slug>` must be a workspace in the same repo. |
 
 - Run from inside a workspace, `create` inherits that workspace's yolo mode and agent kind unless you pass `--yolo` or `--agent`. It prints what it inherited.
 - wsx refuses a slug that git can't use in a branch name, or whose branch already exists or clashes with an existing branch path (`wsx/foo` blocks `wsx/foo/bar`).
@@ -137,3 +138,27 @@ Adds, removes or lists [workspace tags](../dashboard/tags-and-hiding.md) on the 
 | `--json` | `list` only: print an array of tags, or `{"tag", "workspaces"}` objects with `--all`. |
 
 - Tags are lowercased. Each must be 1–32 characters of `a-z 0-9 - _`, starting with a letter or digit. If any tag is invalid, nothing is written.
+
+## wsx series show
+
+```
+wsx series [show] [--workspace <repo>/<slug>] [--json]
+```
+
+Prints the series the workspace belongs to: its title, then one line per part with the part number, slug, branch, PR, and `archived` for parts whose workspace is gone. Prints `not part of a series` for a workspace outside one, or `null` with `--json`.
+
+A series is the numbered chain of workspaces a feature ships through, one small PR each. A workspace joins one when it is created with `--continues`, which the `handoff` skill passes. Parts keep their number, branch and last PR after their workspace is archived, and the dashboard keeps checking an archived part's PR by number until it is merged or closed. A part archived before wsx ever saw its PR has no number to check, so it shows no PR. The [repo focus view](../dashboard/repo-focus.md#the-row) shows each workspace's part.
+
+```
+Focus view declutter
+  1  focus-view-declutter  bakedbean/focus-view-declutter  #466 merged  archived
+  2  focus-diff-bars       bakedbean/focus-diff-bars       #469 draft
+```
+
+## wsx series title
+
+```
+wsx series title <text> [--workspace <repo>/<slug>]
+```
+
+Names the feature the series builds. A new series has no title, and shows part 1's slug until it gets one. An empty `<text>` clears the title.

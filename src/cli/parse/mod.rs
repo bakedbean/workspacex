@@ -13,6 +13,7 @@ pub(crate) mod config;
 pub(crate) mod desktop;
 pub(crate) mod repo;
 pub(crate) mod reporting;
+pub(crate) mod series;
 pub(crate) mod theme;
 pub(crate) mod workspace;
 
@@ -21,6 +22,7 @@ use config::parse_config;
 use desktop::{parse_desktop, parse_menubar, parse_remote, parse_setup, parse_waybar};
 use repo::parse_repo;
 use reporting::{parse_context, parse_recap, parse_status};
+use series::parse_series;
 use theme::parse_theme;
 use workspace::{parse_shared, parse_workspace};
 
@@ -150,6 +152,7 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
         "setup" => parse_setup(&mut it).map_err(|e| tag_group(e, group)),
         "status" => parse_status(&mut it).map_err(|e| tag_group(e, group)),
         "recap" => parse_recap(&mut it).map_err(|e| tag_group(e, group)),
+        "series" => parse_series(&mut it).map_err(|e| tag_group(e, group)),
         "context" => parse_context(&mut it).map_err(|e| tag_group(e, group)),
         "waybar" => parse_waybar(&mut it).map_err(|e| tag_group(e, group)),
         "desktop" => parse_desktop(&mut it).map_err(|e| tag_group(e, group)),

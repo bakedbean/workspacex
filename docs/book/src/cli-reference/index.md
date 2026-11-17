@@ -30,6 +30,7 @@ wsx sets `$WSX_WORKSPACE_ID` and `$WSX_AGENT_INSTANCE_ID` in every agent session
 | `wsx agent` | Add, remove and message agents | [wsx agent](agent.md) |
 | `wsx status` | Report and read agent status | [wsx status, recap, context](status-recap-context.md) |
 | `wsx recap` | Maintain the workspace recap | [wsx status, recap, context](status-recap-context.md) |
+| `wsx series` | Show and title a workspace's series | [wsx workspace](workspace.md#wsx-series-show) |
 | `wsx context` | Print a context digest for editor-hosted agents | [wsx status, recap, context](status-recap-context.md) |
 | `wsx config` | Get and set global settings | [Other commands](other.md#wsx-config-get) |
 | `wsx theme` | Validate and scaffold the bar theme file | [Other commands](other.md#wsx-theme-check) |

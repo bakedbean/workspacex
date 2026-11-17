@@ -153,6 +153,9 @@ pub enum CliAction {
         start: bool,
         /// With `start`: print the workspace's record as JSON.
         json: bool,
+        /// Slug of a same-repo workspace whose series this one joins as the
+        /// next part (`--continues`).
+        continues: Option<String>,
     },
     WorkspaceList {
         repo: Option<String>,
@@ -311,6 +314,15 @@ pub enum CliAction {
         json: bool,
     },
     RecapClear,
+    SeriesShow {
+        workspace: Option<String>,
+        json: bool,
+    },
+    /// Empty `title` clears it.
+    SeriesTitle {
+        title: String,
+        workspace: Option<String>,
+    },
     /// `wsx context show` — print the workspace context digest.
     ContextShow {
         workspace: Option<String>,

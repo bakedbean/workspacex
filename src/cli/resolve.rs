@@ -149,6 +149,22 @@ pub(in crate::cli) fn lookup_workspace(
         .ok_or_else(|| Error::UserInput(format!("no workspace named {name} in repo {}", repo.name)))
 }
 
+/// The `--continues` parent, looked up in `repo` before anything is created
+/// so a bad slug fails with no worktree made.
+pub(in crate::cli) fn resolve_continues(
+    store: &crate::data::store::Store,
+    repo: &crate::data::store::Repo,
+    slug: Option<&str>,
+) -> Result<Option<crate::data::store::Workspace>> {
+    slug.map(|s| {
+        lookup_workspace(store, repo, s).map_err(|e| match e {
+            Error::UserInput(msg) => Error::UserInput(format!("--continues: {msg}")),
+            other => other,
+        })
+    })
+    .transpose()
+}
+
 /// The line `wsx workspace rename` prints. It names the worktree path
 /// because rename never moves it: an agent that assumes the directory
 /// follows the new slug `cd`s into a path that doesn't exist.

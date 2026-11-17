@@ -441,6 +441,18 @@ pub(crate) fn build_workspace_items<'a>(
                             .get(&ws.id)
                             .map(|l| crate::ui::dashboard::tall::commit_sizes(&l.commits))
                             .unwrap_or_default(),
+                        series: app
+                            .series
+                            .iter()
+                            .find(|s| s.parts.iter().any(|p| p.workspace_id == ws.id))
+                            .and_then(|s| {
+                                crate::ui::dashboard::tall::series_slice(s, ws.id, |id| {
+                                    app.pr_number
+                                        .get(&id)
+                                        .copied()
+                                        .zip(app.pr_lifecycle.get(&id).copied())
+                                })
+                            }),
                     }
                 } else {
                     Default::default()

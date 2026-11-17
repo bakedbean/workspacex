@@ -15,6 +15,7 @@ pub mod external;
 pub mod inspect;
 pub mod pinned;
 pub mod remotes;
+pub mod series;
 pub mod shared;
 pub mod shared_hosts;
 pub mod tags;

@@ -1711,6 +1711,7 @@ fn parses_workspace_create_minimal() {
             prompt,
             start: false,
             json: false,
+            continues: None,
         } => {
             assert_eq!(repo, "backend");
             assert!(name.is_none());
@@ -1966,6 +1967,7 @@ async fn workspace_create_with_prompt_queues_it_to_the_new_primary() {
             prompt: Some("fix the flaky tests".to_string()),
             start: false,
             json: false,
+            continues: None,
         },
         &dirs,
     )
@@ -2027,6 +2029,7 @@ async fn workspace_create_without_prompt_queues_nothing() {
             prompt: None,
             start: false,
             json: false,
+            continues: None,
         },
         &dirs,
     )
@@ -2468,6 +2471,7 @@ fn registry_matches_dispatched_groups() {
         "setup",
         "status",
         "recap",
+        "series",
         "context",
         "waybar",
         "desktop",
@@ -4040,4 +4044,133 @@ async fn workspace_tag_run_adds_removes_and_rejects_bad_batch() {
         .await
         .unwrap();
     assert_eq!(stored(), ["ui"]);
+}
+
+#[test]
+fn parses_workspace_create_continues() {
+    match parse(&["workspace", "create", "r", "--continues", "a"]).unwrap() {
+        CliAction::WorkspaceCreate { continues, .. } => assert_eq!(continues.as_deref(), Some("a")),
+        other => panic!("unexpected: {other:?}"),
+    }
+    assert!(parse(&["workspace", "create", "r", "--continues"]).is_err());
+}
+
+#[test]
+fn parses_series_show() {
+    for argv in [&["series"][..], &["series", "show"][..]] {
+        assert!(matches!(
+            parse(argv).unwrap(),
+            CliAction::SeriesShow {
+                workspace: None,
+                json: false
+            }
+        ));
+    }
+    match parse(&["series", "show", "--json", "--workspace", "r/a"]).unwrap() {
+        CliAction::SeriesShow { workspace, json } => {
+            assert_eq!(workspace.as_deref(), Some("r/a"));
+            assert!(json);
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[test]
+fn parses_series_title() {
+    match parse(&["series", "title", "Focus view"]).unwrap() {
+        CliAction::SeriesTitle { title, workspace } => {
+            assert_eq!(title, "Focus view");
+            assert_eq!(workspace, None);
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+    match parse(&["series", "title", "--workspace", "r/a", "X"]).unwrap() {
+        CliAction::SeriesTitle { title, workspace } => {
+            assert_eq!(title, "X");
+            assert_eq!(workspace.as_deref(), Some("r/a"));
+        }
+        other => panic!("unexpected: {other:?}"),
+    }
+    assert!(parse(&["series", "title"]).is_err());
+    assert!(parse(&["series", "bogus"]).is_err());
+}
+
+/// `--continues` resolves before `workspace::create` runs, so a bad slug
+/// fails with no worktree made. Scoped to the target repo.
+#[test]
+fn continues_unknown_or_other_repo_fails_before_worktree() {
+    let store = seed_spec_store();
+    let repos = crate::data::repo::list(&store).unwrap();
+    let mb = repos.iter().find(|r| r.name == "meals backend").unwrap();
+    let other_id = store
+        .add_repo(std::path::Path::new("/tmp/other"), "other", "wsx")
+        .unwrap();
+    let other = crate::data::repo::list(&store)
+        .unwrap()
+        .into_iter()
+        .find(|r| r.id == other_id)
+        .unwrap();
+    assert!(resolve_continues(&store, mb, None).unwrap().is_none());
+    let parent = resolve_continues(&store, mb, Some("api-fix"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(parent.name, "api-fix");
+    let err = resolve_continues(&store, mb, Some("nope"))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("--continues"), "{err}");
+    assert_eq!(err.matches("invalid input").count(), 1, "one prefix: {err}");
+    assert!(resolve_continues(&store, &other, Some("api-fix")).is_err());
+}
+
+#[tokio::test]
+async fn workspace_create_continues_joins_the_parents_series() {
+    use crate::config::Dirs;
+    use crate::data::store::Store;
+    use crate::test_support::EnvGuard;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dirs = Dirs::for_test(tmp.path());
+    let repo_dir = init_git_repo();
+    {
+        let store = Store::open(&dirs.db_path()).unwrap();
+        crate::data::repo::add(&store, repo_dir.path(), "demo", "wsx")
+            .await
+            .unwrap();
+    }
+    let mut env = EnvGuard::new();
+    env.set("XDG_RUNTIME_DIR", tmp.path());
+    stub_agent_binaries(&mut env);
+    env.remove("WSX_AGENT_INSTANCE_ID");
+    env.remove("WSX_WORKSPACE_ID");
+    let create = |name: &str, continues: Option<&str>| CliAction::WorkspaceCreate {
+        repo: "demo".to_string(),
+        name: Some(name.to_string()),
+        yolo: false,
+        shared: false,
+        agent: None,
+        prompt: None,
+        start: false,
+        json: false,
+        continues: continues.map(String::from),
+    };
+    run_cli(create("one", None), &dirs).await.unwrap();
+    run_cli(create("two", Some("one")), &dirs).await.unwrap();
+    assert!(run_cli(create("three", Some("nope")), &dirs).await.is_err());
+    assert!(
+        !dirs.app_dir().join("worktrees/demo/three").exists(),
+        "a bad --continues fails before any worktree is made"
+    );
+
+    let store = Store::open(&dirs.db_path()).unwrap();
+    let two = store
+        .repos()
+        .unwrap()
+        .into_iter()
+        .flat_map(|r| store.workspaces(r.id).unwrap())
+        .find(|w| w.name == "two")
+        .unwrap();
+    let s = store.series_for_workspace(two.id).unwrap().unwrap();
+    let slugs: Vec<(u32, &str)> = s.parts.iter().map(|p| (p.part, p.slug.as_str())).collect();
+    assert_eq!(slugs, vec![(1, "one"), (2, "two")]);
 }

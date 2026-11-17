@@ -28,7 +28,7 @@ wsx workspace list --json      # + status, recap, agents, cached PR per workspac
 ## CLI surface
 
 ```
-wsx workspace create <repo> [--name <slug>] [--yolo] [--shared] [--start [--json]] [--agent claude|pi|hermes|codex|omp] [--prompt <text>]
+wsx workspace create <repo> [--name <slug>] [--yolo] [--shared] [--start [--json]] [--agent claude|pi|hermes|codex|omp] [--prompt <text>] [--continues <slug>]
 wsx workspace path <repo> <slug>            # prints just the worktree path (script-friendly)
 wsx workspace rename <repo> <old> <new>     # renames slug AND git branch in sync;
                                             # the worktree directory does NOT move

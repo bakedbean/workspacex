@@ -52,11 +52,16 @@ is to await the user's request; otherwise the answer *is* the task.
    (`bar-themes-followup`) when the request was deferred. Pass the bare slug —
    wsx prepends the repo's `branch_prefix`. Never reuse the current slug.
 
-5. **Create the workspace** for the **same repo**:
+5. **Create the workspace** for the **same repo**, as the next part of
+   this workspace's series:
 
    ```
-   wsx workspace create <repo> --name <new-slug>
+   wsx workspace create <repo> --name <new-slug> --continues <current-slug>
    ```
+
+   `<current-slug>` is the slug from step 3. `--continues` joins the new
+   workspace to this one's series (starting one if this workspace isn't in
+   one yet), so the dashboard can show it as "part N" of the feature.
 
    Do not pass `--yolo` or `--agent`; the new workspace inherits this one's
    yolo mode and agent kind.
@@ -66,6 +71,18 @@ is to await the user's request; otherwise the answer *is* the task.
    not just create, even if one with that name exists. A setup-script warning
    after a successful create is worth relaying to the user but does not block
    the handoff.
+
+5b. **Name the series if it has none.** If the create report says
+   `started a series`, or `wsx series show` prints no title (its first line
+   is just this workspace's slug), pick a 2–5 word name for the *feature*
+   the chain is building, drawn from this session. Name the feature, not
+   this slice: `Focus view declutter`, not `One diff bar per commit`. Then:
+
+   ```
+   wsx series title --workspace <repo>/<current-slug> "<name>"
+   ```
+
+   Tell the user the title you chose so they can rename it.
 
 6. **Gather the handoff context.** Pull from your own session memory first —
    that is the whole point of this skill — and check it against the repo:
@@ -111,7 +128,9 @@ is to await the user's request; otherwise the answer *is* the task.
                 match it (`wsx workspace rename <repo> <new-slug> <slug>`)
                 and set the recap goal from it."
    WHY:         the epic this continues and where it stands (PR #s, merged
-                or not, what remains).
+                or not, what remains). `wsx series show` lists the parts
+                so far; cite "part N of <title>" so the new agent can name
+                it in its PR.
    CONTEXT:     summary of the previous workspace — decisions + reasons,
                 rejected approaches, gotchas, file:line pointers, follow-ups
                 already identified. Note the previous workspace as
@@ -146,7 +165,8 @@ User fires the chip; you ask; they reply
 `add a --json flag to widgets list and document it`.
 
 ```
-wsx workspace create backend --name add-json-list-flag
+wsx workspace create backend --name add-json-list-flag --continues tsv-list-output
+wsx series title --workspace backend/tsv-list-output "CLI list output formats"
 wsx agent send --workspace backend/add-json-list-flag primary - <<'EOF'
 TASK: Add a --json flag to `widgets list` emitting one object per widget
 (id, name, qty, created_at), and document it in docs/cli/widgets.md. Done

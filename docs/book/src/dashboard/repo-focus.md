@@ -25,6 +25,7 @@ The focus view shows one repo on the dashboard and gives each of its workspaces 
 ━━ Open · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ▎▎ · bakedbean/repo-focus-view    ⏺ #461 open ✓  ▸ idle           ↑4 vs main  ⇡2 unpushed  3 mod 1 untr  ████ +184 −22   3h
+ ▎   part    3 · Repo focus view  #455 ⏺  #458 ⏺
  ▎   goal    Single-repo dashboard view with richer per-workspace detail
  ▎   now     implemented sections and the strip → write the docs · 5h old
  ▎   ▎ claude  #ui
@@ -70,6 +71,7 @@ Each row has three zones.
 
 **The prose** sits under the branch:
 
+- **part**: for a workspace in a [series](../cli-reference/workspace.md#wsx-series-show), its part number and the series title (part 1's slug until it has one), then the earlier parts' PRs, oldest first, each with its PR chip's glyph and color, or the slug of a part with no PR. When a later part exists, the line ends with `→ part N`. It always fits on one line: the oldest PRs fold into `+k` first, then the title is cut.
 - **prompt**: the first prompt the workspace's agent was given, in italics and cut to two lines, so you can see what the workspace was started for. It appears once the agent's session log has been read.
 - **goal**: the recap goal in full.
 - **now**: the recap state, then the next step after `→`. When the workspace kept working for at least half an hour after the recap was last set, the line ends with how old the recap is (`· 5h old`), since it may no longer say what the workspace is doing. Without a recap, a **last** line takes its place: the status text the dashboard row would have clipped, usually the agent's last message, cut to two lines. When that text is just the initial prompt, it isn't repeated.

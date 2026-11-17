@@ -81,7 +81,7 @@ git commit -m "feat(git): record each branch commit's line counts"
   - `StripColumns.bars: usize` — most bars any row draws.
   - `const DIFF_BARS: usize = 8;` (replaces `DIFF_BAR`).
   - `fn commit_bars(sizes: &[Option<DiffStats>], max: u32, theme: &Theme) -> Vec<Span<'static>>` — oldest→newest, one cell per commit.
-  - `fn diff_spans(row: &RowInputs, detail: &WorkspaceDetail, cols: &StripColumns-or-(max, bars), theme: &Theme) -> Vec<Span<'static>>` — bars right-padded with spaces to `bars` cells, then a space and `+N −M` when `bars > 0`; totals only when this row and all rows have no bars. Empty when the row has no diff.
+  - `fn diff_spans(row: &RowInputs, detail: &WorkspaceDetail, max: u32, bars: usize, theme: &Theme) -> Vec<Span<'static>>` (plain args, since `strip_columns` calls it before `StripColumns` exists) — bars right-padded with spaces to `bars` cells, then a space and `+N −M` when `bars > 0`; totals only when this row and all rows have no bars. Empty when the row has no diff.
 
 - [ ] **Step 1: Write the failing tests** in `tall.rs` tests (replace `diff_bar_scales_to_the_largest_diff`):
 

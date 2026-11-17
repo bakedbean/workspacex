@@ -275,6 +275,9 @@ pub struct StripColumns {
     pub sync: usize,
     pub dirty: usize,
     pub diff: usize,
+    /// The largest diff (lines added plus removed) among the rows, which
+    /// a full diff bar stands for.
+    pub diff_max: u32,
     pub age: usize,
     pub two_line: bool,
     pub prose: usize,
@@ -295,7 +298,8 @@ pub fn strip_columns(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -
     let ahead = max(&|r| ahead_text(r.detail).map_or(0, |t| display_width(&t)));
     let sync = max(&|r| spans_width(&sync_spans(r.row, r.detail, &theme)));
     let dirty = max(&|r| dirty_text(r.detail).map_or(0, |t| display_width(&t)));
-    let diff = max(&|r| spans_width(&diff_spans(r.row, &theme)));
+    let diff_max = rows.iter().map(|r| diff_total(r.row)).max().unwrap_or(0);
+    let diff = max(&|r| spans_width(&diff_spans(r.row, diff_max, &theme)));
     let age = max(&|r| display_width(&age_text(r.row)));
     let prefix = widths.agent + row::GUTTER_WIDTH + 1;
     let natural = max(&|r| 2 + display_width(&r.row.branch)).clamp(BRANCH_MIN, BRANCH_MAX);
@@ -313,6 +317,7 @@ pub fn strip_columns(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -
             sync,
             dirty,
             diff,
+            diff_max,
             age,
             two_line,
             prose,
@@ -336,6 +341,7 @@ pub fn strip_columns(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -
         sync: fit(sync),
         dirty: fit(dirty),
         diff: fit(diff),
+        diff_max,
         age,
         two_line,
         prose,
@@ -422,16 +428,57 @@ fn dirty_text(detail: &WorkspaceDetail) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" "))
 }
 
-/// `+184 −22`, or nothing without changes.
-fn diff_spans(row: &RowInputs, theme: &Theme) -> Vec<Span<'static>> {
+/// Cells the diff bar takes, its trailing space excluded.
+const DIFF_BAR: usize = 4;
+
+fn diff_total(row: &RowInputs) -> u32 {
+    row.diff.map_or(0, |d| d.added.saturating_add(d.removed))
+}
+
+/// `██▌  +184 −22`: a bar sized against the view's largest diff, then the
+/// counts; nothing without changes.
+fn diff_spans(row: &RowInputs, max: u32, theme: &Theme) -> Vec<Span<'static>> {
     match row.diff.filter(|d| d.added > 0 || d.removed > 0) {
-        Some(d) => vec![
-            Span::styled(format!("+{}", d.added), theme.ok_style()),
-            Span::raw(" "),
-            Span::styled(format!("−{}", d.removed), theme.err_style()),
-        ],
+        Some(d) => {
+            let mut out = diff_bar(d.added, d.removed, max, theme);
+            out.extend([
+                Span::raw(" "),
+                Span::styled(format!("+{}", d.added), theme.ok_style()),
+                Span::raw(" "),
+                Span::styled(format!("−{}", d.removed), theme.err_style()),
+            ]);
+            out
+        }
         None => Vec::new(),
     }
+}
+
+/// `DIFF_BAR` cells of block eighths, as long as the diff is against `max`
+/// on a log scale (so a 10-line change still shows next to a 2000-line
+/// one), green for the added share and red for the removed. Padded to
+/// `DIFF_BAR` cells; never empty for a nonzero diff.
+fn diff_bar(added: u32, removed: u32, max: u32, theme: &Theme) -> Vec<Span<'static>> {
+    const PARTIAL: [char; 8] = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
+    let total = added.saturating_add(removed);
+    let eighths = DIFF_BAR * 8;
+    let frac = f64::from(total).ln_1p() / f64::from(max.max(total)).ln_1p();
+    let filled = ((frac * eighths as f64).round() as usize).clamp(1, eighths);
+    let green = (filled as f64 * f64::from(added) / f64::from(total)).round() as usize;
+    let mut out: Vec<Span<'static>> = Vec::new();
+    for cell in 0..DIFF_BAR {
+        let fill = filled.saturating_sub(cell * 8).min(8);
+        let glyph = if fill == 8 { '█' } else { PARTIAL[fill] };
+        let style = if cell * 8 + fill.max(1).div_ceil(2) <= green {
+            theme.ok_style()
+        } else {
+            theme.err_style()
+        };
+        match out.last_mut() {
+            Some(last) if last.style == style => last.content.to_mut().push(glyph),
+            _ => out.push(Span::styled(glyph.to_string(), style)),
+        }
+    }
+    out
 }
 
 fn age_text(row: &RowInputs) -> String {
@@ -543,7 +590,7 @@ pub fn row_layout(
         (cols.ahead, dim_cell(ahead_text(tall.detail), theme)),
         (cols.sync, sync_spans(row, tall.detail, theme)),
         (cols.dirty, dim_cell(dirty_text(tall.detail), theme)),
-        (cols.diff, diff_spans(row, theme)),
+        (cols.diff, diff_spans(row, cols.diff_max, theme)),
     ];
     let age = (
         cols.age,
@@ -1911,6 +1958,30 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("mod") || l.contains("untr")),
             "{lines:#?}"
+        );
+    }
+
+    /// The view's largest diff fills the bar; a small one still shows; the
+    /// green share follows the lines added.
+    #[test]
+    fn diff_bar_scales_to_the_largest_diff() {
+        let theme = Theme::wsx();
+        let bar = |a, r, max| -> (String, Vec<Style>) {
+            let spans = diff_bar(a, r, max, &theme);
+            let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+            assert_eq!(display_width(&text), DIFF_BAR);
+            (text, spans.iter().map(|s| s.style).collect())
+        };
+        assert_eq!(bar(1500, 500, 2000).0, "████");
+        let (small, _) = bar(3, 0, 2000);
+        assert!(small.trim() != "" && small != "████", "{small:?}");
+        assert!(bar(100, 0, 2000).0.trim().len() > small.trim().len());
+        assert_eq!(bar(10, 0, 10).1, vec![theme.ok_style()]);
+        assert_eq!(bar(0, 10, 10).1, vec![theme.err_style()]);
+        assert_eq!(
+            bar(5, 5, 10).1,
+            vec![theme.ok_style(), theme.err_style()],
+            "half and half"
         );
     }
 

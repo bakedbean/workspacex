@@ -293,13 +293,39 @@ pub(super) mod tests {
             vec![
                 BranchCommit {
                     hash: "abc1234".into(),
-                    subject: "fix it".into()
+                    subject: "fix it".into(),
+                    stats: None,
                 },
                 BranchCommit {
                     hash: "def5678".into(),
-                    subject: String::new()
+                    subject: String::new(),
+                    stats: None,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn parse_branch_commits_pairs_shortstat_lines() {
+        let out = "aaa1111\tadd thing\n\n 2 files changed, 10 insertions(+), 3 deletions(-)\n\
+                   bbb2222\tMerge branch 'x'\n\
+                   ccc3333\tdrop file\n\n 1 file changed, 4 deletions(-)\n";
+        let parsed = parse_branch_commits(out);
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(
+            parsed[0].stats,
+            Some(DiffStats {
+                added: 10,
+                removed: 3
+            })
+        );
+        assert_eq!(parsed[1].stats, None, "merge has no stat line");
+        assert_eq!(
+            parsed[2].stats,
+            Some(DiffStats {
+                added: 0,
+                removed: 4
+            })
         );
     }
 
@@ -989,6 +1015,9 @@ pub struct BranchCommit {
     /// Abbreviated hash, as `git log --format=%h` prints it.
     pub hash: String,
     pub subject: String,
+    /// Lines the commit changed; `None` when git prints no stat for it
+    /// (a merge or an empty commit).
+    pub stats: Option<DiffStats>,
 }
 
 /// A branch's commits and changed files against `base`, as last polled.
@@ -1029,6 +1058,7 @@ pub async fn branch_commits(worktree: &Path, base: &str) -> Option<Vec<BranchCom
             "log",
             "--no-color",
             "--format=%h%x09%s",
+            "--shortstat",
             &limit,
             &range,
             "--",
@@ -1039,18 +1069,25 @@ pub async fn branch_commits(worktree: &Path, base: &str) -> Option<Vec<BranchCom
     Some(parse_branch_commits(&out))
 }
 
-/// Parse `git log --format=%h%x09%s` output; lines without a tab are
-/// skipped.
+/// Parse `git log --format=%h%x09%s --shortstat` output: each `hash\tsubject`
+/// line starts a commit and an indented stat line after it sets its
+/// `stats`. Other lines are skipped.
 fn parse_branch_commits(out: &str) -> Vec<BranchCommit> {
-    out.lines()
-        .filter_map(|l| {
-            let (hash, subject) = l.split_once('\t')?;
-            Some(BranchCommit {
+    let mut commits: Vec<BranchCommit> = Vec::new();
+    for l in out.lines() {
+        if l.starts_with(' ') {
+            if let (Some(last), Some(stats)) = (commits.last_mut(), parse_shortstat(l)) {
+                last.stats = Some(stats);
+            }
+        } else if let Some((hash, subject)) = l.split_once('\t') {
+            commits.push(BranchCommit {
                 hash: hash.trim().to_string(),
                 subject: subject.trim().to_string(),
-            })
-        })
-        .collect()
+                stats: None,
+            });
+        }
+    }
+    commits
 }
 
 /// Compute line-count diff stats for a worktree against `base`.

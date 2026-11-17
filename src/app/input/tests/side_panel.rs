@@ -120,6 +120,7 @@ async fn the_wheel_over_the_panel_scrolls_it() {
         .map(|i| crate::git::BranchCommit {
             hash: format!("{i:07}"),
             subject: format!("commit {i}"),
+            stats: None,
         })
         .collect();
     app.workspace_branch_lists.insert(ids[0], lists.into());
@@ -234,6 +235,7 @@ async fn the_wheel_over_the_attached_panel_scrolls_it() {
         .map(|i| crate::git::BranchCommit {
             hash: format!("{i:07}"),
             subject: format!("commit {i}"),
+            stats: None,
         })
         .collect();
     app.workspace_branch_lists

@@ -749,10 +749,12 @@ pub(super) fn branch_lists(base: &str) -> std::sync::Arc<crate::git::BranchLists
             BranchCommit {
                 hash: "a1b2c3d".into(),
                 subject: "UNIQUE-COMMIT-SUBJECT".into(),
+                stats: None,
             },
             BranchCommit {
                 hash: "9f8e7d6".into(),
                 subject: "earlier commit".into(),
+                stats: None,
             },
         ],
         vec![

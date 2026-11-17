@@ -228,6 +228,93 @@ pub fn dashboard_header(
     )
 }
 
+pub struct DashboardFocusInputs<'a> {
+    /// The focused repo's name and path.
+    pub repo: &'a str,
+    pub path: &'a str,
+    /// Workspaces per PR stage: No PR, Draft, Open, Done.
+    pub stages: [usize; 4],
+    /// The status tally of the workspaces the view shows.
+    pub statuses: StatusCounts,
+    /// The status the view is filtered to by a tally click, if any.
+    pub status_filter: Option<Status>,
+    pub fleet: &'a SegmentMap,
+}
+
+/// The repo focus view's top line: the way back to every repo, the repo's
+/// name and path, then its PR pipeline, status tally, and workspace count
+/// flush right. `$focus_back` carries `Hit::Unfocus` and the tally's items
+/// `Hit::Status`.
+pub fn dashboard_focus(
+    specs: &BarSpecs,
+    theme: &Theme,
+    inputs: &DashboardFocusInputs<'_>,
+    width: u16,
+) -> Rendered {
+    let resolver = specs.resolver(theme);
+    let segments = dashboard_focus_segments(specs, theme, inputs, &resolver);
+    render_bar(
+        &specs.dashboard_focus,
+        &segments,
+        &specs.segments,
+        width,
+        &resolver,
+    )
+}
+
+/// Build the focus header's segments. `pub(super)` for the drift test.
+pub(super) fn dashboard_focus_segments(
+    specs: &BarSpecs,
+    theme: &Theme,
+    inputs: &DashboardFocusInputs<'_>,
+    resolver: &style::Resolver<'_>,
+) -> SegmentMap {
+    let mut segments = SegmentMap::new();
+    put(
+        &mut segments,
+        "focus_back",
+        providers::focus_back(cfg(specs, "focus_back"), theme, resolver),
+    );
+    put(
+        &mut segments,
+        "focus_repo",
+        providers::focus_repo(cfg(specs, "focus_repo"), inputs.repo, theme, resolver),
+    );
+    put(
+        &mut segments,
+        "focus_path",
+        providers::focus_path(cfg(specs, "focus_path"), inputs.path, theme, resolver),
+    );
+    put(
+        &mut segments,
+        "focus_pipeline",
+        providers::focus_pipeline(cfg(specs, "focus_pipeline"), inputs.stages, theme, resolver),
+    );
+    put(
+        &mut segments,
+        "statuses",
+        providers::statuses(
+            cfg(specs, "statuses"),
+            inputs.statuses,
+            inputs.status_filter,
+            theme,
+            resolver,
+        ),
+    );
+    put(
+        &mut segments,
+        "focus_counts",
+        providers::focus_counts(
+            cfg(specs, "focus_counts"),
+            inputs.statuses.total() as usize,
+            theme,
+            resolver,
+        ),
+    );
+    put_modules(&mut segments, specs, inputs.fleet, resolver);
+    segments
+}
+
 /// The dashboard detail pane's pinned-command row: chips, then a rule to
 /// the edge. Only `$pins` is built; every other registered segment is
 /// absent from the map and so renders empty wherever a theme references

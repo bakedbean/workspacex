@@ -46,6 +46,8 @@ pub struct WorkspaceDetail {
     /// The first prompt the workspace's agent was given, from its session
     /// log; `None` until the log is scanned or when it has none.
     pub first_prompt: Option<String>,
+    /// Seconds since the recap was last set; `None` without one.
+    pub recap_age_secs: Option<u64>,
 }
 
 /// Each agent kind's icon, as the theme's `[agent_bar.symbols]` table
@@ -131,6 +133,10 @@ const PROMPT_MAX_LINES: usize = 2;
 /// Most lines the no-recap fallback text may wrap onto.
 const FALLBACK_MAX_LINES: usize = 2;
 
+/// How long the workspace must have stayed active after its recap was last
+/// set before the `now` line is marked as old.
+const STALE_RECAP_SECS: u64 = 30 * 60;
+
 /// Widest the prose column gets, label included: lines much past ~80
 /// characters of text get tiring to read.
 const PROSE_MAX: usize = 92;
@@ -142,6 +148,25 @@ struct Prose {
     style: Style,
     /// Most lines it may wrap onto.
     max: usize,
+    /// A mark after the text, kept whole: on the last line when it fits,
+    /// else on a line of its own.
+    suffix: Option<Span<'static>>,
+}
+
+/// ` · 2h old` when the workspace kept working at least
+/// `STALE_RECAP_SECS` after its recap was last set, so the recap may no
+/// longer say what it is doing.
+fn stale_recap_mark(
+    row: &RowInputs,
+    detail: &WorkspaceDetail,
+    theme: &Theme,
+) -> Option<Span<'static>> {
+    let age = detail.recap_age_secs?;
+    let active = row.ago_secs?;
+    (age.saturating_sub(active) >= STALE_RECAP_SECS).then(|| {
+        let ago = crate::ui::dashboard::column_content::format_ago_short(Some(age));
+        Span::styled(format!(" · {ago} old"), theme.warn_style())
+    })
 }
 
 /// The prose a row shows, in order: the initial prompt, then the recap's
@@ -163,6 +188,7 @@ fn prose_items(row: &RowInputs, detail: &WorkspaceDetail, theme: &Theme) -> Vec<
                 .row_dim_style()
                 .add_modifier(ratatui::style::Modifier::ITALIC),
             max: PROMPT_MAX_LINES,
+            suffix: None,
         });
     }
     match recap {
@@ -174,6 +200,7 @@ fn prose_items(row: &RowInputs, detail: &WorkspaceDetail, theme: &Theme) -> Vec<
                     text: goal,
                     style: Style::default(),
                     max: usize::MAX,
+                    suffix: None,
                 });
             }
             let state = field(&r.state, &r.state_short);
@@ -190,6 +217,7 @@ fn prose_items(row: &RowInputs, detail: &WorkspaceDetail, theme: &Theme) -> Vec<
                     text: now,
                     style: theme.row_dim_style(),
                     max: usize::MAX,
+                    suffix: stale_recap_mark(row, detail, theme),
                 });
             }
         }
@@ -221,6 +249,7 @@ fn prose_items(row: &RowInputs, detail: &WorkspaceDetail, theme: &Theme) -> Vec<
                     text: text.clone(),
                     style,
                     max: FALLBACK_MAX_LINES,
+                    suffix: None,
                 });
             }
         }
@@ -243,8 +272,12 @@ pub struct StripColumns {
     pub pr: usize,
     pub status: usize,
     pub ahead: usize,
+    pub sync: usize,
     pub dirty: usize,
     pub diff: usize,
+    /// The largest diff (lines added plus removed) among the rows, which
+    /// a full diff bar stands for.
+    pub diff_max: u32,
     pub age: usize,
     pub two_line: bool,
     pub prose: usize,
@@ -263,13 +296,15 @@ pub fn strip_columns(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -
         .clamp(display_width(NO_PR), row::MAX_PR_WIDTH);
     let status = max(&|r| spans_width(&status_spans(r.row, 0, &theme)));
     let ahead = max(&|r| ahead_text(r.detail).map_or(0, |t| display_width(&t)));
+    let sync = max(&|r| spans_width(&sync_spans(r.row, r.detail, &theme)));
     let dirty = max(&|r| dirty_text(r.detail).map_or(0, |t| display_width(&t)));
-    let diff = max(&|r| spans_width(&diff_spans(r.row, &theme)));
+    let diff_max = rows.iter().map(|r| diff_total(r.row)).max().unwrap_or(0);
+    let diff = max(&|r| spans_width(&diff_spans(r.row, diff_max, &theme)));
     let age = max(&|r| display_width(&age_text(r.row)));
     let prefix = widths.agent + row::GUTTER_WIDTH + 1;
     let natural = max(&|r| 2 + display_width(&r.row.branch)).clamp(BRANCH_MIN, BRANCH_MAX);
     let one_line =
-        prefix + natural + STRIP_GAP + pr + cells_width([status, ahead, dirty, diff, age]);
+        prefix + natural + STRIP_GAP + pr + cells_width([status, ahead, sync, dirty, diff, age]);
     let two_line = one_line > width;
     let prose = width.saturating_sub(prefix + 2).min(PROSE_MAX);
     if !two_line {
@@ -279,8 +314,10 @@ pub fn strip_columns(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -
             pr,
             status,
             ahead,
+            sync,
             dirty,
             diff,
+            diff_max,
             age,
             two_line,
             prose,
@@ -301,8 +338,10 @@ pub fn strip_columns(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -
         pr,
         status: fit(status),
         ahead: fit(ahead),
+        sync: fit(sync),
         dirty: fit(dirty),
         diff: fit(diff),
+        diff_max,
         age,
         two_line,
         prose,
@@ -345,6 +384,39 @@ fn ahead_text(detail: &WorkspaceDetail) -> Option<String> {
         .map(|n| ahead_label(n, detail.base_branch.as_deref()))
 }
 
+/// Where the branch stands against its remote: `⇡2 unpushed` and `⇣3
+/// behind` against its upstream, or a dim `not pushed` for a branch with
+/// commits but no upstream and no PR (a PR means it was pushed; a merged
+/// branch's upstream is often deleted). Nothing when in sync or unknown.
+fn sync_spans(row: &RowInputs, detail: &WorkspaceDetail, theme: &Theme) -> Vec<Span<'static>> {
+    use crate::git::forge::BranchLifecycle;
+    let Some(g) = detail.git else {
+        return Vec::new();
+    };
+    if !g.upstream {
+        let no_pr = matches!(row.lifecycle, None | Some(BranchLifecycle::NoPr));
+        return if no_pr && detail.ahead_of_base.is_some_and(|n| n > 0) {
+            vec![Span::styled("not pushed", theme.row_dim_style())]
+        } else {
+            Vec::new()
+        };
+    }
+    let mut out = Vec::new();
+    for (n, label) in [(g.ahead, "⇡{} unpushed"), (g.behind, "⇣{} behind")] {
+        if n == 0 {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(Span::raw(" "));
+        }
+        out.push(Span::styled(
+            label.replace("{}", &n.to_string()),
+            theme.warn_style(),
+        ));
+    }
+    out
+}
+
 /// `3 mod 1 untr`; `None` for a clean or unknown tree.
 fn dirty_text(detail: &WorkspaceDetail) -> Option<String> {
     let g = detail.git?;
@@ -356,15 +428,73 @@ fn dirty_text(detail: &WorkspaceDetail) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" "))
 }
 
-/// `+184 −22`, or nothing without changes.
-fn diff_spans(row: &RowInputs, theme: &Theme) -> Vec<Span<'static>> {
+/// Cells the diff bar takes, its trailing space excluded.
+const DIFF_BAR: usize = 4;
+
+fn diff_total(row: &RowInputs) -> u32 {
+    row.diff.map_or(0, |d| d.added.saturating_add(d.removed))
+}
+
+/// `██▌  +184 −22`: a bar sized against the view's largest diff, then the
+/// counts; nothing without changes.
+fn diff_spans(row: &RowInputs, max: u32, theme: &Theme) -> Vec<Span<'static>> {
     match row.diff.filter(|d| d.added > 0 || d.removed > 0) {
-        Some(d) => vec![
-            Span::styled(format!("+{}", d.added), theme.ok_style()),
-            Span::raw(" "),
-            Span::styled(format!("−{}", d.removed), theme.err_style()),
-        ],
+        Some(d) => {
+            let mut out = diff_bar(d.added, d.removed, max, theme);
+            out.extend([
+                Span::raw(" "),
+                Span::styled(format!("+{}", d.added), theme.ok_style()),
+                Span::raw(" "),
+                Span::styled(format!("−{}", d.removed), theme.err_style()),
+            ]);
+            out
+        }
         None => Vec::new(),
+    }
+}
+
+/// `DIFF_BAR` cells of block eighths, as long as the diff is against `max`
+/// on a log scale (so a 10-line change still shows next to a 2000-line
+/// one), green for the added share and red for the removed. Padded to
+/// `DIFF_BAR` cells; never empty for a nonzero diff.
+fn diff_bar(added: u32, removed: u32, max: u32, theme: &Theme) -> Vec<Span<'static>> {
+    const PARTIAL: [char; 8] = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
+    let total = added.saturating_add(removed);
+    let eighths = DIFF_BAR * 8;
+    let frac = f64::from(total).ln_1p() / f64::from(max.max(total)).ln_1p();
+    let filled = ((frac * eighths as f64).round() as usize).clamp(1, eighths);
+    let green = (filled as f64 * f64::from(added) / f64::from(total)).round() as usize;
+    let mut out: Vec<Span<'static>> = Vec::new();
+    for cell in 0..DIFF_BAR {
+        let fill = filled.saturating_sub(cell * 8).min(8);
+        let glyph = if fill == 8 { '█' } else { PARTIAL[fill] };
+        let style = if cell * 8 + fill.max(1).div_ceil(2) <= green {
+            theme.ok_style()
+        } else {
+            theme.err_style()
+        };
+        match out.last_mut() {
+            Some(last) if last.style == style => last.content.to_mut().push(glyph),
+            _ => out.push(Span::styled(glyph.to_string(), style)),
+        }
+    }
+    out
+}
+
+/// The age cell's tone by the hour range it falls in (the cell itself
+/// counts in seconds, minutes, then hours, never days): bright and bold
+/// under 1h, plain under 6h, the rows' dim text under 24h, and faintest
+/// from 24h on or when unknown, so live workspaces stand out and abandoned
+/// ones fade.
+fn age_style(ago_secs: Option<u64>, theme: &Theme) -> Style {
+    const HOUR: u64 = 3600;
+    match ago_secs.map(|s| s / HOUR) {
+        Some(0) => Style::default()
+            .fg(theme.selected_fg)
+            .add_modifier(ratatui::style::Modifier::BOLD),
+        Some(1..6) => Style::default().fg(theme.selected_fg),
+        Some(6..24) => theme.row_dim_style(),
+        _ => theme.dim_style(),
     }
 }
 
@@ -475,12 +605,13 @@ pub fn row_layout(
     let fields = [
         (cols.status, status_spans(row, tick, theme)),
         (cols.ahead, dim_cell(ahead_text(tall.detail), theme)),
+        (cols.sync, sync_spans(row, tall.detail, theme)),
         (cols.dirty, dim_cell(dirty_text(tall.detail), theme)),
-        (cols.diff, diff_spans(row, theme)),
+        (cols.diff, diff_spans(row, cols.diff_max, theme)),
     ];
     let age = (
         cols.age,
-        vec![Span::styled(age_text(row), theme.row_dim_style())],
+        vec![Span::styled(age_text(row), age_style(row.ago_secs, theme))],
         true,
     );
     // Two-line strips keep only the age on line 1; the rest go under the
@@ -528,17 +659,30 @@ pub fn row_layout(
 
     let text_width = cols.prose.saturating_sub(LABEL_WIDTH).max(8);
     for item in prose_items(row, tall.detail, theme) {
-        for (i, text) in wrap_capped(&item.text, text_width, item.max)
+        let mut texts: Vec<Vec<Span<'static>>> = wrap_capped(&item.text, text_width, item.max)
             .into_iter()
-            .enumerate()
-        {
+            .map(|t| vec![Span::styled(t, item.style)])
+            .collect();
+        if let Some(mark) = item.suffix {
+            let fits = texts.last().is_some_and(|t| {
+                t.iter().map(Span::width).sum::<usize>() + mark.width() <= text_width
+            });
+            match texts.last_mut() {
+                Some(last) if fits => last.push(mark),
+                _ => texts.push(vec![Span::styled(
+                    mark.content.trim_start_matches(" · ").to_string(),
+                    mark.style,
+                )]),
+            }
+        }
+        for (i, text) in texts.into_iter().enumerate() {
             let label = if i == 0 { item.label } else { "" };
             let mut l = lead();
             l.push(Span::styled(
                 format!("{label:<LABEL_WIDTH$}"),
                 theme.dim_style(),
             ));
-            l.push(Span::styled(text, item.style));
+            l.extend(text);
             lines.push(Line::from(l));
         }
     }
@@ -1084,10 +1228,12 @@ mod tests {
                 untracked: 1,
                 ahead: 0,
                 behind: 0,
+                upstream: false,
             }),
             ahead_of_base: Some(4),
             base_branch: Some("origin/main".into()),
             first_prompt: None,
+            recap_age_secs: None,
         };
         let tall = TallRow {
             row: &row,
@@ -1801,6 +1947,7 @@ mod tests {
                 untracked: 1,
                 ahead: 0,
                 behind: 0,
+                upstream: false,
             }),
             ..Default::default()
         };
@@ -1829,6 +1976,200 @@ mod tests {
                 .any(|l| l.contains("mod") || l.contains("untr")),
             "{lines:#?}"
         );
+    }
+
+    /// The age cell fades as the workspace goes quiet.
+    #[test]
+    fn age_fades_with_inactivity() {
+        let theme = Theme::wsx();
+        let age_span = |ago: Option<u64>| {
+            let mut row = base_row("b");
+            row.ago_secs = ago;
+            let detail = WorkspaceDetail::default();
+            let tall = TallRow {
+                row: &row,
+                detail: &detail,
+            };
+            let lines = layout(&tall, &AgentGlyphs::default(), 140);
+            let want = crate::ui::dashboard::column_content::format_ago_short(ago);
+            lines[0]
+                .spans
+                .iter()
+                .rfind(|s| s.content == want)
+                .unwrap()
+                .style
+        };
+        let fresh = age_span(Some(5 * 60));
+        assert_eq!(fresh.fg, Some(theme.selected_fg));
+        assert!(fresh.add_modifier.contains(ratatui::style::Modifier::BOLD));
+        assert_eq!(
+            age_span(Some(3 * 3600)),
+            Style::default().fg(theme.selected_fg)
+        );
+        assert_eq!(age_span(Some(12 * 3600)), theme.row_dim_style());
+        assert_eq!(age_span(Some(30 * 3600)), theme.dim_style());
+        assert_eq!(age_span(None), theme.dim_style());
+    }
+
+    /// The view's largest diff fills the bar; a small one still shows; the
+    /// green share follows the lines added.
+    #[test]
+    fn diff_bar_scales_to_the_largest_diff() {
+        let theme = Theme::wsx();
+        let bar = |a, r, max| -> (String, Vec<Style>) {
+            let spans = diff_bar(a, r, max, &theme);
+            let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+            assert_eq!(display_width(&text), DIFF_BAR);
+            (text, spans.iter().map(|s| s.style).collect())
+        };
+        assert_eq!(bar(1500, 500, 2000).0, "████");
+        let (small, _) = bar(3, 0, 2000);
+        assert!(small.trim() != "" && small != "████", "{small:?}");
+        assert!(bar(100, 0, 2000).0.trim().len() > small.trim().len());
+        assert_eq!(bar(10, 0, 10).1, vec![theme.ok_style()]);
+        assert_eq!(bar(0, 10, 10).1, vec![theme.err_style()]);
+        assert_eq!(
+            bar(5, 5, 10).1,
+            vec![theme.ok_style(), theme.err_style()],
+            "half and half"
+        );
+    }
+
+    /// A recap left behind by later activity is marked old on its `now`
+    /// line; a recap set around the last activity is not.
+    #[test]
+    fn now_line_marks_a_recap_older_than_the_activity() {
+        let mut row = base_row("b");
+        row.ago_secs = Some(60);
+        let now_line = |recap_age_secs: u64| {
+            let detail = WorkspaceDetail {
+                recap: Some(WorkspaceRecap {
+                    state: Some("benchmarking".into()),
+                    ..Default::default()
+                }),
+                recap_age_secs: Some(recap_age_secs),
+                ..Default::default()
+            };
+            let tall = TallRow {
+                row: &row,
+                detail: &detail,
+            };
+            layout(&tall, &AgentGlyphs::default(), 120)
+                .iter()
+                .map(text)
+                .find(|l| l.contains("benchmarking"))
+                .unwrap()
+        };
+        assert!(now_line(2 * 3600).contains("benchmarking · 2h old"));
+        assert!(!now_line(10 * 60).contains("old"));
+    }
+
+    /// The mark appears from exactly `STALE_RECAP_SECS` of activity past the
+    /// recap, and a `now` line that fills its width puts the mark on a line
+    /// of its own instead of past the edge.
+    #[test]
+    fn stale_mark_boundary_and_wrapping() {
+        let mut row = base_row("b");
+        row.ago_secs = Some(60);
+        let lines = |row: &RowInputs, state: String, recap_age_secs: u64| {
+            let detail = WorkspaceDetail {
+                recap: Some(WorkspaceRecap {
+                    state: Some(state),
+                    ..Default::default()
+                }),
+                recap_age_secs: Some(recap_age_secs),
+                ..Default::default()
+            };
+            let tall = TallRow {
+                row,
+                detail: &detail,
+            };
+            layout(&tall, &AgentGlyphs::default(), 120)
+                .iter()
+                .map(text)
+                .collect::<Vec<_>>()
+        };
+        let has_mark = |l: &[String]| l.iter().any(|l| l.contains(" old"));
+        assert!(has_mark(&lines(&row, "x".into(), 60 + STALE_RECAP_SECS)));
+        assert!(!has_mark(&lines(
+            &row,
+            "x".into(),
+            60 + STALE_RECAP_SECS - 1
+        )));
+        // No stale claim without a known last activity.
+        row.ago_secs = None;
+        assert!(!has_mark(&lines(&row, "x".into(), 10 * 3600)));
+        row.ago_secs = Some(60);
+
+        let cols = strip_columns(
+            &[TallRow {
+                row: &row,
+                detail: &WorkspaceDetail::default(),
+            }],
+            ColumnWidths::default(),
+            120,
+        );
+        let text_width = cols.prose.saturating_sub(LABEL_WIDTH).max(8);
+        let full = "x".repeat(text_width);
+        let out = lines(&row, full.clone(), 3 * 3600);
+        let at = out.iter().position(|l| l.contains(&full)).unwrap();
+        assert!(!out[at].contains("old"), "{out:#?}");
+        assert!(out[at + 1].trim_end().ends_with("3h old"), "{out:#?}");
+        assert!(out.iter().all(|l| display_width(l) <= 120));
+    }
+
+    /// The strip says what's not on the remote yet: commits to push or
+    /// pull against the upstream, or a branch with work never pushed.
+    #[test]
+    fn sync_cell_shows_unpushed_behind_and_never_pushed() {
+        use crate::git::forge::BranchLifecycle;
+        let strip = |row: &RowInputs, git: WorkspaceStatus, ahead_of_base: u32| {
+            let detail = WorkspaceDetail {
+                git: Some(git),
+                ahead_of_base: Some(ahead_of_base),
+                ..Default::default()
+            };
+            strip_rows(
+                &[TallRow {
+                    row,
+                    detail: &detail,
+                }],
+                140,
+            )[0][0]
+                .clone()
+        };
+        let tracked = |ahead, behind| WorkspaceStatus {
+            ahead,
+            behind,
+            upstream: true,
+            ..Default::default()
+        };
+        let row = base_row("b");
+        let line = strip(&row, tracked(2, 3), 4);
+        assert!(line.contains("⇡2 unpushed ⇣3 behind"), "{line}");
+        let line = strip(&row, tracked(0, 0), 4);
+        assert!(!line.contains('⇡') && !line.contains("pushed"), "{line}");
+
+        let untracked = WorkspaceStatus::default();
+        assert!(strip(&row, untracked, 4).contains("not pushed"));
+        assert!(!strip(&row, untracked, 0).contains("not pushed"));
+        // A PR means the branch was pushed, even once its upstream is gone.
+        let mut merged = base_row("b");
+        merged.lifecycle = Some(BranchLifecycle::PrMerged);
+        merged.pr_number = Some(7);
+        assert!(!strip(&merged, untracked, 4).contains("not pushed"));
+        for lc in [BranchLifecycle::PrOpen, BranchLifecycle::PrDraft] {
+            let mut pr = base_row("b");
+            pr.lifecycle = Some(lc);
+            pr.pr_number = Some(7);
+            assert!(!strip(&pr, untracked, 4).contains("not pushed"), "{lc:?}");
+        }
+        // Unknown git state makes no claim about the remote.
+        let detail = WorkspaceDetail {
+            ahead_of_base: Some(4),
+            ..Default::default()
+        };
+        assert!(sync_spans(&row, &detail, &Theme::wsx()).is_empty());
     }
 
     /// A chip wider than the column drops its lifecycle word to fit; the
@@ -1980,6 +2321,7 @@ mod tests {
                 untracked: 3,
                 ahead: 0,
                 behind: 0,
+                upstream: false,
             }),
             ahead_of_base: Some(3),
             base_branch: Some("origin/some-long-base".into()),

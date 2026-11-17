@@ -423,8 +423,10 @@ pub fn render_without_footer(
 
     if let Some(repo) = focused_repo(inputs, state) {
         let glyphs = tall::AgentGlyphs::from_specs(specs);
-        let mut targets = render_focus(f, chunks[3], inputs, state, repo, &glyphs, tick, theme);
-        targets.statuses = statuses;
+        let mut targets = render_focus(
+            f, chunks[3], inputs, state, repo, &glyphs, tick, theme, specs,
+        );
+        targets.statuses.extend(statuses);
         return targets;
     }
 
@@ -548,6 +550,14 @@ pub(crate) enum FocusSection {
 }
 
 impl FocusSection {
+    /// Every section, in display order.
+    pub(crate) const ALL: [FocusSection; 4] = [
+        FocusSection::NoPr,
+        FocusSection::Draft,
+        FocusSection::Open,
+        FocusSection::Done,
+    ];
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             FocusSection::NoPr => "No PR",
@@ -571,7 +581,7 @@ pub(crate) fn section_of(lc: Option<BranchLifecycle>) -> FocusSection {
 /// The color a section's header is drawn in; every section gets its own so
 /// the headers stand out from the rows' dim sub-lines. No PR takes the plain
 /// foreground: `header_fg` matches Draft or Done in some themes.
-fn section_color(section: FocusSection, theme: &Theme) -> Color {
+pub(crate) fn section_color(section: FocusSection, theme: &Theme) -> Color {
     match section {
         FocusSection::NoPr => theme.selected_fg,
         FocusSection::Draft => theme.waiting,
@@ -580,21 +590,84 @@ fn section_color(section: FocusSection, theme: &Theme) -> Color {
     }
 }
 
-/// `━━ Open · 2 ━━━…` to `width`, all in the section's color, label bold.
+/// What a section header counts: its workspaces, and those among them
+/// that need a look — waiting on an answer, stalled, or with a PR that
+/// conflicts with its base.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct SectionTally {
+    count: usize,
+    asking: usize,
+    stalled: usize,
+    conflicts: usize,
+}
+
+impl SectionTally {
+    fn of(rows: &[&WorkspaceItem<'_>]) -> Self {
+        let n = |f: &dyn Fn(&WorkspaceItem<'_>) -> bool| rows.iter().filter(|w| f(w)).count();
+        Self {
+            count: rows.len(),
+            asking: n(&|w| w.status == Status::Question),
+            stalled: n(&|w| w.status == Status::Stalled),
+            conflicts: n(&|w| w.row.lifecycle == Some(BranchLifecycle::PrConflicted)),
+        }
+    }
+}
+
+/// `━━ Open · 2 ━━━…` to `width`, in the section's color with the label
+/// bold, then any workspaces needing a look in their own colors:
+/// `━━ Open · 3 · ? 1 asking · ⏺ 1 conflict ━━━…`.
 fn section_header_line(
     section: FocusSection,
-    count: usize,
+    tally: SectionTally,
     width: usize,
     theme: &Theme,
 ) -> Line<'static> {
     let color = Style::default().fg(section_color(section, theme));
-    let label = format!("{} · {} ", section.label(), count);
-    let rule = width.saturating_sub(3 + label.chars().count());
-    Line::from(vec![
+    let mut spans = vec![
         Span::styled("━━ ", color),
-        Span::styled(label, color.add_modifier(Modifier::BOLD)),
-        Span::styled("━".repeat(rule), color),
-    ])
+        Span::styled(
+            format!("{} · {} ", section.label(), tally.count),
+            color.add_modifier(Modifier::BOLD),
+        ),
+    ];
+    let plural = |n: usize, word: &str| {
+        if n == 1 {
+            word.to_string()
+        } else {
+            format!("{word}s")
+        }
+    };
+    let notes = [
+        (
+            tally.asking,
+            format!("{} {} asking", Status::Question.glyph(), tally.asking),
+            theme.status_style(Status::Question),
+        ),
+        (
+            tally.stalled,
+            format!("{} {} stalled", Status::Stalled.glyph(), tally.stalled),
+            theme.status_style(Status::Stalled),
+        ),
+        (
+            tally.conflicts,
+            format!(
+                "⏺ {} {}",
+                tally.conflicts,
+                plural(tally.conflicts, "conflict")
+            ),
+            theme.err_style(),
+        ),
+    ];
+    for (_, text, style) in notes.into_iter().filter(|(n, ..)| *n > 0) {
+        spans.push(Span::styled("· ", color));
+        spans.push(Span::styled(
+            format!("{text} "),
+            style.add_modifier(Modifier::BOLD),
+        ));
+    }
+    let used: usize = spans.iter().map(Span::width).sum();
+    spans.push(Span::styled("━".repeat(width.saturating_sub(used)), color));
+    Line::from(spans)
 }
 
 /// One entry in the focus view, in display order.
@@ -602,7 +675,7 @@ enum FocusEntry<'w, 'a> {
     /// A PR-state header; never a selection or click target.
     Section {
         section: FocusSection,
-        count: usize,
+        tally: SectionTally,
     },
     Workspace(&'w WorkspaceItem<'a>),
     /// A hide rule's summary row, with its rows ordered for display.
@@ -642,7 +715,7 @@ fn focus_entries<'w, 'a>(
         }
         out.push(FocusEntry::Section {
             section,
-            count: rows.len(),
+            tally: SectionTally::of(&rows),
         });
         out.extend(rows.into_iter().map(FocusEntry::Workspace));
     }
@@ -694,6 +767,7 @@ fn render_focus(
     glyphs: &tall::AgentGlyphs,
     tick: u32,
     theme: &Theme,
+    specs: &crate::config::theme_file::BarSpecs,
 ) -> ListClickTargets {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -705,25 +779,35 @@ fn render_focus(
         .split(area);
     let entries = focus_entries(inputs, state, repo);
     // The header counts what shows normally, as the list's repo header does.
-    let counts = StatusCounts::from_iter(
-        focused_workspaces(inputs, state, repo.id)
-            .iter()
-            .map(|w| w.status),
-    );
-    let (crumb, (dx, w)) = by_repo::breadcrumb_line(
-        &repo.name,
-        &repo.path.to_string_lossy(),
-        counts,
-        chunks[0].width as usize,
+    let shown = focused_workspaces(inputs, state, repo.id);
+    let counts = StatusCounts::from_iter(shown.iter().map(|w| w.status));
+    let mut per_section = [0usize; 4];
+    for w in &shown {
+        per_section[section_of(w.row.lifecycle) as usize] += 1;
+    }
+    let header = crate::ui::bar::dashboard_focus(
+        specs,
         theme,
+        &crate::ui::bar::DashboardFocusInputs {
+            repo: &repo.name,
+            path: &repo.path.to_string_lossy(),
+            stages: per_section,
+            statuses: counts,
+            status_filter: state.status_filter,
+            fleet: inputs.fleet,
+        },
+        chunks[0].width,
     );
-    f.render_widget(Paragraph::new(crumb), chunks[0]);
-    let unfocus = Some(Rect {
-        x: chunks[0].x + dx,
-        y: chunks[0].y,
-        width: w.min(chunks[0].width.saturating_sub(dx)),
-        height: 1,
-    });
+    f.render_widget(Paragraph::new(header.line), chunks[0]);
+    let mut unfocus = None;
+    let mut statuses = Vec::new();
+    for (rect, hit) in crate::ui::bar::render::hit_rects(chunks[0], &header.hits) {
+        match hit {
+            crate::ui::bar::segment::Hit::Unfocus => unfocus = Some(rect),
+            crate::ui::bar::segment::Hit::Status(s) => statuses.push((s, rect)),
+            _ => {}
+        }
+    }
 
     // The side panel takes the right of the body when open and there's
     // room; the rows get the rest.
@@ -743,6 +827,7 @@ fn render_focus(
         );
         return ListClickTargets {
             unfocus,
+            statuses,
             panel_files: panel_targets.files,
             panel_tabs: panel_targets.tabs,
             panel_area: panel_targets.area,
@@ -778,8 +863,8 @@ fn render_focus(
                 row,
                 detail: &w.detail,
             }),
-            (FocusEntry::Section { section, count }, _) => tall::TallEntry::Section(
-                section_header_line(*section, *count, rows_area.width as usize, theme),
+            (FocusEntry::Section { section, tally }, _) => tall::TallEntry::Section(
+                section_header_line(*section, *tally, rows_area.width as usize, theme),
             ),
             (FocusEntry::Group(g), _) => {
                 tall::TallEntry::Group(hidden::hidden_group_line(g, None, inputs.nerd_fonts, theme))
@@ -815,6 +900,7 @@ fn render_focus(
         focus_rows: targets.rows,
         focus_groups,
         unfocus,
+        statuses,
         panel_files: panel_targets.files,
         panel_tabs: panel_targets.tabs,
         panel_area: panel_targets.area,
@@ -1806,7 +1892,11 @@ mod section_header_tests {
                 FocusSection::Open,
                 FocusSection::Done,
             ] {
-                let line = section_header_line(section, 2, 40, &theme);
+                let tally = SectionTally {
+                    count: 2,
+                    ..Default::default()
+                };
+                let line = section_header_line(section, tally, 40, &theme);
                 let fg = section_color(section, &theme);
                 assert_ne!(fg, theme.dim, "{name}: {section:?} falls back to dim");
                 assert!(!seen.contains(&fg), "{name}: {section:?} shares {fg:?}");
@@ -1816,5 +1906,44 @@ mod section_header_tests {
                 seen.push(fg);
             }
         }
+    }
+    /// Workspaces needing a look are tallied after the count, each in its
+    /// own color, and the header still spans the width.
+    #[test]
+    fn header_tallies_asking_stalled_and_conflicts() {
+        let theme = Theme::wsx();
+        let text = |t: SectionTally| -> String {
+            let line = section_header_line(FocusSection::Open, t, 80, &theme);
+            assert_eq!(line.width(), 80);
+            line.spans.iter().map(|s| s.content.as_ref()).collect()
+        };
+        let all = SectionTally {
+            count: 5,
+            asking: 1,
+            stalled: 2,
+            conflicts: 2,
+        };
+        assert!(
+            text(all).starts_with("━━ Open · 5 · ? 1 asking · ! 2 stalled · ⏺ 2 conflicts ━"),
+            "{}",
+            text(all)
+        );
+        let one = SectionTally {
+            count: 3,
+            conflicts: 1,
+            ..Default::default()
+        };
+        assert!(
+            text(one).starts_with("━━ Open · 3 · ⏺ 1 conflict ━"),
+            "{}",
+            text(one)
+        );
+        let line = section_header_line(FocusSection::Open, all, 80, &theme);
+        let asking = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("asking"))
+            .unwrap();
+        assert_eq!(asking.style.fg, theme.status_style(Status::Question).fg);
     }
 }

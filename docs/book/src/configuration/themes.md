@@ -76,6 +76,12 @@ format       = "$keys"
 right_format = "$funnel"
 fill         = " "
 
+[dashboard_focus]
+format       = "$focus_back[ / ](fg:dim)$focus_repo(  $focus_path)  "
+right_format = " ($focus_pipeline    )($statuses    )$focus_counts"
+fill         = "─"
+fill_style   = "fg:dim"
+
 [attached_top]
 format = "($agent_bar )$workspace(  $workspace_tags)(   $attention)"
 
@@ -104,6 +110,7 @@ fill         = " "
 |---|---|
 | `dashboard_header` | The dashboard's top line: wordmark, filter echo, status tally, counts. Only the tally's items are clickable. When its formats don't place `$statuses`, or `[statuses]` sets `disabled`, the tally gets its own row below it instead. That depends only on placement: a `priority` that lets `$statuses` drop on a narrow terminal doesn't bring the row back. |
 | `dashboard_footer` | The dashboard's bottom line: key hints and the [`funnel` module](#modules). |
+| `dashboard_focus` | The [repo focus view](../dashboard/repo-focus.md)'s top line, under the dashboard header: the way back to every repo, the repo's name and path, its workspaces by PR stage, its status tally and its workspace count. `$focus_back` and the tally's items are clickable. |
 | `attached_top` | The attached view's top bar. |
 | `attached_bottom` | The attached view's bottom bar (chip row). |
 | `dashboard_detail` | The detail pane's pinned-command row. Drawn only when the reply row leaves out `$pins` or this bar places a module. |
@@ -133,6 +140,7 @@ The bundled priorities:
 | `attached_bottom` | `model_tokens` 10, `agents` 20, `procs` 30, `diff` 40, `tags` 40, `pr` 50 |
 | `dashboard_footer` | `hosts` 45, `version` 50, `tokens` 55, `funnel` 60, `usage` 60 |
 | `dashboard_header` | `sort` 30 (when placed), `counts` 50 |
+| `dashboard_focus` | `focus_pipeline` 30, `focus_path` 40, `focus_counts` 50 |
 
 ### The reply row
 
@@ -147,6 +155,24 @@ When `$pins` is on the reply row, on either side, the separate pinned-command ro
 format       = "([ $pins ](bg:soot fg:orange)[\ue0b0](fg:soot) )$prompt "
 right_format = "([\ue0b2](fg:ash)[ $keys ](bg:ash fg:orange))"
 ```
+
+### The focus header
+
+`[dashboard_focus]` draws the [repo focus view](../dashboard/repo-focus.md)'s top line. `$focus_pipeline` is a multi-item segment, so each PR stage can sit on its own block, chained with the [neighbor colors](#grading-items-by-position). `theme-orange.toml` lays it out as an airline crumb trail:
+
+```toml
+[dashboard_focus]
+format       = "[ $focus_back ](bg:orange fg:black)[\ue0b0](fg:orange bg:smoke)[ $focus_repo ](bg:smoke)[\ue0b0](fg:smoke bg:soot)[( $focus_path )](bg:soot fg:cream)[\ue0b0](fg:soot)"
+right_format = "$focus_pipeline[\ue0b2](fg:smoke bg:soot)[( $statuses )](bg:smoke)[\ue0b2](fg:orange bg:smoke)[( $focus_counts )](bg:orange fg:black)"
+fill         = " "
+
+[focus_pipeline]
+styles    = ["bg:charcoal", "bg:soot", "bg:charcoal", "bg:soot"]
+format    = "[\ue0b2](fg:item_bg bg:prev_bg)[ $label $count ]($style)"
+separator = ""
+```
+
+A provider's `$style` wins over the block's colors, so set `style` on `[focus_back]`, `[focus_repo]` and `[focus_counts]` to recolor their text on a block. Older wsx builds reject a theme with `[dashboard_focus]`.
 
 ### Unplaced segments
 
@@ -227,9 +253,14 @@ Each segment has its own table, such as `[workspace]`, with these keys:
 | `brand` | `$symbol $name $mark $view` | The wordmark. `$view` is `dashboard`, not placed by default. Dashboard header only. |
 | `group` | `$label $tabs` | The `group:` mode tabs; the active one is highlighted. Not placed by default. Dashboard header only. |
 | `sort` | `$label $tabs` | The `sort:` mode tabs. Not placed by default. Dashboard header only. |
-| `statuses` | `$glyph $count $label` | One item per [status](../dashboard/status-indicators.md#status-glyphs) with a nonzero count, most urgent first, counting filtered-out workspaces too. `$style` is the status color, reversed on the status the list is [filtered to](../dashboard/status-indicators.md#filtering-by-status) and dimmed on the rest. Dashboard header only. Clickable. Older wsx builds reject a theme that uses it. |
+| `statuses` | `$glyph $count $label` | One item per [status](../dashboard/status-indicators.md#status-glyphs) with a nonzero count, most urgent first. On the dashboard header it counts every workspace, filtered-out ones too; on the focus header, the workspaces the focus view shows outside hidden groups. `$style` is the status color, reversed on the status the list is [filtered to](../dashboard/status-indicators.md#filtering-by-status) and dimmed on the rest. Dashboard and focus headers only. Clickable. Older wsx builds reject a theme that uses it. |
 | `filter` | `$needle` | The live filter, capped at 24 characters. Dashboard header only. |
 | `counts` | `$repos $workspaces` | Repo and workspace counts. Dashboard header only. |
+| `focus_back` | `$symbol $label` | The focus view's way back (`◂ all repos`). `symbol` defaults to `◂`; `$style` is the path hue, underlined. Focus header only. Clickable. |
+| `focus_repo` | `$name` | The focused repo's name, in the repo-header style. Focus header only. |
+| `focus_path` | `$path` | The focused repo's path, dim. Focus header only. |
+| `focus_pipeline` | `$label $count` | One item per PR stage, in order: `No PR`, `Draft`, `Open`, `Done`, zeros included. `$style` is the stage's section color, dim when empty. Focus header only. |
+| `focus_counts` | `$workspaces` | How many workspaces the focus view shows outside hidden groups (it also counts its PR stages that way). Hidden at zero. Focus header only. |
 | `keys` | `$key $label` | One pill per key hint. Clickable. |
 | `version` | `$version` | |
 | `usage` | `$label $spark` | The activity sparkline. Clickable. |
@@ -253,16 +284,17 @@ Where segments produce output:
 
 | Bar | Segments |
 |---|---|
-| Attached bars | All except the dashboard-header segments, `branch`, `prompt`, `status` and `hosts`. Either bar, either side. |
+| Attached bars | All except the dashboard-header and focus-header segments, `branch`, `prompt`, `status` and `hosts`. Either bar, either side. |
 | `dashboard_footer` | `keys`, `version`, `usage`, `hosts` |
 | `dashboard_header` | `brand`, `group`, `sort`, `statuses`, `filter`, `counts` |
+| `dashboard_focus` | `focus_back`, `focus_repo`, `focus_path`, `focus_pipeline`, `statuses`, `focus_counts` |
 | `dashboard_detail` | `pins` |
 | `dashboard_detail_header` | `agent_bar`, `workspace`, `branch`, `pr`, `diff`, `procs`, `status` |
 | `dashboard_detail_reply` | `prompt`, `agent_bar`, `workspace`, `branch`, `pins`, `keys` |
 
 Other segments render empty there, and any segment renders empty when its data is absent. Modules work in every bar.
 
-`pr`, `procs`, `usage`, `attention` and `tags` may appear only once per scope. The scopes are: the two attached bars together, the dashboard footer, the dashboard header, and each of the three detail-pane rows. `wsx theme check` rejects a duplicate.
+`pr`, `procs`, `usage`, `attention`, `tags` and `focus_back` may appear only once per scope. The scopes are: the two attached bars together, the dashboard footer, the dashboard header, the focus header, and each of the three detail-pane rows. `wsx theme check` rejects a duplicate.
 
 Gotchas when overriding a segment:
 

@@ -3,41 +3,43 @@
 The focus view shows one repo on the dashboard and gives each of its workspaces several lines instead of one, laid out to be read at a glance. Workspaces are grouped into sections by pull request state, each row starts with a strip of fixed columns that line up down the view, and what the workspace is for and doing sits under its branch. Every other workspace has a faint background tint so each reads as one block.
 
 ```text
-◂ all repos / workspacex  ~/src/workspacex  ───────────────────────────────────────────────────────────  ● 1  ? 1    4 ws
+◂ all repos / workspacex  ~/src/workspacex  ──  No PR 1 › Draft 1 › Open 1 › Done 1    ? 1 question   ⠋ 1 thinking   · 2 idle    4 ws
 
-━━ No PR · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━ No PR · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-▎▎ ⠋ bakedbean/try-new-parser     no PR          ▸ working  ● 2p  ↑1 vs main                           2m
+▎▎ ⠋ bakedbean/try-new-parser     no PR          ▸ working  ● 2p  ↑1 vs main  not pushed                    2m
  ▎   prompt  Spike a faster parser for agent recaps; measure it against the current one on a few
  ▎           real session logs before changing anything.
  ▎   goal    Spike a faster recap parser
  ▎   now     benchmarking the streaming approach → compare against the regex version
  ▎   ▎ claude  #spike
 
-━━ Draft · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━ Draft · 1 · ? 1 asking ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-▎▎ ? bakedbean/detail-bar-scroll  ⏷ #459 draft   └ asking         ↑2 vs main                +61 −8    14m
+▎▎ ? bakedbean/detail-bar-scroll  ⏷ #459 draft   └ asking         ↑2 vs main               ██▎  +61 −8    14m
  ▎   prompt  The detail bar containers should scroll independently
  ▎   last    Should the scroll offsets be kept per workspace or shared across the whole detail
  ▎           bar?
  ▎   ▎ claude
 
-━━ Open · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━ Open · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-▎▎ · bakedbean/repo-focus-view    ⏺ #461 open ✓  ▸ idle           ↑4 vs main  3 mod 1 untr  +184 −22   3h
+▎▎ · bakedbean/repo-focus-view    ⏺ #461 open ✓  ▸ idle           ↑4 vs main  ⇡2 unpushed  3 mod 1 untr  ████ +184 −22   3h
  ▎   goal    Single-repo dashboard view with richer per-workspace detail
- ▎   now     implemented sections and the strip → write the docs
+ ▎   now     implemented sections and the strip → write the docs · 5h old
  ▎   ▎ claude  #ui
 
-━━ Done · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━ Done · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-▎▎ ✓ bakedbean/fix-flaky-poller   ⏺ #455 merged  ▸ done           ↑0 vs main                          48h
+▎▎ ✓ bakedbean/fix-flaky-poller   ⏺ #455 merged  ▸ done           ↑0 vs main                                48h
  ▎   ▎ claude
 ```
 
+The header line sums the repo up by PR stage (`No PR 1 › Draft 1 › Open 1 › Done 1`, each stage in its section's color and dim when empty) before the status counts. On a narrow terminal the stages drop first, then the path. Click `◂ all repos` to leave the view, or a status in the tally to filter by it. With a [bar theme](../configuration/themes.md#the-focus-header), the `[dashboard_focus]` bar lays this line out, for example as powerline blocks.
+
 ## Sections
 
-A header line (`━━ Open · 2 ━━━…`, with the workspace count, bold and in the section's color) starts each section:
+A header line (`━━ Open · 2 ━━━…`, with the workspace count, bold and in the section's color) starts each section. After the count it tallies the section's workspaces that need a look, each in its own color: those asking a question (`? 1 asking`), those stalled (`! 1 stalled`), and open PRs that conflict with their base (`⏺ 1 conflict`). Nothing is added when there are none.
 
 | Section | Holds |
 | --- | --- |
@@ -61,20 +63,22 @@ Each row has three zones.
 - the **PR chip**, as on the dashboard list's PR column: number, state, and the review mark with its unresolved-thread count. A workspace without a PR shows a dim `no PR`,
 - the **status word**, as on the dashboard row, with the running-process count and any badge,
 - commits ahead of the repo's base branch (`↑4 vs main`, from the repo's **Base branch** setting; `↑4 base` when it isn't set),
+- where the branch stands against its remote: `⇡2 unpushed` for commits not pushed yet and `⇣3 behind` for commits on the remote the workspace doesn't have, or a dim `not pushed` for a branch with commits but no upstream and no PR. Nothing when it is in sync,
 - uncommitted changes (`3 mod 1 untr`; nothing when the tree is clean),
-- the diff, and how long ago the workspace was active.
+- the diff, led by a bar sized against the largest diff in the view, green for the share of lines added and red for those removed. The scale is logarithmic, so a small change still shows next to a large one,
+- how long ago the workspace was active, toned by hour range so quiet workspaces fade: bright under 1h, plain under 6h, dim under 24h, and faintest from 24h on.
 
 **The prose** sits under the branch:
 
 - **prompt**: the first prompt the workspace's agent was given, in italics and cut to two lines, so you can see what the workspace was started for. It appears once the agent's session log has been read.
 - **goal**: the recap goal in full.
-- **now**: the recap state, then the next step after `→`. Without a recap, a **last** line takes its place: the status text the dashboard row would have clipped, usually the agent's last message, cut to two lines. When that text is just the initial prompt, it isn't repeated.
+- **now**: the recap state, then the next step after `→`. When the workspace kept working for at least half an hour after the recap was last set, the line ends with how old the recap is (`· 5h old`), since it may no longer say what the workspace is doing. Without a recap, a **last** line takes its place: the status text the dashboard row would have clipped, usually the agent's last message, cut to two lines. When that text is just the initial prompt, it isn't repeated.
 
 The prose is wrapped at a comfortable reading width instead of across the whole screen.
 
 **The footer** is a dim line of the workspace's agents, each named with its icon from the theme's [`[agent_bar.symbols]`](../configuration/themes.md) table (or the `▎` bar when the theme has none), then `◇ shared` for a [shared](../integrations/shared-workspaces.md) workspace (red `shared, no session` when its tmux session is gone) and `layout` when it has a saved multi-pane layout, followed by its tags. It is always shown.
 
-When the strip doesn't fit on one line, it breaks up. Line 1 keeps the glyph, branch, PR chip and age; the status, commits ahead, uncommitted changes and diff move under the branch, usually onto one line, more when the terminal is narrow. Every row breaks at the same points, so the columns still line up. A field wider than the whole line, such as a very long base branch name, is cut short with `…`.
+When the strip doesn't fit on one line, it breaks up. Line 1 keeps the glyph, branch, PR chip and age; the status, commits ahead, remote state, uncommitted changes and diff move under the branch, usually onto one line, more when the terminal is narrow. Every row breaks at the same points, so the columns still line up. A field wider than the whole line, such as a very long base branch name, is cut short with `…`.
 
 In the focus view the [detail bar](detail-bar.md) shrinks to its reply row, so the workspaces get nearly the full height. Press `Tab` to type a message to the selected workspace's agent, as you would on the list.
 

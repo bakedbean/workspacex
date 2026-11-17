@@ -32,6 +32,8 @@ pub enum Hit {
     /// A `$statuses` tally item: filters the dashboard list to that status,
     /// or clears the filter when it is already the active one.
     Status(crate::ui::dashboard::status::Status),
+    /// `$focus_back`: leaves the repo focus view for every repo.
+    Unfocus,
 }
 
 impl Hit {

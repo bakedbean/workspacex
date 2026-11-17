@@ -252,6 +252,38 @@ fn the_view_draws_a_breadcrumb_and_one_tall_row_per_workspace() {
     );
 }
 
+/// The breadcrumb sums up the repo by PR stage, and every section header
+/// tallies the workspaces in it that need a look.
+#[test]
+fn the_breadcrumb_shows_the_pipeline_and_headers_tally_attention() {
+    let (mut app, repo, _, ids) = app();
+    app.pr_lifecycle.insert(ids[0], BranchLifecycle::PrOpen);
+    app.pr_lifecycle
+        .insert(ids[1], BranchLifecycle::PrConflicted);
+    app.pr_lifecycle.insert(ids[2], BranchLifecycle::PrDraft);
+    app.pr_lifecycle.insert(ids[3], BranchLifecycle::PrMerged);
+    app.dashboard.focus_repo(repo);
+    let screen = draw(&mut app);
+    let crumb = screen.lines().find(|l| l.contains("◂ all repos")).unwrap();
+    assert!(
+        crumb.contains("No PR 1 › Draft 1 › Open 2 › Done 1"),
+        "{crumb}"
+    );
+    assert!(screen.contains("━━ Open · 2 · ⏺ 1 conflict ━"), "{screen}");
+    // The focus header's tally filters by status like the dashboard's.
+    let crumb_y = screen
+        .lines()
+        .position(|l| l.contains("◂ all repos"))
+        .unwrap() as u16;
+    assert!(
+        app.dashboard_status_rects
+            .iter()
+            .any(|(_, r)| r.y == crumb_y),
+        "{:?}",
+        app.dashboard_status_rects
+    );
+}
+
 #[test]
 fn the_list_records_a_click_rect_per_repo_name() {
     let (mut app, repo, other, _) = app();

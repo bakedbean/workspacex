@@ -521,6 +521,7 @@ mod render_tests {
             untracked: 1,
             ahead: 2,
             behind: 0,
+            upstream: true,
         });
         c.pr = Some((crate::git::forge::BranchLifecycle::PrOpen, Some(241)));
         c.last_activity_ms = Some(3_000);

@@ -357,6 +357,7 @@ mod tests {
                 untracked: 1,
                 ahead: 0,
                 behind: 0,
+                upstream: false,
             }),
             last_assistant_text: Some("I finished the spec.".into()),
             now_ms: 1_000_000,

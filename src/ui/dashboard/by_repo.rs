@@ -268,46 +268,6 @@ pub(crate) fn count_spans(counts: StatusCounts, theme: &Theme) -> Vec<Span<'stat
     right
 }
 
-/// The repo focus view's header: `◂ all repos / name  path ─── counts`.
-/// Returns the line and the `(offset, width)` of the `◂ all repos` link,
-/// which leaves the focus view when clicked.
-pub fn breadcrumb_line(
-    name: &str,
-    path: &str,
-    counts: StatusCounts,
-    width: usize,
-    theme: &Theme,
-) -> (Line<'static>, PrLinkSpan) {
-    let back = Span::styled(
-        "◂ all repos".to_string(),
-        theme.path_style().add_modifier(Modifier::UNDERLINED),
-    );
-    let back_hit = (0, back.width() as u16);
-    let mut spans: Vec<Span<'static>> = vec![
-        back,
-        Span::styled(" / ".to_string(), theme.dim_style()),
-        Span::styled(name.to_string(), theme.header_style()),
-        Span::raw("  ".to_string()),
-        Span::styled(path.to_string(), theme.dim_style()),
-    ];
-    let right = count_spans(counts, theme);
-    let used_left: usize = spans.iter().map(|s| s.width()).sum();
-    let used_right: usize = right.iter().map(|s| s.width()).sum();
-    let gap = width.saturating_sub(used_left + used_right);
-    if gap > RULE_PAD * 2 {
-        spans.push(Span::raw(" ".repeat(RULE_PAD)));
-        spans.push(Span::styled(
-            "─".repeat(gap - RULE_PAD * 2),
-            theme.dim_style(),
-        ));
-        spans.push(Span::raw(" ".repeat(RULE_PAD)));
-    } else {
-        spans.push(Span::raw(" ".repeat(gap)));
-    }
-    spans.extend(right);
-    (Line::from(spans), back_hit)
-}
-
 /// A repo header's clickable PR link, positioned by flat list index:
 /// `(repo id, flat item index, span)`. Mirrors the workspace rows'
 /// `PrChipSpan`, which the caller resolves to screen rects the same way.

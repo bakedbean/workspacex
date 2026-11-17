@@ -431,6 +431,11 @@ pub(crate) fn build_workspace_items<'a>(
                             .workspace_events
                             .get(&ws.id)
                             .and_then(|e| e.first_user_text.clone()),
+                        recap_age_secs: app
+                            .recaps
+                            .get(&ws.id)
+                            .filter(|r| r.updated_at > 0)
+                            .map(|r| (now_ms.saturating_sub(r.updated_at) / 1000).max(0) as u64),
                     }
                 } else {
                     Default::default()

@@ -242,6 +242,48 @@ pub const SEGMENTS: &[SegmentDef] = &[
         items: false,
         singleton: true,
     },
+    // The repo focus view's header (`[dashboard_focus]`).
+    SegmentDef {
+        name: "focus_back",
+        vars: &["symbol", "label"],
+        style_vars: STYLE,
+        more_vars: NO_TAIL,
+        items: false,
+        // Its click leaves the focus view.
+        singleton: true,
+    },
+    SegmentDef {
+        name: "focus_repo",
+        vars: &["name"],
+        style_vars: STYLE,
+        more_vars: NO_TAIL,
+        items: false,
+        singleton: false,
+    },
+    SegmentDef {
+        name: "focus_path",
+        vars: &["path"],
+        style_vars: STYLE,
+        more_vars: NO_TAIL,
+        items: false,
+        singleton: false,
+    },
+    SegmentDef {
+        name: "focus_pipeline",
+        vars: &["label", "count"],
+        style_vars: STYLE,
+        more_vars: NO_TAIL,
+        items: true,
+        singleton: false,
+    },
+    SegmentDef {
+        name: "focus_counts",
+        vars: &["workspaces"],
+        style_vars: STYLE,
+        more_vars: NO_TAIL,
+        items: false,
+        singleton: false,
+    },
 ];
 
 pub fn segment_def(name: &str) -> Option<&'static SegmentDef> {
@@ -453,7 +495,10 @@ mod tests {
     #[test]
     fn singleton_names_matches_the_flagged_entries() {
         let names: Vec<&str> = singleton_names().collect();
-        assert_eq!(names, vec!["usage", "attention", "tags", "procs", "pr"]);
+        assert_eq!(
+            names,
+            vec!["usage", "attention", "tags", "procs", "pr", "focus_back"]
+        );
     }
 
     #[test]

@@ -8,6 +8,7 @@ use crate::data::store::{RepoId, Store, WorkspaceId};
 use crate::error::Result;
 use crate::git::forge::BranchLifecycle;
 use rusqlite::OptionalExtension;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SeriesId(pub i64);
@@ -53,6 +54,16 @@ pub struct SeriesJoin {
     pub part: u32,
     pub started: bool,
     pub title: Option<String>,
+}
+
+/// An archived part whose PR wasn't merged or closed when last seen; the
+/// PR poll fetches it by number from `repo_path` until it settles.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsettledPart {
+    pub series_id: SeriesId,
+    pub part: u32,
+    pub repo_path: PathBuf,
+    pub pr_number: u32,
 }
 
 const PART_COLUMNS: &str = "p.series_id, p.part, p.workspace_id, p.slug, p.branch, \
@@ -166,6 +177,44 @@ impl Store {
         self.conn().execute(
             "UPDATE series SET title = ?1 WHERE id = ?2",
             rusqlite::params![title, id.0],
+        )?;
+        Ok(())
+    }
+
+    pub fn unsettled_archived_parts(&self) -> Result<Vec<UnsettledPart>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT p.series_id, p.part, r.path, p.pr_number \
+             FROM series_parts p JOIN series s ON s.id = p.series_id \
+             JOIN repos r ON r.id = s.repo_id \
+             WHERE p.archived_at IS NOT NULL AND p.pr_number IS NOT NULL \
+               AND (p.pr_lifecycle IS NULL OR p.pr_lifecycle NOT IN ('merged', 'closed'))",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(UnsettledPart {
+                series_id: SeriesId(r.get(0)?),
+                part: r.get(1)?,
+                repo_path: PathBuf::from(r.get::<_, String>(2)?),
+                pr_number: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn set_part_pr(
+        &self,
+        series: SeriesId,
+        part: u32,
+        status: &crate::git::forge::PrStatus,
+    ) -> Result<()> {
+        self.conn().execute(
+            "UPDATE series_parts SET pr_number = COALESCE(?1, pr_number), pr_lifecycle = ?2 \
+             WHERE series_id = ?3 AND part = ?4",
+            rusqlite::params![
+                status.number,
+                crate::data::scm_cache::lifecycle_to_str(status.lifecycle),
+                series.0,
+                part
+            ],
         )?;
         Ok(())
     }
@@ -332,5 +381,115 @@ mod tests {
                 .unwrap();
             assert_eq!(n, 1, "{t}");
         }
+    }
+
+    fn pr(lifecycle: BranchLifecycle, number: u32) -> crate::git::forge::PrStatus {
+        crate::git::forge::PrStatus {
+            lifecycle,
+            number: Some(number),
+            url: None,
+            review: None,
+            unresolved: None,
+        }
+    }
+
+    fn chain(store: &Store, repo: RepoId) -> (WorkspaceId, WorkspaceId) {
+        let a = ws(store, repo, "a");
+        let b = ws(store, repo, "b");
+        store.continue_series(a, b).unwrap();
+        (a, b)
+    }
+
+    #[test]
+    fn rename_updates_part_slug_and_branch() {
+        let (store, repo) = store_with_repo();
+        let (a, b) = chain(&store, repo);
+        store.rename_workspace(a, "a2").unwrap();
+        store.set_workspace_branch(a, "x/a2").unwrap();
+        let s = store.series_for_workspace(b).unwrap().unwrap();
+        assert_eq!(
+            (s.parts[0].slug.as_str(), s.parts[0].branch.as_str()),
+            ("a2", "x/a2")
+        );
+    }
+
+    #[test]
+    fn pr_write_through_updates_live_part() {
+        let (store, repo) = store_with_repo();
+        let (_, b) = chain(&store, repo);
+        store
+            .upsert_scm_pr(b, &pr(BranchLifecycle::PrOpen, 12), 1)
+            .unwrap();
+        let p = &store.series_for_workspace(b).unwrap().unwrap().parts[1];
+        assert_eq!(
+            (p.pr_number, p.pr_lifecycle),
+            (Some(12), Some(BranchLifecycle::PrOpen))
+        );
+        assert_eq!(p.archived_at, None);
+    }
+
+    #[test]
+    fn archive_snapshots_pr_and_keeps_part() {
+        let (store, repo) = store_with_repo();
+        let (a, b) = chain(&store, repo);
+        store
+            .upsert_scm_pr(a, &pr(BranchLifecycle::PrMerged, 10), 1)
+            .unwrap();
+        store.delete_workspace(a).unwrap();
+        let s = store.series_for_workspace(b).unwrap().unwrap();
+        let p = &s.parts[0];
+        assert_eq!((p.part, p.slug.as_str()), (1, "a"));
+        assert!(p.archived_at.is_some());
+        assert_eq!(
+            (p.pr_number, p.pr_lifecycle),
+            (Some(10), Some(BranchLifecycle::PrMerged))
+        );
+    }
+
+    #[test]
+    fn archived_unsettled_parts_are_listed_until_settled() {
+        let (store, repo) = store_with_repo();
+        let (a, b) = chain(&store, repo);
+        store
+            .upsert_scm_pr(a, &pr(BranchLifecycle::PrOpen, 10), 1)
+            .unwrap();
+        store
+            .upsert_scm_pr(b, &pr(BranchLifecycle::PrOpen, 11), 1)
+            .unwrap();
+        store.delete_workspace(a).unwrap();
+        let u = store.unsettled_archived_parts().unwrap();
+        assert_eq!(u.len(), 1, "live part b is not listed");
+        assert_eq!((u[0].part, u[0].pr_number), (1, 10));
+        assert_eq!(u[0].repo_path, PathBuf::from("/tmp/r"));
+        store
+            .set_part_pr(u[0].series_id, 1, &pr(BranchLifecycle::PrMerged, 10))
+            .unwrap();
+        assert!(store.unsettled_archived_parts().unwrap().is_empty());
+        let p = &store.series_for_workspace(b).unwrap().unwrap().parts[0];
+        assert_eq!(p.pr_lifecycle, Some(BranchLifecycle::PrMerged));
+    }
+
+    #[test]
+    fn failed_workspace_archive_marks_part_without_pr() {
+        let (store, repo) = store_with_repo();
+        let (a, b) = chain(&store, repo);
+        store.delete_workspace(b).unwrap();
+        let p = &store.series_for_workspace(a).unwrap().unwrap().parts[1];
+        assert!(p.archived_at.is_some());
+        assert_eq!(p.pr_number, None);
+        assert!(store.unsettled_archived_parts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn remove_repo_deletes_its_series() {
+        let (store, repo) = store_with_repo();
+        chain(&store, repo);
+        store.remove_repo(repo).unwrap();
+        assert!(store.all_series().unwrap().is_empty());
+        let n: i64 = store
+            .conn()
+            .query_row("SELECT count(*) FROM series_parts", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0);
     }
 }

@@ -237,6 +237,14 @@ impl Store {
             "DELETE FROM workspace_agents WHERE workspace_id = ?1",
             [id.0],
         )?;
+        // Series parts outlive the workspace: freeze its last-known PR first.
+        self.conn.execute(
+            "UPDATE series_parts SET archived_at = ?2, \
+               pr_number = COALESCE((SELECT pr_number FROM scm_cache WHERE workspace_id = ?1), pr_number), \
+               pr_lifecycle = COALESCE((SELECT pr_lifecycle FROM scm_cache WHERE workspace_id = ?1), pr_lifecycle) \
+             WHERE workspace_id = ?1",
+            rusqlite::params![id.0, crate::util::time::now_ms() / 1000],
+        )?;
         self.conn
             .execute("DELETE FROM scm_cache WHERE workspace_id = ?1", [id.0])?;
         self.conn
@@ -249,12 +257,20 @@ impl Store {
             "UPDATE workspaces SET name = ?1 WHERE id = ?2",
             rusqlite::params![name, id.0],
         )?;
+        self.conn.execute(
+            "UPDATE series_parts SET slug = ?1 WHERE workspace_id = ?2",
+            rusqlite::params![name, id.0],
+        )?;
         Ok(())
     }
 
     pub fn set_workspace_branch(&self, id: WorkspaceId, branch: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE workspaces SET branch = ?1 WHERE id = ?2",
+            rusqlite::params![branch, id.0],
+        )?;
+        self.conn.execute(
+            "UPDATE series_parts SET branch = ?1 WHERE workspace_id = ?2",
             rusqlite::params![branch, id.0],
         )?;
         Ok(())

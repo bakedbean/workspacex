@@ -106,6 +106,13 @@ impl Store {
                  (SELECT id FROM workspaces WHERE repo_id = ?1)",
             [id.0],
         )?;
+        self.conn().execute(
+            "DELETE FROM series_parts WHERE series_id IN \
+                 (SELECT id FROM series WHERE repo_id = ?1)",
+            [id.0],
+        )?;
+        self.conn()
+            .execute("DELETE FROM series WHERE repo_id = ?1", [id.0])?;
         self.conn()
             .execute("DELETE FROM workspaces WHERE repo_id = ?1", [id.0])?;
         self.conn()

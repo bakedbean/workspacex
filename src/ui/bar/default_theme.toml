@@ -157,7 +157,8 @@ format    = "[$label $count]($style)"
 separator = "[ › ](fg:dim)"
 priority  = 30
 
-# How many workspaces the focus view shows. Variables: $workspaces
+# How many workspaces the focus view shows outside hidden groups.
+# Variables: $workspaces
 [focus_counts]
 format   = "[$workspaces ws]($style)"
 priority = 50

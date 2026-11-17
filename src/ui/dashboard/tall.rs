@@ -2064,6 +2064,60 @@ mod tests {
         assert!(!now_line(10 * 60).contains("old"));
     }
 
+    /// The mark appears from exactly `STALE_RECAP_SECS` of activity past the
+    /// recap, and a `now` line that fills its width puts the mark on a line
+    /// of its own instead of past the edge.
+    #[test]
+    fn stale_mark_boundary_and_wrapping() {
+        let mut row = base_row("b");
+        row.ago_secs = Some(60);
+        let lines = |row: &RowInputs, state: String, recap_age_secs: u64| {
+            let detail = WorkspaceDetail {
+                recap: Some(WorkspaceRecap {
+                    state: Some(state),
+                    ..Default::default()
+                }),
+                recap_age_secs: Some(recap_age_secs),
+                ..Default::default()
+            };
+            let tall = TallRow {
+                row,
+                detail: &detail,
+            };
+            layout(&tall, &AgentGlyphs::default(), 120)
+                .iter()
+                .map(text)
+                .collect::<Vec<_>>()
+        };
+        let has_mark = |l: &[String]| l.iter().any(|l| l.contains(" old"));
+        assert!(has_mark(&lines(&row, "x".into(), 60 + STALE_RECAP_SECS)));
+        assert!(!has_mark(&lines(
+            &row,
+            "x".into(),
+            60 + STALE_RECAP_SECS - 1
+        )));
+        // No stale claim without a known last activity.
+        row.ago_secs = None;
+        assert!(!has_mark(&lines(&row, "x".into(), 10 * 3600)));
+        row.ago_secs = Some(60);
+
+        let cols = strip_columns(
+            &[TallRow {
+                row: &row,
+                detail: &WorkspaceDetail::default(),
+            }],
+            ColumnWidths::default(),
+            120,
+        );
+        let text_width = cols.prose.saturating_sub(LABEL_WIDTH).max(8);
+        let full = "x".repeat(text_width);
+        let out = lines(&row, full.clone(), 3 * 3600);
+        let at = out.iter().position(|l| l.contains(&full)).unwrap();
+        assert!(!out[at].contains("old"), "{out:#?}");
+        assert!(out[at + 1].trim_end().ends_with("3h old"), "{out:#?}");
+        assert!(out.iter().all(|l| display_width(l) <= 120));
+    }
+
     /// The strip says what's not on the remote yet: commits to push or
     /// pull against the upstream, or a branch with work never pushed.
     #[test]
@@ -2104,6 +2158,18 @@ mod tests {
         merged.lifecycle = Some(BranchLifecycle::PrMerged);
         merged.pr_number = Some(7);
         assert!(!strip(&merged, untracked, 4).contains("not pushed"));
+        for lc in [BranchLifecycle::PrOpen, BranchLifecycle::PrDraft] {
+            let mut pr = base_row("b");
+            pr.lifecycle = Some(lc);
+            pr.pr_number = Some(7);
+            assert!(!strip(&pr, untracked, 4).contains("not pushed"), "{lc:?}");
+        }
+        // Unknown git state makes no claim about the remote.
+        let detail = WorkspaceDetail {
+            ahead_of_base: Some(4),
+            ..Default::default()
+        };
+        assert!(sync_spans(&row, &detail, &Theme::wsx()).is_empty());
     }
 
     /// A chip wider than the column drops its lifecycle word to fit; the

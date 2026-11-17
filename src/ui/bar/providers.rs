@@ -444,7 +444,8 @@ pub fn focus_pipeline(
     eval_items(cfg, &items, resolver)
 }
 
-/// How many workspaces the focus view shows. Absent at zero.
+/// How many workspaces the focus view shows outside hidden groups. Absent
+/// at zero.
 /// Variables: `$workspaces`.
 pub fn focus_counts(
     cfg: &SegmentConfig,

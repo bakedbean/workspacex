@@ -3714,6 +3714,43 @@ mod focus_header_tests {
         assert_eq!(statuses, 2);
     }
 
+    /// A theme written before `[dashboard_focus]` existed still loads and
+    /// gets the bundled focus header.
+    #[test]
+    fn old_theme_without_a_focus_bar_gets_the_default() {
+        let src = "[dashboard_header]\nformat = \"$brand\"\n";
+        let specs = resolve(ThemeFile::parse(src).unwrap(), &Theme::wsx()).unwrap();
+        let bundled = bundled_default(&Theme::wsx());
+        assert_eq!(specs.dashboard_focus.format, bundled.dashboard_focus.format);
+        let text = test_util::plain(&render(&specs, 120).line);
+        assert!(text.starts_with("◂ all repos / wsx"), "{text}");
+    }
+
+    /// A repo with no workspaces keeps the way back, name and path, and
+    /// drops the pipeline, tally and count.
+    #[test]
+    fn empty_repo_focus_header_keeps_only_the_crumbs() {
+        let theme = Theme::wsx();
+        let out = dashboard_focus(
+            &bundled_default(&theme),
+            &theme,
+            &crate::ui::bar::DashboardFocusInputs {
+                repo: "wsx",
+                path: "/src/wsx",
+                stages: [0; 4],
+                statuses: StatusCounts::default(),
+                status_filter: None,
+                fleet: crate::ui::bar::fleet::empty(),
+            },
+            80,
+        );
+        let text = test_util::plain(&out.line);
+        assert!(text.starts_with("◂ all repos / wsx  /src/wsx"), "{text}");
+        assert!(!text.contains("No PR"), "{text}");
+        assert!(text.trim_end().ends_with("─"), "{text}");
+        assert!(out.hits.iter().any(|h| h.hit == Hit::Unfocus));
+    }
+
     /// A narrow header drops the pipeline first, then the path, and keeps
     /// the way back and the repo name.
     #[test]

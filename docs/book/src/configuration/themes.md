@@ -253,14 +253,14 @@ Each segment has its own table, such as `[workspace]`, with these keys:
 | `brand` | `$symbol $name $mark $view` | The wordmark. `$view` is `dashboard`, not placed by default. Dashboard header only. |
 | `group` | `$label $tabs` | The `group:` mode tabs; the active one is highlighted. Not placed by default. Dashboard header only. |
 | `sort` | `$label $tabs` | The `sort:` mode tabs. Not placed by default. Dashboard header only. |
-| `statuses` | `$glyph $count $label` | One item per [status](../dashboard/status-indicators.md#status-glyphs) with a nonzero count, most urgent first. On the dashboard header it counts every workspace, filtered-out ones too; on the focus header, the workspaces the view shows. `$style` is the status color, reversed on the status the list is [filtered to](../dashboard/status-indicators.md#filtering-by-status) and dimmed on the rest. Dashboard and focus headers only. Clickable. Older wsx builds reject a theme that uses it. |
+| `statuses` | `$glyph $count $label` | One item per [status](../dashboard/status-indicators.md#status-glyphs) with a nonzero count, most urgent first. On the dashboard header it counts every workspace, filtered-out ones too; on the focus header, the workspaces the focus view shows outside hidden groups. `$style` is the status color, reversed on the status the list is [filtered to](../dashboard/status-indicators.md#filtering-by-status) and dimmed on the rest. Dashboard and focus headers only. Clickable. Older wsx builds reject a theme that uses it. |
 | `filter` | `$needle` | The live filter, capped at 24 characters. Dashboard header only. |
 | `counts` | `$repos $workspaces` | Repo and workspace counts. Dashboard header only. |
 | `focus_back` | `$symbol $label` | The focus view's way back (`◂ all repos`). `symbol` defaults to `◂`; `$style` is the path hue, underlined. Focus header only. Clickable. |
 | `focus_repo` | `$name` | The focused repo's name, in the repo-header style. Focus header only. |
 | `focus_path` | `$path` | The focused repo's path, dim. Focus header only. |
 | `focus_pipeline` | `$label $count` | One item per PR stage, in order: `No PR`, `Draft`, `Open`, `Done`, zeros included. `$style` is the stage's section color, dim when empty. Focus header only. |
-| `focus_counts` | `$workspaces` | How many workspaces the focus view shows. Hidden at zero. Focus header only. |
+| `focus_counts` | `$workspaces` | How many workspaces the focus view shows outside hidden groups (it also counts its PR stages that way). Hidden at zero. Focus header only. |
 | `keys` | `$key $label` | One pill per key hint. Clickable. |
 | `version` | `$version` | |
 | `usage` | `$label $spark` | The activity sparkline. Clickable. |

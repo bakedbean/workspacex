@@ -30,6 +30,10 @@ pub struct ThemeFile {
     /// map, like the other bars.
     #[serde(default)]
     pub dashboard_header: BarTable,
+    /// The repo focus view's top line: the way back, the repo's name and
+    /// path, its PR pipeline, status tally, and workspace count.
+    #[serde(default)]
+    pub dashboard_focus: BarTable,
     #[serde(default)]
     pub attached_top: BarTable,
     #[serde(default)]
@@ -188,6 +192,7 @@ impl ThemeFile {
         }
         self.dashboard_footer = self.dashboard_footer.merge_over(base.dashboard_footer);
         self.dashboard_header = self.dashboard_header.merge_over(base.dashboard_header);
+        self.dashboard_focus = self.dashboard_focus.merge_over(base.dashboard_focus);
         self.attached_top = self.attached_top.merge_over(base.attached_top);
         self.attached_bottom = self.attached_bottom.merge_over(base.attached_bottom);
         self.dashboard_detail = self.dashboard_detail.merge_over(base.dashboard_detail);
@@ -215,6 +220,7 @@ pub struct BarSpecs {
     pub palette: HashMap<String, Color>,
     pub dashboard_footer: BarSpec,
     pub dashboard_header: BarSpec,
+    pub dashboard_focus: BarSpec,
     pub attached_top: BarSpec,
     pub attached_bottom: BarSpec,
     pub dashboard_detail: BarSpec,
@@ -743,6 +749,13 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
         &resolver,
         &mut errors,
     );
+    let dashboard_focus = resolve_bar(
+        "dashboard_focus",
+        &file.dashboard_focus,
+        &allowed_names,
+        &resolver,
+        &mut errors,
+    );
     let attached_top = resolve_bar(
         "attached_top",
         &file.attached_top,
@@ -794,6 +807,11 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
                 "in the dashboard header",
             ),
             (
+                "[dashboard_focus]",
+                &dashboard_focus,
+                "in the repo focus view's header",
+            ),
+            (
                 "[dashboard_detail]",
                 &dashboard_detail,
                 "in the dashboard detail pane's pinned-chip row",
@@ -817,6 +835,7 @@ pub fn resolve(file: ThemeFile, theme: &Theme) -> Result<BarSpecs, Vec<ThemeErro
             palette,
             dashboard_footer,
             dashboard_header,
+            dashboard_focus,
             attached_top,
             attached_bottom,
             dashboard_detail,

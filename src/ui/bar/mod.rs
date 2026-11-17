@@ -25,7 +25,7 @@ pub(crate) use bars::{
     dashboard_detail_reply, fit_attention,
 };
 pub use bars::{
-    DashboardFooterInputs, DashboardHeaderInputs, cfg, dashboard_detail, dashboard_footer,
-    dashboard_footer_shows, dashboard_header,
+    DashboardFocusInputs, DashboardFooterInputs, DashboardHeaderInputs, cfg, dashboard_detail,
+    dashboard_focus, dashboard_footer, dashboard_footer_shows, dashboard_header,
 };
 pub use providers::AgentPill;

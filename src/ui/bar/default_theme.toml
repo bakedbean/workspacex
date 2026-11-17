@@ -48,6 +48,18 @@ format       = "$brand(  $filter)    ($statuses)"
 right_format = "$counts"
 fill         = " "
 
+# The repo focus view's top line: the way back to every repo, the repo's
+# name and path, a rule, then its workspaces by PR stage, the status tally,
+# and the workspace count. On a narrow terminal the pipeline drops first,
+# then the path, then the count. Segments that carry data here:
+# $focus_back $focus_repo $focus_path $focus_pipeline $statuses
+# $focus_counts, and modules.
+[dashboard_focus]
+format       = "$focus_back[ / ](fg:dim)$focus_repo(  $focus_path)  "
+right_format = " ($focus_pipeline    )($statuses    )$focus_counts"
+fill         = "─"
+fill_style   = "fg:dim"
+
 [attached_top]
 format = "($agent_bar )$workspace(  $workspace_tags)(   $attention)"
 
@@ -121,6 +133,34 @@ priority = 30
 # than a shortened one, since rows are missing and nothing says why.
 [filter]
 format = "[/$needle]($style)"
+
+# The focus view's way back to every repo; clicking it leaves the view.
+# $style is the path hue, underlined. Variables: $symbol $label
+[focus_back]
+symbol = "◂"
+format = "[$symbol $label]($style)"
+
+# The focused repo's name, in the repo-header style. Variables: $name
+[focus_repo]
+format = "[$name]($style)"
+
+# The focused repo's path, dim. Variables: $path
+[focus_path]
+format   = "[$path]($style)"
+priority = 40
+
+# The focused repo's workspaces by PR stage: one item per stage (No PR,
+# Draft, Open, Done), zeros included. $style is the stage's section color,
+# dim when empty. Variables: $label $count
+[focus_pipeline]
+format    = "[$label $count]($style)"
+separator = "[ › ](fg:dim)"
+priority  = 30
+
+# How many workspaces the focus view shows. Variables: $workspaces
+[focus_counts]
+format   = "[$workspaces ws]($style)"
+priority = 50
 
 # Variables: $repos $workspaces
 [counts]

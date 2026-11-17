@@ -354,6 +354,117 @@ pub fn counts(
     )
 }
 
+/// The focus view's way back: `◂ all repos`, carrying the `Hit::Unfocus`
+/// click. `$style` is the path hue, underlined like a link.
+/// Variables: `$symbol` `$label`.
+pub fn focus_back(cfg: &SegmentConfig, theme: &Theme, resolver: &Resolver) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
+    let symbol = cfg.symbol.clone().unwrap_or_else(|| "◂".to_string());
+    let mut seg = eval_segment(
+        cfg,
+        &vars(vec![("symbol", var(symbol)), ("label", var("all repos"))]),
+        theme.path_style().add_modifier(Modifier::UNDERLINED),
+        &[],
+        resolver,
+    )?;
+    seg.hit_from(0, Hit::Unfocus);
+    Some(seg)
+}
+
+/// The focused repo's name. `$style` is the repo-header style.
+/// Variables: `$name`.
+pub fn focus_repo(
+    cfg: &SegmentConfig,
+    name: &str,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
+    eval_segment(
+        cfg,
+        &vars(vec![("name", var(name))]),
+        theme.header_style(),
+        &[],
+        resolver,
+    )
+}
+
+/// The focused repo's path. `$style` is the muted `dim` hue.
+/// Variables: `$path`.
+pub fn focus_path(
+    cfg: &SegmentConfig,
+    path: &str,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    let theme = &cfg.theme(theme);
+    eval_segment(
+        cfg,
+        &vars(vec![("path", var(path))]),
+        theme.dim_style(),
+        &[],
+        resolver,
+    )
+}
+
+/// The focused repo's workspaces by PR stage, one item per stage in
+/// pipeline order (No PR, Draft, Open, Done), zeros included. `$style` is
+/// the stage's section color, or `dim` when the stage is empty. Absent
+/// when there are no workspaces. Variables: `$label` `$count`.
+pub fn focus_pipeline(
+    cfg: &SegmentConfig,
+    stages: [usize; 4],
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    use crate::ui::dashboard::{FocusSection, section_color};
+    if stages.iter().all(|&n| n == 0) {
+        return None;
+    }
+    let theme = &cfg.theme(theme);
+    let items: Vec<(SegmentMap, Style, Option<Hit>)> = FocusSection::ALL
+        .into_iter()
+        .zip(stages)
+        .map(|(section, n)| {
+            let style = if n == 0 {
+                theme.dim_style()
+            } else {
+                Style::default().fg(section_color(section, theme))
+            };
+            (
+                vars(vec![
+                    ("label", var(section.label())),
+                    ("count", var(n.to_string())),
+                ]),
+                style,
+                None,
+            )
+        })
+        .collect();
+    eval_items(cfg, &items, resolver)
+}
+
+/// How many workspaces the focus view shows. Absent at zero.
+/// Variables: `$workspaces`.
+pub fn focus_counts(
+    cfg: &SegmentConfig,
+    workspaces: usize,
+    theme: &Theme,
+    resolver: &Resolver,
+) -> Option<Segment> {
+    if workspaces == 0 {
+        return None;
+    }
+    let theme = &cfg.theme(theme);
+    eval_segment(
+        cfg,
+        &vars(vec![("workspaces", var(workspaces.to_string()))]),
+        theme.dim_style(),
+        &[],
+        resolver,
+    )
+}
+
 /// `(key glyph, label, hit)` per pill.
 pub fn keys(
     cfg: &SegmentConfig,

@@ -270,6 +270,18 @@ fn the_breadcrumb_shows_the_pipeline_and_headers_tally_attention() {
         "{crumb}"
     );
     assert!(screen.contains("━━ Open · 2 · ⏺ 1 conflict ━"), "{screen}");
+    // The focus header's tally filters by status like the dashboard's.
+    let crumb_y = screen
+        .lines()
+        .position(|l| l.contains("◂ all repos"))
+        .unwrap() as u16;
+    assert!(
+        app.dashboard_status_rects
+            .iter()
+            .any(|(_, r)| r.y == crumb_y),
+        "{:?}",
+        app.dashboard_status_rects
+    );
 }
 
 #[test]

@@ -1520,6 +1520,7 @@ mod segment_registry_drift_tests {
             .filter(|name| !DASHBOARD_FOOTER_ONLY.contains(name))
             .filter(|name| !DETAIL_HEADER_ONLY.contains(name))
             .filter(|name| !DETAIL_REPLY_ONLY.contains(name))
+            .filter(|name| !FOCUS_HEADER_ONLY.contains(name))
             .collect();
         assert_eq!(
             got, expected,
@@ -1619,6 +1620,48 @@ mod segment_registry_drift_tests {
     /// carrying dashboard-only state, so the attached bars never build them.
     const DASHBOARD_HEADER_ONLY: [&str; 6] =
         ["brand", "group", "sort", "statuses", "filter", "counts"];
+
+    /// The focus header's segments of its own: the focused repo and its
+    /// workspaces, which no other bar has.
+    const FOCUS_HEADER_ONLY: [&str; 5] = [
+        "focus_back",
+        "focus_repo",
+        "focus_path",
+        "focus_pipeline",
+        "focus_counts",
+    ];
+
+    /// Every input present at once, so each of the focus header's segments
+    /// renders, its own five plus the status tally it shares with the
+    /// dashboard header.
+    #[test]
+    fn focus_header_segments_cover_their_registered_names() {
+        let theme = Theme::wsx();
+        let specs = bundled_default(&theme);
+        let resolver = specs.resolver(&theme);
+        let inputs = crate::ui::bar::DashboardFocusInputs {
+            repo: "wsx",
+            path: "/src/wsx",
+            stages: [1, 0, 2, 1],
+            statuses: crate::ui::dashboard::sort::StatusCounts {
+                idle: 4,
+                ..Default::default()
+            },
+            status_filter: None,
+            fleet: crate::ui::bar::fleet::empty(),
+        };
+        let segments =
+            crate::ui::bar::bars::dashboard_focus_segments(&specs, &theme, &inputs, &resolver);
+        let got: BTreeSet<&str> = segments.keys().map(String::as_str).collect();
+        let expected: BTreeSet<&str> = FOCUS_HEADER_ONLY.into_iter().chain(["statuses"]).collect();
+        assert_eq!(got, expected);
+        for name in expected {
+            assert!(
+                SEGMENTS.iter().any(|d| d.name == name),
+                "focus header's `{name}` segment must be in registry::SEGMENTS"
+            );
+        }
+    }
 
     /// The dashboard footer's segment of its own: the shared-host chips,
     /// which open a remote list and so belong to the dashboard alone.
@@ -3614,5 +3657,116 @@ mod module_tests {
             "{:?}",
             plain(&out.line)
         );
+    }
+}
+
+#[cfg(test)]
+mod focus_header_tests {
+    use super::*;
+    use crate::config::theme_file::{BarSpecs, ThemeFile, bundled_default, resolve};
+    use crate::ui::dashboard::sort::StatusCounts;
+
+    fn render(specs: &BarSpecs, width: u16) -> Rendered {
+        let theme = Theme::wsx();
+        dashboard_focus(
+            specs,
+            &theme,
+            &crate::ui::bar::DashboardFocusInputs {
+                repo: "wsx",
+                path: "/src/wsx",
+                stages: [1, 0, 2, 1],
+                statuses: StatusCounts {
+                    question: 1,
+                    idle: 3,
+                    ..Default::default()
+                },
+                status_filter: None,
+                fleet: crate::ui::bar::fleet::empty(),
+            },
+            width,
+        )
+    }
+
+    /// The bundled default draws the stock breadcrumb: the way back, the
+    /// repo and path, a rule, then pipeline, tally and count flush right.
+    #[test]
+    fn bundled_focus_header_reads_like_the_breadcrumb() {
+        let out = render(&bundled_default(&Theme::wsx()), 120);
+        let text = test_util::plain(&out.line);
+        assert!(
+            text.starts_with("◂ all repos / wsx  /src/wsx  ──"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with(
+                "No PR 1 › Draft 0 › Open 2 › Done 1    ? 1 question   · 3 idle    4 ws"
+            ),
+            "{text}"
+        );
+        assert_eq!(out.line.width(), 120);
+        let back = out.hits.iter().find(|h| h.hit == Hit::Unfocus).unwrap();
+        assert_eq!((back.start_col, back.width), (0, 11));
+        let statuses = out
+            .hits
+            .iter()
+            .filter(|h| matches!(h.hit, Hit::Status(_)))
+            .count();
+        assert_eq!(statuses, 2);
+    }
+
+    /// A narrow header drops the pipeline first, then the path, and keeps
+    /// the way back and the repo name.
+    #[test]
+    fn narrow_focus_header_drops_pipeline_then_path() {
+        let specs = bundled_default(&Theme::wsx());
+        let text = test_util::plain(&render(&specs, 70).line);
+        assert!(!text.contains("Draft"), "{text}");
+        assert!(text.contains("/src/wsx"), "{text}");
+        let text = test_util::plain(&render(&specs, 50).line);
+        assert!(!text.contains("/src/wsx"), "{text}");
+        assert!(text.starts_with("◂ all repos / wsx"), "{text}");
+    }
+
+    /// A powerline theme can put each crumb and each pipeline stage on its
+    /// own block, chaining the caps through the stages' neighbour colours.
+    #[test]
+    fn focus_header_takes_a_powerline_theme() {
+        let src = r##"
+[palette]
+first  = "#303030"
+second = "#444444"
+
+[dashboard_focus]
+format       = "[ $focus_back ](bg:first)[\ue0b0](fg:first bg:second)[ $focus_repo ](bg:second)[\ue0b0](fg:second)( $focus_path )"
+right_format = "($focus_pipeline)( $statuses )"
+fill         = " "
+
+[focus_pipeline]
+styles    = ["bg:first", "bg:second"]
+format    = "[\ue0b2](fg:item_bg bg:prev_bg)[ $label $count ]($style)"
+separator = ""
+"##;
+        let specs = resolve(ThemeFile::parse(src).unwrap(), &Theme::wsx()).unwrap();
+        let out = render(&specs, 120);
+        let text = test_util::plain(&out.line);
+        assert!(
+            text.starts_with(" ◂ all repos \u{e0b0} wsx \u{e0b0} /src/wsx"),
+            "{text}"
+        );
+        assert!(
+            text.contains("\u{e0b2} No PR 1 \u{e0b2} Draft 0 \u{e0b2} Open 2 \u{e0b2} Done 1 "),
+            "{text}"
+        );
+        let open = out
+            .line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("Open"))
+            .unwrap();
+        assert_eq!(
+            open.style.bg,
+            Some(ratatui::style::Color::Rgb(0x44, 0x44, 0x44))
+        );
+        assert!(out.hits.iter().any(|h| h.hit == Hit::Unfocus));
     }
 }

@@ -51,6 +51,38 @@ format       = "$brand(  $filter) ([](fg:soot)[ $statuses ](bg:soot fg:orange
 right_format = "[](fg:smoke)[$counts ](bg:orange fg:black)"
 fill         = " "
 
+# The repo focus view's top line, as an airline crumb trail. Left, pointing
+# right: the way back on the orange mode block, the repo on smoke, its path
+# on soot (a thin wedge once the path drops on a narrow terminal). Right,
+# pointing left: one block per PR stage, alternating charcoal and soot so
+# each stage's own color reads, then the status tally on smoke and the
+# workspace count on the orange edge block. On a narrow terminal the path
+# drops first, then the stages; the tally's cap is drawn on soot to meet
+# the last stage, so with the stages gone it keeps a one-cell soot edge.
+[dashboard_focus]
+format       = "[ $focus_back ](bg:orange fg:black)[\ue0b0](fg:orange bg:smoke)[ $focus_repo ](bg:smoke)[\ue0b0](fg:smoke bg:soot)[( $focus_path )](bg:soot fg:cream)[\ue0b0](fg:soot)"
+right_format = "$focus_pipeline[\ue0b2](fg:smoke bg:soot)[( $statuses )](bg:smoke)[\ue0b2](fg:orange bg:smoke)[( $focus_counts )](bg:orange fg:black)"
+fill         = " "
+
+[focus_back]
+style = "fg:black"
+
+[focus_repo]
+style = "fg:cream bold"
+
+[focus_path]
+style = "fg:cream"
+
+[focus_pipeline]
+styles    = ["bg:charcoal", "bg:soot", "bg:charcoal", "bg:soot"]
+format    = "[\ue0b2](fg:item_bg bg:prev_bg)[ $label $count ]($style)"
+separator = ""
+priority  = 45
+
+[focus_counts]
+format = "[$workspaces ws]($style)"
+style  = "fg:black"
+
 # Left: a blank orange stub as the mode block, then the key hints on smoke,
 # a short mode-then-mid chain.
 # Right: the shared hosts on ash, wedging into the funnel on the orange

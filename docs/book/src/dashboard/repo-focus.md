@@ -3,7 +3,7 @@
 The focus view shows one repo on the dashboard and gives each of its workspaces several lines instead of one, laid out to be read at a glance. Workspaces are grouped into sections by pull request state, each row starts with a strip of fixed columns that line up down the view, and what the workspace is for and doing sits under its branch. Every other workspace has a faint background tint so each reads as one block.
 
 ```text
-◂ all repos / workspacex  ~/src/workspacex  ──────  No PR 1 › Draft 1 › Open 1 › Done 1    ● 1  ? 1    4 ws
+◂ all repos / workspacex  ~/src/workspacex  ──  No PR 1 › Draft 1 › Open 1 › Done 1    ? 1 question   ⠋ 1 thinking   · 2 idle    4 ws
 
 ━━ No PR · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -35,7 +35,7 @@ The focus view shows one repo on the dashboard and gives each of its workspaces 
  ▎   ▎ claude
 ```
 
-The header line sums the repo up by PR stage (`No PR 1 › Draft 1 › Open 1 › Done 1`, each stage in its section's color and dim when empty) before the status counts. It is left out when the terminal is too narrow for it.
+The header line sums the repo up by PR stage (`No PR 1 › Draft 1 › Open 1 › Done 1`, each stage in its section's color and dim when empty) before the status counts. On a narrow terminal the stages drop first, then the path. Click `◂ all repos` to leave the view, or a status in the tally to filter by it. With a [bar theme](../configuration/themes.md#the-focus-header), the `[dashboard_focus]` bar lays this line out, for example as powerline blocks.
 
 ## Sections
 

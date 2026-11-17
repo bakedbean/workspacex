@@ -88,6 +88,10 @@ pub struct WorkspaceStatus {
     pub untracked: u32, // files matching ?? in porcelain v1
     pub ahead: u32,     // commits ahead of upstream
     pub behind: u32,    // commits behind upstream
+    /// The branch tracks a remote branch that still exists. False for a
+    /// branch never pushed (or detached HEAD) and for one whose upstream is
+    /// `[gone]`; `ahead`/`behind` are then zero.
+    pub upstream: bool,
 }
 
 impl WorkspaceStatus {
@@ -133,6 +137,7 @@ fn parse_porcelain(out: &str) -> WorkspaceStatus {
     let mut status = WorkspaceStatus::default();
     for line in out.lines() {
         if let Some(rest) = line.strip_prefix("## ") {
+            status.upstream = rest.contains("...") && !rest.contains("[gone]");
             // Parse `[ahead N, behind M]` if present.
             if let Some(brk) = rest.find('[') {
                 if let Some(close_rel) = rest[brk..].find(']') {
@@ -598,6 +603,15 @@ pub(super) mod tests {
         assert_eq!(s.behind, 3);
         assert_eq!(s.modified, 1);
         assert_eq!(s.untracked, 1);
+        assert!(s.upstream);
+    }
+
+    #[test]
+    fn parse_treats_a_gone_upstream_as_none() {
+        let s = parse_porcelain("## feat...origin/feat [gone]\n");
+        assert!(!s.upstream);
+        let s = parse_porcelain("## feat...origin/feat\n");
+        assert!(s.upstream);
     }
 
     #[test]
@@ -606,6 +620,7 @@ pub(super) mod tests {
         let s = parse_porcelain(out);
         assert_eq!(s.ahead, 0);
         assert_eq!(s.behind, 0);
+        assert!(!s.upstream);
     }
 
     #[test]

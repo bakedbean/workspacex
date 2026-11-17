@@ -243,6 +243,7 @@ pub struct StripColumns {
     pub pr: usize,
     pub status: usize,
     pub ahead: usize,
+    pub sync: usize,
     pub dirty: usize,
     pub diff: usize,
     pub age: usize,
@@ -263,13 +264,14 @@ pub fn strip_columns(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -
         .clamp(display_width(NO_PR), row::MAX_PR_WIDTH);
     let status = max(&|r| spans_width(&status_spans(r.row, 0, &theme)));
     let ahead = max(&|r| ahead_text(r.detail).map_or(0, |t| display_width(&t)));
+    let sync = max(&|r| spans_width(&sync_spans(r.row, r.detail, &theme)));
     let dirty = max(&|r| dirty_text(r.detail).map_or(0, |t| display_width(&t)));
     let diff = max(&|r| spans_width(&diff_spans(r.row, &theme)));
     let age = max(&|r| display_width(&age_text(r.row)));
     let prefix = widths.agent + row::GUTTER_WIDTH + 1;
     let natural = max(&|r| 2 + display_width(&r.row.branch)).clamp(BRANCH_MIN, BRANCH_MAX);
     let one_line =
-        prefix + natural + STRIP_GAP + pr + cells_width([status, ahead, dirty, diff, age]);
+        prefix + natural + STRIP_GAP + pr + cells_width([status, ahead, sync, dirty, diff, age]);
     let two_line = one_line > width;
     let prose = width.saturating_sub(prefix + 2).min(PROSE_MAX);
     if !two_line {
@@ -279,6 +281,7 @@ pub fn strip_columns(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -
             pr,
             status,
             ahead,
+            sync,
             dirty,
             diff,
             age,
@@ -301,6 +304,7 @@ pub fn strip_columns(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -
         pr,
         status: fit(status),
         ahead: fit(ahead),
+        sync: fit(sync),
         dirty: fit(dirty),
         diff: fit(diff),
         age,
@@ -343,6 +347,39 @@ fn ahead_text(detail: &WorkspaceDetail) -> Option<String> {
     detail
         .ahead_of_base
         .map(|n| ahead_label(n, detail.base_branch.as_deref()))
+}
+
+/// Where the branch stands against its remote: `⇡2 unpushed` and `⇣3
+/// behind` against its upstream, or a dim `not pushed` for a branch with
+/// commits but no upstream and no PR (a PR means it was pushed; a merged
+/// branch's upstream is often deleted). Nothing when in sync or unknown.
+fn sync_spans(row: &RowInputs, detail: &WorkspaceDetail, theme: &Theme) -> Vec<Span<'static>> {
+    use crate::git::forge::BranchLifecycle;
+    let Some(g) = detail.git else {
+        return Vec::new();
+    };
+    if !g.upstream {
+        let no_pr = matches!(row.lifecycle, None | Some(BranchLifecycle::NoPr));
+        return if no_pr && detail.ahead_of_base.is_some_and(|n| n > 0) {
+            vec![Span::styled("not pushed", theme.row_dim_style())]
+        } else {
+            Vec::new()
+        };
+    }
+    let mut out = Vec::new();
+    for (n, label) in [(g.ahead, "⇡{} unpushed"), (g.behind, "⇣{} behind")] {
+        if n == 0 {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(Span::raw(" "));
+        }
+        out.push(Span::styled(
+            label.replace("{}", &n.to_string()),
+            theme.warn_style(),
+        ));
+    }
+    out
 }
 
 /// `3 mod 1 untr`; `None` for a clean or unknown tree.
@@ -475,6 +512,7 @@ pub fn row_layout(
     let fields = [
         (cols.status, status_spans(row, tick, theme)),
         (cols.ahead, dim_cell(ahead_text(tall.detail), theme)),
+        (cols.sync, sync_spans(row, tall.detail, theme)),
         (cols.dirty, dim_cell(dirty_text(tall.detail), theme)),
         (cols.diff, diff_spans(row, theme)),
     ];
@@ -1084,6 +1122,7 @@ mod tests {
                 untracked: 1,
                 ahead: 0,
                 behind: 0,
+                upstream: false,
             }),
             ahead_of_base: Some(4),
             base_branch: Some("origin/main".into()),
@@ -1801,6 +1840,7 @@ mod tests {
                 untracked: 1,
                 ahead: 0,
                 behind: 0,
+                upstream: false,
             }),
             ..Default::default()
         };
@@ -1829,6 +1869,48 @@ mod tests {
                 .any(|l| l.contains("mod") || l.contains("untr")),
             "{lines:#?}"
         );
+    }
+
+    /// The strip says what's not on the remote yet: commits to push or
+    /// pull against the upstream, or a branch with work never pushed.
+    #[test]
+    fn sync_cell_shows_unpushed_behind_and_never_pushed() {
+        use crate::git::forge::BranchLifecycle;
+        let strip = |row: &RowInputs, git: WorkspaceStatus, ahead_of_base: u32| {
+            let detail = WorkspaceDetail {
+                git: Some(git),
+                ahead_of_base: Some(ahead_of_base),
+                ..Default::default()
+            };
+            strip_rows(
+                &[TallRow {
+                    row,
+                    detail: &detail,
+                }],
+                140,
+            )[0][0]
+                .clone()
+        };
+        let tracked = |ahead, behind| WorkspaceStatus {
+            ahead,
+            behind,
+            upstream: true,
+            ..Default::default()
+        };
+        let row = base_row("b");
+        let line = strip(&row, tracked(2, 3), 4);
+        assert!(line.contains("⇡2 unpushed ⇣3 behind"), "{line}");
+        let line = strip(&row, tracked(0, 0), 4);
+        assert!(!line.contains('⇡') && !line.contains("pushed"), "{line}");
+
+        let untracked = WorkspaceStatus::default();
+        assert!(strip(&row, untracked, 4).contains("not pushed"));
+        assert!(!strip(&row, untracked, 0).contains("not pushed"));
+        // A PR means the branch was pushed, even once its upstream is gone.
+        let mut merged = base_row("b");
+        merged.lifecycle = Some(BranchLifecycle::PrMerged);
+        merged.pr_number = Some(7);
+        assert!(!strip(&merged, untracked, 4).contains("not pushed"));
     }
 
     /// A chip wider than the column drops its lifecycle word to fit; the
@@ -1980,6 +2062,7 @@ mod tests {
                 untracked: 3,
                 ahead: 0,
                 behind: 0,
+                upstream: false,
             }),
             ahead_of_base: Some(3),
             base_branch: Some("origin/some-long-base".into()),

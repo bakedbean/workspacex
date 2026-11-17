@@ -39,14 +39,14 @@ as well as its size. The `+N −M` totals after it stay.
   for a commit with no line changes, e.g. binary-only or empty). Parsing
   pairs each `%h\t%s` line with the shortstat line that follows it. The
   side panel's commit list is unaffected.
-- **Plumbing.** `RowInputs` gains the row's per-commit sizes, newest
-  first, taken from `app.workspace_branch_lists` in
-  `src/app/render/dashboard.rs` alongside `diff`.
+- **Plumbing.** The focus view's `WorkspaceDetail` gains `commit_sizes`,
+  newest first, taken from `app.workspace_branch_lists` in
+  `src/app/render/dashboard.rs` (only built for the focused repo).
 - **Render** (`src/ui/dashboard/tall.rs`, replacing `diff_bar`):
   - Up to `DIFF_BARS = 8` cells, the 8 newest commits, drawn oldest →
     newest left to right; fewer commits draw fewer bars, and the column
     pads to the widest row so `+N −M` stays aligned.
-  - Height: `▁▂▃▄▅▆▇█`, log scale (`ln_1p`) against the largest single
+  - Height: `▁▂▃▄▅▆▇█` in eight even buckets, log scale (`ln_1p`) against the largest single
     commit across the view's rows; any commit with changes gets at least
     `▁`; a commit with no line changes draws a dim `▁`.
   - Color: green when the commit added at least as many lines as it

@@ -157,7 +157,10 @@ pub(in crate::cli) fn resolve_continues(
     slug: Option<&str>,
 ) -> Result<Option<crate::data::store::Workspace>> {
     slug.map(|s| {
-        lookup_workspace(store, repo, s).map_err(|e| Error::UserInput(format!("--continues: {e}")))
+        lookup_workspace(store, repo, s).map_err(|e| match e {
+            Error::UserInput(msg) => Error::UserInput(format!("--continues: {msg}")),
+            other => other,
+        })
     })
     .transpose()
 }

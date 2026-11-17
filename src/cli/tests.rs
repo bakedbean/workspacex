@@ -4119,6 +4119,7 @@ fn continues_unknown_or_other_repo_fails_before_worktree() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("--continues"), "{err}");
+    assert_eq!(err.matches("invalid input").count(), 1, "one prefix: {err}");
     assert!(resolve_continues(&store, &other, Some("api-fix")).is_err());
 }
 

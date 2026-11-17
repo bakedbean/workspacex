@@ -445,6 +445,12 @@ fn dirty_text(detail: &WorkspaceDetail) -> Option<String> {
 /// Most commits the diff column draws a bar for.
 pub const DIFF_BARS: usize = 8;
 
+/// `WorkspaceDetail::commit_sizes` from a branch's commits (newest first):
+/// the `DIFF_BARS` newest commits' stats.
+pub fn commit_sizes(commits: &[crate::git::BranchCommit]) -> Vec<Option<DiffStats>> {
+    commits.iter().take(DIFF_BARS).map(|c| c.stats).collect()
+}
+
 /// `▂▅▁▃█▂▄  +184 −22`: a bar per recent commit, padded to `bars` cells so
 /// the counts line up, then the branch's totals; nothing without changes.
 fn diff_spans(
@@ -2035,6 +2041,22 @@ mod tests {
 
     fn st(added: u32, removed: u32) -> Option<crate::git::DiffStats> {
         Some(crate::git::DiffStats { added, removed })
+    }
+
+    /// Only the `DIFF_BARS` newest commits reach the view, newest first.
+    #[test]
+    fn commit_sizes_keep_the_newest_eight() {
+        let commits: Vec<_> = (0..12u32)
+            .map(|i| crate::git::BranchCommit {
+                hash: format!("{i:07}"),
+                subject: String::new(),
+                stats: st(i + 1, 0),
+            })
+            .collect();
+        let sizes = commit_sizes(&commits);
+        assert_eq!(sizes.len(), DIFF_BARS);
+        assert_eq!(sizes.first().copied().flatten().map(|d| d.added), Some(1));
+        assert_eq!(sizes.last().copied().flatten().map(|d| d.added), Some(8));
     }
 
     fn bars_text(spans: &[Span<'_>]) -> String {

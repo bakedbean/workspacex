@@ -439,13 +439,7 @@ pub(crate) fn build_workspace_items<'a>(
                         commit_sizes: app
                             .workspace_branch_lists
                             .get(&ws.id)
-                            .map(|l| {
-                                l.commits
-                                    .iter()
-                                    .take(crate::ui::dashboard::tall::DIFF_BARS)
-                                    .map(|c| c.stats)
-                                    .collect()
-                            })
+                            .map(|l| crate::ui::dashboard::tall::commit_sizes(&l.commits))
                             .unwrap_or_default(),
                     }
                 } else {

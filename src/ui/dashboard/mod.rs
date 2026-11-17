@@ -660,6 +660,34 @@ fn section_header_line(
     Line::from(spans)
 }
 
+/// `No PR 1 › Draft 0 › Open 2 › Done 1` for the focus view's header: how
+/// many workspaces sit at each PR stage, each stage in its section's color
+/// (dim when empty). Empty when there are no workspaces.
+fn pipeline_spans(per_section: [usize; 4], theme: &Theme) -> Vec<Span<'static>> {
+    if per_section.iter().all(|&n| n == 0) {
+        return Vec::new();
+    }
+    let sections = [
+        FocusSection::NoPr,
+        FocusSection::Draft,
+        FocusSection::Open,
+        FocusSection::Done,
+    ];
+    let mut out = Vec::new();
+    for (i, (section, n)) in sections.into_iter().zip(per_section).enumerate() {
+        if i > 0 {
+            out.push(Span::styled(" › ", theme.dim_style()));
+        }
+        let style = if n == 0 {
+            theme.dim_style()
+        } else {
+            Style::default().fg(section_color(section, theme))
+        };
+        out.push(Span::styled(format!("{} {n}", section.label()), style));
+    }
+    out
+}
+
 /// One entry in the focus view, in display order.
 enum FocusEntry<'w, 'a> {
     /// A PR-state header; never a selection or click target.
@@ -768,15 +796,17 @@ fn render_focus(
         .split(area);
     let entries = focus_entries(inputs, state, repo);
     // The header counts what shows normally, as the list's repo header does.
-    let counts = StatusCounts::from_iter(
-        focused_workspaces(inputs, state, repo.id)
-            .iter()
-            .map(|w| w.status),
-    );
+    let shown = focused_workspaces(inputs, state, repo.id);
+    let counts = StatusCounts::from_iter(shown.iter().map(|w| w.status));
+    let mut per_section = [0usize; 4];
+    for w in &shown {
+        per_section[section_of(w.row.lifecycle) as usize] += 1;
+    }
     let (crumb, (dx, w)) = by_repo::breadcrumb_line(
         &repo.name,
         &repo.path.to_string_lossy(),
         counts,
+        pipeline_spans(per_section, theme),
         chunks[0].width as usize,
         theme,
     );
@@ -1884,6 +1914,24 @@ mod section_header_tests {
             }
         }
     }
+    /// The header's pipeline names every stage in order with its count,
+    /// dimming the empty ones.
+    #[test]
+    fn pipeline_counts_every_stage() {
+        let theme = Theme::wsx();
+        let spans = pipeline_spans([1, 0, 2, 1], &theme);
+        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "No PR 1 › Draft 0 › Open 2 › Done 1");
+        let draft = spans.iter().find(|s| s.content == "Draft 0").unwrap();
+        assert_eq!(draft.style, theme.dim_style());
+        let open = spans.iter().find(|s| s.content == "Open 2").unwrap();
+        assert_eq!(
+            open.style.fg,
+            Some(section_color(FocusSection::Open, &theme))
+        );
+        assert!(pipeline_spans([0; 4], &theme).is_empty());
+    }
+
     /// Workspaces needing a look are tallied after the count, each in its
     /// own color, and the header still spans the width.
     #[test]

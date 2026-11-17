@@ -268,13 +268,17 @@ pub(crate) fn count_spans(counts: StatusCounts, theme: &Theme) -> Vec<Span<'stat
     right
 }
 
-/// The repo focus view's header: `◂ all repos / name  path ─── counts`.
+/// Blank cells between the focus view header's pipeline and its counts.
+const PIPELINE_GAP: usize = 4;
+
+/// The repo focus view's header: `◂ all repos / name  path ─── pipeline    counts`.
 /// Returns the line and the `(offset, width)` of the `◂ all repos` link,
 /// which leaves the focus view when clicked.
 pub fn breadcrumb_line(
     name: &str,
     path: &str,
     counts: StatusCounts,
+    pipeline: Vec<Span<'static>>,
     width: usize,
     theme: &Theme,
 ) -> (Line<'static>, PrLinkSpan) {
@@ -290,8 +294,22 @@ pub fn breadcrumb_line(
         Span::raw("  ".to_string()),
         Span::styled(path.to_string(), theme.dim_style()),
     ];
-    let right = count_spans(counts, theme);
+    let mut right = count_spans(counts, theme);
     let used_left: usize = spans.iter().map(|s| s.width()).sum();
+    // The pipeline goes before the counts while the rule keeps some room;
+    // it's the first thing dropped on a narrow terminal.
+    let width_of = |s: &[Span<'static>]| s.iter().map(|s| s.width()).sum::<usize>();
+    if !pipeline.is_empty()
+        && used_left + width_of(&pipeline) + PIPELINE_GAP + width_of(&right) + RULE_PAD * 2 + 4
+            <= width
+    {
+        let mut joined = pipeline;
+        if !right.is_empty() {
+            joined.push(Span::raw(" ".repeat(PIPELINE_GAP)));
+        }
+        joined.extend(right);
+        right = joined;
+    }
     let used_right: usize = right.iter().map(|s| s.width()).sum();
     let gap = width.saturating_sub(used_left + used_right);
     if gap > RULE_PAD * 2 {

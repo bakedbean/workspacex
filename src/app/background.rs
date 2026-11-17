@@ -1194,7 +1194,47 @@ where
                 }
             })
             .await;
+        settle_archived_parts(&app, &fetch_pr, now_ms).await;
     }
+}
+
+/// Fetch archived series parts' PRs by number until they're merged or
+/// closed, so a slice archived before its merge was polled still settles.
+async fn settle_archived_parts<F, Fut>(app: &SharedApp, fetch_pr: &F, now_ms: i64)
+where
+    F: Fn(std::path::PathBuf, String) -> Fut,
+    Fut: std::future::Future<Output = crate::error::Result<Option<crate::git::forge::PrStatus>>>,
+{
+    use futures::StreamExt;
+    let due: Vec<crate::data::series::UnsettledPart> = {
+        let mut g = app.lock().await;
+        let parts = g.store.unsettled_archived_parts().unwrap_or_default();
+        parts
+            .into_iter()
+            .filter(|p| {
+                let key = (p.series_id, p.part);
+                let due = g
+                    .series_settle_last_ms
+                    .get(&key)
+                    .is_none_or(|last| now_ms.saturating_sub(*last) >= PR_POLL_INTERVAL_MS);
+                if due {
+                    g.series_settle_last_ms.insert(key, now_ms);
+                }
+                due
+            })
+            .collect()
+    };
+    futures::stream::iter(due.into_iter().filter(|p| p.repo_path.exists()))
+        .for_each_concurrent(PR_POLL_CONCURRENCY, |p| async move {
+            if let Ok(Some(status)) = fetch_pr(p.repo_path.clone(), p.pr_number.to_string()).await {
+                let mut g = app.lock().await;
+                if g.store.set_part_pr(p.series_id, p.part, &status).is_ok() {
+                    // In-process writes don't bump data_version, so reload here.
+                    g.series = g.store.all_series().unwrap_or_default();
+                }
+            }
+        })
+        .await;
 }
 
 /// How long a workspace's PR state is trusted before it is fetched again.
@@ -1397,5 +1437,114 @@ mod external_change_polling_tests {
             !app.poll_external_changes(),
             "idle poll must not trigger refresh"
         );
+    }
+}
+
+#[cfg(test)]
+mod series_settle_tests {
+    use super::*;
+    use crate::data::store::{NewWorkspace, Store};
+    use crate::git::forge::{BranchLifecycle, PrStatus};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Mutex;
+
+    fn pr(lifecycle: BranchLifecycle, n: u32) -> PrStatus {
+        PrStatus {
+            lifecycle,
+            number: Some(n),
+            url: None,
+            review: None,
+            unresolved: None,
+        }
+    }
+
+    /// An app whose series has archived part 1 (PR #10 in `first`) and
+    /// live part 2. The repo dir is real so the existence check passes.
+    fn app_with_archived_part(first: BranchLifecycle) -> (SharedApp, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let repo = store.add_repo(dir.path(), "r", "x").unwrap();
+        let ws = |name: &str| {
+            store
+                .insert_workspace(&NewWorkspace {
+                    repo_id: repo,
+                    name,
+                    branch: &format!("x/{name}"),
+                    worktree_path: &dir.path().join(name),
+                    yolo: false,
+                    agent: crate::pty::session::AgentKind::Claude,
+                    shared: false,
+                })
+                .unwrap()
+        };
+        let (a, b) = (ws("a"), ws("b"));
+        store.continue_series(a, b).unwrap();
+        store.upsert_scm_pr(a, &pr(first, 10), 1).unwrap();
+        store.delete_workspace(a).unwrap();
+        let app = crate::app::App::new(store, "/tmp/wsx-test".into()).unwrap();
+        (Arc::new(Mutex::new(app)), dir)
+    }
+
+    fn part1(app: &crate::app::App) -> Option<BranchLifecycle> {
+        app.series[0].parts[0].pr_lifecycle
+    }
+
+    #[tokio::test]
+    async fn archived_open_part_settles_to_merged() {
+        let (app, _dir) = app_with_archived_part(BranchLifecycle::PrOpen);
+        let fetch = |_p: std::path::PathBuf, branch: String| async move {
+            assert_eq!(branch, "10", "fetched by PR number");
+            Ok(Some(pr(BranchLifecycle::PrMerged, 10)))
+        };
+        settle_archived_parts(&app, &fetch, 1_000_000).await;
+        let g = app.lock().await;
+        assert!(g.store.unsettled_archived_parts().unwrap().is_empty());
+        assert_eq!(
+            part1(&g),
+            Some(BranchLifecycle::PrMerged),
+            "App.series reloaded"
+        );
+    }
+
+    #[tokio::test]
+    async fn settled_parts_are_not_fetched() {
+        let (app, _dir) = app_with_archived_part(BranchLifecycle::PrMerged);
+        let fetch = |_p: std::path::PathBuf, _b: String| async move {
+            panic!("a settled part must not be fetched");
+            #[allow(unreachable_code)]
+            Ok(None)
+        };
+        settle_archived_parts(&app, &fetch, 1_000_000).await;
+    }
+
+    #[tokio::test]
+    async fn settle_is_throttled() {
+        let (app, _dir) = app_with_archived_part(BranchLifecycle::PrOpen);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fetch = |_p: std::path::PathBuf, _b: String| {
+            let calls = calls.clone();
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(None)
+            }
+        };
+        settle_archived_parts(&app, &fetch, 1_000_000).await;
+        settle_archived_parts(&app, &fetch, 1_000_000 + PR_POLL_INTERVAL_MS - 1).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        settle_archived_parts(&app, &fetch, 1_000_000 + PR_POLL_INTERVAL_MS).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn failed_fetch_leaves_snapshot() {
+        let (app, _dir) = app_with_archived_part(BranchLifecycle::PrOpen);
+        let fetch = |_p: std::path::PathBuf, _b: String| async move {
+            Err(crate::error::Error::Git("offline".into()))
+        };
+        settle_archived_parts(&app, &fetch, 1_000_000).await;
+        let g = app.lock().await;
+        assert_eq!(part1(&g), Some(BranchLifecycle::PrOpen));
+        assert_eq!(g.store.unsettled_archived_parts().unwrap().len(), 1);
     }
 }

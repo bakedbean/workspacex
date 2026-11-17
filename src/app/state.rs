@@ -116,6 +116,8 @@ impl App {
             pm_visible: false,
             focus: crate::ui::PaneFocus::Dashboard,
             recaps: Default::default(),
+            series: Vec::new(),
+            series_settle_last_ms: Default::default(),
             pm_digest_selected: 0,
             pm_filter: None,
             next_create_gen: 0,
@@ -390,6 +392,7 @@ impl App {
             .collect();
         self.pushed_status = self.store.all_workspace_status().unwrap_or_default();
         self.recaps = self.store.all_workspace_recaps().unwrap_or_default();
+        self.series = self.store.all_series().unwrap_or_default();
         Ok(())
     }
 
@@ -850,6 +853,11 @@ pub struct App {
         crate::data::store::WorkspaceId,
         crate::data::store::WorkspaceRecap,
     >,
+    /// Every workspace series, loaded each `refresh()`; the focus view's
+    /// `part` line reads it.
+    pub series: Vec<crate::data::series::Series>,
+    /// Last epoch-ms an archived part's PR was fetched (settle throttle).
+    pub series_settle_last_ms: std::collections::HashMap<(crate::data::series::SeriesId, u32), i64>,
     /// Index of the selected card in the flattened PM digest (`card_at`
     /// order), clamped on render against the current card count.
     pub pm_digest_selected: usize,

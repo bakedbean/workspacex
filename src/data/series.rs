@@ -122,8 +122,13 @@ impl Store {
         let (_, c_slug, c_branch) = ws_row(child)?;
         let insert_part = |series: i64, part: u32, id: WorkspaceId, slug: &str, branch: &str| {
             tx.execute(
-                "INSERT INTO series_parts (series_id, part, workspace_id, slug, branch) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                // Seed the PR snapshot from scm_cache so `series show` has it
+                // without waiting for a dashboard poll.
+                "INSERT INTO series_parts \
+                     (series_id, part, workspace_id, slug, branch, pr_number, pr_lifecycle) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, \
+                     (SELECT pr_number FROM scm_cache WHERE workspace_id = ?3), \
+                     (SELECT pr_lifecycle FROM scm_cache WHERE workspace_id = ?3))",
                 rusqlite::params![series, part, id.0, slug, branch],
             )
         };
@@ -517,5 +522,40 @@ mod tests {
         assert_eq!((j.part, j.started), (3, false));
         let s = store.series_for_workspace(a).unwrap().unwrap();
         assert_eq!(parts(&s), vec![(1, "a"), (2, "b"), (3, "c")]);
+    }
+
+    #[test]
+    fn pr_invalidation_clears_the_part_snapshot() {
+        let (store, repo) = store_with_repo();
+        let (a, b) = chain(&store, repo);
+        store
+            .upsert_scm_pr(a, &pr(BranchLifecycle::PrMerged, 10), 1)
+            .unwrap();
+        store.set_workspace_branch(a, "x/elsewhere").unwrap();
+        store.clear_scm_pr(a).unwrap();
+        store.delete_workspace(a).unwrap();
+        let p = &store.series_for_workspace(b).unwrap().unwrap().parts[0];
+        assert_eq!(p.branch, "x/elsewhere");
+        assert_eq!((p.pr_number, p.pr_lifecycle), (None, None), "no stale #10");
+    }
+
+    #[test]
+    fn starting_a_series_seeds_cached_prs() {
+        let (store, repo) = store_with_repo();
+        let a = ws(&store, repo, "a");
+        let b = ws(&store, repo, "b");
+        store
+            .upsert_scm_pr(a, &pr(BranchLifecycle::PrMerged, 10), 1)
+            .unwrap();
+        store
+            .upsert_scm_pr(b, &pr(BranchLifecycle::PrDraft, 11), 1)
+            .unwrap();
+        store.continue_series(a, b).unwrap();
+        let s = store.series_for_workspace(a).unwrap().unwrap();
+        assert_eq!(
+            (s.parts[0].pr_number, s.parts[0].pr_lifecycle),
+            (Some(10), Some(BranchLifecycle::PrMerged))
+        );
+        assert_eq!(s.parts[1].pr_number, Some(11));
     }
 }

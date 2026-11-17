@@ -165,6 +165,11 @@ impl Store {
                fetched_at   = NULL",
             rusqlite::params![id.0],
         )?;
+        // Same invalidation for a series part, or archive would freeze the stale PR.
+        self.conn().execute(
+            "UPDATE series_parts SET pr_number = NULL, pr_lifecycle = NULL WHERE workspace_id = ?1",
+            [id.0],
+        )?;
         Ok(())
     }
 

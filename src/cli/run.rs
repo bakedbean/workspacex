@@ -547,26 +547,35 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 created.workspace.name,
                 created.workspace.worktree_path.display()
             );
+            // The workspace exists by now: a failed join warns, never aborts,
+            // so --prompt and --start below still run.
             if let Some(p) = &continues_parent {
-                let j = store.continue_series(p.id, created.workspace.id)?;
-                if j.started {
-                    say!(
+                match store.continue_series(p.id, created.workspace.id) {
+                    Ok(j) if j.started => say!(
                         "started a series: {} is part 1, {} is part 2 (no title yet; set one with wsx series title)",
                         p.name,
                         created.workspace.name
-                    );
-                } else {
-                    let title = store
-                        .series_for_workspace(created.workspace.id)?
-                        .map(|s| s.display_title().to_string())
-                        .unwrap_or_default();
-                    say!(
-                        "continues {}/{} as part {} of \"{}\"",
-                        r.name,
-                        p.name,
-                        j.part,
-                        title
-                    );
+                    ),
+                    Ok(j) => {
+                        let display = store
+                            .series_for_workspace(created.workspace.id)?
+                            .map(|s| s.display_title().to_string())
+                            .unwrap_or_default();
+                        say!(
+                            "{}",
+                            crate::commands::series::continues_report(
+                                &r.name,
+                                &p.name,
+                                j.part,
+                                j.title.as_deref(),
+                                &display
+                            )
+                        );
+                    }
+                    Err(e) => eprintln!(
+                        "warning: created but not linked to {}'s series: {e}",
+                        p.name
+                    ),
                 }
             }
             if let Some(p) = &parent {
@@ -1271,16 +1280,11 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
         }
         CliAction::SeriesShow { workspace, json } => {
             let ws = target_workspace(&store, workspace.as_deref())?;
-            let Some(series) = store.series_for_workspace(ws.id)? else {
-                println!("not part of a series");
-                return Ok(());
-            };
-            let view = crate::commands::series::SeriesView::from(&series);
-            if json {
-                println!("{}", serde_json::to_string_pretty(&view)?);
-            } else {
-                print!("{}", crate::commands::series::render_series(&view));
-            }
+            let series = store.series_for_workspace(ws.id)?;
+            print!(
+                "{}",
+                crate::commands::series::show_output(series.as_ref(), json)
+            );
         }
         CliAction::SeriesTitle { title, workspace } => {
             let ws = target_workspace(&store, workspace.as_deref())?;

@@ -73,8 +73,7 @@ is to await the user's request; otherwise the answer *is* the task.
    the handoff.
 
 5b. **Name the series if it has none.** If the create report says
-   `started a series`, or `wsx series show` prints no title (its first line
-   is just this workspace's slug), pick a 2–5 word name for the *feature*
+   `no title yet`, or `wsx series show --json` has `"title": null`, pick a 2–5 word name for the *feature*
    the chain is building, drawn from this session. Name the feature, not
    this slice: `Focus view declutter`, not `One diff bar per commit`. Then:
 

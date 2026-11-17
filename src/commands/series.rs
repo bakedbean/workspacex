@@ -41,6 +41,38 @@ impl From<&Series> for SeriesView {
     }
 }
 
+/// What `wsx series show` prints; `null` under `--json` outside a series.
+pub fn show_output(series: Option<&Series>, json: bool) -> String {
+    match (series, json) {
+        (None, true) => "null\n".into(),
+        (None, false) => "not part of a series\n".into(),
+        (Some(s), true) => {
+            let view = SeriesView::from(s);
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&view).unwrap_or_default()
+            )
+        }
+        (Some(s), false) => render_series(&SeriesView::from(s)),
+    }
+}
+
+/// The `workspace create --continues` line for joining an existing series;
+/// flags an untitled one so a handoff agent knows to name it.
+pub fn continues_report(
+    repo: &str,
+    parent: &str,
+    part: u32,
+    title: Option<&str>,
+    display_title: &str,
+) -> String {
+    let base = format!("continues {repo}/{parent} as part {part} of \"{display_title}\"");
+    match title {
+        Some(_) => base,
+        None => format!("{base} (no title yet; set one with wsx series title)"),
+    }
+}
+
 /// The title, then one aligned line per part: number, slug, branch, PR,
 /// and `archived` for parts whose workspace is gone.
 pub fn render_series(v: &SeriesView) -> String {
@@ -137,5 +169,26 @@ mod tests {
         let col = |l: &str| l.find("x/").unwrap();
         let lines: Vec<&str> = out.lines().skip(1).collect();
         assert!(lines.iter().all(|l| col(l) == col(lines[0])), "{out}");
+    }
+
+    #[test]
+    fn show_output_outside_a_series() {
+        assert_eq!(show_output(None, false), "not part of a series\n");
+        assert_eq!(show_output(None, true), "null\n");
+        let s = series(Some("T"));
+        assert!(show_output(Some(&s), true).contains("\"display_title\": \"T\""));
+        assert!(show_output(Some(&s), false).starts_with("T\n"));
+    }
+
+    #[test]
+    fn continues_report_flags_an_untitled_series() {
+        assert_eq!(
+            continues_report("demo", "a2", 3, None, "a1"),
+            "continues demo/a2 as part 3 of \"a1\" (no title yet; set one with wsx series title)"
+        );
+        assert_eq!(
+            continues_report("demo", "a2", 3, Some("Feature"), "Feature"),
+            "continues demo/a2 as part 3 of \"Feature\""
+        );
     }
 }

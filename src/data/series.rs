@@ -90,7 +90,12 @@ impl Store {
     /// Join `child` to `parent`'s series as the next part, first starting a
     /// series (untitled, parent = part 1) when `parent` isn't in one.
     pub fn continue_series(&self, parent: WorkspaceId, child: WorkspaceId) -> Result<SeriesJoin> {
-        let tx = self.conn().unchecked_transaction()?;
+        // IMMEDIATE: this reads then writes, and a deferred upgrade gets
+        // SQLITE_BUSY without honouring busy_timeout (see `status.rs`).
+        let tx = rusqlite::Transaction::new_unchecked(
+            self.conn(),
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
         let ws_row = |id: WorkspaceId| {
             tx.query_row(
                 "SELECT repo_id, name, branch FROM workspaces WHERE id = ?1",
@@ -104,7 +109,16 @@ impl Store {
                 },
             )
         };
-        let (repo_id, p_slug, p_branch) = ws_row(parent)?;
+        // An archived parent that's already a part still has its part row.
+        let (repo_id, p_slug, p_branch) = match ws_row(parent).optional()? {
+            Some(row) => row,
+            None => tx.query_row(
+                "SELECT s.repo_id, p.slug, p.branch FROM series_parts p \
+                 JOIN series s ON s.id = p.series_id WHERE p.workspace_id = ?1",
+                [parent.0],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?,
+        };
         let (_, c_slug, c_branch) = ws_row(child)?;
         let insert_part = |series: i64, part: u32, id: WorkspaceId, slug: &str, branch: &str| {
             tx.execute(
@@ -491,5 +505,17 @@ mod tests {
             .query_row("SELECT count(*) FROM series_parts", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn continuing_an_archived_parent_already_in_a_series() {
+        let (store, repo) = store_with_repo();
+        let (a, b) = chain(&store, repo);
+        store.delete_workspace(b).unwrap();
+        let c = ws(&store, repo, "c");
+        let j = store.continue_series(b, c).unwrap();
+        assert_eq!((j.part, j.started), (3, false));
+        let s = store.series_for_workspace(a).unwrap().unwrap();
+        assert_eq!(parts(&s), vec![(1, "a"), (2, "b"), (3, "c")]);
     }
 }

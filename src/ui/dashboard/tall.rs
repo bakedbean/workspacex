@@ -19,10 +19,11 @@
 //! selection.
 
 use crate::data::store::{WorkspaceId, WorkspaceRecap};
-use crate::git::WorkspaceStatus;
+use crate::git::{DiffStats, WorkspaceStatus};
 use crate::pty::session::AgentKind;
 use crate::ui::dashboard::column_content::{ColumnBody, ColumnEmphasis};
 use crate::ui::dashboard::row::{self, ColumnWidths, RowInputs};
+use crate::ui::dashboard::sparkline::BLOCKS;
 use crate::ui::text::{display_width, truncate, truncate_words};
 use crate::ui::theme::Theme;
 use ratatui::Frame;
@@ -48,6 +49,9 @@ pub struct WorkspaceDetail {
     pub first_prompt: Option<String>,
     /// Seconds since the recap was last set; `None` without one.
     pub recap_age_secs: Option<u64>,
+    /// Lines each of the branch's newest commits changed, newest first, at
+    /// most `DIFF_BARS`; `None` for a commit git gave no stat for.
+    pub commit_sizes: Vec<Option<DiffStats>>,
 }
 
 /// Each agent kind's icon, as the theme's `[agent_bar.symbols]` table
@@ -275,9 +279,11 @@ pub struct StripColumns {
     pub sync: usize,
     pub dirty: usize,
     pub diff: usize,
-    /// The largest diff (lines added plus removed) among the rows, which
-    /// a full diff bar stands for.
-    pub diff_max: u32,
+    /// The largest single commit (lines added plus removed) among the
+    /// rows, which a full commit bar stands for.
+    pub commit_max: u32,
+    /// The most commit bars any row draws; shorter rows pad to it.
+    pub bars: usize,
     pub age: usize,
     pub two_line: bool,
     pub prose: usize,
@@ -298,8 +304,14 @@ pub fn strip_columns(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -
     let ahead = max(&|r| ahead_text(r.detail).map_or(0, |t| display_width(&t)));
     let sync = max(&|r| spans_width(&sync_spans(r.row, r.detail, &theme)));
     let dirty = max(&|r| dirty_text(r.detail).map_or(0, |t| display_width(&t)));
-    let diff_max = rows.iter().map(|r| diff_total(r.row)).max().unwrap_or(0);
-    let diff = max(&|r| spans_width(&diff_spans(r.row, diff_max, &theme)));
+    let commit_max = rows
+        .iter()
+        .flat_map(|r| r.detail.commit_sizes.iter().flatten())
+        .map(|d| d.added.saturating_add(d.removed))
+        .max()
+        .unwrap_or(0);
+    let bars = max(&|r| r.detail.commit_sizes.len());
+    let diff = max(&|r| spans_width(&diff_spans(r.row, r.detail, commit_max, bars, &theme)));
     let age = max(&|r| display_width(&age_text(r.row)));
     let prefix = widths.agent + row::GUTTER_WIDTH + 1;
     let natural = max(&|r| 2 + display_width(&r.row.branch)).clamp(BRANCH_MIN, BRANCH_MAX);
@@ -317,7 +329,8 @@ pub fn strip_columns(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -
             sync,
             dirty,
             diff,
-            diff_max,
+            commit_max,
+            bars,
             age,
             two_line,
             prose,
@@ -341,7 +354,8 @@ pub fn strip_columns(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -
         sync: fit(sync),
         dirty: fit(dirty),
         diff: fit(diff),
-        diff_max,
+        commit_max,
+        bars,
         age,
         two_line,
         prose,
@@ -428,50 +442,60 @@ fn dirty_text(detail: &WorkspaceDetail) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(" "))
 }
 
-/// Cells the diff bar takes, its trailing space excluded.
-const DIFF_BAR: usize = 4;
+/// Most commits the diff column draws a bar for.
+pub const DIFF_BARS: usize = 8;
 
-fn diff_total(row: &RowInputs) -> u32 {
-    row.diff.map_or(0, |d| d.added.saturating_add(d.removed))
+/// `WorkspaceDetail::commit_sizes` from a branch's commits (newest first):
+/// the `DIFF_BARS` newest commits' stats.
+pub fn commit_sizes(commits: &[crate::git::BranchCommit]) -> Vec<Option<DiffStats>> {
+    commits.iter().take(DIFF_BARS).map(|c| c.stats).collect()
 }
 
-/// `██▌  +184 −22`: a bar sized against the view's largest diff, then the
-/// counts; nothing without changes.
-fn diff_spans(row: &RowInputs, max: u32, theme: &Theme) -> Vec<Span<'static>> {
-    match row.diff.filter(|d| d.added > 0 || d.removed > 0) {
-        Some(d) => {
-            let mut out = diff_bar(d.added, d.removed, max, theme);
-            out.extend([
-                Span::raw(" "),
-                Span::styled(format!("+{}", d.added), theme.ok_style()),
-                Span::raw(" "),
-                Span::styled(format!("−{}", d.removed), theme.err_style()),
-            ]);
-            out
-        }
-        None => Vec::new(),
+/// `▂▅▁▃█▂▄  +184 −22`: a bar per recent commit, padded to `bars` cells so
+/// the counts line up, then the branch's totals; nothing without changes.
+fn diff_spans(
+    row: &RowInputs,
+    detail: &WorkspaceDetail,
+    max: u32,
+    bars: usize,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let Some(d) = row.diff.filter(|d| d.added > 0 || d.removed > 0) else {
+        return Vec::new();
+    };
+    let mut out = commit_bars(&detail.commit_sizes, max, theme);
+    if bars > 0 {
+        let pad = bars.saturating_sub(detail.commit_sizes.len()) + 1;
+        out.push(Span::raw(" ".repeat(pad)));
     }
+    out.extend([
+        Span::styled(format!("+{}", d.added), theme.ok_style()),
+        Span::raw(" "),
+        Span::styled(format!("−{}", d.removed), theme.err_style()),
+    ]);
+    out
 }
 
-/// `DIFF_BAR` cells of block eighths, as long as the diff is against `max`
-/// on a log scale (so a 10-line change still shows next to a 2000-line
-/// one), green for the added share and red for the removed. Padded to
-/// `DIFF_BAR` cells; never empty for a nonzero diff.
-fn diff_bar(added: u32, removed: u32, max: u32, theme: &Theme) -> Vec<Span<'static>> {
-    const PARTIAL: [char; 8] = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉'];
-    let total = added.saturating_add(removed);
-    let eighths = DIFF_BAR * 8;
-    let frac = f64::from(total).ln_1p() / f64::from(max.max(total)).ln_1p();
-    let filled = ((frac * eighths as f64).round() as usize).clamp(1, eighths);
-    let green = (filled as f64 * f64::from(added) / f64::from(total)).round() as usize;
+/// One cell per commit in `sizes` (given newest first), drawn oldest first:
+/// a block as tall as the commit against `max` on a log scale (so a
+/// one-line commit still shows next to a refactor), green when it added
+/// at least as much as it removed, red otherwise, dim `▁` with no lines.
+fn commit_bars(sizes: &[Option<DiffStats>], max: u32, theme: &Theme) -> Vec<Span<'static>> {
     let mut out: Vec<Span<'static>> = Vec::new();
-    for cell in 0..DIFF_BAR {
-        let fill = filled.saturating_sub(cell * 8).min(8);
-        let glyph = if fill == 8 { '█' } else { PARTIAL[fill] };
-        let style = if cell * 8 + fill.max(1).div_ceil(2) <= green {
-            theme.ok_style()
-        } else {
-            theme.err_style()
+    for size in sizes.iter().rev() {
+        let (glyph, style) = match size.filter(|d| d.added > 0 || d.removed > 0) {
+            Some(d) => {
+                let total = d.added.saturating_add(d.removed);
+                let frac = f64::from(total).ln_1p() / f64::from(max.max(total)).ln_1p();
+                let level = ((frac * 8.0) as usize).min(7);
+                let style = if d.added >= d.removed {
+                    theme.ok_style()
+                } else {
+                    theme.err_style()
+                };
+                (BLOCKS[level], style)
+            }
+            None => (BLOCKS[0], theme.dim_style()),
         };
         match out.last_mut() {
             Some(last) if last.style == style => last.content.to_mut().push(glyph),
@@ -607,7 +631,10 @@ pub fn row_layout(
         (cols.ahead, dim_cell(ahead_text(tall.detail), theme)),
         (cols.sync, sync_spans(row, tall.detail, theme)),
         (cols.dirty, dim_cell(dirty_text(tall.detail), theme)),
-        (cols.diff, diff_spans(row, cols.diff_max, theme)),
+        (
+            cols.diff,
+            diff_spans(row, tall.detail, cols.commit_max, cols.bars, theme),
+        ),
     ];
     let age = (
         cols.age,
@@ -1234,6 +1261,7 @@ mod tests {
             base_branch: Some("origin/main".into()),
             first_prompt: None,
             recap_age_secs: None,
+            commit_sizes: Vec::new(),
         };
         let tall = TallRow {
             row: &row,
@@ -2011,28 +2039,123 @@ mod tests {
         assert_eq!(age_span(None), theme.dim_style());
     }
 
-    /// The view's largest diff fills the bar; a small one still shows; the
-    /// green share follows the lines added.
+    fn st(added: u32, removed: u32) -> Option<crate::git::DiffStats> {
+        Some(crate::git::DiffStats { added, removed })
+    }
+
+    /// Only the `DIFF_BARS` newest commits reach the view, newest first.
     #[test]
-    fn diff_bar_scales_to_the_largest_diff() {
+    fn commit_sizes_keep_the_newest_eight() {
+        let commits: Vec<_> = (0..12u32)
+            .map(|i| crate::git::BranchCommit {
+                hash: format!("{i:07}"),
+                subject: String::new(),
+                stats: st(i + 1, 0),
+            })
+            .collect();
+        let sizes = commit_sizes(&commits);
+        assert_eq!(sizes.len(), DIFF_BARS);
+        assert_eq!(sizes.first().copied().flatten().map(|d| d.added), Some(1));
+        assert_eq!(sizes.last().copied().flatten().map(|d| d.added), Some(8));
+    }
+
+    fn bars_text(spans: &[Span<'_>]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    /// Sizes come in newest first and draw oldest on the left.
+    #[test]
+    fn commit_bars_draw_oldest_left_and_cap_at_eight() {
         let theme = Theme::wsx();
-        let bar = |a, r, max| -> (String, Vec<Style>) {
-            let spans = diff_bar(a, r, max, &theme);
-            let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-            assert_eq!(display_width(&text), DIFF_BAR);
-            (text, spans.iter().map(|s| s.style).collect())
-        };
-        assert_eq!(bar(1500, 500, 2000).0, "████");
-        let (small, _) = bar(3, 0, 2000);
-        assert!(small.trim() != "" && small != "████", "{small:?}");
-        assert!(bar(100, 0, 2000).0.trim().len() > small.trim().len());
-        assert_eq!(bar(10, 0, 10).1, vec![theme.ok_style()]);
-        assert_eq!(bar(0, 10, 10).1, vec![theme.err_style()]);
         assert_eq!(
-            bar(5, 5, 10).1,
-            vec![theme.ok_style(), theme.err_style()],
-            "half and half"
+            bars_text(&commit_bars(&[st(5000, 0), st(1, 0)], 5000, &theme)),
+            "▁█"
         );
+        let many: Vec<_> = (1..=12).map(|n| st(n, 0)).collect();
+        let text = bars_text(&commit_bars(&many[..DIFF_BARS], 12, &theme));
+        assert_eq!(display_width(&text), DIFF_BARS);
+    }
+
+    #[test]
+    fn commit_bars_log_scale_keeps_small_commits_visible() {
+        let theme = Theme::wsx();
+        let text = bars_text(&commit_bars(&[st(1, 0), st(5000, 0)], 5000, &theme));
+        assert_eq!(text.chars().next(), Some('█'));
+        assert_eq!(text.chars().last(), Some('▁'));
+        let mid = bars_text(&commit_bars(&[st(70, 0)], 5000, &theme));
+        assert!(mid != "▁" && mid != "█", "{mid:?}");
+    }
+
+    #[test]
+    fn commit_bars_color_by_dominant_side_and_dim_empty() {
+        let theme = Theme::wsx();
+        let styles: Vec<Style> = commit_bars(&[None, st(1, 9), st(5, 5), st(0, 0)], 10, &theme)
+            .iter()
+            .flat_map(|sp| sp.content.chars().map(move |_| sp.style))
+            .collect();
+        assert_eq!(
+            styles,
+            vec![
+                theme.dim_style(),
+                theme.ok_style(),
+                theme.err_style(),
+                theme.dim_style()
+            ]
+        );
+    }
+
+    /// A row with fewer commits pads its bars so the counts still line up.
+    #[test]
+    fn commit_bars_pad_to_the_widest_row() {
+        let mut a = base_row("bakedbean/a");
+        a.diff = st(30, 3);
+        let mut b = base_row("bakedbean/b");
+        b.workspace_id = WorkspaceId(2);
+        b.diff = st(8, 1);
+        let three = WorkspaceDetail {
+            commit_sizes: vec![st(10, 1), st(10, 1), st(10, 1)],
+            ..Default::default()
+        };
+        let eight = WorkspaceDetail {
+            commit_sizes: vec![st(1, 0); 8],
+            ..Default::default()
+        };
+        let rows = [
+            TallRow {
+                row: &a,
+                detail: &three,
+            },
+            TallRow {
+                row: &b,
+                detail: &eight,
+            },
+        ];
+        let lines = strip_rows(&rows, 160);
+        assert_eq!(
+            col(&lines[0][0], "+30"),
+            col(&lines[1][0], "+8"),
+            "{lines:#?}"
+        );
+    }
+
+    #[test]
+    fn diff_without_commits_shows_totals_only() {
+        let mut a = base_row("bakedbean/a");
+        a.diff = st(12, 3);
+        let none = WorkspaceDetail::default();
+        let rows = [TallRow {
+            row: &a,
+            detail: &none,
+        }];
+        let cols = strip_columns(&rows, ColumnWidths::default(), 160);
+        let text = bars_text(&diff_spans(
+            &a,
+            &none,
+            cols.commit_max,
+            cols.bars,
+            &Theme::wsx(),
+        ));
+        assert_eq!(text, "+12 −3");
     }
 
     /// A recap left behind by later activity is marked old on its `now`

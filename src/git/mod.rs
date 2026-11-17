@@ -293,13 +293,39 @@ pub(super) mod tests {
             vec![
                 BranchCommit {
                     hash: "abc1234".into(),
-                    subject: "fix it".into()
+                    subject: "fix it".into(),
+                    stats: None,
                 },
                 BranchCommit {
                     hash: "def5678".into(),
-                    subject: String::new()
+                    subject: String::new(),
+                    stats: None,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn parse_branch_commits_pairs_shortstat_lines() {
+        let out = "aaa1111\tadd thing\n\n 2 files changed, 10 insertions(+), 3 deletions(-)\n\
+                   bbb2222\tMerge branch 'x'\n\
+                   ccc3333\tdrop file\n\n 1 file changed, 4 deletions(-)\n";
+        let parsed = parse_branch_commits(out);
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(
+            parsed[0].stats,
+            Some(DiffStats {
+                added: 10,
+                removed: 3
+            })
+        );
+        assert_eq!(parsed[1].stats, None, "merge has no stat line");
+        assert_eq!(
+            parsed[2].stats,
+            Some(DiffStats {
+                added: 0,
+                removed: 4
+            })
         );
     }
 
@@ -321,6 +347,36 @@ pub(super) mod tests {
         git(&["commit", "--allow-empty", "-q", "-m", "empty"]);
         assert_eq!(commits_ahead_of(dir.path(), "main").await, Some(1));
         assert_eq!(commits_ahead_of(dir.path(), "no-such-base").await, None);
+    }
+
+    /// The long commit list skips per-commit diffs; only the few newest
+    /// commits the focus view draws pay for `--shortstat`.
+    #[tokio::test]
+    async fn only_recent_commits_carry_line_counts() {
+        let dir = init_repo();
+        let git = |args: &[&str]| {
+            assert!(
+                StdCmd::new("git")
+                    .current_dir(dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        };
+        git(&["checkout", "-q", "-b", "feature"]);
+        for (i, lines) in [3usize, 5, 7].iter().enumerate() {
+            std::fs::write(dir.path().join(format!("f{i}")), "x\n".repeat(*lines)).unwrap();
+            git(&["add", "-A"]);
+            git(&["commit", "-q", "-m", &format!("c{i}")]);
+        }
+        let mut all = branch_commits(dir.path(), "main").await.unwrap();
+        assert_eq!(all.len(), 3);
+        assert!(all.iter().all(|c| c.stats.is_none()), "{all:?}");
+        let recent = recent_commit_stats(dir.path(), "main", 2).await.unwrap();
+        attach_stats(&mut all, &recent);
+        let added: Vec<_> = all.iter().map(|c| c.stats.map(|d| d.added)).collect();
+        assert_eq!(added, vec![Some(7), Some(5), None]);
     }
 
     /// `check-ref-format --branch` expands `@{-N}` against the repository in
@@ -989,6 +1045,9 @@ pub struct BranchCommit {
     /// Abbreviated hash, as `git log --format=%h` prints it.
     pub hash: String,
     pub subject: String,
+    /// Lines the commit changed, set only for the few newest commits (see
+    /// `recent_commit_stats`); `None` otherwise or for a merge or empty commit.
+    pub stats: Option<DiffStats>,
 }
 
 /// A branch's commits and changed files against `base`, as last polled.
@@ -1039,18 +1098,62 @@ pub async fn branch_commits(worktree: &Path, base: &str) -> Option<Vec<BranchCom
     Some(parse_branch_commits(&out))
 }
 
-/// Parse `git log --format=%h%x09%s` output; lines without a tab are
-/// skipped.
+/// The newest `n` commits on HEAD not on `base`, with their line counts.
+/// Kept apart from `branch_commits` so only `n` commits pay for a diff.
+/// `None` on any git failure.
+pub async fn recent_commit_stats(
+    worktree: &Path,
+    base: &str,
+    n: usize,
+) -> Option<Vec<BranchCommit>> {
+    let range = format!("{base}..HEAD");
+    let limit = format!("-n{n}");
+    let out = run(
+        worktree,
+        &[
+            "log",
+            "--no-color",
+            "--format=%h%x09%s",
+            "--shortstat",
+            &limit,
+            &range,
+            "--",
+        ],
+    )
+    .await
+    .ok()?;
+    Some(parse_branch_commits(&out))
+}
+
+/// Copy each `recent` commit's stats onto the commit in `commits` with the
+/// same hash.
+pub fn attach_stats(commits: &mut [BranchCommit], recent: &[BranchCommit]) {
+    for c in commits.iter_mut() {
+        if let Some(r) = recent.iter().find(|r| r.hash == c.hash) {
+            c.stats = r.stats;
+        }
+    }
+}
+
+/// Parse `git log --format=%h%x09%s --shortstat` output: each `hash\tsubject`
+/// line starts a commit and an indented stat line after it sets its
+/// `stats`. Other lines are skipped.
 fn parse_branch_commits(out: &str) -> Vec<BranchCommit> {
-    out.lines()
-        .filter_map(|l| {
-            let (hash, subject) = l.split_once('\t')?;
-            Some(BranchCommit {
+    let mut commits: Vec<BranchCommit> = Vec::new();
+    for l in out.lines() {
+        if l.starts_with(' ') {
+            if let (Some(last), Some(stats)) = (commits.last_mut(), parse_shortstat(l)) {
+                last.stats = Some(stats);
+            }
+        } else if let Some((hash, subject)) = l.split_once('\t') {
+            commits.push(BranchCommit {
                 hash: hash.trim().to_string(),
                 subject: subject.trim().to_string(),
-            })
-        })
-        .collect()
+                stats: None,
+            });
+        }
+    }
+    commits
 }
 
 /// Compute line-count diff stats for a worktree against `base`.

@@ -1099,7 +1099,17 @@ async fn refresh_local(app: SharedApp, t: PollTarget) {
             // log for the common idle case.
             let commits = match ahead {
                 Some(0) => Some(Vec::new()),
-                Some(_) => crate::git::branch_commits(&path, base).await,
+                Some(_) => match crate::git::branch_commits(&path, base).await {
+                    Some(mut commits) => {
+                        let n = crate::ui::dashboard::tall::DIFF_BARS;
+                        if let Some(recent) = crate::git::recent_commit_stats(&path, base, n).await
+                        {
+                            crate::git::attach_stats(&mut commits, &recent);
+                        }
+                        Some(commits)
+                    }
+                    None => None,
+                },
                 None => None,
             };
             let files = crate::git::branch_changed_files(&path, base).await;

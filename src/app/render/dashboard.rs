@@ -436,6 +436,11 @@ pub(crate) fn build_workspace_items<'a>(
                             .get(&ws.id)
                             .filter(|r| r.updated_at > 0)
                             .map(|r| (now_ms.saturating_sub(r.updated_at) / 1000).max(0) as u64),
+                        commit_sizes: app
+                            .workspace_branch_lists
+                            .get(&ws.id)
+                            .map(|l| crate::ui::dashboard::tall::commit_sizes(&l.commits))
+                            .unwrap_or_default(),
                     }
                 } else {
                     Default::default()

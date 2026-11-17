@@ -641,10 +641,12 @@ mod tests {
             BranchCommit {
                 hash: "a1b2c3d".into(),
                 subject: "feat(dashboard): split focus view rows into facts and prose".into(),
+                stats: None,
             },
             BranchCommit {
                 hash: "9f8e7d6".into(),
                 subject: "fix: drop clean".into(),
+                stats: None,
             },
         ]
     }
@@ -764,6 +766,7 @@ mod tests {
             .map(|i| BranchCommit {
                 hash: format!("{i:07}"),
                 subject: format!("commit {i}"),
+                stats: None,
             })
             .collect();
         let inputs = PanelInputs {
@@ -811,6 +814,7 @@ mod tests {
             .map(|i| BranchCommit {
                 hash: format!("{i:07}"),
                 subject: format!("commit {i}"),
+                stats: None,
             })
             .collect();
         let inputs = PanelInputs {
@@ -833,6 +837,7 @@ mod tests {
         let c = vec![BranchCommit {
             hash: "a1b2c3d".into(),
             subject: "UNIQUE-COMMIT".into(),
+            stats: None,
         }];
         let branch = "bakedbean/".to_string() + &"very-long-branch-name-".repeat(6);
         let inputs = PanelInputs {

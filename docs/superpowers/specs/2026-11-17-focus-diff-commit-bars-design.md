@@ -12,8 +12,9 @@ as well as its size. The `+N −M` totals after it stay.
 
 - `▂▅▁▃█▂▄  +184 −22`: the branch's most recent commits, oldest on the
   left, each bar's height the commit's lines changed.
-- No extra git process: per-commit counts come from the `git log` the
-  10s diff poll already runs for the side panel.
+- Cheap: only the `DIFF_BARS` newest commits pay for a per-commit diff
+  (a separate `git log -n8 --shortstat`); the side panel's 200-commit
+  log stays diff-free.
 
 ## Non-goals
 
@@ -34,11 +35,12 @@ as well as its size. The `+N −M` totals after it stay.
 
 ## Design
 
-- **Data.** `branch_commits` (`src/git/mod.rs:1023`) adds `--shortstat` to
-  its `git log`; `BranchCommit` gains `stats: Option<DiffStats>` (`None`
-  for a commit with no line changes, e.g. binary-only or empty). Parsing
-  pairs each `%h\t%s` line with the shortstat line that follows it. The
-  side panel's commit list is unaffected.
+- **Data.** `recent_commit_stats` (`src/git/mod.rs`) runs
+  `git log -n8 --shortstat base..HEAD`; `attach_stats` copies those onto
+  the matching `BranchCommit`s (`stats: Option<DiffStats>`) from
+  `branch_commits`, which stays diff-free. Parsing pairs each `%h\t%s`
+  line with the indented stat line after it; a merge has none (`None`),
+  a binary-only commit gets `0/0`.
 - **Plumbing.** The focus view's `WorkspaceDetail` gains `commit_sizes`,
   newest first, taken from `app.workspace_branch_lists` in
   `src/app/render/dashboard.rs` (only built for the focused repo).

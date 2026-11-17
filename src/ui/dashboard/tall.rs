@@ -46,6 +46,8 @@ pub struct WorkspaceDetail {
     /// The first prompt the workspace's agent was given, from its session
     /// log; `None` until the log is scanned or when it has none.
     pub first_prompt: Option<String>,
+    /// Seconds since the recap was last set; `None` without one.
+    pub recap_age_secs: Option<u64>,
 }
 
 /// Each agent kind's icon, as the theme's `[agent_bar.symbols]` table
@@ -131,6 +133,10 @@ const PROMPT_MAX_LINES: usize = 2;
 /// Most lines the no-recap fallback text may wrap onto.
 const FALLBACK_MAX_LINES: usize = 2;
 
+/// How long the workspace must have stayed active after its recap was last
+/// set before the `now` line is marked as old.
+const STALE_RECAP_SECS: u64 = 30 * 60;
+
 /// Widest the prose column gets, label included: lines much past ~80
 /// characters of text get tiring to read.
 const PROSE_MAX: usize = 92;
@@ -142,6 +148,25 @@ struct Prose {
     style: Style,
     /// Most lines it may wrap onto.
     max: usize,
+    /// A mark after the text, kept whole: on the last line when it fits,
+    /// else on a line of its own.
+    suffix: Option<Span<'static>>,
+}
+
+/// ` · 2h old` when the workspace kept working at least
+/// `STALE_RECAP_SECS` after its recap was last set, so the recap may no
+/// longer say what it is doing.
+fn stale_recap_mark(
+    row: &RowInputs,
+    detail: &WorkspaceDetail,
+    theme: &Theme,
+) -> Option<Span<'static>> {
+    let age = detail.recap_age_secs?;
+    let active = row.ago_secs?;
+    (age.saturating_sub(active) >= STALE_RECAP_SECS).then(|| {
+        let ago = crate::ui::dashboard::column_content::format_ago_short(Some(age));
+        Span::styled(format!(" · {ago} old"), theme.warn_style())
+    })
 }
 
 /// The prose a row shows, in order: the initial prompt, then the recap's
@@ -163,6 +188,7 @@ fn prose_items(row: &RowInputs, detail: &WorkspaceDetail, theme: &Theme) -> Vec<
                 .row_dim_style()
                 .add_modifier(ratatui::style::Modifier::ITALIC),
             max: PROMPT_MAX_LINES,
+            suffix: None,
         });
     }
     match recap {
@@ -174,6 +200,7 @@ fn prose_items(row: &RowInputs, detail: &WorkspaceDetail, theme: &Theme) -> Vec<
                     text: goal,
                     style: Style::default(),
                     max: usize::MAX,
+                    suffix: None,
                 });
             }
             let state = field(&r.state, &r.state_short);
@@ -190,6 +217,7 @@ fn prose_items(row: &RowInputs, detail: &WorkspaceDetail, theme: &Theme) -> Vec<
                     text: now,
                     style: theme.row_dim_style(),
                     max: usize::MAX,
+                    suffix: stale_recap_mark(row, detail, theme),
                 });
             }
         }
@@ -221,6 +249,7 @@ fn prose_items(row: &RowInputs, detail: &WorkspaceDetail, theme: &Theme) -> Vec<
                     text: text.clone(),
                     style,
                     max: FALLBACK_MAX_LINES,
+                    suffix: None,
                 });
             }
         }
@@ -566,17 +595,30 @@ pub fn row_layout(
 
     let text_width = cols.prose.saturating_sub(LABEL_WIDTH).max(8);
     for item in prose_items(row, tall.detail, theme) {
-        for (i, text) in wrap_capped(&item.text, text_width, item.max)
+        let mut texts: Vec<Vec<Span<'static>>> = wrap_capped(&item.text, text_width, item.max)
             .into_iter()
-            .enumerate()
-        {
+            .map(|t| vec![Span::styled(t, item.style)])
+            .collect();
+        if let Some(mark) = item.suffix {
+            let fits = texts.last().is_some_and(|t| {
+                t.iter().map(Span::width).sum::<usize>() + mark.width() <= text_width
+            });
+            match texts.last_mut() {
+                Some(last) if fits => last.push(mark),
+                _ => texts.push(vec![Span::styled(
+                    mark.content.trim_start_matches(" · ").to_string(),
+                    mark.style,
+                )]),
+            }
+        }
+        for (i, text) in texts.into_iter().enumerate() {
             let label = if i == 0 { item.label } else { "" };
             let mut l = lead();
             l.push(Span::styled(
                 format!("{label:<LABEL_WIDTH$}"),
                 theme.dim_style(),
             ));
-            l.push(Span::styled(text, item.style));
+            l.extend(text);
             lines.push(Line::from(l));
         }
     }
@@ -1127,6 +1169,7 @@ mod tests {
             ahead_of_base: Some(4),
             base_branch: Some("origin/main".into()),
             first_prompt: None,
+            recap_age_secs: None,
         };
         let tall = TallRow {
             row: &row,
@@ -1869,6 +1912,35 @@ mod tests {
                 .any(|l| l.contains("mod") || l.contains("untr")),
             "{lines:#?}"
         );
+    }
+
+    /// A recap left behind by later activity is marked old on its `now`
+    /// line; a recap set around the last activity is not.
+    #[test]
+    fn now_line_marks_a_recap_older_than_the_activity() {
+        let mut row = base_row("b");
+        row.ago_secs = Some(60);
+        let now_line = |recap_age_secs: u64| {
+            let detail = WorkspaceDetail {
+                recap: Some(WorkspaceRecap {
+                    state: Some("benchmarking".into()),
+                    ..Default::default()
+                }),
+                recap_age_secs: Some(recap_age_secs),
+                ..Default::default()
+            };
+            let tall = TallRow {
+                row: &row,
+                detail: &detail,
+            };
+            layout(&tall, &AgentGlyphs::default(), 120)
+                .iter()
+                .map(text)
+                .find(|l| l.contains("benchmarking"))
+                .unwrap()
+        };
+        assert!(now_line(2 * 3600).contains("benchmarking · 2h old"));
+        assert!(!now_line(10 * 60).contains("old"));
     }
 
     /// The strip says what's not on the remote yet: commits to push or

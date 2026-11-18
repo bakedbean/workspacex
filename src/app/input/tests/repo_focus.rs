@@ -281,6 +281,43 @@ async fn the_focus_panel_starts_open_and_switches_tabs() {
     assert_eq!(app.dashboard.focus_panel.tab, PanelTab::Prompt, "wraps");
 }
 
+/// `6` shows the agent's latest message in full, even with a recap set,
+/// and saves the tab.
+#[tokio::test]
+async fn six_shows_the_latest_message_beside_a_recap() {
+    use crate::ui::dashboard::FOCUS_TAB_SETTING;
+    use crate::ui::dashboard::side_panel::PanelTab;
+    let (mut app, repo, _, ids) = app();
+    app.recaps.insert(
+        ids[0],
+        crate::data::store::WorkspaceRecap {
+            next: Some("UNIQUE-NEXT".into()),
+            ..Default::default()
+        },
+    );
+    app.workspace_events.insert(
+        ids[0],
+        crate::activity::events::WorkspaceEvents {
+            last_assistant_text: Some("**UNIQUE-CHAT** done".into()),
+            ..Default::default()
+        },
+    );
+    app.dashboard.focus_repo(repo);
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
+    press(&mut app, KeyCode::Char('6')).await;
+    assert_eq!(app.dashboard.focus_panel.tab, PanelTab::Chat);
+    let screen = draw(&mut app);
+    assert!(
+        screen.contains("UNIQUE-CHAT done") && !screen.contains("**"),
+        "{screen}"
+    );
+    assert!(!screen.contains("UNIQUE-NEXT"), "{screen}");
+    assert_eq!(
+        app.store.get_setting(FOCUS_TAB_SETTING).unwrap().as_deref(),
+        Some("chat")
+    );
+}
+
 /// `c` toggles the focus view's panel as on the list, and Esc closes it
 /// before leaving the view. With it closed, the rows show their prose.
 #[tokio::test]

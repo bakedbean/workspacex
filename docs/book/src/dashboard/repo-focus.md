@@ -82,8 +82,9 @@ The [side panel](side-panel.md) is open when you enter the focus view, on the se
 | **Next** | The recap's next step, then its state. When the workspace kept working for at least half an hour after the recap was last set, a note says how old the recap is, since it may no longer say what the workspace is doing. Without a recap, the agent's last message, unless that is just the initial prompt. |
 | **Commits** | The branch's commits against the repo's base branch. |
 | **Files** | The files the branch changed against its base. |
+| **Chat** | The agent's latest message, rendered as markdown: the same text as the detail bar's RECENT CHAT, shown whether or not the workspace has a recap. |
 
-Press `1` to `5` for a tab, `<` / `>` for the previous or next one, or click it. The focus view keeps its own tab, apart from the list's panel, and saves it (the `dashboard_focus_tab` [setting](../configuration/settings.md#dashboard)). Nothing is cut short: a long prompt or recap scrolls. Press `→` to give the panel the keyboard, then `j` / `k` (or `PgDn` / `PgUp`, `g` / `G`) scroll it; `←` or `esc` gives the keys back. The mouse wheel over the panel scrolls it too.
+Press `1` to `6` for a tab, `<` / `>` for the previous or next one, or click it. The focus view keeps its own tab, apart from the list's panel, and saves it (the `dashboard_focus_tab` [setting](../configuration/settings.md#dashboard)). Nothing is cut short: a long prompt or recap scrolls. Press `→` to give the panel the keyboard, then `j` / `k` (or `PgDn` / `PgUp`, `g` / `G`) scroll it; `←` or `esc` gives the keys back. The mouse wheel over the panel scrolls it too.
 
 `c` closes and reopens it, as on the list; `esc` closes it before it leaves the focus view. Closed, it stays closed as `[` / `]` move between repos, and opens again the next time you enter the focus view. The focus view's panel opens and closes apart from the list's. It hides on terminals under 100 columns wide.
 

@@ -85,7 +85,7 @@ pub const BLOCKED_PIN_MAX_AGE_DEFAULT_SECS: u64 = 24 * 60 * 60;
 
 /// Upper bounds of the recency buckets, in seconds. The first bucket orders
 /// by name so two agents working right now never trade places; older buckets
-/// order newest first, which is stable because quiet rows age in lockstep.
+/// order newest first by exact timestamp, which quiet rows never reorder.
 const RECENCY_TIERS: [u64; 5] = [
     2 * 60,      // under 2m — active right now
     10 * 60,     // under 10m
@@ -128,6 +128,9 @@ pub trait SortRow {
     fn sort_status(&self) -> Status;
     /// Seconds since this workspace was last active; `None` if it never was.
     fn sort_ago_secs(&self) -> Option<u64>;
+    /// Epoch-ms of last activity. Orders older tiers: whole-second ages tie
+    /// and untie as the clock ticks, which would swap quiet rows.
+    fn sort_last_active_ms(&self) -> Option<i64>;
     /// The row's display name, used as the final tiebreak so the order is
     /// total — equal keys must not depend on input order.
     fn sort_name(&self) -> &str;
@@ -144,15 +147,15 @@ pub fn order_workspaces<T: SortRow>(items: &mut [T], mode: SortMode, pin_max_age
             // pinned one. Tier 0 ignores exact age so live rows hold still.
             let key = |w: &T| {
                 let tier = recency_tier(w.sort_ago_secs());
-                let age = if tier == 0 {
-                    0
+                let newest_first = if tier == 0 {
+                    None
                 } else {
-                    w.sort_ago_secs().unwrap_or(0)
+                    w.sort_last_active_ms()
                 };
                 (
                     !is_pinned(w.sort_status(), w.sort_ago_secs(), pin_max_age_secs),
                     tier,
-                    age,
+                    std::cmp::Reverse(newest_first),
                 )
             };
             items.sort_by(|a, b| {
@@ -190,6 +193,7 @@ mod tests {
         name: &'static str,
         status: Status,
         ago_secs: Option<u64>,
+        last_ms: Option<i64>,
     }
 
     impl SortRow for Row {
@@ -199,6 +203,9 @@ mod tests {
         fn sort_ago_secs(&self) -> Option<u64> {
             self.ago_secs
         }
+        fn sort_last_active_ms(&self) -> Option<i64> {
+            self.last_ms
+        }
         fn sort_name(&self) -> &str {
             self.name
         }
@@ -206,6 +213,7 @@ mod tests {
 
     const MIN: u64 = 60;
     const HOUR: u64 = 60 * 60;
+    const NOW_MS: i64 = 1_000_000_000;
 
     /// A row with an age but nothing to pin it.
     fn row(name: &'static str, ago_secs: u64) -> Row {
@@ -213,6 +221,7 @@ mod tests {
             name,
             status: Status::Thinking,
             ago_secs: Some(ago_secs),
+            last_ms: Some(NOW_MS - ago_secs as i64 * 1000),
         }
     }
 
@@ -221,6 +230,7 @@ mod tests {
             name,
             status,
             ago_secs: Some(ago_secs),
+            last_ms: Some(NOW_MS - ago_secs as i64 * 1000),
         }
     }
 
@@ -277,11 +287,45 @@ mod tests {
     }
 
     #[test]
+    fn recency_does_not_swap_quiet_rows_as_whole_second_ages_tick() {
+        // Last active 500ms apart, names opposite to recency: floored ages
+        // alternate between tied and untied, but the order must not.
+        let at = |now_ms: i64| {
+            let mk = |name, last_ms: i64| Row {
+                name,
+                status: Status::Thinking,
+                ago_secs: Some(((now_ms - last_ms) / 1000) as u64),
+                last_ms: Some(last_ms),
+            };
+            ordered(
+                vec![mk("a-old", 1_000_000), mk("z-new", 1_000_500)],
+                SortMode::Recency,
+            )
+        };
+        for now_ms in [1_120_600, 1_121_100, 1_121_600, 1_122_100] {
+            assert_eq!(at(now_ms), vec!["z-new", "a-old"], "at {now_ms}");
+        }
+    }
+
+    #[test]
+    fn recency_breaks_exact_timestamp_ties_by_name() {
+        let rows = vec![row("b", 3 * HOUR), row("a", 3 * HOUR)];
+        assert_eq!(ordered(rows, SortMode::Recency), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn recency_orders_pinned_rows_in_one_older_tier_newest_first() {
+        let rows = vec![blocked("a-old", 50 * MIN), blocked("z-new", 20 * MIN)];
+        assert_eq!(ordered(rows, SortMode::Recency), vec!["z-new", "a-old"]);
+    }
+
+    #[test]
     fn recency_orders_never_active_rows_by_name() {
         let never = |name| Row {
             name,
             status: Status::Idle,
             ago_secs: None,
+            last_ms: None,
         };
         let rows = vec![never("b"), never("a")];
         assert_eq!(ordered(rows, SortMode::Recency), vec!["a", "b"]);
@@ -294,6 +338,7 @@ mod tests {
                 name: "never",
                 status: Status::Idle,
                 ago_secs: None,
+                last_ms: None,
             },
             row("ancient", 30 * 24 * HOUR),
         ];

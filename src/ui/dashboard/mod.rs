@@ -1030,6 +1030,7 @@ pub fn render_footer(
 struct NavRow {
     status: Status,
     ago_secs: Option<u64>,
+    last_active_ms: Option<i64>,
     name: String,
     workspace_id: crate::data::store::WorkspaceId,
 }
@@ -1039,6 +1040,7 @@ impl From<&WorkspaceItem<'_>> for NavRow {
         NavRow {
             status: w.status,
             ago_secs: w.row.ago_secs,
+            last_active_ms: w.row.last_active_ms,
             name: w.row.branch.clone(),
             workspace_id: w.workspace_id,
         }
@@ -1051,6 +1053,9 @@ impl sort::SortRow for NavRow {
     }
     fn sort_ago_secs(&self) -> Option<u64> {
         self.ago_secs
+    }
+    fn sort_last_active_ms(&self) -> Option<i64> {
+        self.last_active_ms
     }
     fn sort_name(&self) -> &str {
         &self.name

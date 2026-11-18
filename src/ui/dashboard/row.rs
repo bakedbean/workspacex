@@ -184,6 +184,9 @@ pub struct RowInputs {
     pub diff: Option<DiffStats>,
     pub column: Option<RowColumn>,
     pub ago_secs: Option<u64>,
+    /// Epoch-ms of last activity; orders rows inside older recency tiers.
+    /// Whole-second `ago_secs` ties and unties as the clock ticks.
+    pub last_active_ms: Option<i64>,
     pub selected: bool,
     pub yolo: bool,
     /// Workspace lifecycle badge, rendered after the branch name. `None` for
@@ -227,6 +230,9 @@ impl crate::ui::dashboard::sort::SortRow for RowInputs {
     }
     fn sort_ago_secs(&self) -> Option<u64> {
         self.ago_secs
+    }
+    fn sort_last_active_ms(&self) -> Option<i64> {
+        self.last_active_ms
     }
     fn sort_name(&self) -> &str {
         &self.branch
@@ -868,6 +874,7 @@ mod tests {
                 },
             }),
             ago_secs: Some(29),
+            last_active_ms: None,
             selected: false,
             yolo: false,
             badge: None,

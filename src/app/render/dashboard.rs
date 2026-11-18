@@ -596,6 +596,7 @@ pub(super) fn build_row_inputs(
             app.recaps.get(&ws.id),
         )),
         ago_secs: secs,
+        last_active_ms: workspace_last_active_ms(app, ws.id),
         selected: matches!(app.selected_target(),
             Some(SelectionTarget::Workspace(id)) if id == ws.id),
         yolo: ws.yolo,

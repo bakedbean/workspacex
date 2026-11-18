@@ -360,6 +360,7 @@ mod tests {
                     },
                 }),
                 ago_secs: w.ago_secs,
+                last_active_ms: None,
                 selected: i == 0,
                 yolo: false,
                 badge: None,

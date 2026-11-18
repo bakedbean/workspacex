@@ -104,8 +104,8 @@ impl PanelView<'_> {
 /// and diff cells on every row.
 pub const PANEL_MAX_WIDTH: u16 = 100;
 
-/// Cap on the workspace-name column so one very long name can't starve the
-/// status column of the entire panel.
+/// The name column's cap in a panel too narrow to fit every column next to
+/// a long name. Wider panels let the column grow past it.
 const NAME_COL_MAX: usize = 28;
 
 /// Chars consumed left of the name column: 2-space indent + glyph + space.
@@ -126,14 +126,17 @@ const DIFF_W: usize = crate::ui::dashboard::row::DIFF_WIDTH;
 /// little of a live one.
 const STATUS_MIN_W: usize = 12;
 
-/// Width of the shared workspace-name column: as wide as the widest name cell,
-/// capped at [`NAME_COL_MAX`] and clamped so prefix + name + gap always
-/// leave at least one char of status text in the narrowest panel. Shared
-/// across every section so status texts start at one fixed column for
-/// the whole panel.
-fn name_col_width(widths: impl Iterator<Item = usize>, row_width: usize) -> usize {
-    let cap = NAME_COL_MAX.min(row_width.saturating_sub(ROW_PREFIX_W + COL_GAP_W + 1));
-    widths.max().unwrap_or(0).min(cap)
+/// Width of the shared workspace-name column: as wide as the widest name
+/// cell, truncating only when it would crowd out the PR chip, diff, and
+/// [`STATUS_MIN_W`] of status. Narrow panels fall back to [`NAME_COL_MAX`],
+/// clamped so at least one status char survives. Shared across sections so
+/// status texts start at one column.
+fn name_col_width(widths: impl Iterator<Item = usize>, row_width: usize, pr_width: usize) -> usize {
+    let fixed = ROW_PREFIX_W + COL_GAP_W;
+    let roomy =
+        row_width.saturating_sub(fixed + pr_width + COL_GAP_W + DIFF_W + COL_GAP_W + STATUS_MIN_W);
+    let narrow = NAME_COL_MAX.min(row_width.saturating_sub(fixed + 1));
+    widths.max().unwrap_or(0).min(roomy.max(narrow))
 }
 
 /// Case-insensitive substring match against the workspace name, the owning
@@ -454,6 +457,7 @@ pub fn render_updates_panel(
             .iter()
             .map(|(id, label)| display_width(label) + if nested.contains(id) { NEST_W } else { 0 }),
         row_width,
+        inputs.pr_width,
     );
 
     let mut lines: Vec<Line> = Vec::new();
@@ -1800,6 +1804,7 @@ mod workspace_row_tests {
         let name_col = name_col_width(
             [w.name.as_str(), "alpha"].into_iter().map(display_width),
             98,
+            crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
         );
         assert_eq!(name_col, 13);
         let line = row_line(
@@ -1822,21 +1827,33 @@ mod workspace_row_tests {
 
     #[test]
     fn name_col_width_tracks_longest_name_capped() {
+        let pr = crate::ui::dashboard::row::DEFAULT_PR_WIDTH;
+        let names = |v: &[&str]| {
+            v.iter()
+                .map(|n| display_width(n))
+                .collect::<Vec<_>>()
+                .into_iter()
+        };
+        assert_eq!(name_col_width(names(&["ab", "abcd"]), 78, pr), 4);
+        assert_eq!(name_col_width(std::iter::empty(), 78, pr), 0);
+        let long = "x".repeat(200);
+        // Wide panel: the name grows until chip, diff and minimum status
+        // are all that's left.
+        let row_width = 160;
+        let rest = ROW_PREFIX_W + COL_GAP_W + pr + COL_GAP_W + DIFF_W + COL_GAP_W + STATUS_MIN_W;
         assert_eq!(
-            name_col_width(["ab", "abcd"].into_iter().map(display_width), 78),
-            4
+            name_col_width(names(&[&long]), row_width, pr),
+            row_width - rest
         );
-        assert_eq!(name_col_width(std::iter::empty(), 78), 0);
-        let long = "x".repeat(NAME_COL_MAX + 10);
+        // A 40-char name, cut at 28 before, now fits whole.
+        let forty = "y".repeat(40);
+        assert_eq!(name_col_width(names(&[&forty]), row_width, pr), 40);
+        // Narrow panel: falls back to NAME_COL_MAX.
+        assert_eq!(name_col_width(names(&[&long]), 50, pr), NAME_COL_MAX);
+        // Narrowest panel: clamps so prefix + name + gap leave one status
+        // char. Inner width 18 → 11.
         assert_eq!(
-            name_col_width([long.as_str()].into_iter().map(display_width), 78),
-            NAME_COL_MAX,
-            "column caps at NAME_COL_MAX"
-        );
-        // Narrow panel: the column also clamps so prefix + name + gap leave
-        // at least one status char. Inner width 18 (narrowest panel) → 11.
-        assert_eq!(
-            name_col_width([long.as_str()].into_iter().map(display_width), 18),
+            name_col_width(names(&[&long]), 18, pr),
             18 - ROW_PREFIX_W - COL_GAP_W - 1,
             "column clamps to the row width in narrow panels"
         );
@@ -1850,7 +1867,11 @@ mod workspace_row_tests {
         let theme = Theme::ansi();
         let w = fixture_workspace("a-very-long-workspace-name");
         let row_width = 18;
-        let name_col = name_col_width([w.name.as_str()].into_iter().map(display_width), row_width);
+        let name_col = name_col_width(
+            [w.name.as_str()].into_iter().map(display_width),
+            row_width,
+            crate::ui::dashboard::row::DEFAULT_PR_WIDTH,
+        );
         let awaiting = ("Bash".to_string(), 5_000i64);
         let line = row_line(
             &w,

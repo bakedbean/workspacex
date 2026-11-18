@@ -166,6 +166,10 @@ pub(in crate::app::input) fn leave_repo_focus(app: &mut App) {
     let Some(rid) = app.dashboard.focused_repo.take() else {
         return;
     };
+    // The next entry starts with the panel open again; `[` / `]` between
+    // repos keep it as it is.
+    app.dashboard.focus_panel.open = true;
+    app.dashboard.focus_panel.focused = false;
     let folded = match app.dashboard.folded.get(&(rid.0 as u64)).copied() {
         Some(explicit) => explicit,
         None => crate::ui::dashboard::sort::default_fold(current_repo_counts(app, rid)),
@@ -584,7 +588,10 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         (KeyCode::Char('c'), _) => active_side_panel(app).toggle(),
         // `→` moves keyboard focus into the panel (see
         // `side_panel::focused_key`), opening it on Files if need be.
-        (KeyCode::Right, _) => active_side_panel(app).focus(),
+        (KeyCode::Right, _) => {
+            active_side_panel(app).focus();
+            save_focus_tab(app);
+        }
         (KeyCode::Char(c @ '1'..='5'), _) => {
             let i = c as usize - '1' as usize;
             show_panel_tab(app, crate::ui::dashboard::side_panel::PanelTab::ALL[i]);

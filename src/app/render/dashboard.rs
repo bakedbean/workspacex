@@ -135,12 +135,14 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     app.dashboard.selected = selected;
     // Gathered after reconciling, so a workspace a hide rule just folded
     // into its group never shows in the panel for that frame.
+    let panel_state = if app.dashboard.focused_repo.is_some() {
+        &app.dashboard.focus_panel
+    } else {
+        &app.dashboard.panel
+    };
     inputs.panel = match app.dashboard.selection {
-        Some(SelectionTarget::Workspace(id))
-            if (app.dashboard.focused_repo.is_some() && app.dashboard.focus_panel.open)
-                || (app.dashboard.focused_repo.is_none() && app.dashboard.panel.open) =>
-        {
-            side_panel_data(app, id)
+        Some(SelectionTarget::Workspace(id)) if panel_state.open => {
+            side_panel_data(app, id, panel_state.tab.is_text())
         }
         _ => None,
     };
@@ -328,9 +330,13 @@ pub(crate) fn lifecycle_badge_for(
 /// and the commit and file lists — only lists polled against the current
 /// base, so a changed Base branch never shows the old base's lists.
 /// Shared by the dashboard and the attached view.
+///
+/// The text tabs' prose is gathered only `with_prose`, for a panel on one
+/// of them: it costs a row build and copies of the prompt and recap.
 pub(crate) fn side_panel_data(
     app: &App,
     id: crate::data::store::WorkspaceId,
+    with_prose: bool,
 ) -> Option<crate::ui::dashboard::side_panel::PanelData> {
     let (rid, ws) = app.workspaces.iter().find(|(_, w)| w.id == id)?;
     let repo = app.repos.iter().find(|r| r.id == *rid)?;
@@ -345,7 +351,11 @@ pub(crate) fn side_panel_data(
         base: repo.base_branch.clone(),
         lists,
         ahead: app.workspace_ahead_of_base.get(&id).copied(),
-        prose: panel_prose(app, ws),
+        prose: if with_prose {
+            panel_prose(app, ws)
+        } else {
+            Default::default()
+        },
     })
 }
 
@@ -359,12 +369,12 @@ fn panel_prose(
     let now_ms = crate::util::time::now_ms();
     let row = build_row_inputs(app, ws, now_ms, false);
     let recap = app.recaps.get(&ws.id);
+    // A blank full form falls back to the short one.
+    fn text(t: &Option<String>) -> Option<&str> {
+        t.as_deref().map(str::trim).filter(|t| !t.is_empty())
+    }
     let field = |full: &Option<String>, short: &Option<String>| {
-        full.as_deref()
-            .or(short.as_deref())
-            .map(str::trim)
-            .filter(|t| !t.is_empty())
-            .map(String::from)
+        text(full).or(text(short)).map(String::from)
     };
     let (goal, next, state) = recap.map_or((None, None, None), |r| {
         (

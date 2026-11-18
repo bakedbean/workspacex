@@ -85,7 +85,7 @@ The [side panel](side-panel.md) is open when you enter the focus view, on the se
 
 Press `1` to `5` for a tab, `<` / `>` for the previous or next one, or click it. The focus view keeps its own tab, apart from the list's panel, and saves it (the `dashboard_focus_tab` [setting](../configuration/settings.md#dashboard)). Nothing is cut short: a long prompt or recap scrolls. Press `→` to give the panel the keyboard, then `j` / `k` (or `PgDn` / `PgUp`, `g` / `G`) scroll it; `←` or `esc` gives the keys back. The mouse wheel over the panel scrolls it too.
 
-`c` closes and reopens it, as on the list; `esc` closes it before it leaves the focus view. The focus view's panel opens and closes apart from the list's. It hides on terminals under 100 columns wide.
+`c` closes and reopens it, as on the list; `esc` closes it before it leaves the focus view. Closed, it stays closed as `[` / `]` move between repos, and opens again the next time you enter the focus view. The focus view's panel opens and closes apart from the list's. It hides on terminals under 100 columns wide.
 
 ## Opening and closing it
 

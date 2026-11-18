@@ -360,6 +360,58 @@ async fn a_focused_text_tab_scrolls() {
     assert_eq!(selected_ws(&app), Some(ids[0]), "selection unchanged");
 }
 
+/// `→` on a closed focus panel opens it on Files, and that tab is saved.
+#[tokio::test]
+async fn right_on_a_closed_focus_panel_saves_files() {
+    use crate::ui::dashboard::FOCUS_TAB_SETTING;
+    let (mut app, repo, _, _) = app();
+    app.dashboard.focus_repo(repo);
+    press(&mut app, KeyCode::Char('c')).await;
+    press(&mut app, KeyCode::Right).await;
+    assert!(app.dashboard.focus_panel.open);
+    assert_eq!(
+        app.store.get_setting(FOCUS_TAB_SETTING).unwrap().as_deref(),
+        Some("files")
+    );
+}
+
+/// Closing the focus panel lasts while you move between repos, but the
+/// next time you enter the focus view it starts open again.
+#[tokio::test]
+async fn entering_the_focus_view_reopens_its_panel() {
+    let (mut app, repo, _, _) = app();
+    app.dashboard.selection = Some(SelectionTarget::Repo(repo));
+    press(&mut app, KeyCode::Char('f')).await;
+    press(&mut app, KeyCode::Char('c')).await;
+    press(&mut app, KeyCode::Char(']')).await;
+    assert!(!app.dashboard.focus_panel.open, "[ / ] keep it closed");
+    press(&mut app, KeyCode::Char('f')).await;
+    assert_eq!(app.dashboard.focused_repo, None);
+    app.dashboard.selection = Some(SelectionTarget::Repo(repo));
+    press(&mut app, KeyCode::Char('f')).await;
+    assert!(app.dashboard.focus_panel.open, "open again on entry");
+}
+
+/// A blank full recap field falls back to its short form in the panel.
+#[test]
+fn a_blank_full_field_falls_back_to_the_short_one() {
+    let (mut app, repo, _, ids) = app();
+    app.recaps.insert(
+        ids[0],
+        crate::data::store::WorkspaceRecap {
+            goal: Some("   ".into()),
+            goal_short: Some("SHORT-GOAL".into()),
+            ..Default::default()
+        },
+    );
+    app.dashboard.focus_repo(repo);
+    app.dashboard.focus_panel.tab = crate::ui::dashboard::side_panel::PanelTab::Goal;
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
+    let screen = draw(&mut app);
+    assert!(screen.contains("SHORT-GOAL"), "{screen}");
+    assert!(!screen.contains("No recap goal set"), "{screen}");
+}
+
 #[test]
 fn the_tab_setting_loads_at_startup() {
     use crate::ui::dashboard::FOCUS_TAB_SETTING;

@@ -48,7 +48,8 @@ fn edit_cursor_file(app: &mut App) {
     let Some(ws) = side_panel_workspace(app) else {
         return;
     };
-    let Some(lists) = crate::app::render::dashboard::side_panel_data(app, ws).and_then(|d| d.lists)
+    let Some(lists) =
+        crate::app::render::dashboard::side_panel_data(app, ws, false).and_then(|d| d.lists)
     else {
         return;
     };

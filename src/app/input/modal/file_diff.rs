@@ -19,7 +19,7 @@ pub(in crate::app::input) fn open(
     ws: WorkspaceId,
     index: usize,
 ) {
-    let Some(data) = crate::app::render::dashboard::side_panel_data(app, ws) else {
+    let Some(data) = crate::app::render::dashboard::side_panel_data(app, ws, false) else {
         return;
     };
     let Some(lists) = data.lists else {

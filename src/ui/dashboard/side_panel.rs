@@ -81,6 +81,11 @@ impl PanelTab {
         }
     }
 
+    /// Prompt, Goal or Next: a tab of prose rather than a git list.
+    pub fn is_text(self) -> bool {
+        matches!(self, PanelTab::Prompt | PanelTab::Goal | PanelTab::Next)
+    }
+
     pub fn from_key(s: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|t| t.key() == s)
     }
@@ -491,7 +496,10 @@ pub fn render(
         (PanelTab::Files, Some(files)) if !files.is_empty() => Some(files),
         _ => None,
     };
-    view.cursor = view.cursor.min(files.map_or(0, |f| f.len() - 1));
+    // Clamped only on Files, so another tab keeps the place in the list.
+    if tab == PanelTab::Files {
+        view.cursor = view.cursor.min(files.map_or(0, |f| f.len() - 1));
+    }
     // While focused, the bottom row says what the keys do.
     let hint = (view.focused && inner.height as usize > head.len() + 1).then(|| {
         if files.is_some() {
@@ -1303,6 +1311,52 @@ mod tests {
         assert!(p.is_focused() && p.tab == PanelTab::Next);
         p.toggle();
         assert!(!p.open && !p.is_focused());
+    }
+
+    /// Another tab leaves the Files cursor where it was; only Files clamps
+    /// it.
+    #[test]
+    fn another_tab_keeps_the_file_cursor() {
+        let files = many_files(10);
+        let mut view = PanelView {
+            cursor: 7,
+            ..Default::default()
+        };
+        draw_view(
+            PanelTab::Commits,
+            Some(file_inputs(&files)),
+            40,
+            12,
+            &mut view,
+        );
+        assert_eq!(view.cursor, 7);
+        view.cursor = 99;
+        draw_view(
+            PanelTab::Files,
+            Some(file_inputs(&files)),
+            40,
+            12,
+            &mut view,
+        );
+        assert_eq!(view.cursor, 9, "clamped on Files");
+    }
+
+    /// However short the panel, every tab draws without panicking.
+    #[test]
+    fn a_tiny_panel_still_draws() {
+        let files = many_files(3);
+        for h in 1..5 {
+            for w in [4, 12, 30] {
+                for tab in PanelTab::ALL {
+                    let mut view = PanelView {
+                        focused: true,
+                        follow: true,
+                        ..Default::default()
+                    };
+                    draw_view(tab, Some(file_inputs(&files)), w, h, &mut view);
+                }
+            }
+        }
     }
 
     #[test]

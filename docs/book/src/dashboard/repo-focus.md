@@ -52,7 +52,7 @@ Each row has three zones.
 **The strip** is line 1: columns that are as wide as the widest value in the view, so each field lines up down the screen. Left to right:
 
 - the agent strip and the status glyph (a spinner while the agent works),
-- the **branch**, which wraps onto the next line when it is too long and is never shortened,
+- the **branch**, at its full length: the column is as wide as the longest branch name, so names never wrap (only a pane too narrow to fit one beside the PR chip wraps it),
 - the **PR chip**, as on the dashboard list's PR column: number, state, and the review mark with its unresolved-thread count. A workspace without a PR shows a dim `no PR`,
 - the **status word**, as on the dashboard row, with the running-process count and any badge,
 - commits ahead of the repo's base branch (`↑4 vs main`, from the repo's **Base branch** setting; `↑4 base` when it isn't set),

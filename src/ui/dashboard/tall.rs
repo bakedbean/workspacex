@@ -408,9 +408,8 @@ fn last_message(row: &RowInputs, prompt: Option<&str>, theme: &Theme) -> Option<
     })
 }
 
-/// Bounds on the strip's branch column, its status glyph included.
+/// Narrowest the strip's branch column gets, its status glyph included.
 const BRANCH_MIN: usize = 12;
-const BRANCH_MAX: usize = 44;
 /// Blank cells between strip columns.
 const STRIP_GAP: usize = 2;
 
@@ -437,9 +436,9 @@ pub struct StripColumns {
 }
 
 /// Size the strip's columns for `rows` at `width`. The branch column fits
-/// the longest branch within its bounds; when that strip overflows `width`
-/// it breaks in two and the branch column shrinks to fit line 1, never
-/// below `BRANCH_MIN`. A longer branch wraps.
+/// the longest branch so names never wrap; when that strip overflows
+/// `width` it breaks in two. Only a line too narrow for the branch beside
+/// the PR chip shrinks it (never below `BRANCH_MIN`) and wraps it.
 pub fn strip_columns(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -> StripColumns {
     let max = |f: &dyn Fn(&TallRow<'_>) -> usize| rows.iter().map(f).max().unwrap_or(0);
     let spans_width = |s: &[Span<'_>]| s.iter().map(Span::width).sum::<usize>();
@@ -461,7 +460,7 @@ pub fn strip_columns(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -
     let diff = max(&|r| spans_width(&diff_spans(r.row, r.detail, commit_max, bars, &theme)));
     let age = max(&|r| display_width(&age_text(r.row)));
     let prefix = widths.agent + row::GUTTER_WIDTH + 1;
-    let natural = max(&|r| 2 + display_width(&r.row.branch)).clamp(BRANCH_MIN, BRANCH_MAX);
+    let natural = max(&|r| 2 + display_width(&r.row.branch)).max(BRANCH_MIN);
     let one_line =
         prefix + natural + STRIP_GAP + pr + cells_width([status, ahead, sync, dirty, diff, age]);
     let two_line = one_line > width;
@@ -483,8 +482,8 @@ pub fn strip_columns(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -
             prose,
         };
     }
-    // Line 1 holds branch, PR and age: the branch gives way first, then the
-    // PR chip (which drops its lifecycle word when fitted narrower).
+    // Line 1 holds branch, PR and age: the branch stays whole unless the
+    // line can't fit it beside the chip, then the PR chip narrows.
     let room = width.saturating_sub(prefix + STRIP_GAP + cells_width([age]));
     let branch = natural.min(room.saturating_sub(pr)).max(BRANCH_MIN);
     let pr = pr
@@ -1636,9 +1635,8 @@ mod tests {
         let head = lines[0]
             .split_whitespace()
             .find(|w| w.starts_with("bakedbean"));
-        let rest = lines[1].trim_start_matches([' ', '▎']);
-        assert_eq!(format!("{}{rest}", head.unwrap()), row.branch, "{all}");
-        assert!(lines[2].contains("goal"), "{all}");
+        assert_eq!(head, Some(row.branch.as_str()), "{all}");
+        assert!(lines[1].contains("goal"), "{all}");
         // Drop the gutter bars so wrapped text reads as one run.
         let joined = lines
             .join(" ")
@@ -2331,9 +2329,9 @@ mod tests {
     }
 
     #[test]
-    fn long_branch_wraps_without_moving_the_strip() {
+    fn long_branch_never_wraps() {
         use crate::git::forge::BranchLifecycle;
-        let long = "bakedbean/a-branch-name-much-longer-than-the-branch-column-allows";
+        let long = "bakedbean/a-branch-name-much-longer-than-a-typical-branch-column";
         let mut a = base_row(long);
         a.lifecycle = Some(BranchLifecycle::PrOpen);
         a.pr_number = Some(8);
@@ -2351,21 +2349,14 @@ mod tests {
                 detail: &detail,
             },
         ];
-        let out = strip_rows(&rows, 140);
-        assert_eq!(col(&out[0][0], "#8"), col(&out[1][0], "#9"), "{out:#?}");
-        assert!(out[0][0].contains("working"), "strip on line 1: {out:#?}");
-        let joined: String = out[0][..2]
-            .iter()
-            .map(|l| {
-                l.split_whitespace()
-                    .find(|w| w.starts_with("bakedbean") || w.contains("allows"))
-                    .unwrap_or("")
-            })
-            .collect();
-        assert_eq!(joined, long, "{out:#?}");
-        for l in out.iter().flatten() {
-            assert!(display_width(l) <= 140, "too wide: {l:?}");
-            assert!(!l.contains('…'), "no ellipsis: {l:?}");
+        for width in [100, 140, 200] {
+            let out = strip_rows(&rows, width);
+            assert!(out[0][0].contains(long), "{width}: {out:#?}");
+            assert_eq!(col(&out[0][0], "#8"), col(&out[1][0], "#9"), "{out:#?}");
+            for l in out.iter().flatten() {
+                assert!(display_width(l) <= width, "too wide: {l:?}");
+                assert!(!l.contains('…') || l.contains('#'), "no ellipsis: {l:?}");
+            }
         }
     }
 

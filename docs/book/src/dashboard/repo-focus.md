@@ -5,7 +5,7 @@ The focus view shows one repo on the dashboard and gives each of its workspaces 
 ```text
 ◂ all repos / workspacex  ~/src/workspacex  ──  No PR 1 › Draft 1 › Open 1 › Done 1    ? 1 question   ⠋ 1 thinking   · 2 idle    4 ws
 
-━━ No PR · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │  Prompt  Goal  Next  Commits 4  Files 7
+━━ No PR · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │  Prompt  Goal  Next  Commits 4  Files 7  Chat
                                                                                              │ bakedbean/repo-focus-view vs main
 ▎▎ ⠋ bakedbean/try-new-parser     no PR          ▸ working  ● 2p  ↑1 vs main  not pushed  2m │ ─────────────────────────────────────
  ▎   ▎ claude  opus 4.8 61k/200k  #spike                                                     │ write the docs, then open the PR
@@ -63,7 +63,7 @@ Each row has three zones.
 
 **The part line** sits under the branch for a workspace in a [series](../cli-reference/workspace.md#wsx-series-show): its part number and the series title (part 1's slug until it has one), then the earlier parts' PRs, oldest first, each with its PR chip's glyph and color, or the slug of a part with no PR. When a later part exists, the line ends with `→ part N`. It always fits on one line: the oldest PRs fold into `+k` first, then the title is cut.
 
-What each workspace is for and doing is in the [side panel](#side-panel), for the selected one. With the panel closed, or on a terminal too narrow for it (under 100 columns), each row shows one line of the panel tab's text under its branch instead: `prompt` (cut to two lines), `goal` or `next` (up to three), with `next` standing in for the Commits and Files tabs. Without a recap, `next` gives way to a `last` line, the agent's last message.
+What each workspace is for and doing is in the [side panel](#side-panel), for the selected one. With the panel closed, or on a terminal too narrow for it (under 100 columns), each row shows one line of the panel tab's text under its branch instead: `prompt` (cut to two lines), `goal` or `next` (up to three), with `next` standing in for the Commits, Files and Chat tabs. Without a recap, `next` gives way to a `last` line, the agent's last message.
 
 **The footer** is a dim line of the workspace's agents, each named with its icon from the theme's [`[agent_bar.symbols]`](../configuration/themes.md) table (or the `▎` bar when the theme has none), then the agent's model and how full its context window is (`opus 4.8 45k/200k`, the fill in the warn color from 85%; just the token count when the window size isn't known), as the attached view's top bar shows them. That appears once the agent's session log reports token usage. Then come `◇ shared` for a [shared](../integrations/shared-workspaces.md) workspace (red `shared, no session` when its tmux session is gone) and `layout` when it has a saved multi-pane layout, followed by its tags. It is always shown.
 

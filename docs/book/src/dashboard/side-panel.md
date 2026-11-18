@@ -12,7 +12,7 @@ On the dashboard, press `c` to open it for the selected workspace:
 - **Chat**: the agent's latest message, rendered as markdown, as the detail bar's RECENT CHAT shows it.
 
 ```text
-│  Prompt  Goal  Next  Commits 2  Files 7
+│  Prompt  Goal  Next  Commits 2  Files 7  Chat
 │ bakedbean/repo-focus-view vs main
 │ ──────────────────────────────────
 │ cda7649  fix(dashboard): name the base

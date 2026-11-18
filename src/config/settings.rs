@@ -205,6 +205,12 @@ pub const SETTINGS: &[SettingDef] = &[
         true,
         "Section the repo focus view by PR state; `G` there toggles it too.",
     ),
+    choice(
+        "dashboard_focus_tab",
+        "Dashboard",
+        &["next", "goal", "prompt", "commits", "files"],
+        "The repo focus view's side-panel tab; `<` / `>` and `1`–`5` there switch it too.",
+    ),
     text(
         "dashboard_blocked_pin_max_age_secs",
         "Dashboard",
@@ -458,6 +464,7 @@ mod tests {
             "dashboard_pr_width",
             "dashboard_sort_mode",
             "dashboard_focus_group_by_pr",
+            "dashboard_focus_tab",
             "dashboard_blocked_pin_max_age_secs",
             "top_bar_show_tags",
             "coding_agent",

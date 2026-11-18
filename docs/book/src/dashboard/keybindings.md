@@ -22,9 +22,10 @@ Every key in the wsx TUI, grouped by where you press it. Capital letters mean `S
 | `{` / `}` (focus view)  | Previous / next [section](repo-focus.md#sections)      |
 | `G` (focus view)        | Sections by PR state, or the list's order (saved)      |
 | `PgUp` / `PgDn` (focus view) | Scroll the [focus view](repo-focus.md) a page      |
-| `c`                     | Toggle the [side panel](side-panel.md) (commits and changed files); `esc` closes it |
-| `1` / `2`               | Side panel: Commits / Files                            |
-| `→`                     | Side panel: [browse changed files](side-panel.md#browsing-changed-files) and open their diffs |
+| `c`                     | Toggle the [side panel](side-panel.md) (prompt, recap, commits and changed files); `esc` closes it. Starts open in the focus view |
+| `1`–`5`                 | Side panel: Prompt / Goal / Next / Commits / Files     |
+| `<` / `>`               | Side panel: previous / next tab (saved in the focus view) |
+| `→`                     | Side panel: take the keyboard to scroll it, or [browse changed files](side-panel.md#browsing-changed-files) and open their diffs |
 | `Tab`                   | Focus the detail-bar reply, then the digest            |
 | `q`                     | Quit; stops direct sessions (shared ones keep running)  |
 
@@ -154,8 +155,8 @@ Keys go to the agent, except chords after `Ctrl-x`. Pressing `Ctrl-x` alone show
 | `Ctrl-x <`           | [Prompt tag](../attached-view/prompt-tags.md) picker    |
 | `Ctrl-x #`           | [Workspace tags](tags-and-hiding.md) editor             |
 | `Ctrl-x R`           | Workspace recap (goal / state / next); `j`/`k` scroll; `esc` closes |
-| `Ctrl-x c`           | Toggle the [side panel](side-panel.md#in-the-attached-view) (commits and changed files) |
-| `Ctrl-x C`           | Side panel: switch between Commits and Files            |
+| `Ctrl-x c`           | Toggle the [side panel](side-panel.md#in-the-attached-view) (prompt, recap, commits and changed files) |
+| `Ctrl-x C`           | Side panel: next tab                                    |
 | `Ctrl-x f`           | Side panel: [browse changed files](side-panel.md#browsing-changed-files) and open their diffs |
 | `Ctrl-x 1`–`9`       | Send a pinned command                                   |
 | `Ctrl-x x`           | Send a literal `Ctrl-x` to the agent                    |

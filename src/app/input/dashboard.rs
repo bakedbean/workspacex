@@ -166,6 +166,10 @@ pub(in crate::app::input) fn leave_repo_focus(app: &mut App) {
     let Some(rid) = app.dashboard.focused_repo.take() else {
         return;
     };
+    // The next entry starts with the panel open again; `[` / `]` between
+    // repos keep it as it is.
+    app.dashboard.focus_panel.open = true;
+    app.dashboard.focus_panel.focused = false;
     let folded = match app.dashboard.folded.get(&(rid.0 as u64)).copied() {
         Some(explicit) => explicit,
         None => crate::ui::dashboard::sort::default_fold(current_repo_counts(app, rid)),
@@ -280,17 +284,26 @@ pub(in crate::app::input) fn active_side_panel(
 ) -> &mut crate::ui::dashboard::side_panel::SidePanelState {
     match app.view {
         crate::ui::View::Attached(_) => &mut app.attached_panel,
+        _ if app.dashboard.focused_repo.is_some() => &mut app.dashboard.focus_panel,
         _ => &mut app.dashboard.panel,
     }
 }
 
-/// Open the side panel of the view on screen on `tab` — `1` / `2` on the
+/// Open the side panel of the view on screen on `tab` — `1`–`5` on the
 /// dashboard, or a click on the tab in either view.
 pub(in crate::app::input) fn show_panel_tab(
     app: &mut App,
     tab: crate::ui::dashboard::side_panel::PanelTab,
 ) {
     active_side_panel(app).show(tab);
+    save_focus_tab(app);
+}
+
+/// Remember the focus view's panel tab after a change; a no-op elsewhere.
+pub(in crate::app::input) fn save_focus_tab(app: &App) {
+    if matches!(app.view, crate::ui::View::Dashboard) && app.dashboard.focused_repo.is_some() {
+        app.dashboard.save_focus_tab(&app.store);
+    }
 }
 
 /// The side-panel tab a click landed on.
@@ -565,21 +578,31 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         // Esc closes the side panel — before it leaves the focus view —
         // but only a panel actually on screen; with a terminal too narrow
         // to show it, Esc does what it would without the panel.
-        (KeyCode::Esc, _) if app.dashboard.panel.open && app.side_panel_rect.is_some() => {
-            app.dashboard.panel.close();
+        (KeyCode::Esc, _) if active_side_panel(app).open && app.side_panel_rect.is_some() => {
+            active_side_panel(app).close();
         }
         (KeyCode::Esc, _) if app.dashboard.focused_repo.is_some() => leave_repo_focus(app),
-        // The side panel: `c` toggles it, `1` / `2` pick its tab (opening
-        // it if closed).
-        (KeyCode::Char('c'), _) => app.dashboard.panel.toggle(),
-        // `→` moves keyboard focus into the panel's Files list (see
-        // `side_panel::focused_key`), opening it there if need be.
-        (KeyCode::Right, _) => app.dashboard.panel.focus_files(),
-        (KeyCode::Char('1'), _) => {
-            show_panel_tab(app, crate::ui::dashboard::side_panel::PanelTab::Commits);
+        // The side panel: `c` toggles it, `1`–`5` pick its tab and
+        // `<` / `>` step through them (opening it if closed). The focus
+        // view has its own, open to start with.
+        (KeyCode::Char('c'), _) => active_side_panel(app).toggle(),
+        // `→` moves keyboard focus into the panel (see
+        // `side_panel::focused_key`), opening it on Files if need be.
+        (KeyCode::Right, _) => {
+            active_side_panel(app).focus();
+            save_focus_tab(app);
         }
-        (KeyCode::Char('2'), _) => {
-            show_panel_tab(app, crate::ui::dashboard::side_panel::PanelTab::Files);
+        (KeyCode::Char(c @ '1'..='5'), _) => {
+            let i = c as usize - '1' as usize;
+            show_panel_tab(app, crate::ui::dashboard::side_panel::PanelTab::ALL[i]);
+        }
+        (KeyCode::Char('>'), _) => {
+            active_side_panel(app).next_tab();
+            save_focus_tab(app);
+        }
+        (KeyCode::Char('<'), _) => {
+            active_side_panel(app).prev_tab();
+            save_focus_tab(app);
         }
         (KeyCode::Char('f'), _) => toggle_repo_focus(app),
         // Page the focus view, so a workspace taller than the screen can

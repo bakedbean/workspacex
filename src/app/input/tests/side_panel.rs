@@ -82,7 +82,7 @@ async fn c_on_the_list_opens_the_panel_beside_the_rows() {
         assert!(!left.contains("UNIQUE-COMMIT"), "{line:?}");
     }
 
-    press(&mut app, KeyCode::Char('2')).await;
+    press(&mut app, KeyCode::Char('5')).await;
     let screen = draw(&mut app);
     assert!(screen.contains("2 files  +43 −3"), "{screen}");
 
@@ -204,7 +204,7 @@ async fn ctrl_x_c_opens_the_panel_beside_the_agent_pane() {
     );
 
     // A click on the Commits tab shows it in the attached panel.
-    let (tab, r) = app.side_panel_tab_rects[0];
+    let (tab, r) = app.side_panel_tab_rects[3];
     assert_eq!(tab, crate::ui::dashboard::side_panel::PanelTab::Commits);
     handle_mouse(
         &mut app,
@@ -315,7 +315,7 @@ async fn focus_goes_back_on_esc_or_any_other_key() {
 
     key(&mut app, KeyCode::Right).await;
     draw(&mut app);
-    key(&mut app, KeyCode::Char('1')).await;
+    key(&mut app, KeyCode::Char('4')).await;
     assert!(!app.dashboard.panel.is_focused());
     assert_eq!(
         app.dashboard.panel.tab,
@@ -335,7 +335,7 @@ async fn focus_goes_back_on_esc_or_any_other_key() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn clicking_a_file_opens_it_and_the_viewer_steps_and_closes() {
     let (mut app, _, _) = app();
-    key(&mut app, KeyCode::Char('2')).await;
+    key(&mut app, KeyCode::Char('5')).await;
     draw(&mut app);
     let &(index, r) = app
         .side_panel_file_rects

@@ -12,8 +12,19 @@ use std::path::PathBuf;
 
 /// Five workspaces in "repo", plus an empty second repo "other".
 fn app() -> (App, RepoId, RepoId, Vec<WorkspaceId>) {
+    app_named(&["a", "b", "c", "d", "e"])
+}
+
+/// `app()` with the first workspace's name (and so its branch) so long that
+/// its row is taller than a small screen: branch names wrap uncapped.
+fn app_with_a_tall_row() -> (App, RepoId, RepoId, Vec<WorkspaceId>) {
+    let long = format!("a{}", "x".repeat(600));
+    app_named(&[&long, "b", "c", "d", "e"])
+}
+
+fn app_named(names: &[&str]) -> (App, RepoId, RepoId, Vec<WorkspaceId>) {
     let store = Store::open_in_memory().unwrap();
-    let ids = seed_workspaces(&store, &["a", "b", "c", "d", "e"]);
+    let ids = seed_workspaces(&store, names);
     let other = store
         .add_repo(std::path::Path::new("/tmp/other"), "other", "")
         .unwrap();
@@ -209,6 +220,210 @@ async fn g_toggles_pr_grouping_and_remembers_it() {
     );
 }
 
+/// The focus view's side panel starts open on the Next tab, showing
+/// the selected workspace's recap in full; `>` and `<` step through its
+/// tabs, wrapping, and the tab is remembered. The rows show no prose.
+#[tokio::test]
+async fn the_focus_panel_starts_open_and_switches_tabs() {
+    use crate::ui::dashboard::FOCUS_TAB_SETTING;
+    use crate::ui::dashboard::side_panel::PanelTab;
+    let (mut app, repo, _, ids) = app();
+    let goal = format!("UNIQUE-GOAL {}GOAL-END", "word ".repeat(80));
+    app.recaps.insert(
+        ids[0],
+        crate::data::store::WorkspaceRecap {
+            goal: Some(goal),
+            state: Some("UNIQUE-STATE".into()),
+            next: Some("UNIQUE-NEXT".into()),
+            ..Default::default()
+        },
+    );
+    app.dashboard.focus_repo(repo);
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
+    assert_eq!(app.dashboard.focus_panel.tab, PanelTab::Next, "next first");
+    let screen = draw(&mut app);
+    assert!(app.side_panel_rect.is_some(), "open:\n{screen}");
+    assert!(screen.contains("UNIQUE-NEXT"), "{screen}");
+    assert!(
+        screen.contains("UNIQUE-STATE"),
+        "state under next:\n{screen}"
+    );
+    assert!(
+        !screen.contains("UNIQUE-GOAL"),
+        "one tab at a time:\n{screen}"
+    );
+    assert_eq!(
+        screen.matches("UNIQUE-NEXT").count(),
+        1,
+        "not on the row too"
+    );
+
+    press(&mut app, KeyCode::Char('<')).await;
+    assert_eq!(app.dashboard.focus_panel.tab, PanelTab::Goal);
+    let screen = draw(&mut app);
+    assert!(
+        screen.contains("UNIQUE-GOAL") && screen.contains("GOAL-END"),
+        "the goal is never cut short:\n{screen}"
+    );
+    assert_eq!(
+        app.store.get_setting(FOCUS_TAB_SETTING).unwrap().as_deref(),
+        Some("goal")
+    );
+    assert!(!app.dashboard.panel.open, "the list's panel is untouched");
+
+    press(&mut app, KeyCode::Char('3')).await;
+    assert_eq!(app.dashboard.focus_panel.tab, PanelTab::Next);
+    press(&mut app, KeyCode::Char('>')).await;
+    press(&mut app, KeyCode::Char('>')).await;
+    press(&mut app, KeyCode::Char('>')).await;
+    assert_eq!(app.dashboard.focus_panel.tab, PanelTab::Prompt, "wraps");
+}
+
+/// `c` toggles the focus view's panel as on the list, and Esc closes it
+/// before leaving the view. With it closed, the rows show their prose.
+#[tokio::test]
+async fn c_and_esc_close_the_focus_panel() {
+    let (mut app, repo, _, ids) = app();
+    app.recaps.insert(
+        ids[0],
+        crate::data::store::WorkspaceRecap {
+            next: Some("UNIQUE-NEXT".into()),
+            ..Default::default()
+        },
+    );
+    app.dashboard.focus_repo(repo);
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
+    let screen = draw(&mut app);
+    assert!(app.side_panel_rect.is_some(), "open to start with");
+    assert!(
+        !screen.contains("next    UNIQUE-NEXT"),
+        "no row prose:\n{screen}"
+    );
+
+    press(&mut app, KeyCode::Char('c')).await;
+    let screen = draw(&mut app);
+    assert!(app.side_panel_rect.is_none(), "c closes it");
+    assert!(
+        screen.contains("next    UNIQUE-NEXT"),
+        "row prose:\n{screen}"
+    );
+    assert!(!app.dashboard.panel.open, "the list's panel is untouched");
+
+    press(&mut app, KeyCode::Char('c')).await;
+    draw(&mut app);
+    assert!(app.side_panel_rect.is_some(), "c reopens it");
+    press(&mut app, KeyCode::Esc).await;
+    assert!(!app.dashboard.focus_panel.open, "Esc closes it first");
+    assert_eq!(app.dashboard.focused_repo, Some(repo));
+    draw(&mut app);
+    press(&mut app, KeyCode::Esc).await;
+    assert_eq!(app.dashboard.focused_repo, None, "then leaves the view");
+}
+
+/// With the panel focused (`→`), `j` scrolls a text tab's body instead of
+/// moving the selection.
+#[tokio::test]
+async fn a_focused_text_tab_scrolls() {
+    let (mut app, repo, _, ids) = app();
+    let prompt = (0..120)
+        .map(|i| format!("line-{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    app.workspace_events.insert(
+        ids[0],
+        crate::activity::events::WorkspaceEvents {
+            first_user_text: Some(prompt),
+            ..Default::default()
+        },
+    );
+    app.dashboard.focus_repo(repo);
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
+    press(&mut app, KeyCode::Char('1')).await;
+    draw(&mut app);
+    press(&mut app, KeyCode::Right).await;
+    assert!(app.dashboard.focus_panel.is_focused());
+    for _ in 0..5 {
+        dispatch_key(
+            &mut app,
+            &shared_app(),
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        )
+        .await
+        .unwrap();
+    }
+    let screen = draw(&mut app);
+    assert!(
+        !screen.contains("line-0\n") && !screen.contains("line-0 "),
+        "{screen}"
+    );
+    assert!(screen.contains("line-5"), "{screen}");
+    assert_eq!(selected_ws(&app), Some(ids[0]), "selection unchanged");
+}
+
+/// `→` on a closed focus panel opens it on Files, and that tab is saved.
+#[tokio::test]
+async fn right_on_a_closed_focus_panel_saves_files() {
+    use crate::ui::dashboard::FOCUS_TAB_SETTING;
+    let (mut app, repo, _, _) = app();
+    app.dashboard.focus_repo(repo);
+    press(&mut app, KeyCode::Char('c')).await;
+    press(&mut app, KeyCode::Right).await;
+    assert!(app.dashboard.focus_panel.open);
+    assert_eq!(
+        app.store.get_setting(FOCUS_TAB_SETTING).unwrap().as_deref(),
+        Some("files")
+    );
+}
+
+/// Closing the focus panel lasts while you move between repos, but the
+/// next time you enter the focus view it starts open again.
+#[tokio::test]
+async fn entering_the_focus_view_reopens_its_panel() {
+    let (mut app, repo, _, _) = app();
+    app.dashboard.selection = Some(SelectionTarget::Repo(repo));
+    press(&mut app, KeyCode::Char('f')).await;
+    press(&mut app, KeyCode::Char('c')).await;
+    press(&mut app, KeyCode::Char(']')).await;
+    assert!(!app.dashboard.focus_panel.open, "[ / ] keep it closed");
+    press(&mut app, KeyCode::Char('f')).await;
+    assert_eq!(app.dashboard.focused_repo, None);
+    app.dashboard.selection = Some(SelectionTarget::Repo(repo));
+    press(&mut app, KeyCode::Char('f')).await;
+    assert!(app.dashboard.focus_panel.open, "open again on entry");
+}
+
+/// A blank full recap field falls back to its short form in the panel.
+#[test]
+fn a_blank_full_field_falls_back_to_the_short_one() {
+    let (mut app, repo, _, ids) = app();
+    app.recaps.insert(
+        ids[0],
+        crate::data::store::WorkspaceRecap {
+            goal: Some("   ".into()),
+            goal_short: Some("SHORT-GOAL".into()),
+            ..Default::default()
+        },
+    );
+    app.dashboard.focus_repo(repo);
+    app.dashboard.focus_panel.tab = crate::ui::dashboard::side_panel::PanelTab::Goal;
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
+    let screen = draw(&mut app);
+    assert!(screen.contains("SHORT-GOAL"), "{screen}");
+    assert!(!screen.contains("No recap goal set"), "{screen}");
+}
+
+#[test]
+fn the_tab_setting_loads_at_startup() {
+    use crate::ui::dashboard::FOCUS_TAB_SETTING;
+    let store = Store::open_in_memory().unwrap();
+    store.set_setting(FOCUS_TAB_SETTING, "prompt\n").unwrap();
+    let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    assert_eq!(
+        app.dashboard.focus_panel.tab,
+        crate::ui::dashboard::side_panel::PanelTab::Prompt
+    );
+}
+
 #[tokio::test]
 async fn g_outside_the_focus_view_still_flips_list_grouping() {
     let (mut app, _, _, _) = app();
@@ -337,11 +552,12 @@ fn clicking_a_row_targets_its_workspace() {
     }
 }
 
-/// A long goal wraps in full and the full branch name shows.
+/// Beside the open panel the rows show no prose: a long goal wraps in
+/// the panel, in full, and nowhere else.
 #[test]
-fn tall_rows_show_long_recaps_and_branches_whole() {
+fn a_long_goal_wraps_in_the_panel_not_the_row() {
     let (mut app, repo, _, ids) = app();
-    let goal = "Single-repo dashboard view with richer per-workspace detail, wrapping every recap field across as many lines as it needs";
+    let goal = "Single-repo dashboard view with richer per-workspace detail, wrapping the recap goal across the lines it needs";
     app.recaps.insert(
         ids[0],
         crate::data::store::WorkspaceRecap {
@@ -350,30 +566,28 @@ fn tall_rows_show_long_recaps_and_branches_whole() {
         },
     );
     app.dashboard.focus_repo(repo);
+    app.dashboard.focus_panel.tab = crate::ui::dashboard::side_panel::PanelTab::Goal;
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
     let screen = draw(&mut app);
     let flat = screen.split_whitespace().collect::<Vec<_>>().join(" ");
-    for chunk in ["Single-repo dashboard view", "as it needs"] {
+    for chunk in ["Single-repo dashboard", "lines it needs"] {
         assert!(flat.contains(chunk), "{chunk:?} missing:\n{screen}");
     }
-    let r = app
-        .dashboard_focus_row_rects
-        .iter()
-        .find(|(id, _)| *id == ids[0])
-        .unwrap()
-        .1;
-    // The row's rect covers every line the wrapped goal landed on.
-    let goal_lines: Vec<usize> = screen
+    let panel = app.side_panel_rect.expect("open panel");
+    let goal_lines: Vec<&str> = screen
         .lines()
-        .enumerate()
-        .filter(|(_, l)| goal.split(' ').any(|w| w.len() > 4 && l.contains(w)))
-        .map(|(y, _)| y)
+        .filter(|l| goal.split(' ').any(|w| w.len() > 6 && l.contains(w)))
         .collect();
     assert!(goal_lines.len() >= 2, "goal wraps:\n{screen}");
-    let rows = r.y as usize..(r.y + r.height) as usize;
-    assert!(
-        goal_lines.iter().all(|y| rows.contains(y)),
-        "{r:?}\n{screen}"
-    );
+    for l in goal_lines {
+        let rows_part: String = l.chars().take(panel.x as usize).collect();
+        assert!(
+            !goal
+                .split(' ')
+                .any(|w| w.len() > 6 && rows_part.contains(w)),
+            "goal on a row:\n{screen}"
+        );
+    }
 }
 
 /// The focus view keeps only the detail bar's reply row: no header or
@@ -407,15 +621,7 @@ async fn the_focus_view_keeps_only_the_reply_row() {
 /// vanishing; and no click target covers lines nothing was drawn on.
 #[test]
 fn an_oversized_selected_row_still_draws() {
-    let (mut app, repo, _, ids) = app();
-    let goal = "word ".repeat(400);
-    app.recaps.insert(
-        ids[0],
-        crate::data::store::WorkspaceRecap {
-            goal: Some(goal),
-            ..Default::default()
-        },
-    );
+    let (mut app, repo, _, ids) = app_with_a_tall_row();
     app.dashboard.focus_repo(repo);
     app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
     let mut term = Terminal::new(TestBackend::new(100, 16)).unwrap();
@@ -436,7 +642,6 @@ fn an_oversized_selected_row_still_draws() {
         screen.contains("repo/a"),
         "selected row's head drawn:\n{screen}"
     );
-    assert!(screen.contains("goal    word word"), "{screen}");
     let buf = term.backend().buffer().clone();
     for (_, r) in &app.dashboard_focus_row_rects {
         for y in r.y..r.y + r.height {
@@ -662,23 +867,23 @@ async fn group_expansion_carries_between_views() {
     assert!(app.selectable.contains(&SelectionTarget::Workspace(ids[3])));
 }
 
-/// PgDn pages through a workspace taller than the screen to its last line,
+/// PgDn pages through a workspace taller than the screen to its last line
+/// (on a terminal too narrow for the panel, so the row shows its prose),
 /// and the selection holding still doesn't snap it back to the top.
 #[tokio::test]
 async fn pgdn_reaches_the_end_of_an_oversized_row() {
-    let (mut app, repo, _, ids) = app();
+    let (mut app, repo, _, ids) = app_with_a_tall_row();
     app.recaps.insert(
         ids[0],
         crate::data::store::WorkspaceRecap {
-            goal: Some(format!("{} END-OF-GOAL", "word ".repeat(400))),
-            state: Some("STATE-AT-THE-END".into()),
+            next: Some("STATE-AT-THE-END".into()),
             ..Default::default()
         },
     );
     app.dashboard.focus_repo(repo);
     app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
     let frame = |app: &mut App| -> String {
-        let mut term = Terminal::new(TestBackend::new(100, 16)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(99, 16)).unwrap();
         term.draw(|f| crate::app::render::draw_for_test(f, app))
             .unwrap();
         let buf = term.backend().buffer().clone();
@@ -697,7 +902,7 @@ async fn pgdn_reaches_the_end_of_an_oversized_row() {
     for _ in 0..20 {
         press(&mut app, KeyCode::PageDown).await;
         let screen = frame(&mut app);
-        if screen.contains("END-OF-GOAL") && screen.contains("STATE-AT-THE-END") {
+        if screen.contains("STATE-AT-THE-END") {
             seen_end = true;
             break;
         }
@@ -794,16 +999,16 @@ fn app_with_branch_data() -> (App, RepoId, Vec<WorkspaceId>) {
 }
 
 #[tokio::test]
-async fn c_toggles_the_side_panel_showing_commits() {
+async fn the_focus_panel_shows_commits_on_4() {
     let (mut app, _, _) = app_with_branch_data();
     let screen = draw(&mut app);
     assert!(
         !screen.contains("UNIQUE-COMMIT-SUBJECT"),
-        "closed by default"
+        "on Next to start"
     );
-    assert!(app.side_panel_rect.is_none());
+    assert!(app.side_panel_rect.is_some(), "open to start with");
 
-    press(&mut app, KeyCode::Char('c')).await;
+    press(&mut app, KeyCode::Char('4')).await;
     let screen = draw(&mut app);
     assert!(screen.contains("Commits 2"), "{screen}");
     assert!(screen.contains("Files 2"), "{screen}");
@@ -816,50 +1021,28 @@ async fn c_toggles_the_side_panel_showing_commits() {
     for (_, r) in &app.dashboard_focus_row_rects {
         assert!(r.x + r.width <= panel.x, "rows stay left of the panel");
     }
-
-    press(&mut app, KeyCode::Char('c')).await;
-    draw(&mut app);
-    assert!(app.side_panel_rect.is_none(), "c closes it");
 }
 
 #[tokio::test]
 async fn number_keys_and_clicks_switch_tabs() {
+    use crate::ui::dashboard::side_panel::PanelTab;
     let (mut app, _, _) = app_with_branch_data();
-    press(&mut app, KeyCode::Char('2')).await;
-    assert!(app.dashboard.panel.open, "2 opens the panel");
+    press(&mut app, KeyCode::Char('5')).await;
+    assert_eq!(app.dashboard.focus_panel.tab, PanelTab::Files);
     let screen = draw(&mut app);
     assert!(screen.contains("2 files  +43 −3"), "{screen}");
     let alpha = screen.find("src/alpha.rs").unwrap();
     let zeta = screen.find("src/zeta.rs").unwrap();
     assert!(alpha < zeta, "sorted by path:\n{screen}");
 
-    let (tab, r) = app.side_panel_tab_rects[0];
-    assert_eq!(tab, crate::ui::dashboard::side_panel::PanelTab::Commits);
+    let tabs: Vec<PanelTab> = app.side_panel_tab_rects.iter().map(|(t, _)| *t).collect();
+    assert_eq!(tabs, PanelTab::ALL, "every tab is a target");
+    let (tab, r) = app.side_panel_tab_rects[3];
+    assert_eq!(tab, PanelTab::Commits);
     assert_eq!(panel_tab_click_target(&app, &click(r.x, r.y)), Some(tab));
     show_panel_tab(&mut app, tab);
     assert!(draw(&mut app).contains("UNIQUE-COMMIT-SUBJECT"));
-
-    press(&mut app, KeyCode::Char('2')).await;
-    press(&mut app, KeyCode::Char('c')).await;
-    press(&mut app, KeyCode::Char('c')).await;
-    assert_eq!(
-        app.dashboard.panel.tab,
-        crate::ui::dashboard::side_panel::PanelTab::Files,
-        "the tab survives closing"
-    );
-}
-
-/// Esc peels the panel before leaving the focus view.
-#[tokio::test]
-async fn esc_closes_the_panel_before_leaving_focus() {
-    let (mut app, repo, _) = app_with_branch_data();
-    press(&mut app, KeyCode::Char('c')).await;
-    draw(&mut app);
-    press(&mut app, KeyCode::Esc).await;
-    assert!(!app.dashboard.panel.open);
-    assert_eq!(app.dashboard.focused_repo, Some(repo));
-    press(&mut app, KeyCode::Esc).await;
-    assert_eq!(app.dashboard.focused_repo, None);
+    assert!(!app.dashboard.panel.open, "the list's panel is untouched");
 }
 
 /// The panel follows the selection, and a repo header or empty selection
@@ -867,7 +1050,7 @@ async fn esc_closes_the_panel_before_leaving_focus() {
 #[tokio::test]
 async fn the_panel_follows_the_selection() {
     let (mut app, _, ids) = app_with_branch_data();
-    press(&mut app, KeyCode::Char('c')).await;
+    press(&mut app, KeyCode::Char('4')).await;
     draw(&mut app);
     app.dashboard.selection = Some(SelectionTarget::Workspace(ids[1]));
     let screen = draw(&mut app);
@@ -879,16 +1062,42 @@ async fn the_panel_follows_the_selection() {
     );
 }
 
-/// Too narrow for rows and a panel: the panel stays hidden.
+/// Too narrow for rows and a panel: the panel stays hidden, and the rows
+/// show one line of its tab's prose instead.
 #[tokio::test]
 async fn a_narrow_terminal_hides_the_panel() {
-    let (mut app, _, _) = app_with_branch_data();
-    press(&mut app, KeyCode::Char('c')).await;
+    let (mut app, _, ids) = app_with_branch_data();
+    app.recaps.insert(
+        ids[0],
+        crate::data::store::WorkspaceRecap {
+            goal: Some("UNIQUE-GOAL".into()),
+            next: Some("UNIQUE-NEXT".into()),
+            ..Default::default()
+        },
+    );
     let mut term = Terminal::new(TestBackend::new(90, 30)).unwrap();
-    term.draw(|f| crate::app::render::draw_for_test(f, &mut app))
-        .unwrap();
+    let mut screen = |app: &mut App| {
+        term.draw(|f| crate::app::render::draw_for_test(f, app))
+            .unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let s = screen(&mut app);
     assert!(app.side_panel_rect.is_none());
-    assert!(app.dashboard.panel.open, "stays open for when there's room");
+    assert!(s.contains("next    UNIQUE-NEXT"), "{s}");
+    press(&mut app, KeyCode::Char('2')).await;
+    let s = screen(&mut app);
+    assert!(
+        s.contains("goal    UNIQUE-GOAL") && !s.contains("UNIQUE-NEXT"),
+        "{s}"
+    );
 }
 
 /// Lists polled against a different base than the repo's current one are
@@ -898,7 +1107,7 @@ async fn lists_from_another_base_are_not_shown() {
     let (mut app, _, ids) = app_with_branch_data();
     app.workspace_branch_lists
         .insert(ids[0], branch_lists("origin/old-base"));
-    press(&mut app, KeyCode::Char('c')).await;
+    press(&mut app, KeyCode::Char('4')).await;
     let screen = draw(&mut app);
     assert!(screen.contains("repo/a vs main"), "{screen}");
     assert!(!screen.contains("UNIQUE-COMMIT-SUBJECT"), "{screen}");
@@ -935,12 +1144,10 @@ fn changing_the_base_branch_drops_old_results() {
     );
 }
 
-/// On a terminal too narrow to show the panel, Esc leaves the focus view
-/// at once rather than first closing an invisible panel.
+/// On a terminal too narrow to show the panel, Esc leaves the focus view.
 #[tokio::test]
 async fn esc_on_a_hidden_panel_leaves_focus() {
     let (mut app, _, _) = app_with_branch_data();
-    press(&mut app, KeyCode::Char('c')).await;
     let mut term = Terminal::new(TestBackend::new(90, 30)).unwrap();
     term.draw(|f| crate::app::render::draw_for_test(f, &mut app))
         .unwrap();
@@ -959,7 +1166,7 @@ async fn binary_files_show_in_the_files_tab() {
         stats: None,
     }];
     app.workspace_branch_lists.insert(ids[0], lists.into());
-    press(&mut app, KeyCode::Char('2')).await;
+    press(&mut app, KeyCode::Char('5')).await;
     let screen = draw(&mut app);
     assert!(screen.contains("assets/logo.png"), "{screen}");
     assert!(screen.contains("1 binary"), "{screen}");

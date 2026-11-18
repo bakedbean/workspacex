@@ -25,6 +25,7 @@ impl App {
             .flatten()
             .and_then(|w| w.parse::<u16>().ok());
         dashboard.panel.width = panel_width;
+        dashboard.focus_panel.width = panel_width;
         let mut attached_panel = crate::ui::dashboard::side_panel::SidePanelState::default();
         attached_panel.width = panel_width;
         // Several tests construct an `App` only incidentally and then create

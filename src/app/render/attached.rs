@@ -304,7 +304,7 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
     // room, for the focused pane's workspace; the panes (and their PTYs)
     // get the rest.
     let panel_data = if app.attached_panel.open {
-        super::dashboard::side_panel_data(app, focused_id)
+        super::dashboard::side_panel_data(app, focused_id, app.attached_panel.tab.is_text())
     } else {
         None
     };

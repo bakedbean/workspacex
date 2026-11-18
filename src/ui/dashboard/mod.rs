@@ -128,12 +128,18 @@ pub struct DashboardState {
     /// Whether the focus view sections workspaces by PR state (`G` toggles;
     /// `dashboard_focus_group_by_pr` setting) or keeps the list's order.
     pub focus_group_by_pr: bool,
+    /// The focus view's side panel, apart from the list's: open on the
+    /// selected workspace to start with (`c` toggles it), its tab kept in
+    /// the `dashboard_focus_tab` setting.
+    pub focus_panel: side_panel::SidePanelState,
 }
 
 /// Settings key holding the by-repo sort mode.
 pub const SORT_MODE_SETTING: &str = "dashboard_sort_mode";
 /// Settings key for the focus view's PR-state grouping (on/off).
 pub const FOCUS_GROUP_BY_PR_SETTING: &str = "dashboard_focus_group_by_pr";
+/// Settings key for the focus view's side-panel tab.
+pub const FOCUS_TAB_SETTING: &str = "dashboard_focus_tab";
 /// Settings key holding how long a blocked row keeps its pin, in seconds.
 pub const BLOCKED_PIN_SETTING: &str = "dashboard_blocked_pin_max_age_secs";
 /// Settings key holding the tags exempt from tag hide rules in the top bar.
@@ -176,6 +182,23 @@ impl DashboardState {
             .unwrap_or_default();
         self.focus_group_by_pr =
             crate::config::settings::toggle_on(store, FOCUS_GROUP_BY_PR_SETTING);
+        self.focus_panel.tab = get(FOCUS_TAB_SETTING)
+            .and_then(|v| side_panel::PanelTab::from_key(v.trim()))
+            .unwrap_or(side_panel::PanelTab::Next);
+    }
+
+    /// Remember the focus view's panel tab, when it changed.
+    pub fn save_focus_tab(&self, store: &crate::data::store::Store) {
+        let tab = self.focus_panel.tab.key();
+        if store
+            .get_setting(FOCUS_TAB_SETTING)
+            .ok()
+            .flatten()
+            .as_deref()
+            != Some(tab)
+        {
+            let _ = store.set_setting(FOCUS_TAB_SETTING, tab);
+        }
     }
 
     /// Flip the focus view between PR-state sections and the list's order,
@@ -238,6 +261,7 @@ impl Default for DashboardState {
             list_state: ListState::default(),
             group_mode: GroupMode::default(),
             focus_group_by_pr: true,
+            focus_panel: side_panel::SidePanelState::open_on(side_panel::PanelTab::Next),
             sort_mode: SortMode::default(),
             blocked_pin_max_age_secs: BLOCKED_PIN_MAX_AGE_DEFAULT_SECS,
             top_bar_show_tags: Vec::new(),
@@ -808,12 +832,23 @@ fn render_focus(
             _ => {}
         }
     }
-
     // The side panel takes the right of the body when open and there's
-    // room; the rows get the rest.
-    let (rows_area, panel_targets) = state
-        .panel
-        .carve(f, chunks[2], inputs.panel.as_ref(), theme);
+    // room, with the selected workspace's prose in full; the rows get the
+    // rest.
+    let (rows_area, panel_targets) =
+        state
+            .focus_panel
+            .carve(f, chunks[2], inputs.panel.as_ref(), theme);
+    // With the panel closed or no room for it, the rows show one line of
+    // the panel tab's prose (the next step for the list tabs) instead.
+    let row_prose = panel_targets
+        .area
+        .is_none()
+        .then_some(match state.focus_panel.tab {
+            side_panel::PanelTab::Prompt => tall::ProseTab::Prompt,
+            side_panel::PanelTab::Goal => tall::ProseTab::Goal,
+            _ => tall::ProseTab::Next,
+        });
 
     if entries.is_empty() {
         let msg = if RowFilter::of(state).is_active() {
@@ -884,6 +919,7 @@ fn render_focus(
         &mut state.focus_scroll,
         follow,
         widths,
+        row_prose,
         tick,
         theme,
     );

@@ -12,8 +12,19 @@ use std::path::PathBuf;
 
 /// Five workspaces in "repo", plus an empty second repo "other".
 fn app() -> (App, RepoId, RepoId, Vec<WorkspaceId>) {
+    app_named(&["a", "b", "c", "d", "e"])
+}
+
+/// `app()` with the first workspace's name (and so its branch) so long that
+/// its row is taller than a small screen: branch names wrap uncapped.
+fn app_with_a_tall_row() -> (App, RepoId, RepoId, Vec<WorkspaceId>) {
+    let long = format!("a{}", "x".repeat(600));
+    app_named(&[&long, "b", "c", "d", "e"])
+}
+
+fn app_named(names: &[&str]) -> (App, RepoId, RepoId, Vec<WorkspaceId>) {
     let store = Store::open_in_memory().unwrap();
-    let ids = seed_workspaces(&store, &["a", "b", "c", "d", "e"]);
+    let ids = seed_workspaces(&store, names);
     let other = store
         .add_repo(std::path::Path::new("/tmp/other"), "other", "")
         .unwrap();
@@ -209,6 +220,93 @@ async fn g_toggles_pr_grouping_and_remembers_it() {
     );
 }
 
+/// The rows show the `next` tab by default; `>` and `<` step through the
+/// tabs, wrapping, and the choice is remembered.
+#[tokio::test]
+async fn angle_brackets_switch_the_prose_tab_and_remember_it() {
+    use crate::ui::dashboard::FOCUS_TAB_SETTING;
+    use crate::ui::dashboard::tall::ProseTab;
+    let (mut app, repo, _, ids) = app();
+    app.recaps.insert(
+        ids[0],
+        crate::data::store::WorkspaceRecap {
+            goal: Some("UNIQUE-GOAL".into()),
+            state: Some("UNIQUE-STATE".into()),
+            next: Some("UNIQUE-NEXT".into()),
+            ..Default::default()
+        },
+    );
+    app.dashboard.focus_repo(repo);
+    assert_eq!(app.dashboard.focus_tab, ProseTab::Next, "next by default");
+    let screen = draw(&mut app);
+    assert!(screen.contains("UNIQUE-NEXT"), "{screen}");
+    assert!(
+        !screen.contains("UNIQUE-GOAL"),
+        "one field at a time:\n{screen}"
+    );
+    assert!(!screen.contains("UNIQUE-STATE"), "{screen}");
+
+    press(&mut app, KeyCode::Char('>')).await;
+    assert_eq!(app.dashboard.focus_tab, ProseTab::Prompt, "wraps");
+    press(&mut app, KeyCode::Char('>')).await;
+    assert_eq!(app.dashboard.focus_tab, ProseTab::Goal);
+    let screen = draw(&mut app);
+    assert!(screen.contains("UNIQUE-GOAL"), "{screen}");
+    assert!(!screen.contains("UNIQUE-NEXT"), "{screen}");
+    assert_eq!(
+        app.store.get_setting(FOCUS_TAB_SETTING).unwrap().as_deref(),
+        Some("goal")
+    );
+    press(&mut app, KeyCode::Char('<')).await;
+    press(&mut app, KeyCode::Char('<')).await;
+    assert_eq!(app.dashboard.focus_tab, ProseTab::Next, "wraps back");
+}
+
+#[tokio::test]
+async fn angle_brackets_outside_the_focus_view_leave_the_tab() {
+    let (mut app, _, _, _) = app();
+    press(&mut app, KeyCode::Char('>')).await;
+    assert_eq!(
+        app.dashboard.focus_tab,
+        crate::ui::dashboard::tall::ProseTab::Next
+    );
+}
+
+/// The tab bar draws under the breadcrumb, and a click on a tab shows it.
+#[test]
+fn clicking_a_prose_tab_shows_it() {
+    use crate::ui::dashboard::tall::ProseTab;
+    let (mut app, repo, _, _) = app();
+    app.dashboard.focus_repo(repo);
+    let screen = draw(&mut app);
+    assert!(screen.contains(" prompt   goal   next "), "{screen}");
+    assert_eq!(app.dashboard_focus_tab_rects.len(), 3);
+    let (tab, r) = app.dashboard_focus_tab_rects[0];
+    assert_eq!(tab, ProseTab::Prompt);
+    assert_eq!(
+        focus_tab_click_target(&app, &click(r.x + r.width - 1, r.y)),
+        Some(ProseTab::Prompt)
+    );
+    assert_eq!(focus_tab_click_target(&app, &click(r.x, r.y + 1)), None);
+
+    // Off the focus view, no tab targets linger.
+    app.dashboard.focused_repo = None;
+    draw(&mut app);
+    assert!(app.dashboard_focus_tab_rects.is_empty());
+}
+
+#[test]
+fn the_tab_setting_loads_at_startup() {
+    use crate::ui::dashboard::FOCUS_TAB_SETTING;
+    let store = Store::open_in_memory().unwrap();
+    store.set_setting(FOCUS_TAB_SETTING, "prompt\n").unwrap();
+    let app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    assert_eq!(
+        app.dashboard.focus_tab,
+        crate::ui::dashboard::tall::ProseTab::Prompt
+    );
+}
+
 #[tokio::test]
 async fn g_outside_the_focus_view_still_flips_list_grouping() {
     let (mut app, _, _, _) = app();
@@ -337,11 +435,11 @@ fn clicking_a_row_targets_its_workspace() {
     }
 }
 
-/// A long goal wraps in full and the full branch name shows.
+/// On the goal tab, a long goal wraps onto more lines.
 #[test]
 fn tall_rows_show_long_recaps_and_branches_whole() {
     let (mut app, repo, _, ids) = app();
-    let goal = "Single-repo dashboard view with richer per-workspace detail, wrapping every recap field across as many lines as it needs";
+    let goal = "Single-repo dashboard view with richer per-workspace detail, wrapping the recap goal across the lines it needs";
     app.recaps.insert(
         ids[0],
         crate::data::store::WorkspaceRecap {
@@ -350,9 +448,10 @@ fn tall_rows_show_long_recaps_and_branches_whole() {
         },
     );
     app.dashboard.focus_repo(repo);
+    app.dashboard.focus_tab = crate::ui::dashboard::tall::ProseTab::Goal;
     let screen = draw(&mut app);
     let flat = screen.split_whitespace().collect::<Vec<_>>().join(" ");
-    for chunk in ["Single-repo dashboard view", "as it needs"] {
+    for chunk in ["Single-repo dashboard view", "lines it needs"] {
         assert!(flat.contains(chunk), "{chunk:?} missing:\n{screen}");
     }
     let r = app
@@ -407,15 +506,7 @@ async fn the_focus_view_keeps_only_the_reply_row() {
 /// vanishing; and no click target covers lines nothing was drawn on.
 #[test]
 fn an_oversized_selected_row_still_draws() {
-    let (mut app, repo, _, ids) = app();
-    let goal = "word ".repeat(400);
-    app.recaps.insert(
-        ids[0],
-        crate::data::store::WorkspaceRecap {
-            goal: Some(goal),
-            ..Default::default()
-        },
-    );
+    let (mut app, repo, _, ids) = app_with_a_tall_row();
     app.dashboard.focus_repo(repo);
     app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
     let mut term = Terminal::new(TestBackend::new(100, 16)).unwrap();
@@ -436,7 +527,6 @@ fn an_oversized_selected_row_still_draws() {
         screen.contains("repo/a"),
         "selected row's head drawn:\n{screen}"
     );
-    assert!(screen.contains("goal    word word"), "{screen}");
     let buf = term.backend().buffer().clone();
     for (_, r) in &app.dashboard_focus_row_rects {
         for y in r.y..r.y + r.height {
@@ -666,12 +756,11 @@ async fn group_expansion_carries_between_views() {
 /// and the selection holding still doesn't snap it back to the top.
 #[tokio::test]
 async fn pgdn_reaches_the_end_of_an_oversized_row() {
-    let (mut app, repo, _, ids) = app();
+    let (mut app, repo, _, ids) = app_with_a_tall_row();
     app.recaps.insert(
         ids[0],
         crate::data::store::WorkspaceRecap {
-            goal: Some(format!("{} END-OF-GOAL", "word ".repeat(400))),
-            state: Some("STATE-AT-THE-END".into()),
+            next: Some("STATE-AT-THE-END".into()),
             ..Default::default()
         },
     );
@@ -697,7 +786,7 @@ async fn pgdn_reaches_the_end_of_an_oversized_row() {
     for _ in 0..20 {
         press(&mut app, KeyCode::PageDown).await;
         let screen = frame(&mut app);
-        if screen.contains("END-OF-GOAL") && screen.contains("STATE-AT-THE-END") {
+        if screen.contains("STATE-AT-THE-END") {
             seen_end = true;
             break;
         }

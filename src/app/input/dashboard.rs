@@ -304,6 +304,17 @@ pub(crate) fn panel_tab_click_target(
         .map(|(t, _)| *t)
 }
 
+/// The focus-view prose tab a click landed on.
+pub(crate) fn focus_tab_click_target(
+    app: &App,
+    m: &crossterm::event::MouseEvent,
+) -> Option<crate::ui::dashboard::tall::ProseTab> {
+    app.dashboard_focus_tab_rects
+        .iter()
+        .find(|(_, r)| rect_contains(r, m))
+        .map(|(t, _)| *t)
+}
+
 /// Select `ws` and attach to it — a click on its row in the focus view.
 pub(in crate::app::input) fn select_and_attach(
     app: &mut App,
@@ -810,6 +821,14 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         }
         (KeyCode::Char('G'), _) if app.dashboard.focused_repo.is_some() => {
             app.dashboard.toggle_focus_grouping(&app.store);
+        }
+        (KeyCode::Char('>'), _) if app.dashboard.focused_repo.is_some() => {
+            let tab = app.dashboard.focus_tab.next();
+            app.dashboard.set_focus_tab(tab, &app.store);
+        }
+        (KeyCode::Char('<'), _) if app.dashboard.focused_repo.is_some() => {
+            let tab = app.dashboard.focus_tab.prev();
+            app.dashboard.set_focus_tab(tab, &app.store);
         }
         (KeyCode::Char('G'), _) => app.dashboard.toggle_group_mode(),
         (KeyCode::Char('o'), _) => {

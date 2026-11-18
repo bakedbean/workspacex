@@ -117,6 +117,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.side_panel_rect = None;
     app.side_panel_file_rects.clear();
     app.dashboard_unfocus_rect = None;
+    app.dashboard_focus_tab_rects.clear();
     app.procs_link_rect = None;
     app.usage_graph_rect = None;
     app.footer_hint_rects.clear();

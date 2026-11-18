@@ -160,6 +160,7 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     app.side_panel_rect = click_targets.panel_area;
     app.side_panel_file_rects = click_targets.panel_files;
     app.dashboard_unfocus_rect = click_targets.unfocus;
+    app.dashboard_focus_tab_rects = click_targets.focus_tabs;
     if let Some(pm_area) = pm_area {
         let digest = app.build_pm_digest();
         let selected = app

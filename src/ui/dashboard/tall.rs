@@ -3,9 +3,10 @@
 //!
 //! Each row has three zones: a strip of fixed columns (branch, PR chip,
 //! status, ahead, uncommitted, diff, age) sized once per frame so fields
-//! line up down the view; the prose under the branch (initial prompt, recap
-//! goal and state → next, or the agent's last message), wrapped at a
-//! comfortable reading width; and a footer of agents and tags. Alternate
+//! line up down the view; the prose under the branch, one field at a time
+//! by the view's tab (initial prompt, recap goal, or next step — the
+//! agent's last message without a recap), wrapped at a comfortable reading
+//! width; and a footer of agents and tags. Alternate
 //! rows take a background tint so each workspace reads as one block.
 //!
 //! When the strip doesn't fit on one line it breaks in two: branch, PR chip
@@ -246,8 +247,11 @@ const PROMPT_MAX_LINES: usize = 2;
 /// Most lines the no-recap fallback text may wrap onto.
 const FALLBACK_MAX_LINES: usize = 2;
 
+/// Most lines a recap goal or next step may wrap onto.
+const RECAP_MAX_LINES: usize = 3;
+
 /// How long the workspace must have stayed active after its recap was last
-/// set before the `now` line is marked as old.
+/// set before the `next` line is marked as old.
 const STALE_RECAP_SECS: u64 = 30 * 60;
 
 /// Widest the prose column gets, label included: lines much past ~80
@@ -282,92 +286,161 @@ fn stale_recap_mark(
     })
 }
 
-/// The prose a row shows, in order: the initial prompt, then the recap's
-/// goal and state → next, or without a recap the row's fallback text.
-fn prose_items(row: &RowInputs, detail: &WorkspaceDetail, theme: &Theme) -> Vec<Prose> {
-    let mut out = Vec::new();
+/// Which of a row's prose fields the focus view shows: one at a time, as
+/// tabs, so each workspace reads in a line or two. `<` / `>` switch tabs
+/// for every row at once.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ProseTab {
+    /// The first prompt the agent was given: what the workspace is for.
+    Prompt,
+    /// The recap goal.
+    Goal,
+    /// The recap's next step (or its state when no next step is set), or
+    /// without a recap the agent's last message.
+    #[default]
+    Next,
+}
+
+impl ProseTab {
+    /// Every tab, in the order the tab bar shows them.
+    pub const ALL: [ProseTab; 3] = [ProseTab::Prompt, ProseTab::Goal, ProseTab::Next];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ProseTab::Prompt => "prompt",
+            ProseTab::Goal => "goal",
+            ProseTab::Next => "next",
+        }
+    }
+
+    /// The value the `dashboard_focus_tab` setting stores.
+    pub fn from_label(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|t| t.label() == s)
+    }
+
+    /// The tab after this one, wrapping.
+    pub fn next(self) -> Self {
+        let i = Self::ALL.iter().position(|t| *t == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
+    }
+
+    /// The tab before this one, wrapping.
+    pub fn prev(self) -> Self {
+        let i = Self::ALL.iter().position(|t| *t == self).unwrap_or(0);
+        Self::ALL[(i + Self::ALL.len() - 1) % Self::ALL.len()]
+    }
+}
+
+/// The tab bar over the focus view's rows: each tab, the active one
+/// highlighted as the side panel's are, then a dim key hint. Returns the
+/// line and each tab's `(x offset, width)` for click targets.
+pub fn tab_bar(active: ProseTab, theme: &Theme) -> (Line<'static>, Vec<(ProseTab, u16, u16)>) {
+    let mut spans = Vec::new();
+    let mut hits = Vec::new();
+    let mut x = 0u16;
+    for t in ProseTab::ALL {
+        let text = format!(" {} ", t.label());
+        let w = display_width(&text) as u16;
+        let style = if t == active {
+            theme.selected_style()
+        } else {
+            theme.dim_style()
+        };
+        hits.push((t, x, w));
+        spans.push(Span::styled(text, style));
+        spans.push(Span::raw(" "));
+        x += w + 1;
+    }
+    spans.push(Span::styled(" < >", theme.dim_style()));
+    (Line::from(spans), hits)
+}
+
+/// The prose a row shows under `tab`: one labelled item, or nothing when
+/// the workspace has nothing for that tab yet.
+fn prose_item(
+    row: &RowInputs,
+    detail: &WorkspaceDetail,
+    tab: ProseTab,
+    theme: &Theme,
+) -> Option<Prose> {
     let recap = detail.recap.as_ref().filter(|r| has_recap(r));
-    // What the workspace was started for, above what it is doing now.
     let prompt = detail
         .first_prompt
         .as_deref()
         .map(str::trim)
         .filter(|p| !p.is_empty());
-    if let Some(prompt) = prompt {
-        out.push(Prose {
+    match tab {
+        ProseTab::Prompt => prompt.map(|p| Prose {
             label: "prompt",
-            text: prompt.to_string(),
+            text: p.to_string(),
             style: theme
                 .row_dim_style()
                 .add_modifier(ratatui::style::Modifier::ITALIC),
             max: PROMPT_MAX_LINES,
             suffix: None,
-        });
-    }
-    match recap {
-        Some(r) => {
-            let goal = field(&r.goal, &r.goal_short);
-            if !goal.is_empty() {
-                out.push(Prose {
-                    label: "goal",
-                    text: goal,
-                    style: Style::default(),
-                    max: usize::MAX,
-                    suffix: None,
-                });
-            }
-            let state = field(&r.state, &r.state_short);
-            let next = field(&r.next, &r.next_short);
-            let now = match (state.is_empty(), next.is_empty()) {
-                (false, false) => format!("{state} → {next}"),
-                (false, true) => state,
-                (true, false) => format!("→ {next}"),
-                (true, true) => String::new(),
-            };
-            if !now.is_empty() {
-                out.push(Prose {
-                    label: "now",
-                    text: now,
-                    style: theme.row_dim_style(),
-                    max: usize::MAX,
-                    suffix: stale_recap_mark(row, detail, theme),
-                });
-            }
-        }
-        None => {
-            // Without a recap, the row's fallback text (often the agent's
-            // last message, which can run to paragraphs) moves here from the
-            // first line, gets a little more room, and stays capped so one
-            // chatty workspace can't push its siblings off screen. It's
-            // labelled `last`, not `now`: it's what the agent last said, not
-            // a state it reported.
-            //
-            // An idle (or finished, before its first reply) workspace's
-            // fallback *is* the initial prompt; the `prompt` line already
-            // shows it, so it isn't repeated as if the agent said it.
-            let is_prompt = |text: &str| {
-                prompt.is_some_and(|p| p.split_whitespace().eq(text.split_whitespace()))
-            };
-            if let Some(ColumnBody::Fallback { text, emphasis }) =
-                row.column.as_ref().map(|c| &c.body)
-                && !is_prompt(text)
-            {
-                let style = match emphasis {
-                    ColumnEmphasis::Dim => theme.row_dim_style(),
-                    ColumnEmphasis::Status => theme.status_style(row.status),
-                    ColumnEmphasis::Warn => theme.warn_style(),
+        }),
+        ProseTab::Goal => recap
+            .map(|r| field(&r.goal, &r.goal_short))
+            .filter(|g| !g.is_empty())
+            .map(|goal| Prose {
+                label: "goal",
+                text: goal,
+                style: Style::default(),
+                max: RECAP_MAX_LINES,
+                suffix: None,
+            }),
+        ProseTab::Next => match recap {
+            Some(r) => {
+                // The next step is what the tab is for; a recap with only a
+                // state still says where the workspace stands.
+                let next = field(&r.next, &r.next_short);
+                let (label, text) = if next.is_empty() {
+                    ("state", field(&r.state, &r.state_short))
+                } else {
+                    ("next", next)
                 };
-                out.push(Prose {
-                    label: "last",
-                    text: text.clone(),
-                    style,
-                    max: FALLBACK_MAX_LINES,
-                    suffix: None,
-                });
+                (!text.is_empty()).then(|| Prose {
+                    label,
+                    text,
+                    style: Style::default(),
+                    max: RECAP_MAX_LINES,
+                    suffix: stale_recap_mark(row, detail, theme),
+                })
             }
-        }
+            None => last_message(row, prompt, theme),
+        },
     }
-    out
+}
+
+/// Without a recap, the row's fallback text (often the agent's last
+/// message, which can run to paragraphs), capped so one chatty workspace
+/// can't push its siblings off screen. It's labelled `last`: it's what the
+/// agent last said, not a step it reported.
+///
+/// An idle (or finished, before its first reply) workspace's fallback *is*
+/// the initial prompt, which the `prompt` tab shows; it isn't passed off as
+/// something the agent said.
+fn last_message(row: &RowInputs, prompt: Option<&str>, theme: &Theme) -> Option<Prose> {
+    let is_prompt =
+        |text: &str| prompt.is_some_and(|p| p.split_whitespace().eq(text.split_whitespace()));
+    let Some(ColumnBody::Fallback { text, emphasis }) = row.column.as_ref().map(|c| &c.body) else {
+        return None;
+    };
+    if is_prompt(text) {
+        return None;
+    }
+    let style = match emphasis {
+        ColumnEmphasis::Dim => theme.row_dim_style(),
+        ColumnEmphasis::Status => theme.status_style(row.status),
+        ColumnEmphasis::Warn => theme.warn_style(),
+    };
+    Some(Prose {
+        label: "last",
+        text: text.clone(),
+        style,
+        max: FALLBACK_MAX_LINES,
+        suffix: None,
+    })
 }
 
 /// Bounds on the strip's branch column, its status glyph included.
@@ -688,6 +761,7 @@ pub fn row_layout(
     tall: &TallRow<'_>,
     glyphs: &AgentGlyphs,
     cols: StripColumns,
+    tab: ProseTab,
     tick: u32,
     theme: &Theme,
 ) -> RowLayout {
@@ -803,7 +877,7 @@ pub fn row_layout(
         l.extend(part_line(series, text_width, theme));
         lines.push(Line::from(l));
     }
-    for item in prose_items(row, tall.detail, theme) {
+    if let Some(item) = prose_item(row, tall.detail, tab, theme) {
         let mut texts: Vec<Vec<Span<'static>>> = wrap_capped(&item.text, text_width, item.max)
             .into_iter()
             .map(|t| vec![Span::styled(t, item.style)])
@@ -1013,6 +1087,7 @@ pub fn render(
     scroll: &mut usize,
     follow: bool,
     widths: ColumnWidths,
+    tab: ProseTab,
     tick: u32,
     theme: &Theme,
 ) -> TallTargets {
@@ -1036,7 +1111,7 @@ pub fn render(
         }
         let (entry, pr_hit) = match e {
             TallEntry::Row(r) => {
-                let l = row_layout(r, glyphs, cols, tick, theme);
+                let l = row_layout(r, glyphs, cols, tab, tick, theme);
                 (l.lines, l.pr_hit)
             }
             TallEntry::Group(line) | TallEntry::Section(line) => (vec![line.clone()], None),
@@ -1290,8 +1365,22 @@ mod tests {
 
     /// One row's lines at `width`, with strip columns sized to it alone.
     fn layout(t: &TallRow<'_>, glyphs: &AgentGlyphs, width: usize) -> Vec<Line<'static>> {
+        layout_tab(t, glyphs, width, ProseTab::Next)
+    }
+
+    /// One row's lines at `width` under `tab`.
+    fn layout_tab(
+        t: &TallRow<'_>,
+        glyphs: &AgentGlyphs,
+        width: usize,
+        tab: ProseTab,
+    ) -> Vec<Line<'static>> {
         let cols = strip_columns(std::slice::from_ref(t), ColumnWidths::default(), width);
-        row_layout(t, glyphs, cols, 0, &Theme::wsx()).lines
+        row_layout(t, glyphs, cols, tab, 0, &Theme::wsx()).lines
+    }
+
+    fn texts_of(lines: &[Line<'_>]) -> Vec<String> {
+        lines.iter().map(text).collect()
     }
 
     fn text(line: &Line<'_>) -> String {
@@ -1309,7 +1398,7 @@ mod tests {
         WorkspaceDetail {
             series: Some(slice),
             recap: Some(WorkspaceRecap {
-                goal: Some("the goal".into()),
+                next: Some("the next step".into()),
                 ..Default::default()
             }),
             ..Default::default()
@@ -1340,7 +1429,7 @@ mod tests {
         );
         assert!(t[1].contains("#466") && t[1].contains("#468"), "{t:?}");
         assert!(!t[1].contains('→'), "no later part: {t:?}");
-        assert!(t[2].contains("goal"), "{t:?}");
+        assert!(t[2].contains("next"), "{t:?}");
     }
 
     #[test]
@@ -1477,7 +1566,7 @@ mod tests {
     /// A long last message without a recap stays at two lines; a long
     /// recap goal still wraps in full.
     #[test]
-    fn fallback_text_is_capped_but_recap_is_not() {
+    fn fallback_text_and_recap_are_capped() {
         let long = "word ".repeat(200);
         let mut row = base_row("b");
         row.column = Some(RowColumn {
@@ -1508,7 +1597,9 @@ mod tests {
             row: &row,
             detail: &detail,
         };
-        assert!(draw(&tall).len() > 4, "recap goal not capped");
+        let lines = layout_tab(&tall, &AgentGlyphs::default(), 120, ProseTab::Goal);
+        // Strip, three `goal` lines, footer.
+        assert_eq!(lines.len(), 5, "{:?}", texts_of(&lines));
     }
 
     #[test]
@@ -1521,7 +1612,7 @@ mod tests {
     }
 
     #[test]
-    fn row_shows_the_full_recap_and_branch() {
+    fn row_shows_the_recap_tab_by_tab_and_the_full_branch() {
         let row = base_row("bakedbean/a-very-long-branch-name-for-testing");
         let detail = WorkspaceDetail {
             recap: Some(WorkspaceRecap {
@@ -1553,10 +1644,12 @@ mod tests {
             detail: &detail,
         };
         let width = 120;
-        let lines: Vec<String> = layout(&tall, &AgentGlyphs::default(), width)
-            .iter()
-            .map(text)
-            .collect();
+        let lines = texts_of(&layout_tab(
+            &tall,
+            &AgentGlyphs::default(),
+            width,
+            ProseTab::Goal,
+        ));
         let all = lines.join("\n");
         let head = lines[0]
             .split_whitespace()
@@ -1575,10 +1668,11 @@ mod tests {
             joined.contains("including every recap field in full without truncation"),
             "goal wraps in full:\n{all}"
         );
-        assert!(
-            joined.contains("mapping dashboard code → draft design options"),
-            "{all}"
-        );
+        assert!(!joined.contains("draft design options"), "one tab: {all}");
+        let next = texts_of(&layout(&tall, &AgentGlyphs::default(), width)).join("\n");
+        assert!(next.contains("next    draft design options"), "{next}");
+        assert!(!next.contains("mapping dashboard code"), "{next}");
+        assert!(!next.contains("Single-repo"), "{next}");
         assert!(
             lines[0].contains("↑4 vs main") && lines[0].contains("3 mod 1 untr"),
             "{all}"
@@ -1613,7 +1707,7 @@ mod tests {
             row: &row,
             detail: &detail,
         };
-        let lines = layout(&tall, &AgentGlyphs::default(), 120);
+        let lines = layout_tab(&tall, &AgentGlyphs::default(), 120, ProseTab::Goal);
         assert!(text(&lines[0]).contains("working"));
         assert!(!text(&lines[0]).contains("SQUEEZED-GOAL"));
         assert!(text(&lines[1]).contains("SQUEEZED-GOAL"));
@@ -1723,6 +1817,7 @@ mod tests {
                 &mut scroll,
                 true,
                 ColumnWidths::default(),
+                ProseTab::Next,
                 0,
                 &Theme::wsx(),
             );
@@ -1744,10 +1839,11 @@ mod tests {
     /// and its click target covers exactly the viewport.
     #[test]
     fn an_oversized_selected_row_paints_its_top() {
-        let row = base_row("bakedbean/huge");
+        // Branch names wrap uncapped, so a long one makes a tall row.
+        let row = base_row(&format!("bakedbean/huge-{}", "x".repeat(400)));
         let detail = WorkspaceDetail {
             recap: Some(WorkspaceRecap {
-                goal: Some("word ".repeat(300)),
+                next: Some("the next step".into()),
                 ..Default::default()
             }),
             ..Default::default()
@@ -1759,7 +1855,6 @@ mod tests {
         let (text, targets, scroll) = render_rows(&rows, Some(0), 6);
         assert_eq!(scroll, 0);
         assert!(text.contains("bakedbean/huge"), "head painted:\n{text}");
-        assert!(text.contains("goal"), "{text}");
         assert_eq!(
             targets.rows,
             vec![(row.workspace_id, Rect::new(0, 0, NARROW, 6))]
@@ -1825,6 +1920,7 @@ mod tests {
                 &mut scroll,
                 true,
                 ColumnWidths::default(),
+                ProseTab::Next,
                 0,
                 &Theme::wsx(),
             );
@@ -1872,10 +1968,46 @@ mod tests {
         );
     }
 
-    /// The initial prompt shows first, labelled, italic, and capped at two
-    /// lines however long the brief was; it shows alongside a recap too.
+    /// The next tab falls back to the recap's state when no next step is
+    /// set, labelled as such, and keeps the stale-recap mark.
     #[test]
-    fn initial_prompt_leads_the_detail_lines() {
+    fn next_tab_falls_back_to_the_state() {
+        let mut row = base_row("b");
+        row.ago_secs = Some(60);
+        let detail = WorkspaceDetail {
+            recap: Some(WorkspaceRecap {
+                goal: Some("the goal".into()),
+                state: Some("tests failing".into()),
+                ..Default::default()
+            }),
+            recap_age_secs: Some(5 * 3600),
+            ..Default::default()
+        };
+        let tall = TallRow {
+            row: &row,
+            detail: &detail,
+        };
+        let texts = texts_of(&layout(&tall, &AgentGlyphs::default(), 120));
+        assert!(texts[1].contains("state   tests failing"), "{texts:?}");
+        assert!(texts[1].contains("5h old"), "{texts:?}");
+        assert!(!texts.iter().any(|l| l.contains("the goal")), "{texts:?}");
+    }
+
+    #[test]
+    fn prose_tabs_cycle_both_ways() {
+        assert_eq!(ProseTab::default(), ProseTab::Next);
+        assert_eq!(ProseTab::Next.next(), ProseTab::Prompt);
+        assert_eq!(ProseTab::Prompt.prev(), ProseTab::Next);
+        for t in ProseTab::ALL {
+            assert_eq!(t.next().prev(), t);
+            assert_eq!(ProseTab::from_label(t.label()), Some(t));
+        }
+    }
+
+    /// The prompt tab shows the initial prompt, labelled, italic, and
+    /// capped at two lines however long the brief was, and nothing else.
+    #[test]
+    fn prompt_tab_shows_the_initial_prompt() {
         let row = base_row("b");
         let detail = WorkspaceDetail {
             first_prompt: Some(format!("FIRST-PROMPT {}", "brief ".repeat(200))),
@@ -1889,7 +2021,7 @@ mod tests {
             row: &row,
             detail: &detail,
         };
-        let lines = layout(&tall, &AgentGlyphs::default(), 120);
+        let lines = layout_tab(&tall, &AgentGlyphs::default(), 120, ProseTab::Prompt);
         let texts: Vec<String> = lines.iter().map(text).collect();
         assert!(
             texts[1].contains("prompt") && texts[1].contains("FIRST-PROMPT"),
@@ -1899,7 +2031,8 @@ mod tests {
             texts[2].ends_with('…') || texts[2].trim_end().ends_with('…'),
             "capped: {texts:?}"
         );
-        assert!(texts[3].contains("goal"), "recap follows: {texts:?}");
+        assert!(!texts.iter().any(|l| l.contains("goal")), "{texts:?}");
+        assert_eq!(texts.len(), 4, "strip, two prompt lines, footer: {texts:?}");
         let prompt_span = lines[1].spans.last().unwrap();
         assert!(
             prompt_span
@@ -1914,10 +2047,12 @@ mod tests {
             row: &row,
             detail: &detail,
         };
-        let texts: Vec<String> = layout(&tall, &AgentGlyphs::default(), 120)
-            .iter()
-            .map(text)
-            .collect();
+        let texts = texts_of(&layout_tab(
+            &tall,
+            &AgentGlyphs::default(),
+            120,
+            ProseTab::Prompt,
+        ));
         assert!(!texts.iter().any(|l| l.contains("prompt")), "{texts:?}");
     }
 
@@ -1956,12 +2091,15 @@ mod tests {
             row: &row,
             detail: &detail,
         };
-        let texts: Vec<String> = layout(&tall, &AgentGlyphs::default(), 120)
-            .iter()
-            .map(text)
-            .collect();
-        assert!(texts.iter().any(|l| l.contains("prompt")), "{texts:?}");
+        let texts = texts_of(&layout(&tall, &AgentGlyphs::default(), 120));
         assert!(!texts.iter().any(|l| l.contains("last")), "{texts:?}");
+        let texts = texts_of(&layout_tab(
+            &tall,
+            &AgentGlyphs::default(),
+            120,
+            ProseTab::Prompt,
+        ));
+        assert!(texts.iter().any(|l| l.contains("prompt")), "{texts:?}");
     }
 
     /// End to end with the real synthesizer: an idle workspace without a
@@ -1989,18 +2127,14 @@ mod tests {
             row: &row,
             detail: &detail,
         };
-        let all: Vec<String> = layout(&tall, &AgentGlyphs::default(), 120)
-            .iter()
-            .map(text)
-            .collect();
-        assert_eq!(
+        let count = |tab| {
+            let all = texts_of(&layout_tab(&tall, &AgentGlyphs::default(), 120, tab));
             all.iter()
                 .filter(|l| l.contains("UNIQUE-INITIAL-PROMPT"))
-                .count(),
-            1,
-            "{all:?}"
-        );
-        assert!(all.iter().any(|l| l.contains("prompt")), "{all:?}");
+                .count()
+        };
+        assert_eq!(count(ProseTab::Prompt), 1);
+        assert_eq!(count(ProseTab::Next), 0, "not passed off as `last`");
     }
 
     #[test]
@@ -2030,6 +2164,7 @@ mod tests {
                 &mut scroll,
                 true,
                 ColumnWidths::default(),
+                ProseTab::Next,
                 0,
                 &Theme::wsx(),
             );
@@ -2104,11 +2239,18 @@ mod tests {
         let cols = strip_columns(rows, ColumnWidths::default(), width);
         rows.iter()
             .map(|r| {
-                row_layout(r, &AgentGlyphs::default(), cols, 0, &Theme::wsx())
-                    .lines
-                    .iter()
-                    .map(text)
-                    .collect()
+                row_layout(
+                    r,
+                    &AgentGlyphs::default(),
+                    cols,
+                    ProseTab::Next,
+                    0,
+                    &Theme::wsx(),
+                )
+                .lines
+                .iter()
+                .map(text)
+                .collect()
             })
             .collect()
     }
@@ -2226,12 +2368,10 @@ mod tests {
             }),
             ..Default::default()
         };
-        let rows = [TallRow {
+        let tall = TallRow {
             row: &row,
             detail: &detail,
-        }];
-        let lines = &strip_rows(&rows, 140)[0];
-        assert!(lines[0].contains("bakedbean/zones") && lines[0].contains("1m"));
+        };
         // After the agent strip and gutter.
         let body = |l: &String| {
             l.chars()
@@ -2240,15 +2380,20 @@ mod tests {
                 .trim_start()
                 .to_string()
         };
-        let labels: Vec<String> = lines[1..4].iter().map(body).collect();
-        assert!(labels[0].starts_with("prompt"), "{lines:#?}");
-        assert!(labels[1].starts_with("goal"), "{lines:#?}");
-        assert!(labels[2].starts_with("now"), "{lines:#?}");
-        let x = col(&lines[0], "bakedbean");
-        assert_eq!(col(&lines[1], "prompt"), x, "prose under the branch");
-        let last = lines.last().unwrap();
-        assert_eq!(lines.len(), 5, "{lines:#?}");
-        assert!(last.contains("claude") && last.contains("codex") && last.contains("#tag"));
+        for (tab, want) in [
+            (ProseTab::Prompt, "prompt  the PROMPT"),
+            (ProseTab::Goal, "goal    the GOAL"),
+            (ProseTab::Next, "next    NEXT"),
+        ] {
+            let lines = texts_of(&layout_tab(&tall, &AgentGlyphs::default(), 140, tab));
+            assert!(lines[0].contains("bakedbean/zones") && lines[0].contains("1m"));
+            assert_eq!(lines.len(), 3, "strip, one prose line, footer: {lines:#?}");
+            assert!(body(&lines[1]).starts_with(want), "{lines:#?}");
+            let x = col(&lines[0], "bakedbean");
+            assert_eq!(col(&lines[1], tab.label()), x, "prose under the branch");
+            let last = &lines[2];
+            assert!(last.contains("claude") && last.contains("codex") && last.contains("#tag"));
+        }
     }
 
     #[test]
@@ -2815,6 +2960,7 @@ mod tests {
                 &mut scroll,
                 false,
                 ColumnWidths::default(),
+                ProseTab::Next,
                 0,
                 &Theme::wsx(),
             );
@@ -2972,6 +3118,7 @@ mod tests {
                 &mut scroll,
                 true,
                 ColumnWidths::default(),
+                ProseTab::Next,
                 0,
                 &Theme::wsx(),
             );

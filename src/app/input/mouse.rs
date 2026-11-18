@@ -335,6 +335,9 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
             {
                 // The focus view's `◂ all repos` link, same as Esc / `f`.
                 leave_repo_focus(app);
+            } else if let Some(tab) = focus_tab_click_target(app, &m) {
+                // A focus-view prose tab, same as `<` / `>`.
+                app.dashboard.set_focus_tab(tab, &app.store);
             } else if let Some(&(index, _)) = app
                 .side_panel_file_rects
                 .iter()

@@ -574,21 +574,14 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         // Esc closes the side panel — before it leaves the focus view —
         // but only a panel actually on screen; with a terminal too narrow
         // to show it, Esc does what it would without the panel.
-        // The focus view's panel is pinned, so there Esc leaves the view.
-        (KeyCode::Esc, _)
-            if app.dashboard.focused_repo.is_none()
-                && app.dashboard.panel.open
-                && app.side_panel_rect.is_some() =>
-        {
-            app.dashboard.panel.close();
+        (KeyCode::Esc, _) if active_side_panel(app).open && app.side_panel_rect.is_some() => {
+            active_side_panel(app).close();
         }
         (KeyCode::Esc, _) if app.dashboard.focused_repo.is_some() => leave_repo_focus(app),
-        // The side panel: `c` toggles it (the focus view's is pinned
-        // open), `1`–`5` pick its tab and `<` / `>` step through them
-        // (opening it if closed).
-        (KeyCode::Char('c'), _) if app.dashboard.focused_repo.is_none() => {
-            app.dashboard.panel.toggle();
-        }
+        // The side panel: `c` toggles it, `1`–`5` pick its tab and
+        // `<` / `>` step through them (opening it if closed). The focus
+        // view has its own, open to start with.
+        (KeyCode::Char('c'), _) => active_side_panel(app).toggle(),
         // `→` moves keyboard focus into the panel (see
         // `side_panel::focused_key`), opening it on Files if need be.
         (KeyCode::Right, _) => active_side_panel(app).focus(),

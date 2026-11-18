@@ -1,6 +1,6 @@
 # Side panel
 
-The side panel shows the selected workspace in more depth, on the right of the screen, one tab at a time. It's available on the dashboard list, in the [repo focus view](repo-focus.md#side-panel) (where it is always open), and in the [attached view](#in-the-attached-view).
+The side panel shows the selected workspace in more depth, on the right of the screen, one tab at a time. It's available on the dashboard list, in the [repo focus view](repo-focus.md#side-panel) (where it starts open), and in the [attached view](#in-the-attached-view).
 
 On the dashboard, press `c` to open it for the selected workspace:
 

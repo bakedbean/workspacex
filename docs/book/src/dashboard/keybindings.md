@@ -22,7 +22,7 @@ Every key in the wsx TUI, grouped by where you press it. Capital letters mean `S
 | `{` / `}` (focus view)  | Previous / next [section](repo-focus.md#sections)      |
 | `G` (focus view)        | Sections by PR state, or the list's order (saved)      |
 | `PgUp` / `PgDn` (focus view) | Scroll the [focus view](repo-focus.md) a page      |
-| `c`                     | Toggle the [side panel](side-panel.md) (prompt, recap, commits and changed files); `esc` closes it. Always open in the focus view |
+| `c`                     | Toggle the [side panel](side-panel.md) (prompt, recap, commits and changed files); `esc` closes it. Starts open in the focus view |
 | `1`–`5`                 | Side panel: Prompt / Goal / Next / Commits / Files     |
 | `<` / `>`               | Side panel: previous / next tab (saved in the focus view) |
 | `→`                     | Side panel: take the keyboard to scroll it, or [browse changed files](side-panel.md#browsing-changed-files) and open their diffs |

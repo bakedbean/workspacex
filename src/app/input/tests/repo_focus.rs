@@ -220,11 +220,11 @@ async fn g_toggles_pr_grouping_and_remembers_it() {
     );
 }
 
-/// The focus view's side panel is pinned open on the Next tab, showing
+/// The focus view's side panel starts open on the Next tab, showing
 /// the selected workspace's recap in full; `>` and `<` step through its
 /// tabs, wrapping, and the tab is remembered. The rows show no prose.
 #[tokio::test]
-async fn the_focus_panel_is_pinned_and_switches_tabs() {
+async fn the_focus_panel_starts_open_and_switches_tabs() {
     use crate::ui::dashboard::FOCUS_TAB_SETTING;
     use crate::ui::dashboard::side_panel::PanelTab;
     let (mut app, repo, _, ids) = app();
@@ -242,7 +242,7 @@ async fn the_focus_panel_is_pinned_and_switches_tabs() {
     app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
     assert_eq!(app.dashboard.focus_panel.tab, PanelTab::Next, "next first");
     let screen = draw(&mut app);
-    assert!(app.side_panel_rect.is_some(), "pinned open:\n{screen}");
+    assert!(app.side_panel_rect.is_some(), "open:\n{screen}");
     assert!(screen.contains("UNIQUE-NEXT"), "{screen}");
     assert!(
         screen.contains("UNIQUE-STATE"),
@@ -279,22 +279,39 @@ async fn the_focus_panel_is_pinned_and_switches_tabs() {
     assert_eq!(app.dashboard.focus_panel.tab, PanelTab::Prompt, "wraps");
 }
 
-/// Neither `c` nor Esc closes the pinned panel: Esc leaves the view.
+/// `c` toggles the focus view's panel as on the list, and Esc closes it
+/// before leaving the view. With it closed, the rows show their prose.
 #[tokio::test]
-async fn the_focus_panel_does_not_close() {
-    let (mut app, repo, _, _) = app();
+async fn c_and_esc_close_the_focus_panel() {
+    let (mut app, repo, _, ids) = app();
+    app.recaps.insert(
+        ids[0],
+        crate::data::store::WorkspaceRecap {
+            next: Some("UNIQUE-NEXT".into()),
+            ..Default::default()
+        },
+    );
     app.dashboard.focus_repo(repo);
-    draw(&mut app);
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
+    let screen = draw(&mut app);
+    assert!(app.side_panel_rect.is_some(), "open to start with");
+    assert!(!screen.contains("next    UNIQUE-NEXT"), "no row prose:\n{screen}");
+
+    press(&mut app, KeyCode::Char('c')).await;
+    let screen = draw(&mut app);
+    assert!(app.side_panel_rect.is_none(), "c closes it");
+    assert!(screen.contains("next    UNIQUE-NEXT"), "row prose:\n{screen}");
+    assert!(!app.dashboard.panel.open, "the list's panel is untouched");
+
     press(&mut app, KeyCode::Char('c')).await;
     draw(&mut app);
-    assert!(app.side_panel_rect.is_some());
+    assert!(app.side_panel_rect.is_some(), "c reopens it");
     press(&mut app, KeyCode::Esc).await;
-    assert_eq!(app.dashboard.focused_repo, None, "Esc leaves the view");
+    assert!(!app.dashboard.focus_panel.open, "Esc closes it first");
+    assert_eq!(app.dashboard.focused_repo, Some(repo));
     draw(&mut app);
-    assert!(
-        app.side_panel_rect.is_none(),
-        "the list's panel stays closed"
-    );
+    press(&mut app, KeyCode::Esc).await;
+    assert_eq!(app.dashboard.focused_repo, None, "then leaves the view");
 }
 
 /// With the panel focused (`→`), `j` scrolls a text tab's body instead of
@@ -477,7 +494,7 @@ fn clicking_a_row_targets_its_workspace() {
     }
 }
 
-/// Beside the pinned panel the rows show no prose: a long goal wraps in
+/// Beside the open panel the rows show no prose: a long goal wraps in
 /// the panel, in full, and nowhere else.
 #[test]
 fn a_long_goal_wraps_in_the_panel_not_the_row() {
@@ -498,7 +515,7 @@ fn a_long_goal_wraps_in_the_panel_not_the_row() {
     for chunk in ["Single-repo dashboard", "lines it needs"] {
         assert!(flat.contains(chunk), "{chunk:?} missing:\n{screen}");
     }
-    let panel = app.side_panel_rect.expect("pinned panel");
+    let panel = app.side_panel_rect.expect("open panel");
     let goal_lines: Vec<&str> = screen
         .lines()
         .filter(|l| goal.split(' ').any(|w| w.len() > 6 && l.contains(w)))
@@ -924,14 +941,14 @@ fn app_with_branch_data() -> (App, RepoId, Vec<WorkspaceId>) {
 }
 
 #[tokio::test]
-async fn the_pinned_panel_shows_commits_on_4() {
+async fn the_focus_panel_shows_commits_on_4() {
     let (mut app, _, _) = app_with_branch_data();
     let screen = draw(&mut app);
     assert!(
         !screen.contains("UNIQUE-COMMIT-SUBJECT"),
         "on Next to start"
     );
-    assert!(app.side_panel_rect.is_some(), "pinned open");
+    assert!(app.side_panel_rect.is_some(), "open to start with");
 
     press(&mut app, KeyCode::Char('4')).await;
     let screen = draw(&mut app);

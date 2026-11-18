@@ -16,8 +16,8 @@
 //! workspace's [`PanelData`]; the panel takes the right of the area it is
 //! given and returns what is left.
 //!
-//! The repo focus view's panel is pinned: it always shows, on the Next tab
-//! to start with, and its text tabs are never cut short — the body scrolls.
+//! The repo focus view's panel starts open, on the Next tab. Text tabs are
+//! never cut short — the body scrolls.
 //!
 //! While the panel holds keyboard focus (`→` on the dashboard, `Ctrl-x f`
 //! attached), `j` / `k` scroll its body. The Files tab has a cursor
@@ -125,8 +125,6 @@ pub fn panel_width(total: u16, chosen: Option<u16>) -> u16 {
 #[derive(Debug, Clone, Default)]
 pub struct SidePanelState {
     pub open: bool,
-    /// Always shown, whatever `open` says: the repo focus view's panel.
-    pub pinned: bool,
     /// The tab, kept while the panel is closed.
     pub tab: PanelTab,
     /// The body's first visible line, clamped on draw.
@@ -151,18 +149,13 @@ pub struct SidePanelState {
 }
 
 impl SidePanelState {
-    /// A pinned panel on `tab`: always shown, never closed.
-    pub fn pinned_on(tab: PanelTab) -> Self {
+    /// A panel open on `tab`.
+    pub fn open_on(tab: PanelTab) -> Self {
         Self {
-            pinned: true,
+            open: true,
             tab,
             ..Default::default()
         }
-    }
-
-    /// Whether the panel shows (when the surface has room for it).
-    pub fn visible(&self) -> bool {
-        self.open || self.pinned
     }
 
     pub fn toggle(&mut self) {
@@ -181,15 +174,15 @@ impl SidePanelState {
         self.resizing = false;
     }
 
-    /// Whether the panel has keyboard focus: only ever a shown panel.
+    /// Whether the panel has keyboard focus: only ever an open panel.
     pub fn is_focused(&self) -> bool {
-        self.focused && self.visible()
+        self.focused && self.open
     }
 
-    /// Give the panel keyboard focus: on its tab when it shows, else
-    /// opened on Files.
+    /// Give the panel keyboard focus: on its tab when open, else opened
+    /// on Files.
     pub fn focus(&mut self) {
-        if self.visible() {
+        if self.open {
             self.focused = true;
             self.follow = true;
         } else {
@@ -257,7 +250,7 @@ impl SidePanelState {
         data: Option<&PanelData>,
         theme: &Theme,
     ) -> (Rect, PanelTargets) {
-        if !self.visible() || area.width < PANEL_MIN_TOTAL {
+        if !self.open || area.width < PANEL_MIN_TOTAL {
             return (area, PanelTargets::default());
         }
         self.body_width = area.width;
@@ -1304,16 +1297,12 @@ mod tests {
     }
 
     #[test]
-    fn a_pinned_panel_shows_however_it_is_closed() {
-        let mut p = SidePanelState::pinned_on(PanelTab::Next);
-        assert!(p.visible() && !p.open);
-        p.close();
-        assert!(p.visible());
+    fn focus_on_an_open_panel_keeps_its_tab() {
+        let mut p = SidePanelState::open_on(PanelTab::Next);
         p.focus();
-        assert!(
-            p.is_focused() && p.tab == PanelTab::Next,
-            "focus on its tab"
-        );
+        assert!(p.is_focused() && p.tab == PanelTab::Next);
+        p.toggle();
+        assert!(!p.open && !p.is_focused());
     }
 
     #[test]

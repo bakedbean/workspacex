@@ -128,8 +128,9 @@ pub struct DashboardState {
     /// Whether the focus view sections workspaces by PR state (`G` toggles;
     /// `dashboard_focus_group_by_pr` setting) or keeps the list's order.
     pub focus_group_by_pr: bool,
-    /// The focus view's side panel: pinned open on the selected
-    /// workspace, its tab kept in the `dashboard_focus_tab` setting.
+    /// The focus view's side panel, apart from the list's: open on the
+    /// selected workspace to start with (`c` toggles it), its tab kept in
+    /// the `dashboard_focus_tab` setting.
     pub focus_panel: side_panel::SidePanelState,
 }
 
@@ -260,7 +261,7 @@ impl Default for DashboardState {
             list_state: ListState::default(),
             group_mode: GroupMode::default(),
             focus_group_by_pr: true,
-            focus_panel: side_panel::SidePanelState::pinned_on(side_panel::PanelTab::Next),
+            focus_panel: side_panel::SidePanelState::open_on(side_panel::PanelTab::Next),
             sort_mode: SortMode::default(),
             blocked_pin_max_age_secs: BLOCKED_PIN_MAX_AGE_DEFAULT_SECS,
             top_bar_show_tags: Vec::new(),
@@ -831,15 +832,15 @@ fn render_focus(
             _ => {}
         }
     }
-    // The pinned side panel takes the right of the body when there's
+    // The side panel takes the right of the body when open and there's
     // room, with the selected workspace's prose in full; the rows get the
     // rest.
     let (rows_area, panel_targets) =
         state
             .focus_panel
             .carve(f, chunks[2], inputs.panel.as_ref(), theme);
-    // Without room for the panel, the rows show one line of the panel
-    // tab's prose (the next step for the list tabs) instead.
+    // With the panel closed or no room for it, the rows show one line of
+    // the panel tab's prose (the next step for the list tabs) instead.
     let row_prose = panel_targets
         .area
         .is_none()

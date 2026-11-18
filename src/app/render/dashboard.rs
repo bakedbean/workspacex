@@ -137,7 +137,8 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     // into its group never shows in the panel for that frame.
     inputs.panel = match app.dashboard.selection {
         Some(SelectionTarget::Workspace(id))
-            if app.dashboard.panel.open || app.dashboard.focused_repo.is_some() =>
+            if (app.dashboard.focused_repo.is_some() && app.dashboard.focus_panel.open)
+                || (app.dashboard.focused_repo.is_none() && app.dashboard.panel.open) =>
         {
             side_panel_data(app, id)
         }

@@ -1086,9 +1086,14 @@ pub fn render(
     let mut spans: Vec<(usize, usize)> = Vec::with_capacity(entries.len());
     let mut pr_hits: Vec<Option<(usize, u16, u16)>> = Vec::with_capacity(entries.len());
     for (i, e) in entries.iter().enumerate() {
-        if i > 0 {
-            lines.push(Line::default());
-        }
+        // A section header hugs its first row and gets an extra gap above,
+        // so spacing alone shows which rows it heads.
+        let gap = match (i.checked_sub(1).map(|p| &entries[p]), e) {
+            (None, _) | (Some(TallEntry::Section(_)), _) => 0,
+            (Some(_), TallEntry::Section(_)) => 2,
+            _ => 1,
+        };
+        lines.extend(std::iter::repeat_n(Line::default(), gap));
         let (entry, pr_hit) = match e {
             TallEntry::Row(r) => {
                 let l = row_layout(r, glyphs, cols, tab, tick, theme);
@@ -1107,7 +1112,7 @@ pub fn render(
     let sel_span = selected.and_then(|i| {
         let (top, len) = spans.get(i).copied()?;
         match i.checked_sub(1).and_then(|p| entries.get(p)) {
-            // Only when header, gap and the row's first line all fit.
+            // Only when the header and the row's first line both fit.
             Some(TallEntry::Section(_)) if follow && top - spans[i - 1].0 < height => {
                 let header_top = spans[i - 1].0;
                 Some((header_top, top + len - header_top))
@@ -2833,6 +2838,45 @@ mod tests {
         assert!(targets.groups.is_empty(), "headers are not click targets");
     }
 
+    /// A header hugs its first row and sits two blank lines below the
+    /// previous section, so spacing shows which rows it heads.
+    #[test]
+    fn section_header_hugs_its_rows_and_parts_from_the_last_section() {
+        let mk = |id: i64, name: &str| {
+            let mut r = base_row(name);
+            r.workspace_id = WorkspaceId(id);
+            r
+        };
+        let (a, b) = (mk(1, "a"), mk(2, "b"));
+        let detail = WorkspaceDetail::default();
+        let row = |r| {
+            TallEntry::Row(TallRow {
+                row: r,
+                detail: &detail,
+            })
+        };
+        let entries = [
+            TallEntry::Section(Line::from("── Open · 1 ──")),
+            row(&a),
+            TallEntry::Section(Line::from("── Done · 1 ──")),
+            row(&b),
+        ];
+        let (lines, targets, _) = split_render(&entries, 160, 40);
+        let y = |id: i64| targets.rows.iter().find(|(w, _)| w.0 == id).unwrap().1.y as usize;
+        let header = |label: &str| lines.iter().position(|l| l.contains(label)).unwrap();
+        assert_eq!(header("Open"), 0);
+        assert_eq!(y(1), 1, "first row right under its header");
+        assert_eq!(y(2), header("Done") + 1, "{lines:#?}");
+        let last_of_a = header("Done") - 3;
+        assert!(!lines[last_of_a].trim().is_empty(), "{lines:#?}");
+        assert!(
+            lines[last_of_a + 1..header("Done")]
+                .iter()
+                .all(|l| l.trim().is_empty()),
+            "two blank lines before the next header: {lines:#?}"
+        );
+    }
+
     /// A clean working tree adds nothing to the git facts, at any width.
     #[test]
     fn a_clean_tree_is_not_mentioned() {
@@ -2957,7 +3001,7 @@ mod tests {
                 detail: &detail,
             }),
         ];
-        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 2)).unwrap();
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 1)).unwrap();
         let mut scroll = 0;
         let mut targets = TallTargets::default();
         term.draw(|f| {
@@ -3102,7 +3146,7 @@ mod tests {
         assert!(!footer(&row).contains("shared") && !footer(&row).contains("layout"));
     }
 
-    /// In a viewport too short for header, gap and the row's first line,
+    /// In a viewport too short for the header and the row's first line,
     /// following the selection shows the row, not just its header.
     #[test]
     fn follow_skips_the_header_when_the_row_would_not_show() {
@@ -3115,7 +3159,7 @@ mod tests {
                 detail: &detail,
             }),
         ];
-        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 2)).unwrap();
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 1)).unwrap();
         let mut scroll = 0;
         let mut targets = TallTargets::default();
         term.draw(|f| {
@@ -3134,7 +3178,7 @@ mod tests {
             );
         })
         .unwrap();
-        assert_eq!(scroll, 2, "row's first line at the top");
+        assert_eq!(scroll, 1, "row's first line at the top");
         assert_eq!(targets.rows.len(), 1);
     }
 

@@ -6,7 +6,7 @@
 //! line up down the view; when the side panel has no room, one line of
 //! prose under the branch (initial prompt, recap goal, or next step — the
 //! agent's last message without a recap), wrapped at a comfortable reading
-//! width; and a footer of agents and tags. Alternate
+//! width; and a footer of agents, model and context fill, and tags. Alternate
 //! rows take a background tint so each workspace reads as one block.
 //!
 //! When the strip doesn't fit on one line it breaks in two: branch, PR chip
@@ -55,6 +55,9 @@ pub struct WorkspaceDetail {
     pub commit_sizes: Vec<Option<DiffStats>>,
     /// The workspace's place in its series; `None` outside one.
     pub series: Option<SeriesSlice>,
+    /// The agent's model and context-window fill, as the attached view's
+    /// chip shows them; `None` until its session log reports token usage.
+    pub(crate) model_tokens: Option<crate::ui::detail_modules::session_summary::ChipModelTokens>,
 }
 
 /// An earlier part as the `part` line shows it: its PR, or its slug when
@@ -718,7 +721,7 @@ pub struct RowLayout {
 }
 
 /// Lay out one row: the strip (branch continuation lines under it), the
-/// prose under the branch, then the agents-and-tags footer.
+/// prose under the branch, then the footer of agents, model and tags.
 pub fn row_layout(
     tall: &TallRow<'_>,
     glyphs: &AgentGlyphs,
@@ -869,7 +872,7 @@ pub fn row_layout(
     }
 
     for part in pack(
-        footer_parts(row, glyphs, theme, cols.prose),
+        footer_parts(row, tall.detail, glyphs, theme, cols.prose),
         &Span::raw("  "),
         cols.prose,
     ) {
@@ -948,6 +951,7 @@ fn dim_cell(text: Option<String>, theme: &Theme) -> Vec<Span<'static>> {
 /// for [`pack`].
 fn footer_parts(
     row: &RowInputs,
+    detail: &WorkspaceDetail,
     glyphs: &AgentGlyphs,
     theme: &Theme,
     width: usize,
@@ -968,6 +972,21 @@ fn footer_parts(
             a.push(Span::styled(kind.display_name().to_string(), label_style));
             a
         });
+    // The model and how full its context window is (`opus 4.8 45k/200k`),
+    // the fill in the warn color when nearly full.
+    let model = detail.model_tokens.as_ref().map(|mt| {
+        let mut spans = Vec::new();
+        if let Some(m) = &mt.model {
+            spans.push(Span::styled(format!("{m} "), theme.model_style()));
+        }
+        let fill = if mt.warn {
+            theme.warn_style()
+        } else {
+            theme.row_dim_style()
+        };
+        spans.push(Span::styled(mt.tokens.clone(), fill));
+        spans
+    });
     // Shared-session and layout badges, as the dashboard row draws them.
     let mut badges = Vec::new();
     if row.shared {
@@ -992,7 +1011,7 @@ fn footer_parts(
         let tag = truncate(&format!("#{t}"), width);
         vec![Span::styled(tag, theme.row_dim_style())]
     });
-    agents.chain(badges).chain(tags).collect()
+    agents.chain(model).chain(badges).chain(tags).collect()
 }
 
 /// `↑4 vs main`: commits ahead of the base branch, named without its
@@ -1600,6 +1619,7 @@ mod tests {
             recap_age_secs: None,
             commit_sizes: Vec::new(),
             series: None,
+            model_tokens: None,
         };
         let tall = TallRow {
             row: &row,
@@ -1673,6 +1693,54 @@ mod tests {
         assert!(text(&lines[0]).contains("working"));
         assert!(!text(&lines[0]).contains("SQUEEZED-GOAL"));
         assert!(text(&lines[1]).contains("SQUEEZED-GOAL"));
+    }
+
+    /// The footer names the model and its context fill after the agents,
+    /// before the tags; a nearly full window takes the warn color.
+    #[test]
+    fn footer_shows_model_and_context_between_agents_and_tags() {
+        use crate::ui::detail_modules::session_summary::ChipModelTokens;
+        let mut row = base_row("b");
+        row.tags = vec!["ui".into()];
+        let mut detail = WorkspaceDetail {
+            model_tokens: Some(ChipModelTokens {
+                model: Some("opus 4.8".into()),
+                tokens: "45k/200k".into(),
+                warn: false,
+            }),
+            ..Default::default()
+        };
+        let draw = |d: &WorkspaceDetail| {
+            let tall = TallRow {
+                row: &row,
+                detail: d,
+            };
+            layout(&tall, &AgentGlyphs::default(), 120)
+        };
+        let lines = draw(&detail);
+        let footer = text(lines.last().unwrap());
+        let (agent, model, tag) = (
+            footer.find("claude").unwrap(),
+            footer.find("opus 4.8 45k/200k").expect(&footer),
+            footer.find("#ui").unwrap(),
+        );
+        assert!(agent < model && model < tag, "{footer}");
+        assert_eq!(lines.len(), 2, "same line as the agents: {lines:?}");
+
+        detail.model_tokens.as_mut().unwrap().warn = true;
+        let lines = draw(&detail);
+        let fill = lines
+            .last()
+            .unwrap()
+            .spans
+            .iter()
+            .find(|s| s.content == "45k/200k")
+            .unwrap();
+        assert_eq!(fill.style, Theme::wsx().warn_style());
+
+        // No token data yet: nothing between the agents and the tags.
+        let footer = text(draw(&WorkspaceDetail::default()).last().unwrap());
+        assert!(!footer.contains("200k"), "{footer}");
     }
 
     /// Agents are named by the theme's per-kind icon, falling back to the

@@ -8,7 +8,7 @@ The focus view shows one repo on the dashboard and gives each of its workspaces 
 ━━ No PR · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │  Prompt  Goal  Next  Commits 4  Files 7
                                                                                              │ bakedbean/repo-focus-view vs main
 ▎▎ ⠋ bakedbean/try-new-parser     no PR          ▸ working  ● 2p  ↑1 vs main  not pushed  2m │ ─────────────────────────────────────
- ▎   ▎ claude  #spike                                                                        │ write the docs, then open the PR
+ ▎   ▎ claude  opus 4.8 61k/200k  #spike                                                     │ write the docs, then open the PR
                                                                                              │
 ━━ Draft · 1 · ? 1 asking ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │ state
                                                                                              │ implemented sections and the strip;
@@ -19,7 +19,7 @@ The focus view shows one repo on the dashboard and gives each of its workspaces 
                                                                                              │
 ▍▍ · bakedbean/repo-focus-view    ⏺ #461 open ✓  ▸ idle           ↑4 vs main ███ +184 −22 3h │
  ▍   part    3 · Repo focus view  #455 ⏺  #458 ⏺                                             │
- ▍   ▎ claude  #ui                                                                           │
+ ▍   ▎ claude  opus 4.8 172k/200k  #ui                                                       │
                                                                                              │
 ━━ Done · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │
                                                                                              │
@@ -65,7 +65,7 @@ Each row has three zones.
 
 What each workspace is for and doing is in the [side panel](#side-panel), for the selected one. With the panel closed, or on a terminal too narrow for it (under 100 columns), each row shows one line of the panel tab's text under its branch instead: `prompt` (cut to two lines), `goal` or `next` (up to three), with `next` standing in for the Commits and Files tabs. Without a recap, `next` gives way to a `last` line, the agent's last message.
 
-**The footer** is a dim line of the workspace's agents, each named with its icon from the theme's [`[agent_bar.symbols]`](../configuration/themes.md) table (or the `▎` bar when the theme has none), then `◇ shared` for a [shared](../integrations/shared-workspaces.md) workspace (red `shared, no session` when its tmux session is gone) and `layout` when it has a saved multi-pane layout, followed by its tags. It is always shown.
+**The footer** is a dim line of the workspace's agents, each named with its icon from the theme's [`[agent_bar.symbols]`](../configuration/themes.md) table (or the `▎` bar when the theme has none), then the agent's model and how full its context window is (`opus 4.8 45k/200k`, the fill in the warn color from 85%; just the token count when the window size isn't known), as the attached view's top bar shows them. That appears once the agent's session log reports token usage. Then come `◇ shared` for a [shared](../integrations/shared-workspaces.md) workspace (red `shared, no session` when its tmux session is gone) and `layout` when it has a saved multi-pane layout, followed by its tags. It is always shown.
 
 When the strip doesn't fit on one line, it breaks up. Line 1 keeps the glyph, branch, PR chip and age; the status, commits ahead, remote state, uncommitted changes and diff move under the branch, usually onto one line, more when the terminal is narrow. Every row breaks at the same points, so the columns still line up. A field wider than the whole line, such as a very long base branch name, is cut short with `…`.
 

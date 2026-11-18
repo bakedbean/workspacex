@@ -295,12 +295,18 @@ async fn c_and_esc_close_the_focus_panel() {
     app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
     let screen = draw(&mut app);
     assert!(app.side_panel_rect.is_some(), "open to start with");
-    assert!(!screen.contains("next    UNIQUE-NEXT"), "no row prose:\n{screen}");
+    assert!(
+        !screen.contains("next    UNIQUE-NEXT"),
+        "no row prose:\n{screen}"
+    );
 
     press(&mut app, KeyCode::Char('c')).await;
     let screen = draw(&mut app);
     assert!(app.side_panel_rect.is_none(), "c closes it");
-    assert!(screen.contains("next    UNIQUE-NEXT"), "row prose:\n{screen}");
+    assert!(
+        screen.contains("next    UNIQUE-NEXT"),
+        "row prose:\n{screen}"
+    );
     assert!(!app.dashboard.panel.open, "the list's panel is untouched");
 
     press(&mut app, KeyCode::Char('c')).await;

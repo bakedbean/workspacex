@@ -498,6 +498,9 @@ pub(crate) fn build_workspace_items<'a>(
                             .get(&ws.id)
                             .map(|l| crate::ui::dashboard::tall::commit_sizes(&l.commits))
                             .unwrap_or_default(),
+                        model_tokens: app.workspace_events.get(&ws.id).and_then(
+                            crate::ui::detail_modules::session_summary::format_chip_model_tokens,
+                        ),
                         series: app
                             .series
                             .iter()

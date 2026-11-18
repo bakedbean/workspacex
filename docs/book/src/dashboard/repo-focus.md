@@ -5,7 +5,7 @@ The focus view shows one repo on the dashboard and gives each of its workspaces 
 ```text
 ◂ all repos / workspacex  ~/src/workspacex  ──  No PR 1 › Draft 1 › Open 1 › Done 1    ? 1 question   ⠋ 1 thinking   · 2 idle    4 ws
 
-━━ No PR · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │  Prompt  Goal  Next  Commits 4  Files 7
+━━ No PR · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │  Prompt  Goal  Next  Commits 4  Files 7  Chat
                                                                                              │ bakedbean/repo-focus-view vs main
 ▎▎ ⠋ bakedbean/try-new-parser     no PR          ▸ working  ● 2p  ↑1 vs main  not pushed  2m │ ─────────────────────────────────────
  ▎   ▎ claude  opus 4.8 61k/200k  #spike                                                     │ write the docs, then open the PR
@@ -63,7 +63,7 @@ Each row has three zones.
 
 **The part line** sits under the branch for a workspace in a [series](../cli-reference/workspace.md#wsx-series-show): its part number and the series title (part 1's slug until it has one), then the earlier parts' PRs, oldest first, each with its PR chip's glyph and color, or the slug of a part with no PR. When a later part exists, the line ends with `→ part N`. It always fits on one line: the oldest PRs fold into `+k` first, then the title is cut.
 
-What each workspace is for and doing is in the [side panel](#side-panel), for the selected one. With the panel closed, or on a terminal too narrow for it (under 100 columns), each row shows one line of the panel tab's text under its branch instead: `prompt` (cut to two lines), `goal` or `next` (up to three), with `next` standing in for the Commits and Files tabs. Without a recap, `next` gives way to a `last` line, the agent's last message.
+What each workspace is for and doing is in the [side panel](#side-panel), for the selected one. With the panel closed, or on a terminal too narrow for it (under 100 columns), each row shows one line of the panel tab's text under its branch instead: `prompt` (cut to two lines), `goal` or `next` (up to three), with `next` standing in for the Commits, Files and Chat tabs. Without a recap, `next` gives way to a `last` line, the agent's last message.
 
 **The footer** is a dim line of the workspace's agents, each named with its icon from the theme's [`[agent_bar.symbols]`](../configuration/themes.md) table (or the `▎` bar when the theme has none), then the agent's model and how full its context window is (`opus 4.8 45k/200k`, the fill in the warn color from 85%; just the token count when the window size isn't known), as the attached view's top bar shows them. That appears once the agent's session log reports token usage. Then come `◇ shared` for a [shared](../integrations/shared-workspaces.md) workspace (red `shared, no session` when its tmux session is gone) and `layout` when it has a saved multi-pane layout, followed by its tags. It is always shown.
 
@@ -82,8 +82,9 @@ The [side panel](side-panel.md) is open when you enter the focus view, on the se
 | **Next** | The recap's next step, then its state. When the workspace kept working for at least half an hour after the recap was last set, a note says how old the recap is, since it may no longer say what the workspace is doing. Without a recap, the agent's last message, unless that is just the initial prompt. |
 | **Commits** | The branch's commits against the repo's base branch. |
 | **Files** | The files the branch changed against its base. |
+| **Chat** | The agent's latest message, rendered as markdown: the same text as the detail bar's RECENT CHAT, shown whether or not the workspace has a recap. |
 
-Press `1` to `5` for a tab, `<` / `>` for the previous or next one, or click it. The focus view keeps its own tab, apart from the list's panel, and saves it (the `dashboard_focus_tab` [setting](../configuration/settings.md#dashboard)). Nothing is cut short: a long prompt or recap scrolls. Press `→` to give the panel the keyboard, then `j` / `k` (or `PgDn` / `PgUp`, `g` / `G`) scroll it; `←` or `esc` gives the keys back. The mouse wheel over the panel scrolls it too.
+Press `1` to `6` for a tab, `<` / `>` for the previous or next one, or click it. The focus view keeps its own tab, apart from the list's panel, and saves it (the `dashboard_focus_tab` [setting](../configuration/settings.md#dashboard)). Nothing is cut short: a long prompt or recap scrolls. Press `→` to give the panel the keyboard, then `j` / `k` (or `PgDn` / `PgUp`, `g` / `G`) scroll it; `←` or `esc` gives the keys back. The mouse wheel over the panel scrolls it too.
 
 `c` closes and reopens it, as on the list; `esc` closes it before it leaves the focus view. Closed, it stays closed as `[` / `]` move between repos, and opens again the next time you enter the focus view. The focus view's panel opens and closes apart from the list's. It hides on terminals under 100 columns wide.
 

@@ -83,10 +83,9 @@ impl SortMode {
 /// blocked for days are exactly what the pin must not camp on.
 pub const BLOCKED_PIN_MAX_AGE_DEFAULT_SECS: u64 = 24 * 60 * 60;
 
-/// Upper bounds of the recency buckets, in seconds. Rows inside one bucket
-/// are ordered by name, not by age, so two agents both working right now
-/// never trade places on you; the order only changes when a row crosses a
-/// boundary.
+/// Upper bounds of the recency buckets, in seconds. The first bucket orders
+/// by name so two agents working right now never trade places; older buckets
+/// order newest first, which is stable because quiet rows age in lockstep.
 const RECENCY_TIERS: [u64; 5] = [
     2 * 60,      // under 2m — active right now
     10 * 60,     // under 10m
@@ -142,12 +141,18 @@ pub fn order_workspaces<T: SortRow>(items: &mut [T], mode: SortMode, pin_max_age
         }
         SortMode::Recency => {
             // `false` sorts before `true`, so an un-pinned row ranks below a
-            // pinned one. Age only enters as a bucket; inside a bucket the
-            // name decides, which is what keeps the list still.
+            // pinned one. Tier 0 ignores exact age so live rows hold still.
             let key = |w: &T| {
+                let tier = recency_tier(w.sort_ago_secs());
+                let age = if tier == 0 {
+                    0
+                } else {
+                    w.sort_ago_secs().unwrap_or(0)
+                };
                 (
                     !is_pinned(w.sort_status(), w.sort_ago_secs(), pin_max_age_secs),
-                    recency_tier(w.sort_ago_secs()),
+                    tier,
+                    age,
                 )
             };
             items.sort_by(|a, b| {
@@ -257,11 +262,29 @@ mod tests {
     }
 
     #[test]
-    fn recency_orders_rows_inside_one_tier_by_name_not_age() {
-        // Both under 2m: the whole point of bucketing is that two agents
-        // working right now do not trade places second by second.
+    fn recency_keeps_name_order_inside_the_active_tier() {
+        // Both under 2m: two agents working right now must not trade places.
         let rows = vec![row("zebra", 5), row("alpha", 100)];
         assert_eq!(ordered(rows, SortMode::Recency), vec!["alpha", "zebra"]);
+    }
+
+    #[test]
+    fn recency_orders_older_tiers_newest_first() {
+        let rows = vec![row("a-old", 20 * HOUR), row("z-new", 7 * HOUR)];
+        assert_eq!(ordered(rows, SortMode::Recency), vec!["z-new", "a-old"]);
+        let rows = vec![row("a", 40 * 24 * HOUR), row("b", 2 * 24 * HOUR)];
+        assert_eq!(ordered(rows, SortMode::Recency), vec!["b", "a"]);
+    }
+
+    #[test]
+    fn recency_orders_never_active_rows_by_name() {
+        let never = |name| Row {
+            name,
+            status: Status::Idle,
+            ago_secs: None,
+        };
+        let rows = vec![never("b"), never("a")];
+        assert_eq!(ordered(rows, SortMode::Recency), vec!["a", "b"]);
     }
 
     #[test]

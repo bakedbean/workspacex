@@ -1,23 +1,20 @@
 # Repo focus view
 
-The focus view shows one repo on the dashboard and gives each of its workspaces several lines instead of one, laid out to be read at a glance. Workspaces are grouped into sections by pull request state, each row starts with a strip of fixed columns that line up down the view, and what the workspace is for and doing sits under its branch. Every other workspace has a faint background tint so each reads as one block.
+The focus view shows one repo on the dashboard and gives each of its workspaces several lines instead of one, laid out to be read at a glance. Workspaces are grouped into sections by pull request state, each row starts with a strip of fixed columns that line up down the view, and one line of prose sits under its branch: its next step, its goal or its first prompt, picked by the tabs at the top of the view. Every other workspace has a faint background tint so each reads as one block.
 
 ```text
 ◂ all repos / workspacex  ~/src/workspacex  ──  No PR 1 › Draft 1 › Open 1 › Done 1    ? 1 question   ⠋ 1 thinking   · 2 idle    4 ws
+ prompt   goal  [next]  < >
 
 ━━ No PR · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ▎▎ ⠋ bakedbean/try-new-parser     no PR          ▸ working  ● 2p  ↑1 vs main  not pushed                    2m
- ▎   prompt  Spike a faster parser for agent recaps; measure it against the current one on a few
- ▎           real session logs before changing anything.
- ▎   goal    Spike a faster recap parser
- ▎   now     benchmarking the streaming approach → compare against the regex version
+ ▎   next    compare against the regex version
  ▎   ▎ claude  #spike
 
 ━━ Draft · 1 · ? 1 asking ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ▎▎ ? bakedbean/detail-bar-scroll  ⏷ #459 draft   └ asking         ↑2 vs main               ██▎  +61 −8    14m
- ▎   prompt  The detail bar containers should scroll independently
  ▎   last    Should the scroll offsets be kept per workspace or shared across the whole detail
  ▎           bar?
  ▎   ▎ claude
@@ -26,8 +23,7 @@ The focus view shows one repo on the dashboard and gives each of its workspaces 
 
 ▎▎ · bakedbean/repo-focus-view    ⏺ #461 open ✓  ▸ idle           ↑4 vs main  ⇡2 unpushed  3 mod 1 untr  ████ +184 −22   3h
  ▎   part    3 · Repo focus view  #455 ⏺  #458 ⏺
- ▎   goal    Single-repo dashboard view with richer per-workspace detail
- ▎   now     implemented sections and the strip → write the docs · 5h old
+ ▎   next    write the docs · 5h old
  ▎   ▎ claude  #ui
 
 ━━ Done · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -35,6 +31,8 @@ The focus view shows one repo on the dashboard and gives each of its workspaces 
 ▎▎ ✓ bakedbean/fix-flaky-poller   ⏺ #455 merged  ▸ done           ↑0 vs main                                48h
  ▎   ▎ claude
 ```
+
+The active tab is highlighted; `[next]` above stands in for that.
 
 The header line sums the repo up by PR stage (`No PR 1 › Draft 1 › Open 1 › Done 1`, each stage in its section's color and dim when empty) before the status counts. On a narrow terminal the stages drop first, then the path. Click `◂ all repos` to leave the view, or a status in the tally to filter by it. With a [bar theme](../configuration/themes.md#the-focus-header), the `[dashboard_focus]` bar lays this line out, for example as powerline blocks.
 
@@ -71,16 +69,24 @@ Each row has three zones.
 
 **The prose** sits under the branch:
 
-- **part**: for a workspace in a [series](../cli-reference/workspace.md#wsx-series-show), its part number and the series title (part 1's slug until it has one), then the earlier parts' PRs, oldest first, each with its PR chip's glyph and color, or the slug of a part with no PR. When a later part exists, the line ends with `→ part N`. It always fits on one line: the oldest PRs fold into `+k` first, then the title is cut.
-- **prompt**: the first prompt the workspace's agent was given, in italics and cut to two lines, so you can see what the workspace was started for. It appears once the agent's session log has been read.
-- **goal**: the recap goal in full.
-- **now**: the recap state, then the next step after `→`. When the workspace kept working for at least half an hour after the recap was last set, the line ends with how old the recap is (`· 5h old`), since it may no longer say what the workspace is doing. Without a recap, a **last** line takes its place: the status text the dashboard row would have clipped, usually the agent's last message, cut to two lines. When that text is just the initial prompt, it isn't repeated.
-
-The prose is wrapped at a comfortable reading width instead of across the whole screen.
+- **part**: for a workspace in a [series](../cli-reference/workspace.md#wsx-series-show), its part number and the series title (part 1's slug until it has one), then the earlier parts' PRs, oldest first, each with its PR chip's glyph and color, or the slug of a part with no PR. When a later part exists, the line ends with `→ part N`. It always fits on one line: the oldest PRs fold into `+k` first, then the title is cut. It shows on every tab.
+- one line from the [prose tab](#the-prose-tabs) the view is on, wrapped at a comfortable reading width instead of across the whole screen.
 
 **The footer** is a dim line of the workspace's agents, each named with its icon from the theme's [`[agent_bar.symbols]`](../configuration/themes.md) table (or the `▎` bar when the theme has none), then `◇ shared` for a [shared](../integrations/shared-workspaces.md) workspace (red `shared, no session` when its tmux session is gone) and `layout` when it has a saved multi-pane layout, followed by its tags. It is always shown.
 
 When the strip doesn't fit on one line, it breaks up. Line 1 keeps the glyph, branch, PR chip and age; the status, commits ahead, remote state, uncommitted changes and diff move under the branch, usually onto one line, more when the terminal is narrow. Every row breaks at the same points, so the columns still line up. A field wider than the whole line, such as a very long base branch name, is cut short with `…`.
+
+## The prose tabs
+
+A tab bar under the header line picks what the rows show under their branch, one field at a time, so each workspace takes a line or two and the view can be scanned quickly. Press `>` for the next tab and `<` for the previous one (both wrap), or click a tab. The tab applies to every row at once and is saved (the `dashboard_focus_tab` [setting](../configuration/settings.md#dashboard)). It starts on **next**.
+
+| Tab | Shows |
+| --- | --- |
+| **prompt** | The first prompt the workspace's agent was given, in italics and cut to two lines, so you can see what the workspace was started for. It appears once the agent's session log has been read. |
+| **goal** | The recap goal, up to three lines. |
+| **next** | The recap's next step, up to three lines, or its state (labelled `state`) when no next step is set. When the workspace kept working for at least half an hour after the recap was last set, the line ends with how old the recap is (`· 5h old`), since it may no longer say what the workspace is doing. Without a recap, a **last** line takes its place: the status text the dashboard row would have clipped, usually the agent's last message, cut to two lines. When that text is just the initial prompt, it isn't repeated. |
+
+A workspace with nothing for the tab, such as one without a recap on the goal tab, shows no prose line.
 
 In the focus view the [detail bar](detail-bar.md) shrinks to its reply row, so the workspaces get nearly the full height. Press `Tab` to type a message to the selected workspace's agent, as you would on the list.
 

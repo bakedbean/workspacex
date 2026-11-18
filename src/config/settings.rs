@@ -208,8 +208,8 @@ pub const SETTINGS: &[SettingDef] = &[
     choice(
         "dashboard_focus_tab",
         "Dashboard",
-        &["next", "goal", "prompt", "commits", "files"],
-        "The repo focus view's side-panel tab; `<` / `>` and `1`–`5` there switch it too.",
+        &["next", "goal", "prompt", "commits", "files", "chat"],
+        "The repo focus view's side-panel tab; `<` / `>` and `1`–`6` there switch it too.",
     ),
     text(
         "dashboard_blocked_pin_max_age_secs",

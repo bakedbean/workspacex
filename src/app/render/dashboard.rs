@@ -359,8 +359,8 @@ pub(crate) fn side_panel_data(
     })
 }
 
-/// The side panel's text tabs for `ws`: its first prompt and recap in
-/// full, or without a recap what its agent last said.
+/// The side panel's text tabs for `ws`: its first prompt, recap and the
+/// agent's latest message in full.
 fn panel_prose(
     app: &App,
     ws: &crate::data::store::Workspace,
@@ -384,10 +384,9 @@ fn panel_prose(
         )
     });
     let has_recap = goal.is_some() || next.is_some() || state.is_some();
-    let prompt = app
-        .workspace_events
-        .get(&ws.id)
-        .and_then(|e| e.first_user_text.clone());
+    let events = app.workspace_events.get(&ws.id);
+    let prompt = events.and_then(|e| e.first_user_text.clone());
+    let chat = events.and_then(|e| e.last_assistant_text.clone());
     let recap_age = recap
         .filter(|r| r.updated_at > 0)
         .map(|r| (now_ms.saturating_sub(r.updated_at) / 1000).max(0) as u64);
@@ -409,6 +408,7 @@ fn panel_prose(
         state,
         stale: crate::ui::dashboard::tall::stale_recap_age(recap_age, row.ago_secs),
         last,
+        chat,
     }
 }
 

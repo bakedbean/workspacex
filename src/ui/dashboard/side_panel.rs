@@ -1,8 +1,9 @@
 //! The side panel: the selected workspace's first prompt, recap goal, next
-//! step, commits or changed files, one at a time under a tab bar.
+//! step, agent's latest message, commits or changed files, one at a time
+//! under a tab bar.
 //!
 //! ```text
-//! │ Prompt  Goal  Next  Commits 4   Files 7
+//! │ Prompt  Goal  Next  Commits 4   Files 7  Chat
 //! │ bakedbean/repo-focus-view vs main
 //! │ ─────────────────────────────────
 //! │ a1b2c3d  feat(dashboard): split focus view
@@ -48,16 +49,19 @@ pub enum PanelTab {
     #[default]
     Commits,
     Files,
+    /// The agent's latest message, as the detail bar's RECENT CHAT shows it.
+    Chat,
 }
 
 impl PanelTab {
-    /// Every tab, in tab-bar order; `1`–`5` on the dashboard pick them.
-    pub const ALL: [PanelTab; 5] = [
+    /// Every tab, in tab-bar order; `1`–`6` on the dashboard pick them.
+    pub const ALL: [PanelTab; 6] = [
         PanelTab::Prompt,
         PanelTab::Goal,
         PanelTab::Next,
         PanelTab::Commits,
         PanelTab::Files,
+        PanelTab::Chat,
     ];
 
     pub fn label(self) -> &'static str {
@@ -65,6 +69,7 @@ impl PanelTab {
             PanelTab::Prompt => "Prompt",
             PanelTab::Goal => "Goal",
             PanelTab::Next => "Next",
+            PanelTab::Chat => "Chat",
             PanelTab::Commits => "Commits",
             PanelTab::Files => "Files",
         }
@@ -76,14 +81,18 @@ impl PanelTab {
             PanelTab::Prompt => "prompt",
             PanelTab::Goal => "goal",
             PanelTab::Next => "next",
+            PanelTab::Chat => "chat",
             PanelTab::Commits => "commits",
             PanelTab::Files => "files",
         }
     }
 
-    /// Prompt, Goal or Next: a tab of prose rather than a git list.
+    /// Prompt, Goal, Next or Chat: a tab of prose rather than a git list.
     pub fn is_text(self) -> bool {
-        matches!(self, PanelTab::Prompt | PanelTab::Goal | PanelTab::Next)
+        matches!(
+            self,
+            PanelTab::Prompt | PanelTab::Goal | PanelTab::Next | PanelTab::Chat
+        )
     }
 
     pub fn from_key(s: &str) -> Option<Self> {
@@ -327,6 +336,8 @@ pub struct PanelProse {
     pub stale: Option<String>,
     /// Without a recap, what the agent last said.
     pub last: Option<String>,
+    /// The agent's latest message, recap or not; markdown.
+    pub chat: Option<String>,
 }
 
 impl PanelData {
@@ -434,7 +445,7 @@ pub fn render(
                 .commits
                 .map(|c| c.len().max(s.ahead.map_or(0, |a| a as usize))),
             PanelTab::Files => s.files.map(<[_]>::len),
-            PanelTab::Prompt | PanelTab::Goal | PanelTab::Next => None,
+            PanelTab::Prompt | PanelTab::Goal | PanelTab::Next | PanelTab::Chat => None,
         });
         let text = match count {
             Some(n) => format!(" {} {n} ", t.label()),
@@ -601,7 +612,7 @@ fn body_lines(
             Some([]) => note(&format!("No files changed against {base}.")),
             Some(files) => file_lines(files, width, None, theme).0,
         },
-        PanelTab::Prompt | PanelTab::Goal | PanelTab::Next => {
+        PanelTab::Prompt | PanelTab::Goal | PanelTab::Next | PanelTab::Chat => {
             unreachable!("prose_lines draws the text tabs")
         }
     }
@@ -630,6 +641,10 @@ fn prose_lines(
         PanelTab::Goal => match text(&p.goal) {
             Some(t) => paragraphs(t, width, Style::default()),
             None => note("No recap goal set."),
+        },
+        PanelTab::Chat => match text(&p.chat) {
+            Some(t) => crate::ui::detail_modules::markdown::render(t, width as u16, theme),
+            None => note("No agent message read from its session log yet."),
         },
         PanelTab::Next => {
             let mut out = Vec::new();
@@ -893,7 +908,8 @@ mod tests {
                 && lines[0].contains("Files 2"),
             "{lines:?}"
         );
-        assert!(lines[1].contains("bakedbean/x vs main"), "{lines:?}");
+        assert!(lines[1].contains("Chat"), "Chat wraps: {lines:?}");
+        assert!(lines[2].contains("bakedbean/x vs main"), "{lines:?}");
         let all = lines.join("\n");
         assert!(all.contains("a1b2c3d  feat(dashboard)"), "{all}");
         assert!(
@@ -915,7 +931,7 @@ mod tests {
             "{lines:?}"
         );
         assert!(lines[1].contains("Files"), "{lines:?}");
-        assert_eq!(targets.tabs.len(), 5);
+        assert_eq!(targets.tabs.len(), 6);
         let files = targets
             .tabs
             .iter()
@@ -1007,6 +1023,22 @@ mod tests {
         assert!(all.contains("No recap yet."), "{all}");
         let all = prose_draw(PanelTab::Prompt, &PanelProse::default(), 20, &mut 0).join("\n");
         assert!(all.contains("No prompt read"), "{all}");
+    }
+
+    #[test]
+    fn chat_tab_renders_the_latest_message_as_markdown() {
+        let prose = PanelProse {
+            next: Some("UNIQUE-NEXT".into()),
+            chat: Some("**Done.** See `foo.rs`\n\n- one\n- two".into()),
+            ..Default::default()
+        };
+        let all = prose_draw(PanelTab::Chat, &prose, 20, &mut 0).join("\n");
+        assert!(all.contains("Done.") && !all.contains("**"), "{all}");
+        assert!(all.contains("foo.rs") && all.contains("two"), "{all}");
+        assert!(!all.contains("UNIQUE-NEXT"), "{all}");
+
+        let all = prose_draw(PanelTab::Chat, &PanelProse::default(), 20, &mut 0).join("\n");
+        assert!(all.contains("No agent message"), "{all}");
     }
 
     /// A long text tab scrolls, clamped to its end.
@@ -1362,11 +1394,11 @@ mod tests {
     #[test]
     fn tabs_step_both_ways_and_round_trip_their_keys() {
         let mut p = SidePanelState::default();
-        p.show(PanelTab::Files);
+        p.show(PanelTab::Chat);
         p.next_tab();
         assert_eq!(p.tab, PanelTab::Prompt, "wraps");
         p.prev_tab();
-        assert_eq!(p.tab, PanelTab::Files);
+        assert_eq!(p.tab, PanelTab::Chat);
         for t in PanelTab::ALL {
             assert_eq!(PanelTab::from_key(t.key()), Some(t));
         }

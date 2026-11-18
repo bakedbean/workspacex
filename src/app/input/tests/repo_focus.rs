@@ -276,6 +276,8 @@ async fn the_focus_panel_starts_open_and_switches_tabs() {
     press(&mut app, KeyCode::Char('>')).await;
     press(&mut app, KeyCode::Char('>')).await;
     press(&mut app, KeyCode::Char('>')).await;
+    assert_eq!(app.dashboard.focus_panel.tab, PanelTab::Chat);
+    press(&mut app, KeyCode::Char('>')).await;
     assert_eq!(app.dashboard.focus_panel.tab, PanelTab::Prompt, "wraps");
 }
 

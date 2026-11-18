@@ -582,7 +582,7 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             active_side_panel(app).close();
         }
         (KeyCode::Esc, _) if app.dashboard.focused_repo.is_some() => leave_repo_focus(app),
-        // The side panel: `c` toggles it, `1`–`5` pick its tab and
+        // The side panel: `c` toggles it, `1`–`6` pick its tab and
         // `<` / `>` step through them (opening it if closed). The focus
         // view has its own, open to start with.
         (KeyCode::Char('c'), _) => active_side_panel(app).toggle(),
@@ -592,7 +592,7 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             active_side_panel(app).focus();
             save_focus_tab(app);
         }
-        (KeyCode::Char(c @ '1'..='5'), _) => {
+        (KeyCode::Char(c @ '1'..='6'), _) => {
             let i = c as usize - '1' as usize;
             show_panel_tab(app, crate::ui::dashboard::side_panel::PanelTab::ALL[i]);
         }

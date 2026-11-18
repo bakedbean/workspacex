@@ -136,7 +136,9 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     // Gathered after reconciling, so a workspace a hide rule just folded
     // into its group never shows in the panel for that frame.
     inputs.panel = match app.dashboard.selection {
-        Some(SelectionTarget::Workspace(id)) if app.dashboard.panel.open => {
+        Some(SelectionTarget::Workspace(id))
+            if app.dashboard.panel.open || app.dashboard.focused_repo.is_some() =>
+        {
             side_panel_data(app, id)
         }
         _ => None,
@@ -160,7 +162,6 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     app.side_panel_rect = click_targets.panel_area;
     app.side_panel_file_rects = click_targets.panel_files;
     app.dashboard_unfocus_rect = click_targets.unfocus;
-    app.dashboard_focus_tab_rects = click_targets.focus_tabs;
     if let Some(pm_area) = pm_area {
         let digest = app.build_pm_digest();
         let selected = app
@@ -343,7 +344,61 @@ pub(crate) fn side_panel_data(
         base: repo.base_branch.clone(),
         lists,
         ahead: app.workspace_ahead_of_base.get(&id).copied(),
+        prose: panel_prose(app, ws),
     })
+}
+
+/// The side panel's text tabs for `ws`: its first prompt and recap in
+/// full, or without a recap what its agent last said.
+fn panel_prose(
+    app: &App,
+    ws: &crate::data::store::Workspace,
+) -> crate::ui::dashboard::side_panel::PanelProse {
+    use crate::ui::dashboard::column_content::ColumnBody;
+    let now_ms = crate::util::time::now_ms();
+    let row = build_row_inputs(app, ws, now_ms, false);
+    let recap = app.recaps.get(&ws.id);
+    let field = |full: &Option<String>, short: &Option<String>| {
+        full.as_deref()
+            .or(short.as_deref())
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(String::from)
+    };
+    let (goal, next, state) = recap.map_or((None, None, None), |r| {
+        (
+            field(&r.goal, &r.goal_short),
+            field(&r.next, &r.next_short),
+            field(&r.state, &r.state_short),
+        )
+    });
+    let has_recap = goal.is_some() || next.is_some() || state.is_some();
+    let prompt = app
+        .workspace_events
+        .get(&ws.id)
+        .and_then(|e| e.first_user_text.clone());
+    let recap_age = recap
+        .filter(|r| r.updated_at > 0)
+        .map(|r| (now_ms.saturating_sub(r.updated_at) / 1000).max(0) as u64);
+    // The fallback is the initial prompt for an idle workspace; the Prompt
+    // tab shows that, so it isn't passed off as something the agent said.
+    let same = |a: &str, b: &str| a.split_whitespace().eq(b.split_whitespace());
+    let last = match row.column.as_ref().map(|c| &c.body) {
+        Some(ColumnBody::Fallback { text, .. })
+            if !has_recap && !prompt.as_deref().is_some_and(|p| same(p, text)) =>
+        {
+            Some(text.clone())
+        }
+        _ => None,
+    };
+    crate::ui::dashboard::side_panel::PanelProse {
+        prompt,
+        goal,
+        next,
+        state,
+        stale: crate::ui::dashboard::tall::stale_recap_age(recap_age, row.ago_secs),
+        last,
+    }
 }
 
 /// Build one workspace's dashboard row inputs: status classification, live

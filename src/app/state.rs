@@ -25,6 +25,7 @@ impl App {
             .flatten()
             .and_then(|w| w.parse::<u16>().ok());
         dashboard.panel.width = panel_width;
+        dashboard.focus_panel.width = panel_width;
         let mut attached_panel = crate::ui::dashboard::side_panel::SidePanelState::default();
         attached_panel.width = panel_width;
         // Several tests construct an `App` only incidentally and then create
@@ -74,7 +75,6 @@ impl App {
             side_panel_rect: None,
             side_panel_file_rects: Vec::new(),
             dashboard_unfocus_rect: None,
-            dashboard_focus_tab_rects: Vec::new(),
             procs_link_rect: None,
             github_remotes: Default::default(),
             pr_last_poll_ms: std::collections::HashMap::new(),
@@ -767,10 +767,6 @@ pub struct App {
     pub dashboard_focus_row_rects: Vec<(crate::data::store::WorkspaceId, ratatui::layout::Rect)>,
     /// The focus view's `◂ all repos` link — a click leaves the focus view.
     pub dashboard_unfocus_rect: Option<ratatui::layout::Rect>,
-    /// The focus view's prose tabs, for clicks. Empty outside the focus
-    /// view.
-    pub dashboard_focus_tab_rects:
-        Vec<(crate::ui::dashboard::tall::ProseTab, ratatui::layout::Rect)>,
     /// Until then the classifier's output is provisional (it can only see
     /// session-liveness, not stop_reason),
     /// so we hold off on recording activity / firing bells for it. Without

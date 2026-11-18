@@ -1,8 +1,8 @@
-//! The repo focus view's side panel: the selected workspace's commits or
-//! changed files, one at a time under a tab bar.
+//! The side panel: the selected workspace's first prompt, recap goal, next
+//! step, commits or changed files, one at a time under a tab bar.
 //!
 //! ```text
-//! │ Commits 4   Files 7
+//! │ Prompt  Goal  Next  Commits 4   Files 7
 //! │ bakedbean/repo-focus-view vs main
 //! │ ─────────────────────────────────
 //! │ a1b2c3d  feat(dashboard): split focus view
@@ -16,10 +16,13 @@
 //! workspace's [`PanelData`]; the panel takes the right of the area it is
 //! given and returns what is left.
 //!
-//! The Files tab has a cursor. While the panel holds keyboard focus
-//! (`→` on the dashboard, `Ctrl-x f` attached) it is highlighted and moves
-//! with `j` / `k`; Enter, or a click on a file, opens the file's diff, and
-//! `o` opens the file in the editor.
+//! The repo focus view's panel is pinned: it always shows, on the Next tab
+//! to start with, and its text tabs are never cut short — the body scrolls.
+//!
+//! While the panel holds keyboard focus (`→` on the dashboard, `Ctrl-x f`
+//! attached), `j` / `k` scroll its body. The Files tab has a cursor
+//! instead, which they move; Enter, or a click on a file, opens the file's
+//! diff, and `o` opens the file in the editor.
 
 use crate::data::store::WorkspaceId;
 use crate::git::{BranchCommit, ChangedFile};
@@ -33,22 +36,60 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-/// Which list the panel shows.
+/// What the panel shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PanelTab {
+    /// The first prompt the workspace's agent was given.
+    Prompt,
+    /// The recap goal.
+    Goal,
+    /// The recap's next step and state, or the agent's last message.
+    Next,
     #[default]
     Commits,
     Files,
 }
 
 impl PanelTab {
-    pub const ALL: [PanelTab; 2] = [PanelTab::Commits, PanelTab::Files];
+    /// Every tab, in tab-bar order; `1`–`5` on the dashboard pick them.
+    pub const ALL: [PanelTab; 5] = [
+        PanelTab::Prompt,
+        PanelTab::Goal,
+        PanelTab::Next,
+        PanelTab::Commits,
+        PanelTab::Files,
+    ];
 
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
+            PanelTab::Prompt => "Prompt",
+            PanelTab::Goal => "Goal",
+            PanelTab::Next => "Next",
             PanelTab::Commits => "Commits",
             PanelTab::Files => "Files",
         }
+    }
+
+    /// The value the `dashboard_focus_tab` setting stores.
+    pub fn key(self) -> &'static str {
+        match self {
+            PanelTab::Prompt => "prompt",
+            PanelTab::Goal => "goal",
+            PanelTab::Next => "next",
+            PanelTab::Commits => "commits",
+            PanelTab::Files => "files",
+        }
+    }
+
+    pub fn from_key(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|t| t.key() == s)
+    }
+
+    /// The tab `d` places along the bar, wrapping.
+    fn step(self, d: isize) -> Self {
+        let n = Self::ALL.len() as isize;
+        let i = Self::ALL.iter().position(|t| *t == self).unwrap_or(0) as isize;
+        Self::ALL[(i + d).rem_euclid(n) as usize]
     }
 }
 
@@ -84,6 +125,8 @@ pub fn panel_width(total: u16, chosen: Option<u16>) -> u16 {
 #[derive(Debug, Clone, Default)]
 pub struct SidePanelState {
     pub open: bool,
+    /// Always shown, whatever `open` says: the repo focus view's panel.
+    pub pinned: bool,
     /// The tab, kept while the panel is closed.
     pub tab: PanelTab,
     /// The body's first visible line, clamped on draw.
@@ -108,6 +151,20 @@ pub struct SidePanelState {
 }
 
 impl SidePanelState {
+    /// A pinned panel on `tab`: always shown, never closed.
+    pub fn pinned_on(tab: PanelTab) -> Self {
+        Self {
+            pinned: true,
+            tab,
+            ..Default::default()
+        }
+    }
+
+    /// Whether the panel shows (when the surface has room for it).
+    pub fn visible(&self) -> bool {
+        self.open || self.pinned
+    }
+
     pub fn toggle(&mut self) {
         if self.open {
             self.close();
@@ -124,10 +181,20 @@ impl SidePanelState {
         self.resizing = false;
     }
 
-    /// Whether the Files list has keyboard focus: focus is only ever on an
-    /// open panel's Files tab.
+    /// Whether the panel has keyboard focus: only ever a shown panel.
     pub fn is_focused(&self) -> bool {
-        self.focused && self.open && self.tab == PanelTab::Files
+        self.focused && self.visible()
+    }
+
+    /// Give the panel keyboard focus: on its tab when it shows, else
+    /// opened on Files.
+    pub fn focus(&mut self) {
+        if self.visible() {
+            self.focused = true;
+            self.follow = true;
+        } else {
+            self.focus_files();
+        }
     }
 
     /// Open the panel on Files with keyboard focus in the list.
@@ -149,23 +216,20 @@ impl SidePanelState {
         self.follow = true;
     }
 
-    /// Open the panel on `tab`.
+    /// Open the panel on `tab`; keyboard focus stays where it was.
     pub fn show(&mut self, tab: PanelTab) {
         self.open = true;
         self.tab = tab;
-        // Focus lives on the Files list; another tab drops it.
-        if tab != PanelTab::Files {
-            self.focused = false;
-        }
     }
 
-    /// Switch to the other tab, opening the panel if closed.
+    /// Switch to the next tab, wrapping, opening the panel if closed.
     pub fn next_tab(&mut self) {
-        let next = match self.tab {
-            PanelTab::Commits => PanelTab::Files,
-            PanelTab::Files => PanelTab::Commits,
-        };
-        self.show(next);
+        self.show(self.tab.step(1));
+    }
+
+    /// Switch to the previous tab, wrapping, opening the panel if closed.
+    pub fn prev_tab(&mut self) {
+        self.show(self.tab.step(-1));
     }
 
     /// Move the body by `lines`, up when `up`.
@@ -193,7 +257,7 @@ impl SidePanelState {
         data: Option<&PanelData>,
         theme: &Theme,
     ) -> (Rect, PanelTargets) {
-        if !self.open || area.width < PANEL_MIN_TOTAL {
+        if !self.visible() || area.width < PANEL_MIN_TOTAL {
             return (area, PanelTargets::default());
         }
         self.body_width = area.width;
@@ -248,6 +312,23 @@ pub struct PanelData {
     /// against `base`; `None` until then.
     pub lists: Option<std::sync::Arc<crate::git::BranchLists>>,
     pub ahead: Option<u32>,
+    pub prose: PanelProse,
+}
+
+/// What the text tabs show, in full.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PanelProse {
+    /// The first prompt the agent was given; `None` until its session log
+    /// has been read.
+    pub prompt: Option<String>,
+    pub goal: Option<String>,
+    pub next: Option<String>,
+    pub state: Option<String>,
+    /// How old the recap is (`5h`) when the workspace kept working well
+    /// after it was set, so it may be out of date.
+    pub stale: Option<String>,
+    /// Without a recap, what the agent last said.
+    pub last: Option<String>,
 }
 
 impl PanelData {
@@ -258,6 +339,7 @@ impl PanelData {
             commits: self.lists.as_deref().map(|l| l.commits.as_slice()),
             files: self.lists.as_deref().map(|l| l.files.as_slice()),
             ahead: self.ahead,
+            prose: Some(&self.prose),
         }
     }
 }
@@ -278,6 +360,8 @@ pub struct PanelInputs<'a> {
     /// stops at `BRANCH_COMMITS_LIMIT`, so this is the true total when it
     /// is larger.
     pub ahead: Option<u32>,
+    /// The text tabs' content; `None` reads as nothing known yet.
+    pub prose: Option<&'a PanelProse>,
 }
 
 /// How the panel is scrolled and where its file cursor is, for one draw.
@@ -341,8 +425,10 @@ pub fn render(
         area: Some(area),
         ..Default::default()
     };
-    let mut bar: Vec<Span<'static>> = Vec::new();
+    // Tabs that don't fit on the bar's line wrap onto another.
+    let mut bars: Vec<Vec<Span<'static>>> = vec![Vec::new()];
     let mut x = inner.x;
+    let mut y = inner.y;
     for t in PanelTab::ALL {
         let count = selected.and_then(|s| match t {
             // The true total, not just the listed (capped) commits.
@@ -350,6 +436,7 @@ pub fn render(
                 .commits
                 .map(|c| c.len().max(s.ahead.map_or(0, |a| a as usize))),
             PanelTab::Files => s.files.map(<[_]>::len),
+            PanelTab::Prompt | PanelTab::Goal | PanelTab::Next => None,
         });
         let text = match count {
             Some(n) => format!(" {} {n} ", t.label()),
@@ -361,23 +448,30 @@ pub fn render(
         } else {
             theme.dim_style()
         };
+        if x > inner.x && x + w > inner.x + inner.width && y + 1 < inner.bottom() {
+            bars.push(Vec::new());
+            x = inner.x;
+            y += 1;
+        }
         if x + w <= inner.x + inner.width {
             targets.tabs.push((
                 t,
                 Rect {
                     x,
-                    y: inner.y,
+                    y,
                     width: w,
                     height: 1,
                 },
             ));
         }
-        bar.push(Span::styled(text, style));
-        bar.push(Span::raw(" "));
-        x += w + 1;
+        // Each tab's own padding spaces it from the next.
+        bars.last_mut()
+            .expect("one bar at least")
+            .push(Span::styled(text, style));
+        x += w;
     }
 
-    let mut head: Vec<Line<'static>> = vec![Line::from(bar)];
+    let mut head: Vec<Line<'static>> = bars.into_iter().map(Line::from).collect();
     if let Some(s) = selected {
         let title = match s.base {
             Some(b) => format!("{} vs {}", s.branch, b.strip_prefix("origin/").unwrap_or(b)),
@@ -386,7 +480,9 @@ pub fn render(
         // At most two lines, and never so many that the tab bar, the rule
         // and at least one line of the list don't fit: a long branch name
         // must not push the list it introduces off the bottom.
-        let room = (inner.height as usize).saturating_sub(3).min(2);
+        let room = (inner.height as usize)
+            .saturating_sub(head.len() + 2)
+            .min(2);
         if room > 0 {
             for l in wrap_capped(&title, width, room) {
                 head.push(Line::from(Span::styled(l, theme.row_dim_style())));
@@ -404,10 +500,13 @@ pub fn render(
     };
     view.cursor = view.cursor.min(files.map_or(0, |f| f.len() - 1));
     // While focused, the bottom row says what the keys do.
-    let hint =
-        (view.focused && files.is_some() && inner.height as usize > head.len() + 1).then(|| {
+    let hint = (view.focused && inner.height as usize > head.len() + 1).then(|| {
+        if files.is_some() {
             crate::ui::drawer::hint_line(&[("↵", "diff"), ("o", "edit"), ("esc", "back")], theme)
-        });
+        } else {
+            crate::ui::drawer::hint_line(&[("j/k", "scroll"), ("esc", "back")], theme)
+        }
+    });
     let (body, spans) = match files {
         Some(files) => file_lines(files, width, view.focused.then_some(view.cursor), theme),
         None => (body_lines(tab, selected, width, theme), Vec::new()),
@@ -466,8 +565,11 @@ fn body_lines(
             .collect()
     };
     let Some(s) = selected else {
-        return note("Select a workspace to see its commits and changed files.");
+        return note("Select a workspace to see what it is doing.");
     };
+    if let Some(lines) = prose_lines(tab, s.prose, width, theme) {
+        return lines;
+    }
     let Some(base) = s.base else {
         return note(
             "Set a base branch in repo settings (s) to list this branch's commits and files.",
@@ -498,7 +600,94 @@ fn body_lines(
             Some([]) => note(&format!("No files changed against {base}.")),
             Some(files) => file_lines(files, width, None, theme).0,
         },
+        PanelTab::Prompt | PanelTab::Goal | PanelTab::Next => {
+            unreachable!("prose_lines draws the text tabs")
+        }
     }
+}
+
+/// The body of a text tab, in full; `None` for the list tabs.
+fn prose_lines(
+    tab: PanelTab,
+    prose: Option<&PanelProse>,
+    width: usize,
+    theme: &Theme,
+) -> Option<Vec<Line<'static>>> {
+    let empty = PanelProse::default();
+    let p = prose.unwrap_or(&empty);
+    fn text(t: &Option<String>) -> Option<&str> {
+        t.as_deref().map(str::trim).filter(|t| !t.is_empty())
+    }
+    let note = |t: &str| paragraphs(t, width, theme.dim_style());
+    let label = |t: &str| Line::from(Span::styled(t.to_string(), theme.dim_style()));
+    let lines = match tab {
+        PanelTab::Commits | PanelTab::Files => return None,
+        PanelTab::Prompt => match text(&p.prompt) {
+            Some(t) => paragraphs(t, width, Style::default()),
+            None => note("No prompt read from the agent's session log yet."),
+        },
+        PanelTab::Goal => match text(&p.goal) {
+            Some(t) => paragraphs(t, width, Style::default()),
+            None => note("No recap goal set."),
+        },
+        PanelTab::Next => {
+            let mut out = Vec::new();
+            let (next, state) = (text(&p.next), text(&p.state));
+            if let Some(t) = next {
+                out.extend(paragraphs(t, width, Style::default()));
+            }
+            if let Some(t) = state {
+                if !out.is_empty() {
+                    out.push(Line::default());
+                }
+                out.push(label("state"));
+                out.extend(paragraphs(t, width, theme.row_dim_style()));
+            }
+            if !out.is_empty()
+                && let Some(age) = &p.stale
+            {
+                out.push(Line::default());
+                out.extend(paragraphs(
+                    &format!("Recap set {age} ago; the workspace has kept working since."),
+                    width,
+                    theme.warn_style(),
+                ));
+            }
+            if out.is_empty()
+                && let Some(t) = text(&p.last)
+            {
+                out.push(label("last message"));
+                out.extend(paragraphs(t, width, theme.row_dim_style()));
+            }
+            if out.is_empty() {
+                out = note("No recap yet.");
+            }
+            out
+        }
+    };
+    Some(lines)
+}
+
+/// `text` wrapped to `width`, keeping its line breaks; runs of blank lines
+/// collapse to one.
+fn paragraphs(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut blank = false;
+    for para in text.lines() {
+        if para.trim().is_empty() {
+            blank = !out.is_empty();
+            continue;
+        }
+        if std::mem::take(&mut blank) {
+            out.push(Line::default());
+        }
+        out.extend(
+            wrap(para, width)
+                .into_iter()
+                .map(|l| Line::from(Span::styled(l, style))),
+        );
+    }
+    out
 }
 
 /// `a1b2c3d  subject`, the subject wrapping under itself so the hashes
@@ -694,22 +883,153 @@ mod tests {
             commits: Some(&c),
             files: Some(&f),
             ahead: None,
+            prose: None,
         };
-        let (lines, targets) = draw(PanelTab::Commits, Some(inputs), 40, 14, &mut 0);
+        let (lines, targets) = draw(PanelTab::Commits, Some(inputs), 44, 14, &mut 0);
         assert!(
-            lines[0].contains("Commits 2") && lines[0].contains("Files 2"),
+            lines[0].contains("Prompt")
+                && lines[0].contains("Commits 2")
+                && lines[0].contains("Files 2"),
             "{lines:?}"
         );
         assert!(lines[1].contains("bakedbean/x vs main"), "{lines:?}");
         let all = lines.join("\n");
         assert!(all.contains("a1b2c3d  feat(dashboard)"), "{all}");
         assert!(
-            all.contains("view rows") && all.contains("prose"),
+            all.contains("rows into") && all.contains("prose"),
             "subject wraps, not cut:\n{all}"
         );
         assert!(!all.contains('…'), "{all}");
-        assert_eq!(targets.tabs.len(), 2);
-        assert_eq!(targets.tabs[0].0, PanelTab::Commits);
+        let tabs: Vec<PanelTab> = targets.tabs.iter().map(|t| t.0).collect();
+        assert_eq!(tabs, PanelTab::ALL);
+    }
+
+    /// Tabs that don't fit wrap onto a second bar line, each still a click
+    /// target on the line it landed on.
+    #[test]
+    fn a_narrow_tab_bar_wraps() {
+        let (lines, targets) = draw(PanelTab::Next, None, 30, 10, &mut 0);
+        assert!(
+            lines[0].contains("Prompt") && !lines[0].contains("Files"),
+            "{lines:?}"
+        );
+        assert!(lines[1].contains("Files"), "{lines:?}");
+        assert_eq!(targets.tabs.len(), 5);
+        let files = targets
+            .tabs
+            .iter()
+            .find(|t| t.0 == PanelTab::Files)
+            .unwrap()
+            .1;
+        assert_eq!(files.y, 1);
+    }
+
+    fn prose_draw(tab: PanelTab, prose: &PanelProse, h: u16, scroll: &mut usize) -> Vec<String> {
+        let inputs = PanelInputs {
+            branch: "b",
+            base: None,
+            commits: None,
+            files: None,
+            ahead: None,
+            prose: Some(prose),
+        };
+        draw(tab, Some(inputs), 50, h, scroll).0
+    }
+
+    /// Text tabs show their field in full, keeping paragraph breaks, and
+    /// need no base branch.
+    #[test]
+    fn text_tabs_show_their_field_in_full() {
+        let prompt = format!("FIRST {}\n\n\nSECOND paragraph END", "word ".repeat(60));
+        let prose = PanelProse {
+            prompt: Some(prompt),
+            goal: Some("the GOAL".into()),
+            ..Default::default()
+        };
+        let lines = prose_draw(PanelTab::Prompt, &prose, 40, &mut 0);
+        let all = lines.join("\n");
+        assert!(
+            all.contains("FIRST") && all.contains("SECOND paragraph END"),
+            "{all}"
+        );
+        assert!(!all.contains('…'), "never cut short: {all}");
+        let second = lines.iter().position(|l| l.contains("SECOND")).unwrap();
+        assert_eq!(
+            lines[second - 1].trim_matches(['│', ' ']),
+            "",
+            "one blank between"
+        );
+        assert_ne!(
+            lines[second - 2].trim_matches(['│', ' ']),
+            "",
+            "blank runs collapse"
+        );
+
+        let all = prose_draw(PanelTab::Goal, &prose, 20, &mut 0).join("\n");
+        assert!(all.contains("the GOAL") && !all.contains("FIRST"), "{all}");
+        assert!(!all.contains("base branch"), "{all}");
+    }
+
+    #[test]
+    fn next_tab_shows_next_state_and_staleness() {
+        let prose = PanelProse {
+            next: Some("UNIQUE-NEXT".into()),
+            state: Some("UNIQUE-STATE".into()),
+            stale: Some("5h".into()),
+            last: Some("UNIQUE-LAST".into()),
+            ..Default::default()
+        };
+        let all = prose_draw(PanelTab::Next, &prose, 20, &mut 0).join("\n");
+        assert!(
+            all.contains("UNIQUE-NEXT") && all.contains("UNIQUE-STATE"),
+            "{all}"
+        );
+        assert!(all.contains("Recap set 5h ago"), "{all}");
+        assert!(
+            !all.contains("UNIQUE-LAST"),
+            "a recap wins over the last message"
+        );
+
+        let prose = PanelProse {
+            last: Some("UNIQUE-LAST".into()),
+            stale: Some("5h".into()),
+            ..Default::default()
+        };
+        let all = prose_draw(PanelTab::Next, &prose, 20, &mut 0).join("\n");
+        assert!(
+            all.contains("last message") && all.contains("UNIQUE-LAST"),
+            "{all}"
+        );
+        assert!(!all.contains("Recap set"), "{all}");
+
+        let all = prose_draw(PanelTab::Next, &PanelProse::default(), 20, &mut 0).join("\n");
+        assert!(all.contains("No recap yet."), "{all}");
+        let all = prose_draw(PanelTab::Prompt, &PanelProse::default(), 20, &mut 0).join("\n");
+        assert!(all.contains("No prompt read"), "{all}");
+    }
+
+    /// A long text tab scrolls, clamped to its end.
+    #[test]
+    fn a_long_text_tab_scrolls() {
+        let prose = PanelProse {
+            goal: Some(
+                (0..60)
+                    .map(|i| format!("g{i}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            ..Default::default()
+        };
+        let mut scroll = 5;
+        let all = prose_draw(PanelTab::Goal, &prose, 12, &mut scroll).join("\n");
+        assert!(
+            all.contains("g5") && !all.contains("g4\n") && !all.contains(" g4 "),
+            "{all}"
+        );
+        let mut scroll = 999;
+        let all = prose_draw(PanelTab::Goal, &prose, 12, &mut scroll).join("\n");
+        assert!(all.contains("g59"), "{all}");
+        assert!(scroll < 60);
     }
 
     #[test]
@@ -722,6 +1042,7 @@ mod tests {
             commits: Some(&c),
             files: Some(&f),
             ahead: None,
+            prose: None,
         };
         let (lines, _) = draw(PanelTab::Files, Some(inputs), 44, 16, &mut 0);
         let all = lines.join("\n");
@@ -743,6 +1064,7 @@ mod tests {
             commits: Some(none),
             files: None,
             ahead: None,
+            prose: None,
         };
         let (lines, _) = draw(PanelTab::Commits, Some(inputs), 40, 8, &mut 0);
         assert!(lines.join(" ").contains("base branch"), "{lines:?}");
@@ -775,6 +1097,7 @@ mod tests {
             commits: Some(&many),
             files: None,
             ahead: None,
+            prose: None,
         };
         let mut scroll = 999;
         let (lines, _) = draw(PanelTab::Commits, Some(inputs), 40, 10, &mut scroll);
@@ -797,6 +1120,7 @@ mod tests {
             commits: Some(&c),
             files: Some(&f),
             ahead: Some(2),
+            prose: None,
         };
         let (lines, _) = draw(PanelTab::Files, Some(inputs), 44, 10, &mut 0);
         let all = lines.join("\n");
@@ -823,6 +1147,7 @@ mod tests {
             commits: Some(&listed),
             files: None,
             ahead: Some(250),
+            prose: None,
         };
         let (lines, _) = draw(PanelTab::Commits, Some(inputs), 44, 14, &mut 0);
         let all = lines.join("\n");
@@ -846,6 +1171,7 @@ mod tests {
             commits: Some(&c),
             files: None,
             ahead: Some(1),
+            prose: None,
         };
         for h in [6u16, 4] {
             let (lines, _) = draw(PanelTab::Commits, Some(inputs), 40, h, &mut 999);
@@ -876,6 +1202,7 @@ mod tests {
             commits: Some(&[]),
             files: Some(files),
             ahead: Some(0),
+            prose: None,
         }
     }
 
@@ -960,16 +1287,45 @@ mod tests {
     }
 
     #[test]
-    fn focus_holds_only_on_an_open_files_tab() {
+    fn focus_holds_only_on_a_shown_panel() {
         let mut p = SidePanelState::default();
         p.focus_files();
         assert!(p.is_focused());
         p.show(PanelTab::Commits);
-        p.show(PanelTab::Files);
-        assert!(!p.is_focused(), "another tab drops focus for good");
-        p.focus_files();
+        assert!(p.is_focused(), "focus follows the tab");
         p.toggle();
         p.toggle();
         assert!(p.open && !p.is_focused(), "closing drops focus for good");
+        p.focus();
+        assert!(
+            p.is_focused() && p.tab == PanelTab::Commits,
+            "focus keeps the tab"
+        );
+    }
+
+    #[test]
+    fn a_pinned_panel_shows_however_it_is_closed() {
+        let mut p = SidePanelState::pinned_on(PanelTab::Next);
+        assert!(p.visible() && !p.open);
+        p.close();
+        assert!(p.visible());
+        p.focus();
+        assert!(
+            p.is_focused() && p.tab == PanelTab::Next,
+            "focus on its tab"
+        );
+    }
+
+    #[test]
+    fn tabs_step_both_ways_and_round_trip_their_keys() {
+        let mut p = SidePanelState::default();
+        p.show(PanelTab::Files);
+        p.next_tab();
+        assert_eq!(p.tab, PanelTab::Prompt, "wraps");
+        p.prev_tab();
+        assert_eq!(p.tab, PanelTab::Files);
+        for t in PanelTab::ALL {
+            assert_eq!(PanelTab::from_key(t.key()), Some(t));
+        }
     }
 }

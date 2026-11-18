@@ -280,17 +280,26 @@ pub(in crate::app::input) fn active_side_panel(
 ) -> &mut crate::ui::dashboard::side_panel::SidePanelState {
     match app.view {
         crate::ui::View::Attached(_) => &mut app.attached_panel,
+        _ if app.dashboard.focused_repo.is_some() => &mut app.dashboard.focus_panel,
         _ => &mut app.dashboard.panel,
     }
 }
 
-/// Open the side panel of the view on screen on `tab` — `1` / `2` on the
+/// Open the side panel of the view on screen on `tab` — `1`–`5` on the
 /// dashboard, or a click on the tab in either view.
 pub(in crate::app::input) fn show_panel_tab(
     app: &mut App,
     tab: crate::ui::dashboard::side_panel::PanelTab,
 ) {
     active_side_panel(app).show(tab);
+    save_focus_tab(app);
+}
+
+/// Remember the focus view's panel tab after a change; a no-op elsewhere.
+pub(in crate::app::input) fn save_focus_tab(app: &App) {
+    if matches!(app.view, crate::ui::View::Dashboard) && app.dashboard.focused_repo.is_some() {
+        app.dashboard.save_focus_tab(&app.store);
+    }
 }
 
 /// The side-panel tab a click landed on.
@@ -299,17 +308,6 @@ pub(crate) fn panel_tab_click_target(
     m: &crossterm::event::MouseEvent,
 ) -> Option<crate::ui::dashboard::side_panel::PanelTab> {
     app.side_panel_tab_rects
-        .iter()
-        .find(|(_, r)| rect_contains(r, m))
-        .map(|(t, _)| *t)
-}
-
-/// The focus-view prose tab a click landed on.
-pub(crate) fn focus_tab_click_target(
-    app: &App,
-    m: &crossterm::event::MouseEvent,
-) -> Option<crate::ui::dashboard::tall::ProseTab> {
-    app.dashboard_focus_tab_rects
         .iter()
         .find(|(_, r)| rect_contains(r, m))
         .map(|(t, _)| *t)
@@ -576,21 +574,35 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         // Esc closes the side panel — before it leaves the focus view —
         // but only a panel actually on screen; with a terminal too narrow
         // to show it, Esc does what it would without the panel.
-        (KeyCode::Esc, _) if app.dashboard.panel.open && app.side_panel_rect.is_some() => {
+        // The focus view's panel is pinned, so there Esc leaves the view.
+        (KeyCode::Esc, _)
+            if app.dashboard.focused_repo.is_none()
+                && app.dashboard.panel.open
+                && app.side_panel_rect.is_some() =>
+        {
             app.dashboard.panel.close();
         }
         (KeyCode::Esc, _) if app.dashboard.focused_repo.is_some() => leave_repo_focus(app),
-        // The side panel: `c` toggles it, `1` / `2` pick its tab (opening
-        // it if closed).
-        (KeyCode::Char('c'), _) => app.dashboard.panel.toggle(),
-        // `→` moves keyboard focus into the panel's Files list (see
-        // `side_panel::focused_key`), opening it there if need be.
-        (KeyCode::Right, _) => app.dashboard.panel.focus_files(),
-        (KeyCode::Char('1'), _) => {
-            show_panel_tab(app, crate::ui::dashboard::side_panel::PanelTab::Commits);
+        // The side panel: `c` toggles it (the focus view's is pinned
+        // open), `1`–`5` pick its tab and `<` / `>` step through them
+        // (opening it if closed).
+        (KeyCode::Char('c'), _) if app.dashboard.focused_repo.is_none() => {
+            app.dashboard.panel.toggle();
         }
-        (KeyCode::Char('2'), _) => {
-            show_panel_tab(app, crate::ui::dashboard::side_panel::PanelTab::Files);
+        // `→` moves keyboard focus into the panel (see
+        // `side_panel::focused_key`), opening it on Files if need be.
+        (KeyCode::Right, _) => active_side_panel(app).focus(),
+        (KeyCode::Char(c @ '1'..='5'), _) => {
+            let i = c as usize - '1' as usize;
+            show_panel_tab(app, crate::ui::dashboard::side_panel::PanelTab::ALL[i]);
+        }
+        (KeyCode::Char('>'), _) => {
+            active_side_panel(app).next_tab();
+            save_focus_tab(app);
+        }
+        (KeyCode::Char('<'), _) => {
+            active_side_panel(app).prev_tab();
+            save_focus_tab(app);
         }
         (KeyCode::Char('f'), _) => toggle_repo_focus(app),
         // Page the focus view, so a workspace taller than the screen can
@@ -821,14 +833,6 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         }
         (KeyCode::Char('G'), _) if app.dashboard.focused_repo.is_some() => {
             app.dashboard.toggle_focus_grouping(&app.store);
-        }
-        (KeyCode::Char('>'), _) if app.dashboard.focused_repo.is_some() => {
-            let tab = app.dashboard.focus_tab.next();
-            app.dashboard.set_focus_tab(tab, &app.store);
-        }
-        (KeyCode::Char('<'), _) if app.dashboard.focused_repo.is_some() => {
-            let tab = app.dashboard.focus_tab.prev();
-            app.dashboard.set_focus_tab(tab, &app.store);
         }
         (KeyCode::Char('G'), _) => app.dashboard.toggle_group_mode(),
         (KeyCode::Char('o'), _) => {

@@ -335,9 +335,6 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
             {
                 // The focus view's `◂ all repos` link, same as Esc / `f`.
                 leave_repo_focus(app);
-            } else if let Some(tab) = focus_tab_click_target(app, &m) {
-                // A focus-view prose tab, same as `<` / `>`.
-                app.dashboard.set_focus_tab(tab, &app.store);
             } else if let Some(&(index, _)) = app
                 .side_panel_file_rects
                 .iter()
@@ -346,7 +343,7 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
                 // A file in the side panel opens its diff.
                 super::side_panel::open_file(app, shared, index);
             } else if let Some(tab) = panel_tab_click_target(app, &m) {
-                // A side-panel tab shows that tab, same as `1` / `2`.
+                // A side-panel tab shows that tab, same as `1`–`5`.
                 show_panel_tab(app, tab);
             } else if let Some(group) = focus_group_click_target(app, &m) {
                 // A hidden group's row in the focus view expands or
@@ -427,7 +424,10 @@ fn on_panel_edge(r: &ratatui::layout::Rect, m: &MouseEvent) -> bool {
 /// view switch, a hidden panel, or a fresh press (a release lost outside
 /// the terminal) cancels the drag and lets the event through.
 fn side_panel_resize(app: &mut App, m: &MouseEvent) -> bool {
-    if !(app.dashboard.panel.resizing || app.attached_panel.resizing) {
+    if !(app.dashboard.panel.resizing
+        || app.dashboard.focus_panel.resizing
+        || app.attached_panel.resizing)
+    {
         return false;
     }
     let rect = app.side_panel_rect;
@@ -449,6 +449,7 @@ fn side_panel_resize(app: &mut App, m: &MouseEvent) -> bool {
     let right = r.x.saturating_add(r.width);
     let width = active_side_panel(app).clamp_width(right.saturating_sub(m.column));
     app.dashboard.panel.width = Some(width);
+    app.dashboard.focus_panel.width = Some(width);
     app.attached_panel.width = Some(width);
     if release {
         cancel_side_panel_resize(app);
@@ -464,5 +465,6 @@ fn side_panel_resize(app: &mut App, m: &MouseEvent) -> bool {
 
 fn cancel_side_panel_resize(app: &mut App) {
     app.dashboard.panel.resizing = false;
+    app.dashboard.focus_panel.resizing = false;
     app.attached_panel.resizing = false;
 }

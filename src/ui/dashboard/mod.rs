@@ -128,16 +128,16 @@ pub struct DashboardState {
     /// Whether the focus view sections workspaces by PR state (`G` toggles;
     /// `dashboard_focus_group_by_pr` setting) or keeps the list's order.
     pub focus_group_by_pr: bool,
-    /// Which prose field the focus view's rows show (`<` / `>` switch;
-    /// `dashboard_focus_tab` setting).
-    pub focus_tab: tall::ProseTab,
+    /// The focus view's side panel: pinned open on the selected
+    /// workspace, its tab kept in the `dashboard_focus_tab` setting.
+    pub focus_panel: side_panel::SidePanelState,
 }
 
 /// Settings key holding the by-repo sort mode.
 pub const SORT_MODE_SETTING: &str = "dashboard_sort_mode";
 /// Settings key for the focus view's PR-state grouping (on/off).
 pub const FOCUS_GROUP_BY_PR_SETTING: &str = "dashboard_focus_group_by_pr";
-/// Settings key for the focus view's prose tab (prompt / goal / next).
+/// Settings key for the focus view's side-panel tab.
 pub const FOCUS_TAB_SETTING: &str = "dashboard_focus_tab";
 /// Settings key holding how long a blocked row keeps its pin, in seconds.
 pub const BLOCKED_PIN_SETTING: &str = "dashboard_blocked_pin_max_age_secs";
@@ -181,15 +181,23 @@ impl DashboardState {
             .unwrap_or_default();
         self.focus_group_by_pr =
             crate::config::settings::toggle_on(store, FOCUS_GROUP_BY_PR_SETTING);
-        self.focus_tab = get(FOCUS_TAB_SETTING)
-            .and_then(|v| tall::ProseTab::from_label(v.trim()))
-            .unwrap_or_default();
+        self.focus_panel.tab = get(FOCUS_TAB_SETTING)
+            .and_then(|v| side_panel::PanelTab::from_key(v.trim()))
+            .unwrap_or(side_panel::PanelTab::Next);
     }
 
-    /// Show `tab` in the focus view's rows, and remember it.
-    pub fn set_focus_tab(&mut self, tab: tall::ProseTab, store: &crate::data::store::Store) {
-        self.focus_tab = tab;
-        let _ = store.set_setting(FOCUS_TAB_SETTING, tab.label());
+    /// Remember the focus view's panel tab, when it changed.
+    pub fn save_focus_tab(&self, store: &crate::data::store::Store) {
+        let tab = self.focus_panel.tab.key();
+        if store
+            .get_setting(FOCUS_TAB_SETTING)
+            .ok()
+            .flatten()
+            .as_deref()
+            != Some(tab)
+        {
+            let _ = store.set_setting(FOCUS_TAB_SETTING, tab);
+        }
     }
 
     /// Flip the focus view between PR-state sections and the list's order,
@@ -252,7 +260,7 @@ impl Default for DashboardState {
             list_state: ListState::default(),
             group_mode: GroupMode::default(),
             focus_group_by_pr: true,
-            focus_tab: tall::ProseTab::default(),
+            focus_panel: side_panel::SidePanelState::pinned_on(side_panel::PanelTab::Next),
             sort_mode: SortMode::default(),
             blocked_pin_max_age_secs: BLOCKED_PIN_MAX_AGE_DEFAULT_SECS,
             top_bar_show_tags: Vec::new(),
@@ -338,8 +346,6 @@ pub struct ListClickTargets {
     pub panel_files: Vec<(usize, Rect)>,
     /// The focus view's `◂ all repos` link — leaves the focus view.
     pub unfocus: Option<Rect>,
-    /// The focus view's prose tabs — a click shows that tab.
-    pub focus_tabs: Vec<(tall::ProseTab, Rect)>,
 }
 
 /// Resolve `(key, flat item index, (char offset, width))` spans into screen
@@ -790,7 +796,6 @@ fn render_focus(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // breadcrumb
-            Constraint::Length(1), // prose tabs
             Constraint::Length(1), // spacer
             Constraint::Min(0),    // rows
         ])
@@ -826,29 +831,23 @@ fn render_focus(
             _ => {}
         }
     }
-    let (tab_line, tab_hits) = tall::tab_bar(state.focus_tab, theme);
-    f.render_widget(Paragraph::new(tab_line), chunks[1]);
-    let tab_row = chunks[1];
-    let focus_tabs: Vec<(tall::ProseTab, Rect)> = tab_hits
-        .into_iter()
-        .filter(|&(_, dx, w)| dx + w <= tab_row.width)
-        .map(|(t, dx, w)| {
-            (
-                t,
-                Rect {
-                    x: tab_row.x + dx,
-                    width: w,
-                    ..tab_row
-                },
-            )
-        })
-        .collect();
-
-    // The side panel takes the right of the body when open and there's
-    // room; the rows get the rest.
-    let (rows_area, panel_targets) = state
-        .panel
-        .carve(f, chunks[3], inputs.panel.as_ref(), theme);
+    // The pinned side panel takes the right of the body when there's
+    // room, with the selected workspace's prose in full; the rows get the
+    // rest.
+    let (rows_area, panel_targets) =
+        state
+            .focus_panel
+            .carve(f, chunks[2], inputs.panel.as_ref(), theme);
+    // Without room for the panel, the rows show one line of the panel
+    // tab's prose (the next step for the list tabs) instead.
+    let row_prose = panel_targets
+        .area
+        .is_none()
+        .then_some(match state.focus_panel.tab {
+            side_panel::PanelTab::Prompt => tall::ProseTab::Prompt,
+            side_panel::PanelTab::Goal => tall::ProseTab::Goal,
+            _ => tall::ProseTab::Next,
+        });
 
     if entries.is_empty() {
         let msg = if RowFilter::of(state).is_active() {
@@ -862,7 +861,6 @@ fn render_focus(
         );
         return ListClickTargets {
             unfocus,
-            focus_tabs,
             statuses,
             panel_files: panel_targets.files,
             panel_tabs: panel_targets.tabs,
@@ -920,7 +918,7 @@ fn render_focus(
         &mut state.focus_scroll,
         follow,
         widths,
-        state.focus_tab,
+        row_prose,
         tick,
         theme,
     );
@@ -937,7 +935,6 @@ fn render_focus(
         focus_rows: targets.rows,
         focus_groups,
         unfocus,
-        focus_tabs,
         statuses,
         panel_files: panel_targets.files,
         panel_tabs: panel_targets.tabs,

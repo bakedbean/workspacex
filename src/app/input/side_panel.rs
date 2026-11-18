@@ -106,6 +106,25 @@ pub(in crate::app::input) fn focused_key(app: &mut App, shared: &SharedApp, k: K
     }
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
     let panel = super::active_side_panel(app);
+    // Off the Files list there's no cursor: the keys scroll the body,
+    // which the draw clamps.
+    if panel.tab != crate::ui::dashboard::side_panel::PanelTab::Files {
+        match k.code {
+            KeyCode::Down | KeyCode::Char('j') if !ctrl => panel.scroll_by(1, false),
+            KeyCode::Up | KeyCode::Char('k') if !ctrl => panel.scroll_by(1, true),
+            KeyCode::PageDown => panel.scroll_by(10, false),
+            KeyCode::PageUp => panel.scroll_by(10, true),
+            KeyCode::Home | KeyCode::Char('g') if !ctrl => panel.scroll = 0,
+            KeyCode::End | KeyCode::Char('G') if !ctrl => panel.scroll = usize::MAX,
+            KeyCode::Esc | KeyCode::Left => panel.focused = false,
+            KeyCode::Char('x') if ctrl => return false,
+            _ => {
+                panel.focused = false;
+                return false;
+            }
+        }
+        return true;
+    }
     match k.code {
         KeyCode::Down | KeyCode::Char('j') if !ctrl => panel.move_cursor(1),
         KeyCode::Up | KeyCode::Char('k') if !ctrl => panel.move_cursor(-1),

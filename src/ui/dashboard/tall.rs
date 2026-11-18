@@ -3,8 +3,8 @@
 //!
 //! Each row has three zones: a strip of fixed columns (branch, PR chip,
 //! status, ahead, uncommitted, diff, age) sized once per frame so fields
-//! line up down the view; the prose under the branch, one field at a time
-//! by the view's tab (initial prompt, recap goal, or next step — the
+//! line up down the view; when the side panel has no room, one line of
+//! prose under the branch (initial prompt, recap goal, or next step — the
 //! agent's last message without a recap), wrapped at a comfortable reading
 //! width; and a footer of agents and tags. Alternate
 //! rows take a background tint so each workspace reads as one block.
@@ -278,17 +278,23 @@ fn stale_recap_mark(
     detail: &WorkspaceDetail,
     theme: &Theme,
 ) -> Option<Span<'static>> {
-    let age = detail.recap_age_secs?;
-    let active = row.ago_secs?;
-    (age.saturating_sub(active) >= STALE_RECAP_SECS).then(|| {
-        let ago = crate::ui::dashboard::column_content::format_ago_short(Some(age));
-        Span::styled(format!(" · {ago} old"), theme.warn_style())
-    })
+    stale_recap_age(detail.recap_age_secs, row.ago_secs)
+        .map(|ago| Span::styled(format!(" · {ago} old"), theme.warn_style()))
 }
 
-/// Which of a row's prose fields the focus view shows: one at a time, as
-/// tabs, so each workspace reads in a line or two. `<` / `>` switch tabs
-/// for every row at once.
+/// The recap's age (`2h`) when the workspace, last active `active_secs`
+/// ago, kept working at least `STALE_RECAP_SECS` after the recap was set
+/// `recap_age_secs` ago.
+pub fn stale_recap_age(recap_age_secs: Option<u64>, active_secs: Option<u64>) -> Option<String> {
+    let age = recap_age_secs?;
+    let active = active_secs?;
+    (age.saturating_sub(active) >= STALE_RECAP_SECS)
+        .then(|| crate::ui::dashboard::column_content::format_ago_short(Some(age)))
+}
+
+/// Which prose field a row shows under its branch. The focus view's side
+/// panel shows the selected workspace's in full, so rows show one only
+/// when the terminal is too narrow for the panel.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ProseTab {
     /// The first prompt the agent was given: what the workspace is for.
@@ -302,57 +308,13 @@ pub enum ProseTab {
 }
 
 impl ProseTab {
-    /// Every tab, in the order the tab bar shows them.
-    pub const ALL: [ProseTab; 3] = [ProseTab::Prompt, ProseTab::Goal, ProseTab::Next];
-
-    pub fn label(self) -> &'static str {
+    fn label(self) -> &'static str {
         match self {
             ProseTab::Prompt => "prompt",
             ProseTab::Goal => "goal",
             ProseTab::Next => "next",
         }
     }
-
-    /// The value the `dashboard_focus_tab` setting stores.
-    pub fn from_label(s: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|t| t.label() == s)
-    }
-
-    /// The tab after this one, wrapping.
-    pub fn next(self) -> Self {
-        let i = Self::ALL.iter().position(|t| *t == self).unwrap_or(0);
-        Self::ALL[(i + 1) % Self::ALL.len()]
-    }
-
-    /// The tab before this one, wrapping.
-    pub fn prev(self) -> Self {
-        let i = Self::ALL.iter().position(|t| *t == self).unwrap_or(0);
-        Self::ALL[(i + Self::ALL.len() - 1) % Self::ALL.len()]
-    }
-}
-
-/// The tab bar over the focus view's rows: each tab, the active one
-/// highlighted as the side panel's are, then a dim key hint. Returns the
-/// line and each tab's `(x offset, width)` for click targets.
-pub fn tab_bar(active: ProseTab, theme: &Theme) -> (Line<'static>, Vec<(ProseTab, u16, u16)>) {
-    let mut spans = Vec::new();
-    let mut hits = Vec::new();
-    let mut x = 0u16;
-    for t in ProseTab::ALL {
-        let text = format!(" {} ", t.label());
-        let w = display_width(&text) as u16;
-        let style = if t == active {
-            theme.selected_style()
-        } else {
-            theme.dim_style()
-        };
-        hits.push((t, x, w));
-        spans.push(Span::styled(text, style));
-        spans.push(Span::raw(" "));
-        x += w + 1;
-    }
-    spans.push(Span::styled(" < >", theme.dim_style()));
-    (Line::from(spans), hits)
 }
 
 /// The prose a row shows under `tab`: one labelled item, or nothing when
@@ -371,7 +333,7 @@ fn prose_item(
         .filter(|p| !p.is_empty());
     match tab {
         ProseTab::Prompt => prompt.map(|p| Prose {
-            label: "prompt",
+            label: tab.label(),
             text: p.to_string(),
             style: theme
                 .row_dim_style()
@@ -383,7 +345,7 @@ fn prose_item(
             .map(|r| field(&r.goal, &r.goal_short))
             .filter(|g| !g.is_empty())
             .map(|goal| Prose {
-                label: "goal",
+                label: tab.label(),
                 text: goal,
                 style: Style::default(),
                 max: RECAP_MAX_LINES,
@@ -761,7 +723,7 @@ pub fn row_layout(
     tall: &TallRow<'_>,
     glyphs: &AgentGlyphs,
     cols: StripColumns,
-    tab: ProseTab,
+    tab: Option<ProseTab>,
     tick: u32,
     theme: &Theme,
 ) -> RowLayout {
@@ -877,7 +839,7 @@ pub fn row_layout(
         l.extend(part_line(series, text_width, theme));
         lines.push(Line::from(l));
     }
-    if let Some(item) = prose_item(row, tall.detail, tab, theme) {
+    if let Some(item) = tab.and_then(|tab| prose_item(row, tall.detail, tab, theme)) {
         let mut texts: Vec<Vec<Span<'static>>> = wrap_capped(&item.text, text_width, item.max)
             .into_iter()
             .map(|t| vec![Span::styled(t, item.style)])
@@ -1087,7 +1049,7 @@ pub fn render(
     scroll: &mut usize,
     follow: bool,
     widths: ColumnWidths,
-    tab: ProseTab,
+    tab: Option<ProseTab>,
     tick: u32,
     theme: &Theme,
 ) -> TallTargets {
@@ -1376,7 +1338,7 @@ mod tests {
         tab: ProseTab,
     ) -> Vec<Line<'static>> {
         let cols = strip_columns(std::slice::from_ref(t), ColumnWidths::default(), width);
-        row_layout(t, glyphs, cols, tab, 0, &Theme::wsx()).lines
+        row_layout(t, glyphs, cols, Some(tab), 0, &Theme::wsx()).lines
     }
 
     fn texts_of(lines: &[Line<'_>]) -> Vec<String> {
@@ -1817,7 +1779,7 @@ mod tests {
                 &mut scroll,
                 true,
                 ColumnWidths::default(),
-                ProseTab::Next,
+                Some(ProseTab::Next),
                 0,
                 &Theme::wsx(),
             );
@@ -1920,7 +1882,7 @@ mod tests {
                 &mut scroll,
                 true,
                 ColumnWidths::default(),
-                ProseTab::Next,
+                Some(ProseTab::Next),
                 0,
                 &Theme::wsx(),
             );
@@ -1991,17 +1953,6 @@ mod tests {
         assert!(texts[1].contains("state   tests failing"), "{texts:?}");
         assert!(texts[1].contains("5h old"), "{texts:?}");
         assert!(!texts.iter().any(|l| l.contains("the goal")), "{texts:?}");
-    }
-
-    #[test]
-    fn prose_tabs_cycle_both_ways() {
-        assert_eq!(ProseTab::default(), ProseTab::Next);
-        assert_eq!(ProseTab::Next.next(), ProseTab::Prompt);
-        assert_eq!(ProseTab::Prompt.prev(), ProseTab::Next);
-        for t in ProseTab::ALL {
-            assert_eq!(t.next().prev(), t);
-            assert_eq!(ProseTab::from_label(t.label()), Some(t));
-        }
     }
 
     /// The prompt tab shows the initial prompt, labelled, italic, and
@@ -2164,7 +2115,7 @@ mod tests {
                 &mut scroll,
                 true,
                 ColumnWidths::default(),
-                ProseTab::Next,
+                Some(ProseTab::Next),
                 0,
                 &Theme::wsx(),
             );
@@ -2243,7 +2194,7 @@ mod tests {
                     r,
                     &AgentGlyphs::default(),
                     cols,
-                    ProseTab::Next,
+                    Some(ProseTab::Next),
                     0,
                     &Theme::wsx(),
                 )
@@ -2960,7 +2911,7 @@ mod tests {
                 &mut scroll,
                 false,
                 ColumnWidths::default(),
-                ProseTab::Next,
+                Some(ProseTab::Next),
                 0,
                 &Theme::wsx(),
             );
@@ -3118,7 +3069,7 @@ mod tests {
                 &mut scroll,
                 true,
                 ColumnWidths::default(),
-                ProseTab::Next,
+                Some(ProseTab::Next),
                 0,
                 &Theme::wsx(),
             );

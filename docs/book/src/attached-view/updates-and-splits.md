@@ -32,7 +32,7 @@ While a filter is active, letter keys type into the filter. Use the arrow keys a
 
 ## Split panes
 
-You can tile several workspaces in the attached view, vim-style. Any pane can split again, so you can build any tree of vertical and horizontal splits. Each pane has a one-line title bar naming its workspace and agent (`<workspace> · <agent>`), and `●` marks the focused pane, which receives your keystrokes. Click a pane to focus it.
+You can tile several workspaces in the attached view, vim-style. Any pane can split again, so you can build any tree of vertical and horizontal splits. Each pane has a one-line title bar naming its workspace and agent (`<workspace> · <agent>`), and `●` marks the focused pane, which receives your keystrokes. Click a pane to focus it, or click the `✕` at the right end of its title bar to close it; the focused pane keeps focus unless it's the one you closed.
 
 1. Attach to a workspace and press `Ctrl-x u`.
 2. Select another workspace and press `v` or `s`. Focus moves to the new pane.

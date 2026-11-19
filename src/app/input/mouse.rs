@@ -415,22 +415,22 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
     }
 }
 
-/// Focus the split pane under a click. Returns `true` when the click landed
-/// on a pane, which consumes it (pane rects overlap no other click target).
+/// Focus the split pane under a click and take keyboard ownership back from
+/// the side panel. Returns `true` (consuming the click) only when the hit
+/// still resolves to a leaf of the live split tree.
 fn focus_pane_at(app: &mut App, m: &MouseEvent) -> bool {
-    let Some(path) = app
+    let crate::ui::View::Attached(state) = &mut app.view else {
+        return false;
+    };
+    let Some((path, _)) = app
         .attached_pane_focus_rects
         .iter()
-        .find(|(_, r)| rect_contains(r, m))
-        .map(|(p, _)| p.clone())
+        .find(|(p, r)| rect_contains(r, m) && state.tree.leaf_at(p).is_some())
     else {
         return false;
     };
-    if let crate::ui::View::Attached(state) = &mut app.view
-        && state.tree.leaf_at(&path).is_some()
-    {
-        state.focus = path;
-    }
+    state.focus = path.clone();
+    app.attached_panel.focused = false;
     true
 }
 

@@ -1058,11 +1058,29 @@ async fn clicking_a_split_pane_focuses_it() {
     let (left_path, left) = app.attached_pane_focus_rects[0].clone();
     assert_eq!(left_path, vec![0]);
 
+    let (_, right) = app.attached_pane_focus_rects[1].clone();
+    let focus = |app: &App| match &app.view {
+        crate::ui::View::Attached(s) => s.focus.clone(),
+        _ => panic!("expected attached view"),
+    };
     let mut m = mouse_event(MouseEventKind::Down(crossterm::event::MouseButton::Left));
+
+    // A body click focuses the pane and takes keys back from a focused panel.
+    app.attached_panel.focused = true;
     (m.column, m.row) = (left.x + 2, left.y + left.height / 2);
     handle_mouse(&mut app, &shared_app(), m).await;
-    let crate::ui::View::Attached(state) = &app.view else {
-        panic!("expected attached view");
-    };
-    assert_eq!(state.focus, vec![0], "click on the left pane focuses it");
+    assert_eq!(focus(&app), vec![0], "click on the left pane focuses it");
+    assert!(
+        !app.attached_panel.focused,
+        "pane click unfocuses the side panel"
+    );
+
+    // The title row counts as part of the pane.
+    (m.column, m.row) = (right.x + 2, right.y);
+    handle_mouse(&mut app, &shared_app(), m).await;
+    assert_eq!(
+        focus(&app),
+        vec![1],
+        "click on the right title row focuses it"
+    );
 }

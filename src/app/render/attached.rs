@@ -727,9 +727,8 @@ mod tests {
             })
             .collect();
         assert_eq!(titles.len(), 2);
-        for title in &titles {
-            assert!(title.contains("title-ws · "), "{title}");
-        }
+        assert!(titles[0].contains("title-ws · claude"), "{}", titles[0]);
+        assert!(titles[1].contains("title-ws · codex"), "{}", titles[1]);
     }
 
     #[test]

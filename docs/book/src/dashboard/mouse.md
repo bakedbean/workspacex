@@ -30,6 +30,7 @@ Hold `Shift` while you drag. Most terminals (Alacritty, Kitty, WezTerm, iTerm2, 
 | A pinned-command chip        | Sends that [pinned command](../attached-view/pinned-commands.md) |
 | A prompt-tag chip            | Opens that [prompt tag](../attached-view/prompt-tags.md)'s body box |
 | A workspace in the attached view's strip | Attaches to it                               |
+| A split pane in the attached view | Focuses that pane                                   |
 | The strip's `+N more`        | Opens the updates panel                                  |
 | An agent pill                | Switches the pane to that agent                          |
 | A `$hosts` chip              | Opens that host's [shared workspaces](../integrations/shared-workspaces.md) |

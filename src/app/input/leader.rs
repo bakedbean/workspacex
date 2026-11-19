@@ -25,20 +25,23 @@ pub(in crate::app::input) fn close_split_pane(app: &mut App, path: &[usize]) -> 
     if state.leaf_count() < 2 {
         return false;
     }
-    let kept_focus = (state.focus != path)
-        .then(|| state.focused_target())
-        .flatten();
+    // Closing one leaf keeps the others' depth-first order, so the focused
+    // pane is found again by rank (targets can repeat across panes).
+    let paths = state.tree.leaf_paths();
+    let rank = |p: &[usize]| paths.iter().position(|q| q == p);
+    let kept_rank = match (rank(&state.focus), rank(path)) {
+        (Some(f), Some(c)) if f != c => Some(f - usize::from(c < f)),
+        _ => None,
+    };
     state.focus = path.to_vec();
     let empty = matches!(state.close_focused(), CloseOutcome::Empty);
-    if let Some(target) = kept_focus
-        && let Some(p) = state
-            .tree
-            .leaf_paths()
-            .into_iter()
-            .find(|p| state.tree.leaf_at(p) == Some(target))
-    {
+    if let Some(p) = kept_rank.and_then(|r| state.tree.leaf_paths().get(r).cloned()) {
         state.focus = p;
     }
+    // Paths shift once a pane closes; drop hit rects until the next draw so a
+    // second click can't land on a renumbered pane.
+    app.attached_pane_close_rects.clear();
+    app.attached_pane_focus_rects.clear();
     // If another pane shares the closed pane's workspace this refresh is
     // redundant but harmless (at most one extra poll).
     schedule_detach_refresh(app, [closed.workspace_id]);

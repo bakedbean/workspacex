@@ -1161,3 +1161,70 @@ async fn clicking_a_split_panes_close_button_closes_that_pane() {
     draw(&mut app);
     assert!(app.attached_pane_close_rects.is_empty(), "no button solo");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn split_close_keeps_the_focused_pane_and_ignores_stale_hits() {
+    use crate::pty::session::{AgentKind, SessionStatus};
+    use crate::ui::split::{AttachTarget, SplitDirection};
+    let mut app = App::new(
+        Store::open_in_memory().unwrap(),
+        PathBuf::from("/tmp/wsx-test"),
+    )
+    .unwrap();
+    let ws = app.test_workspace("close-dup");
+    let a = app
+        .store
+        .add_primary_agent(ws, AgentKind::Claude, 1)
+        .unwrap()
+        .id;
+    let b = app
+        .store
+        .add_workspace_agent(ws, AgentKind::Codex)
+        .unwrap()
+        .id;
+    app.test_spawn_session(a, SessionStatus::Running { pid: 1 });
+    app.test_spawn_session(b, SessionStatus::Running { pid: 2 });
+    let target = |instance| AttachTarget {
+        workspace_id: ws,
+        instance,
+    };
+    // [A, [A, B]] with focus on the SECOND A, so matching by target would
+    // wrongly land on the first one.
+    let mut state = AttachedState::single(target(a));
+    state.split(SplitDirection::Vertical, target(a));
+    state.split(SplitDirection::Horizontal, target(b));
+    state.focus = vec![1, 0];
+    app.view = crate::ui::View::Attached(state);
+
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+    terminal
+        .draw(|f| crate::app::render::draw_for_test(f, &mut app))
+        .unwrap();
+    let (_, close_b) = app
+        .attached_pane_close_rects
+        .iter()
+        .find(|(p, _)| *p == vec![1, 1])
+        .cloned()
+        .unwrap();
+    let state = |app: &App| match &app.view {
+        crate::ui::View::Attached(s) => s.clone(),
+        _ => panic!("expected attached view"),
+    };
+    let mut m = mouse_event(MouseEventKind::Down(crossterm::event::MouseButton::Left));
+    (m.column, m.row) = (close_b.x + 1, close_b.y);
+    handle_mouse(&mut app, &shared_app(), m).await;
+    let s = state(&app);
+    assert_eq!(
+        s.leaves(),
+        vec![target(a), target(a)],
+        "B closed, split collapsed"
+    );
+    assert_eq!(s.focus, vec![1], "the focused (second) A keeps focus");
+
+    // A second click on the same spot before a redraw must not close the
+    // pane that now occupies B's old path.
+    handle_mouse(&mut app, &shared_app(), m).await;
+    let s = state(&app);
+    assert_eq!(s.leaves().len(), 2, "stale close hit ignored");
+    assert_eq!(s.focus, vec![1]);
+}

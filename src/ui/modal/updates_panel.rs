@@ -2664,6 +2664,7 @@ pub(super) mod test_fixtures {
                 diff: None,
                 column: None,
                 ago_secs,
+                last_active_ms: None,
                 selected: false,
                 yolo: false,
                 badge: None,

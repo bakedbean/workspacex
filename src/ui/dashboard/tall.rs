@@ -1331,6 +1331,7 @@ mod tests {
                 body: ColumnBody::Empty,
             }),
             ago_secs: Some(60),
+            last_active_ms: None,
             selected: false,
             yolo: false,
             badge: None,

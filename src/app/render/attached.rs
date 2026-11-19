@@ -343,14 +343,16 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
                 .workspace_agents_by_id(target.instance)
                 .ok()
                 .flatten();
-            let (label, agent) = match instance {
-                Some(inst) => (inst.label(), Some(inst.agent)),
-                None => app
-                    .workspaces
-                    .iter()
-                    .find(|(_, w)| w.id == target.workspace_id)
-                    .map(|(_, w)| (w.name.clone(), Some(w.agent)))
-                    .unwrap_or_default(),
+            let ws = app
+                .workspaces
+                .iter()
+                .find(|(_, w)| w.id == target.workspace_id)
+                .map(|(_, w)| w);
+            let (label, agent) = match (instance, ws) {
+                (Some(inst), Some(w)) => (pane_title(&w.name, &inst.label()), Some(inst.agent)),
+                (Some(inst), None) => (inst.label(), Some(inst.agent)),
+                (None, Some(w)) => (w.name.clone(), Some(w.agent)),
+                (None, None) => Default::default(),
             };
             let focused = path == state.focus;
             Some((session, label, rect, focused, agent))
@@ -435,6 +437,12 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
     app.side_panel_tab_rects = panel.tabs;
     app.side_panel_rect = panel.area;
     app.side_panel_file_rects = panel.files;
+}
+
+/// A split pane's title: the workspace name, then the agent instance label,
+/// so every pane names its workspace whether or not it is focused.
+fn pane_title(workspace: &str, agent_label: &str) -> String {
+    format!("{workspace} · {agent_label}")
 }
 
 /// The single full-screen pane of an ssh-attached remote workspace.
@@ -669,6 +677,59 @@ mod tests {
         assert!(codex_footer.contains("gpt-5-codex"), "{codex_footer}");
         assert!(codex_footer.contains("77k"), "{codex_footer}");
         assert!(!codex_footer.contains("90k/200k"), "{codex_footer}");
+    }
+
+    #[test]
+    fn split_titles_name_the_workspace_on_every_pane() {
+        let mut app = App::new(
+            Store::open_in_memory().unwrap(),
+            std::path::PathBuf::from("/tmp/wsx-test"),
+        )
+        .unwrap();
+        let workspace_id = app.test_workspace("title-ws");
+        let primary = app
+            .store
+            .add_primary_agent(workspace_id, AgentKind::Claude, 1)
+            .unwrap()
+            .id;
+        let peer = app
+            .store
+            .add_workspace_agent(workspace_id, AgentKind::Codex)
+            .unwrap()
+            .id;
+        app.test_spawn_session(primary, SessionStatus::Running { pid: 1 });
+        app.test_spawn_session(peer, SessionStatus::Running { pid: 2 });
+        let mut state = AttachedState::single(AttachTarget {
+            workspace_id,
+            instance: primary,
+        });
+        state.split(
+            crate::ui::split::SplitDirection::Horizontal,
+            AttachTarget {
+                workspace_id,
+                instance: peer,
+            },
+        );
+        app.view = View::Attached(state);
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal
+            .draw(|f| draw_attached(f, &mut app, f.area()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let titles: Vec<String> = app
+            .attached_pane_focus_rects
+            .iter()
+            .map(|(_, r)| {
+                (r.x..r.x + r.width)
+                    .map(|x| buffer[(x, r.y)].symbol())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(titles.len(), 2);
+        for title in &titles {
+            assert!(title.contains("title-ws · "), "{title}");
+        }
     }
 
     #[test]

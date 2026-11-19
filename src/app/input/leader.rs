@@ -12,6 +12,42 @@ use crossterm::event::KeyCode;
 // `AttachedState`, `Arc`, and `Mutex` through `super::*` glob imports
 // that cascade from the surrounding `tests` module.
 
+/// Close the split pane at `path`, keeping the remaining panes' sessions
+/// running; the focused pane keeps focus unless it was the one closed.
+/// Returns `false` (no-op) when `path` isn't a leaf of a multi-pane view.
+pub(in crate::app::input) fn close_split_pane(app: &mut App, path: &[usize]) -> bool {
+    let View::Attached(state) = &mut app.view else {
+        return false;
+    };
+    let Some(closed) = state.tree.leaf_at(path) else {
+        return false;
+    };
+    if state.leaf_count() < 2 {
+        return false;
+    }
+    let kept_focus = (state.focus != path)
+        .then(|| state.focused_target())
+        .flatten();
+    state.focus = path.to_vec();
+    let empty = matches!(state.close_focused(), CloseOutcome::Empty);
+    if let Some(target) = kept_focus
+        && let Some(p) = state
+            .tree
+            .leaf_paths()
+            .into_iter()
+            .find(|p| state.tree.leaf_at(p) == Some(target))
+    {
+        state.focus = p;
+    }
+    // If another pane shares the closed pane's workspace this refresh is
+    // redundant but harmless (at most one extra poll).
+    schedule_detach_refresh(app, [closed.workspace_id]);
+    if empty {
+        app.view = View::Dashboard;
+    }
+    true
+}
+
 /// Fire a single attached-view leader action for `k` (already-armed leader).
 /// Extracted so both the letter-accelerator path and the overlay's Enter path
 /// dispatch through identical code. Caller clears `leader_pending` first.
@@ -33,29 +69,12 @@ pub(in crate::app::input) async fn dispatch_leader_action(
             // In multi-pane mode, close just the focused pane; the
             // other panes' sessions keep running. Detach to dashboard
             // only when the last pane closes.
-            if let View::Attached(state) = &mut app.view {
-                if state.leaf_count() > 1 {
-                    let closed = state.focused_target();
-                    match state.close_focused() {
-                        CloseOutcome::Focus(_) => {
-                            // Refresh the closed pane's workspace. If another pane
-                            // shares the same workspace this may redundantly refresh
-                            // a still-attached workspace — harmless (at most one
-                            // extra poll).
-                            if let Some(cid) = closed {
-                                schedule_detach_refresh(app, [cid.workspace_id]);
-                            }
-                            return Ok(());
-                        }
-                        CloseOutcome::Empty => {
-                            if let Some(cid) = closed {
-                                schedule_detach_refresh(app, [cid.workspace_id]);
-                            }
-                            app.view = View::Dashboard;
-                            return Ok(());
-                        }
-                    }
-                }
+            if let View::Attached(state) = &app.view
+                && state.leaf_count() > 1
+            {
+                let focus = state.focus.clone();
+                close_split_pane(app, &focus);
+                return Ok(());
             }
             let leaves: Vec<_> = match &app.view {
                 View::Attached(state) => state.leaves().iter().map(|t| t.workspace_id).collect(),

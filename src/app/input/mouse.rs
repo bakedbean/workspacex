@@ -235,6 +235,18 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
                 return;
             }
 
+            // The close button sits inside the pane rect, so it goes first.
+            if let Some((path, _)) = app
+                .attached_pane_close_rects
+                .iter()
+                .find(|(_, r)| rect_contains(r, &m))
+            {
+                let path = path.clone();
+                if super::leader::close_split_pane(app, &path) {
+                    return;
+                }
+            }
+
             if focus_pane_at(app, &m) {
                 return;
             }

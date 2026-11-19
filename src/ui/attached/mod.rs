@@ -237,7 +237,21 @@ fn render_one_pane(f: &mut Frame, pane: &PaneSpec<'_>, show_title: bool, theme: 
             Style::default()
         };
         let spans = title_bar_spans(pane.label, pane.agent, pane.focused, theme);
-        f.render_widget(Paragraph::new(Line::from(spans)).style(row_bg), area);
+        // The close button's columns are carved off first so a narrow pane
+        // clips the label, never the button.
+        let close = close_button_rect(pane.rect);
+        let label_area = match close {
+            Some(c) => Rect {
+                width: c.x - area.x,
+                ..area
+            },
+            None => area,
+        };
+        f.render_widget(Paragraph::new(Line::from(spans)).style(row_bg), label_area);
+        if let Some(c) = close {
+            let glyph = Span::styled(CLOSE_GLYPH, Style::default().fg(theme.dim));
+            f.render_widget(Paragraph::new(Line::from(glyph)).style(row_bg), c);
+        }
     }
 
     let offset = pane
@@ -256,6 +270,21 @@ fn render_one_pane(f: &mut Frame, pane: &PaneSpec<'_>, show_title: bool, theme: 
     }
     drop(parser);
     term_area
+}
+
+/// The clickable close button drawn at the right end of a split pane's title row.
+const CLOSE_GLYPH: &str = " ✕ ";
+const CLOSE_WIDTH: u16 = 3;
+
+/// Rect of the close button in the title row of the split pane at `pane`, or
+/// `None` when the pane is too narrow to fit it beside a sliver of label.
+pub fn close_button_rect(pane: Rect) -> Option<Rect> {
+    (pane.width >= CLOSE_WIDTH + 4 && pane.height > 1).then(|| Rect {
+        x: pane.right() - CLOSE_WIDTH,
+        y: pane.y,
+        width: CLOSE_WIDTH,
+        height: 1,
+    })
 }
 
 /// Draw subtle 1-cell dividers between adjacent split panes. Vertical
@@ -360,6 +389,14 @@ fn title_bar_spans(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn close_button_hugs_the_right_of_the_title_row_or_hides_when_narrow() {
+        let pane = Rect::new(10, 5, 20, 8);
+        assert_eq!(close_button_rect(pane), Some(Rect::new(27, 5, 3, 1)));
+        assert_eq!(close_button_rect(Rect::new(0, 0, 6, 8)), None);
+        assert_eq!(close_button_rect(Rect::new(0, 0, 20, 1)), None);
+    }
 
     fn attached_bars_top(
         specs: &crate::config::theme_file::BarSpecs,

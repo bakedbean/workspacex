@@ -106,6 +106,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.detail_container_rects = [None; 4];
     app.attached_pane_rects.clear();
     app.attached_pane_focus_rects.clear();
+    app.attached_pane_close_rects.clear();
     app.agent_chip_rects.clear();
     app.pr_link_rect = None;
     app.dashboard_pr_rects.clear();

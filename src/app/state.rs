@@ -145,6 +145,7 @@ impl App {
             detail_container_rects: [None; 4],
             attached_pane_rects: Vec::new(),
             attached_pane_focus_rects: Vec::new(),
+            attached_pane_close_rects: Vec::new(),
             agent_chip_rects: Vec::new(),
             usage_graph_rect: None,
             footer_hint_rects: Vec::new(),
@@ -911,6 +912,9 @@ pub struct App {
     /// `(focus path, full pane rect incl. title row)` per split pane from the
     /// last attached-view draw; a left click inside one focuses that pane.
     pub attached_pane_focus_rects: Vec<(crate::ui::split::FocusPath, ratatui::layout::Rect)>,
+    /// `(focus path, close-button rect)` per split pane title row; a left
+    /// click on one closes that pane like `Ctrl-x d`.
+    pub attached_pane_close_rects: Vec<(crate::ui::split::FocusPath, ratatui::layout::Rect)>,
     /// `(instance id, rect)` for each agent pill in the attached chip row,
     /// populated each attached-view draw and consumed by `handle_mouse` to
     /// retarget the focused pane on click. Mirrors the `chip_rects`

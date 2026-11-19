@@ -322,6 +322,10 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
     } else {
         Vec::new()
     };
+    let pane_close_rects: Vec<_> = pane_focus_rects
+        .iter()
+        .filter_map(|(path, rect)| Some((path.clone(), attached::close_button_rect(*rect)?)))
+        .collect();
 
     // Resize each session's PTY to its pane area (minus title row when multi-pane).
     for (target, _path, rect) in &panes {
@@ -428,6 +432,7 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
     app.usage_graph_rect = out.usage_graph_rect;
     app.attached_pane_rects = out.pane_rects;
     app.attached_pane_focus_rects = pane_focus_rects;
+    app.attached_pane_close_rects = pane_close_rects;
     app.agent_chip_rects = out.agent_chip_rects;
     app.footer_hint_rects = out.footer_hint_rects;
     app.pinned_commands_cache = data.pinned;
@@ -729,6 +734,10 @@ mod tests {
         assert_eq!(titles.len(), 2);
         assert!(titles[0].contains("title-ws · claude"), "{}", titles[0]);
         assert!(titles[1].contains("title-ws · codex"), "{}", titles[1]);
+        for t in &titles {
+            assert!(t.ends_with(" ✕ "), "close button flush right: {t:?}");
+        }
+        assert_eq!(app.attached_pane_close_rects.len(), 2);
     }
 
     #[test]

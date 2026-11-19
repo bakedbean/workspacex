@@ -12,6 +12,45 @@ use crossterm::event::KeyCode;
 // `AttachedState`, `Arc`, and `Mutex` through `super::*` glob imports
 // that cascade from the surrounding `tests` module.
 
+/// Close the split pane at `path`, keeping the remaining panes' sessions
+/// running; the focused pane keeps focus unless it was the one closed.
+/// Returns `false` (no-op) when `path` isn't a leaf of a multi-pane view.
+pub(in crate::app::input) fn close_split_pane(app: &mut App, path: &[usize]) -> bool {
+    let View::Attached(state) = &mut app.view else {
+        return false;
+    };
+    let Some(closed) = state.tree.leaf_at(path) else {
+        return false;
+    };
+    if state.leaf_count() < 2 {
+        return false;
+    }
+    // Closing one leaf keeps the others' depth-first order, so the focused
+    // pane is found again by rank (targets can repeat across panes).
+    let paths = state.tree.leaf_paths();
+    let rank = |p: &[usize]| paths.iter().position(|q| q == p);
+    let kept_rank = match (rank(&state.focus), rank(path)) {
+        (Some(f), Some(c)) if f != c => Some(f - usize::from(c < f)),
+        _ => None,
+    };
+    state.focus = path.to_vec();
+    let empty = matches!(state.close_focused(), CloseOutcome::Empty);
+    if let Some(p) = kept_rank.and_then(|r| state.tree.leaf_paths().get(r).cloned()) {
+        state.focus = p;
+    }
+    // Paths shift once a pane closes; drop hit rects until the next draw so a
+    // second click can't land on a renumbered pane.
+    app.attached_pane_close_rects.clear();
+    app.attached_pane_focus_rects.clear();
+    // If another pane shares the closed pane's workspace this refresh is
+    // redundant but harmless (at most one extra poll).
+    schedule_detach_refresh(app, [closed.workspace_id]);
+    if empty {
+        app.view = View::Dashboard;
+    }
+    true
+}
+
 /// Fire a single attached-view leader action for `k` (already-armed leader).
 /// Extracted so both the letter-accelerator path and the overlay's Enter path
 /// dispatch through identical code. Caller clears `leader_pending` first.
@@ -33,29 +72,12 @@ pub(in crate::app::input) async fn dispatch_leader_action(
             // In multi-pane mode, close just the focused pane; the
             // other panes' sessions keep running. Detach to dashboard
             // only when the last pane closes.
-            if let View::Attached(state) = &mut app.view {
-                if state.leaf_count() > 1 {
-                    let closed = state.focused_target();
-                    match state.close_focused() {
-                        CloseOutcome::Focus(_) => {
-                            // Refresh the closed pane's workspace. If another pane
-                            // shares the same workspace this may redundantly refresh
-                            // a still-attached workspace — harmless (at most one
-                            // extra poll).
-                            if let Some(cid) = closed {
-                                schedule_detach_refresh(app, [cid.workspace_id]);
-                            }
-                            return Ok(());
-                        }
-                        CloseOutcome::Empty => {
-                            if let Some(cid) = closed {
-                                schedule_detach_refresh(app, [cid.workspace_id]);
-                            }
-                            app.view = View::Dashboard;
-                            return Ok(());
-                        }
-                    }
-                }
+            if let View::Attached(state) = &app.view
+                && state.leaf_count() > 1
+            {
+                let focus = state.focus.clone();
+                close_split_pane(app, &focus);
+                return Ok(());
             }
             let leaves: Vec<_> = match &app.view {
                 View::Attached(state) => state.leaves().iter().map(|t| t.workspace_id).collect(),

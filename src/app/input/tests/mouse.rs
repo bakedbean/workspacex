@@ -1014,3 +1014,55 @@ async fn click_header_status_toggles_the_status_filter() {
     handle_mouse(&mut app, &shared, click(35)).await;
     assert_eq!(app.dashboard.status_filter, None, "the gap is not a hit");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn clicking_a_split_pane_focuses_it() {
+    use crate::pty::session::{AgentKind, SessionStatus};
+    use crate::ui::split::{AttachTarget, SplitDirection};
+    let mut app = App::new(
+        Store::open_in_memory().unwrap(),
+        PathBuf::from("/tmp/wsx-test"),
+    )
+    .unwrap();
+    let ws = app.test_workspace("click-focus");
+    let primary = app
+        .store
+        .add_primary_agent(ws, AgentKind::Claude, 1)
+        .unwrap()
+        .id;
+    let peer = app
+        .store
+        .add_workspace_agent(ws, AgentKind::Codex)
+        .unwrap()
+        .id;
+    app.test_spawn_session(primary, SessionStatus::Running { pid: 1 });
+    app.test_spawn_session(peer, SessionStatus::Running { pid: 2 });
+    let mut state = AttachedState::single(AttachTarget {
+        workspace_id: ws,
+        instance: primary,
+    });
+    state.split(
+        SplitDirection::Vertical,
+        AttachTarget {
+            workspace_id: ws,
+            instance: peer,
+        },
+    );
+    assert_eq!(state.focus, vec![1]);
+    app.view = crate::ui::View::Attached(state);
+
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+    terminal
+        .draw(|f| crate::app::render::draw_for_test(f, &mut app))
+        .unwrap();
+    let (left_path, left) = app.attached_pane_focus_rects[0].clone();
+    assert_eq!(left_path, vec![0]);
+
+    let mut m = mouse_event(MouseEventKind::Down(crossterm::event::MouseButton::Left));
+    (m.column, m.row) = (left.x + 2, left.y + left.height / 2);
+    handle_mouse(&mut app, &shared_app(), m).await;
+    let crate::ui::View::Attached(state) = &app.view else {
+        panic!("expected attached view");
+    };
+    assert_eq!(state.focus, vec![0], "click on the left pane focuses it");
+}

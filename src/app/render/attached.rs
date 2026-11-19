@@ -314,6 +314,14 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
 
     let crate::ui::split::LayoutResult { panes, dividers } = state.layout(pane_area);
     let multi_pane = panes.len() > 1;
+    let pane_focus_rects: Vec<_> = if multi_pane {
+        panes
+            .iter()
+            .map(|(_, path, rect)| (path.clone(), *rect))
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     // Resize each session's PTY to its pane area (minus title row when multi-pane).
     for (target, _path, rect) in &panes {
@@ -417,6 +425,7 @@ pub(super) fn draw_attached(f: &mut ratatui::Frame, app: &mut App, area: ratatui
     app.attention_more_rect = out.attention_more_rect;
     app.usage_graph_rect = out.usage_graph_rect;
     app.attached_pane_rects = out.pane_rects;
+    app.attached_pane_focus_rects = pane_focus_rects;
     app.agent_chip_rects = out.agent_chip_rects;
     app.footer_hint_rects = out.footer_hint_rects;
     app.pinned_commands_cache = data.pinned;

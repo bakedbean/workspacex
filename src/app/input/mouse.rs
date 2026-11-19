@@ -235,6 +235,10 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
                 return;
             }
 
+            if focus_pane_at(app, &m) {
+                return;
+            }
+
             // Footer keybind hint click → behave exactly like pressing the
             // printed key. The footer row doesn't overlap any other click
             // target, so this is checked first and returns early.
@@ -409,6 +413,25 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
         }
         _ => {}
     }
+}
+
+/// Focus the split pane under a click. Returns `true` when the click landed
+/// on a pane, which consumes it (pane rects overlap no other click target).
+fn focus_pane_at(app: &mut App, m: &MouseEvent) -> bool {
+    let Some(path) = app
+        .attached_pane_focus_rects
+        .iter()
+        .find(|(_, r)| rect_contains(r, m))
+        .map(|(p, _)| p.clone())
+    else {
+        return false;
+    };
+    if let crate::ui::View::Attached(state) = &mut app.view
+        && state.tree.leaf_at(&path).is_some()
+    {
+        state.focus = path;
+    }
+    true
 }
 
 /// Whether `m` is on the panel at `r`'s left edge or the gutter left of it.

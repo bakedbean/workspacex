@@ -1150,6 +1150,11 @@ async fn clicking_a_split_panes_close_button_closes_that_pane() {
     assert_eq!(s.focused_target(), focused, "focus stays put");
     assert!(app.pending_workspace_refresh.contains(&ws));
 
+    // Repeating the click before a redraw must not close the pane now at
+    // the old path [0].
+    handle_mouse(&mut app, &shared_app(), m).await;
+    assert_eq!(state(&app).leaves().len(), 2, "stale close hit ignored");
+
     // Closing down to one pane leaves a single, title-less pane attached.
     draw(&mut app);
     let (_, close) = app.attached_pane_close_rects[1].clone();

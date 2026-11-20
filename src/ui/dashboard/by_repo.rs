@@ -370,6 +370,7 @@ mod tests {
                 lifecycle: None,
                 review: None,
                 unresolved: None,
+                comments: None,
                 nerd_fonts: false,
                 name_color: None,
                 workspace_id: crate::data::store::WorkspaceId(i as i64),

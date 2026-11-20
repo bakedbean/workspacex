@@ -681,7 +681,7 @@ fn full_chip(row: &RowInputs) -> Option<crate::ui::theme::PrChip> {
         row.lifecycle?,
         row.pr_number,
         row.review,
-        row.unresolved,
+        row.pr_counts(),
         usize::MAX,
     )
 }
@@ -692,7 +692,7 @@ fn full_chip(row: &RowInputs) -> Option<crate::ui::theme::PrChip> {
 /// drop the lifecycle word, leaving padding that must not open the PR.
 fn pr_cell(row: &RowInputs, pr: usize, theme: &Theme) -> (Vec<Span<'static>>, Option<u16>) {
     let fitted = row.lifecycle.and_then(|lc| {
-        crate::ui::theme::pr_chip(lc, row.pr_number, row.review, row.unresolved, pr)
+        crate::ui::theme::pr_chip(lc, row.pr_number, row.review, row.pr_counts(), pr)
     });
     match fitted {
         Some(c) => (
@@ -700,7 +700,7 @@ fn pr_cell(row: &RowInputs, pr: usize, theme: &Theme) -> (Vec<Span<'static>>, Op
                 row.lifecycle,
                 row.pr_number,
                 row.review,
-                row.unresolved,
+                row.pr_counts(),
                 pr,
                 theme,
             ),
@@ -1342,6 +1342,7 @@ mod tests {
             lifecycle: None,
             review: None,
             unresolved: None,
+            comments: None,
             nerd_fonts: false,
             name_color: None,
             workspace_id: WorkspaceId(1),

@@ -474,6 +474,7 @@ mod tests {
                     url: Some("https://example.test/pr/42".into()),
                     review: Some(ReviewDecision::Approved),
                     unresolved: Some(2),
+                    comments: None,
                 },
                 7,
             )

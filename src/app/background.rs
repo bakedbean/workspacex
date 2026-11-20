@@ -1343,6 +1343,7 @@ mod pr_commit_tests {
             url: None,
             review: None,
             unresolved: None,
+            comments: None,
         }
     }
 
@@ -1460,6 +1461,7 @@ mod series_settle_tests {
             url: None,
             review: None,
             unresolved: None,
+            comments: None,
         }
     }
 

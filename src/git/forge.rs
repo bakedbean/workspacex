@@ -25,6 +25,12 @@ impl BranchLifecycle {
     pub(crate) fn awaits_review(self) -> bool {
         matches!(self, Self::PrOpen | Self::PrConflicted)
     }
+
+    /// Whether the PR is still open in any form — draft included — so its
+    /// conversation can still grow.
+    pub(crate) fn is_open(self) -> bool {
+        matches!(self, Self::PrOpen | Self::PrConflicted | Self::PrDraft)
+    }
 }
 
 /// A PR's aggregate review verdict, as GitHub computes it from the repo's
@@ -177,6 +183,9 @@ pub struct PrStatus {
     /// the GraphQL probe failed). `Some(0)` is a real answer — every
     /// conversation resolved — and renders as no number rather than a `0`.
     pub unresolved: Option<u32>,
+    /// Human-authored conversation comments (not review comments) on an
+    /// open PR, or `None` when not fetched. Bot comments are excluded.
+    pub comments: Option<u32>,
 }
 
 /// Parse the JSON returned by
@@ -215,8 +224,9 @@ pub(crate) fn parse_gh_pr_status(stdout: &str) -> Option<PrStatus> {
                 .and_then(parse_review_decision)
         },
         // Comes from a separate GraphQL probe, not this payload — see
-        // [`fetch_unresolved_threads`].
+        // [`fetch_pr_activity`].
         unresolved: None,
+        comments: None,
     })
 }
 
@@ -261,30 +271,29 @@ pub(crate) fn apply_review_gate(status: PrStatus, gated: Option<bool>) -> PrStat
     }
 }
 
-/// The GraphQL query behind the unresolved-thread count. Thread resolution
-/// is not in `gh pr view`'s `--json` field set at all — GitHub only exposes
-/// it through GraphQL `reviewThreads` — hence a second probe instead of a
-/// wider field list. Capped at the first 100 threads: past that the count
-/// reads low, which is the cheap failure, and a PR with >100 review threads
-/// has louder problems than an indicator.
-const UNRESOLVED_THREADS_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){\
+/// The GraphQL query behind the unresolved-thread and comment counts.
+/// Thread resolution and comment authorship are not in `gh pr view`'s
+/// `--json` field set — hence a second probe instead of a wider field list.
+/// Each list is capped at 100: past that a count reads low, the cheap failure.
+const PR_ACTIVITY_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){\
      repository(owner:$owner,name:$name){pullRequest(number:$number){\
-     reviewThreads(first:100){nodes{isResolved}}}}}";
+     reviewThreads(first:100){nodes{isResolved}}\
+     comments(last:100){nodes{author{__typename}}}}}}";
 
-/// The argv (after `gh`) that fetches the PR's review threads. `None` when
+/// The argv (after `gh`) that fetches the PR's activity. `None` when
 /// `slug` isn't `owner/name` shaped — nothing sane to ask for.
 ///
 /// `$number` is declared `Int!`, so it rides typed `-F`; the `String!`
 /// variables ride raw `-f` deliberately. `gh api -F` type-coerces its
 /// value — an all-numeric owner or repo name (GitHub allows both) would be
 /// sent as an integer and the whole query rejected.
-pub(crate) fn unresolved_threads_argv(slug: &str, number: u32) -> Option<Vec<String>> {
+pub(crate) fn pr_activity_argv(slug: &str, number: u32) -> Option<Vec<String>> {
     let (owner, name) = slug.split_once('/')?;
     Some(vec![
         "api".into(),
         "graphql".into(),
         "-f".into(),
-        format!("query={UNRESOLVED_THREADS_QUERY}"),
+        format!("query={PR_ACTIVITY_QUERY}"),
         "-f".into(),
         format!("owner={owner}"),
         "-f".into(),
@@ -307,10 +316,13 @@ struct GhThreadsRepo {
     #[serde(rename = "pullRequest")]
     pull_request: Option<GhThreadsPr>,
 }
+// Each list is optional so one missing from the payload reads as unknown
+// for that count alone; a list that IS present must still parse whole.
 #[derive(Debug, Deserialize)]
 struct GhThreadsPr {
     #[serde(rename = "reviewThreads")]
-    review_threads: GhThreadNodes,
+    review_threads: Option<GhThreadNodes>,
+    comments: Option<GhCommentNodes>,
 }
 // `nodes` and `isResolved` are deliberately NOT `#[serde(default)]`: a
 // truncated payload like `"reviewThreads":{}` would otherwise read as
@@ -326,32 +338,70 @@ struct GhThreadNode {
     #[serde(rename = "isResolved")]
     is_resolved: bool,
 }
-
-/// Count the unresolved threads in a GraphQL `reviewThreads` response.
-///
-/// `None` — not `Some(0)` — when the body doesn't reach the thread list:
-/// GraphQL errors arrive as `{"errors":[...]}` with `data` null or the
-/// repository/PR missing, and reading one of those as "all resolved" would
-/// erase a real count on a transient failure.
-pub(crate) fn parse_unresolved_threads(stdout: &str) -> Option<u32> {
-    let parsed: GhThreadsResponse = serde_json::from_str(stdout.trim()).ok()?;
-    let threads = parsed.data?.repository?.pull_request?.review_threads;
-    Some(threads.nodes.iter().filter(|n| !n.is_resolved).count() as u32)
+#[derive(Debug, Deserialize)]
+struct GhCommentNodes {
+    nodes: Vec<GhCommentNode>,
+}
+#[derive(Debug, Deserialize)]
+struct GhCommentNode {
+    /// `null` for a deleted ("ghost") account, which counts as human.
+    author: Option<GhAuthor>,
+}
+#[derive(Debug, Deserialize)]
+struct GhAuthor {
+    #[serde(rename = "__typename")]
+    typename: String,
 }
 
-/// The unresolved-thread count for PR `number` on `slug`, or `None` when it
-/// couldn't be learned. Not memoised: a thread resolves the moment someone
-/// clicks "Resolve conversation", and this rides the same 30s poll cadence
-/// as the PR status itself.
-async fn fetch_unresolved_threads(worktree: &Path, slug: &str, number: u32) -> Option<u32> {
-    let argv = unresolved_threads_argv(slug, number)?;
-    let out = Command::new("gh")
+/// The two counts the activity probe yields; each `None` when unknown.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PrActivity {
+    pub unresolved: Option<u32>,
+    pub comments: Option<u32>,
+}
+
+/// Count unresolved threads and human comments in a GraphQL activity
+/// response.
+///
+/// A count is `None` — not `Some(0)` — when the body doesn't reach its list:
+/// GraphQL errors arrive as `{"errors":[...]}` with `data` null or the
+/// repository/PR missing, and reading one of those as zero would erase a
+/// real count on a transient failure.
+pub(crate) fn parse_pr_activity(stdout: &str) -> PrActivity {
+    let Some(pr) = serde_json::from_str::<GhThreadsResponse>(stdout.trim())
+        .ok()
+        .and_then(|r| r.data?.repository?.pull_request)
+    else {
+        return PrActivity::default();
+    };
+    PrActivity {
+        unresolved: pr
+            .review_threads
+            .map(|t| t.nodes.iter().filter(|n| !n.is_resolved).count() as u32),
+        comments: pr.comments.map(|c| {
+            c.nodes
+                .iter()
+                .filter(|n| n.author.as_ref().is_none_or(|a| a.typename != "Bot"))
+                .count() as u32
+        }),
+    }
+}
+
+/// The activity counts for PR `number` on `slug`. Not memoised: a thread
+/// resolves on a click, and this rides the same 30s poll as the PR status.
+async fn fetch_pr_activity(worktree: &Path, slug: &str, number: u32) -> PrActivity {
+    let Some(argv) = pr_activity_argv(slug, number) else {
+        return PrActivity::default();
+    };
+    let Ok(out) = Command::new("gh")
         .current_dir(worktree)
         .args(argv)
         .output()
         .await
-        .ok()?;
-    parse_unresolved_threads(&String::from_utf8_lossy(&out.stdout))
+    else {
+        return PrActivity::default();
+    };
+    parse_pr_activity(&String::from_utf8_lossy(&out.stdout))
 }
 
 /// How long a branch's approval gate is trusted before being re-probed.
@@ -481,16 +531,16 @@ async fn fetch_pr_status_probed(
             };
             apply_review_gate(status, gated)
         };
-        // The unresolved-thread count only accompanies a verdict on a PR
-        // that's still open — exactly when the review mark renders — so a
-        // merged PR's lingering verdict or an ungated repo costs no extra
-        // call and carries no number.
+        // Comments show on any open PR; the unresolved count only
+        // accompanies a verdict on a reviewable one, where the mark renders.
+        // Merged and closed PRs cost no extra call.
         let status = match (status.number, slug.as_deref()) {
-            (Some(n), Some(slug))
-                if status.review.is_some() && status.lifecycle.awaits_review() =>
-            {
+            (Some(n), Some(slug)) if status.lifecycle.is_open() => {
+                let activity = fetch_pr_activity(worktree, slug, n).await;
+                let marked = status.review.is_some() && status.lifecycle.awaits_review();
                 PrStatus {
-                    unresolved: fetch_unresolved_threads(worktree, slug, n).await,
+                    unresolved: activity.unresolved.filter(|_| marked),
+                    comments: activity.comments,
                     ..status
                 }
             }
@@ -507,6 +557,7 @@ async fn fetch_pr_status_probed(
             url: None,
             review: None,
             unresolved: None,
+            comments: None,
         }));
     }
 
@@ -1045,6 +1096,7 @@ mod tests {
             url: Some("https://github.com/o/r/pull/1".into()),
             review,
             unresolved: None,
+            comments: None,
         }
     }
 
@@ -1154,17 +1206,17 @@ mod tests {
     #[test]
     fn counts_unresolved_threads_from_a_real_payload() {
         let json = r#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":true},{"isResolved":false},{"isResolved":true}]}}}}}"#;
-        assert_eq!(parse_unresolved_threads(json), Some(1));
+        assert_eq!(parse_pr_activity(json).unresolved, Some(1));
     }
 
     /// All threads resolved is a real answer, distinct from "couldn't ask".
     #[test]
     fn zero_unresolved_threads_is_some_zero() {
         let json = r#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":true}]}}}}}"#;
-        assert_eq!(parse_unresolved_threads(json), Some(0));
+        assert_eq!(parse_pr_activity(json).unresolved, Some(0));
         // So is a PR with no review threads at all.
         let empty = r#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]}}}}}"#;
-        assert_eq!(parse_unresolved_threads(empty), Some(0));
+        assert_eq!(parse_pr_activity(empty).unresolved, Some(0));
     }
 
     /// A GraphQL error body must read as "unknown", never as "all resolved" —
@@ -1184,16 +1236,54 @@ mod tests {
             "not json",
             "",
         ] {
-            assert_eq!(parse_unresolved_threads(body), None, "body {body:?}");
+            assert_eq!(
+                parse_pr_activity(body),
+                PrActivity::default(),
+                "body {body:?}"
+            );
+        }
+    }
+
+    /// Bots (CI, coverage) are excluded; a deleted author counts as human.
+    #[test]
+    fn counts_human_comments_only() {
+        let json = r#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[]},"comments":{"nodes":[{"author":{"__typename":"User"}},{"author":{"__typename":"Bot"}},{"author":null},{"author":{"__typename":"User"}}]}}}}}"#;
+        assert_eq!(
+            parse_pr_activity(json),
+            PrActivity {
+                unresolved: Some(0),
+                comments: Some(3)
+            }
+        );
+    }
+
+    /// One list missing or malformed must not invent a count for it.
+    #[test]
+    fn a_missing_comment_list_is_unknown() {
+        let no_comments = r#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false}]}}}}}"#;
+        assert_eq!(parse_pr_activity(no_comments).comments, None);
+        assert_eq!(parse_pr_activity(no_comments).unresolved, Some(1));
+        let truncated = r#"{"data":{"repository":{"pullRequest":{"comments":{}}}}}"#;
+        assert_eq!(parse_pr_activity(truncated), PrActivity::default());
+    }
+
+    #[test]
+    fn is_open_covers_drafts_but_not_finished_prs() {
+        use BranchLifecycle::*;
+        for lc in [PrOpen, PrConflicted, PrDraft] {
+            assert!(lc.is_open(), "{lc:?}");
+        }
+        for lc in [NoPr, PrMerged, PrClosed] {
+            assert!(!lc.is_open(), "{lc:?}");
         }
     }
 
     #[test]
-    fn unresolved_threads_argv_types_the_number_as_int() {
+    fn pr_activity_argv_types_the_number_as_int() {
         let pair = |argv: &[String], flag: &str, field: &str| {
             argv.windows(2).any(|w| w[0] == flag && w[1] == field)
         };
-        let argv = unresolved_threads_argv("o/r", 42).expect("argv");
+        let argv = pr_activity_argv("o/r", 42).expect("argv");
         assert_eq!(argv[0], "api");
         assert_eq!(argv[1], "graphql");
         // Only $number is declared Int and rides typed `-F`. The String!
@@ -1213,8 +1303,8 @@ mod tests {
 
     /// An all-numeric slug half is the case the `-f`/`-F` split exists for.
     #[test]
-    fn unresolved_threads_argv_keeps_numeric_names_as_strings() {
-        let argv = unresolved_threads_argv("123/456", 7).expect("argv");
+    fn pr_activity_argv_keeps_numeric_names_as_strings() {
+        let argv = pr_activity_argv("123/456", 7).expect("argv");
         assert!(
             argv.windows(2).any(|w| w[0] == "-f" && w[1] == "owner=123"),
             "{argv:?}"
@@ -1227,8 +1317,8 @@ mod tests {
 
     /// A slug that isn't `owner/name` shaped has nothing to query.
     #[test]
-    fn unresolved_threads_argv_rejects_a_shapeless_slug() {
-        assert_eq!(unresolved_threads_argv("noslash", 1), None);
+    fn pr_activity_argv_rejects_a_shapeless_slug() {
+        assert_eq!(pr_activity_argv("noslash", 1), None);
     }
 
     fn key(base: &str) -> (String, String) {

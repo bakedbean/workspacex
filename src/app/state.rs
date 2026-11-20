@@ -1104,6 +1104,7 @@ mod scm_seed_tests {
             url: None,
             review: Some(ReviewDecision::Approved),
             unresolved: Some(3),
+            comments: None,
         };
         store.upsert_scm_pr(ws, &status, 1).unwrap();
         store.upsert_scm_git(ws, true, 10, 4, 1).unwrap();

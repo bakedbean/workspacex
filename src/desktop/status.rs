@@ -240,6 +240,7 @@ mod tests {
                     url: None,
                     review: None,
                     unresolved: None,
+                    comments: None,
                 },
                 1000,
             )

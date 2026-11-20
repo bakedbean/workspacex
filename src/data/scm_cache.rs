@@ -22,6 +22,8 @@ pub struct ScmCacheRow {
     /// or couldn't be. `Some(0)` — all conversations resolved — renders the
     /// same as `None`: no number.
     pub pr_unresolved: Option<u32>,
+    /// Human conversation-comment count, or `None` when never fetched.
+    pub pr_comments: Option<u32>,
     pub dirty: Option<bool>,
     pub additions: Option<u32>,
     pub deletions: Option<u32>,
@@ -86,8 +88,8 @@ impl Store {
             // protected branch takes a new commit, a thread resolves on a
             // click — so a stale one is actively misleading, unlike a
             // stale-but-still-correct URL.
-            "INSERT INTO scm_cache (workspace_id, pr_lifecycle, pr_number, pr_url, pr_review, pr_unresolved, fetched_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO scm_cache (workspace_id, pr_lifecycle, pr_number, pr_url, pr_review, pr_unresolved, pr_comments, fetched_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(workspace_id) DO UPDATE SET
                pr_lifecycle = excluded.pr_lifecycle,
                pr_number    = excluded.pr_number,
@@ -98,6 +100,7 @@ impl Store {
                END,
                pr_review    = excluded.pr_review,
                pr_unresolved = excluded.pr_unresolved,
+               pr_comments  = excluded.pr_comments,
                fetched_at   = excluded.fetched_at",
             rusqlite::params![
                 id.0,
@@ -106,6 +109,7 @@ impl Store {
                 status.url.as_deref(),
                 status.review.map(review_to_str),
                 status.unresolved,
+                status.comments,
                 fetched_at
             ],
         )?;
@@ -162,6 +166,7 @@ impl Store {
                pr_url       = NULL,
                pr_review    = NULL,
                pr_unresolved = NULL,
+               pr_comments  = NULL,
                fetched_at   = NULL",
             rusqlite::params![id.0],
         )?;
@@ -191,7 +196,8 @@ impl Store {
     pub fn all_scm_cache(&self) -> Result<HashMap<WorkspaceId, ScmCacheRow>> {
         let mut stmt = self.conn().prepare(
             "SELECT workspace_id, pr_lifecycle, pr_number, dirty, additions, deletions, \
-                    fetched_at, pr_url, git_fetched_at, pr_review, pr_unresolved
+                    fetched_at, pr_url, git_fetched_at, pr_review, pr_unresolved, \
+                    pr_comments
              FROM scm_cache",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -214,6 +220,7 @@ impl Store {
                         .as_deref()
                         .and_then(review_from_str),
                     pr_unresolved: r.get(10)?,
+                    pr_comments: r.get(11)?,
                 },
             ))
         })?;
@@ -247,6 +254,7 @@ mod scm_cache_tests {
             url: url.map(str::to_string),
             review,
             unresolved: Some(2),
+            comments: Some(5),
         }
     }
 
@@ -258,6 +266,7 @@ mod scm_cache_tests {
             url: url.map(str::to_string),
             review: None,
             unresolved: None,
+            comments: None,
         }
     }
 
@@ -273,6 +282,7 @@ mod scm_cache_tests {
             url: None,
             review,
             unresolved: None,
+            comments: None,
         }
     }
 
@@ -514,6 +524,21 @@ mod scm_cache_tests {
     }
 
     #[test]
+    fn comment_count_persists_and_clears() {
+        let (store, id) = store_with_workspace();
+        let with_count = |comments| PrStatus {
+            comments,
+            ..pr(BranchLifecycle::PrOpen, Some(7), None)
+        };
+        store.upsert_scm_pr(id, &with_count(Some(4)), 1000).unwrap();
+        assert_eq!(store.all_scm_cache().unwrap()[&id].pr_comments, Some(4));
+        store.upsert_scm_pr(id, &with_count(Some(0)), 2000).unwrap();
+        assert_eq!(store.all_scm_cache().unwrap()[&id].pr_comments, Some(0));
+        store.upsert_scm_pr(id, &with_count(None), 3000).unwrap();
+        assert_eq!(store.all_scm_cache().unwrap()[&id].pr_comments, None);
+    }
+
+    #[test]
     fn git_only_upsert_leaves_review_decision_alone() {
         let (store, id) = store_with_workspace();
         store
@@ -560,6 +585,7 @@ mod scm_cache_tests {
         let row = store.all_scm_cache().unwrap()[&id].clone();
         assert_eq!(row.pr_review, None, "verdict cleared");
         assert_eq!(row.pr_unresolved, None, "unresolved count cleared");
+        assert_eq!(row.pr_comments, None, "comment count cleared");
         assert_eq!(row.pr_lifecycle, None, "lifecycle cleared");
         assert_eq!(row.pr_number, None, "number cleared");
         assert_eq!(row.pr_url, None, "url cleared");

@@ -607,6 +607,7 @@ pub(super) fn build_row_inputs(
         lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
         review: app.pr_review.get(&ws.id).copied(),
         unresolved: app.pr_unresolved.get(&ws.id).copied(),
+        comments: app.pr_comments.get(&ws.id).copied(),
         nerd_fonts,
         name_color: ws.name_color.map(crate::config::name_color::color),
         workspace_id: ws.id,

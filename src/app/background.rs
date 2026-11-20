@@ -1040,6 +1040,7 @@ async fn refresh_local(app: SharedApp, t: PollTarget) {
             g.pr_number.remove(&id);
             g.pr_review.remove(&id);
             g.pr_unresolved.remove(&id);
+            g.pr_comments.remove(&id);
             g.pr_last_poll_ms.remove(&id);
             // The persisted row too, not just these in-memory maps:
             // `wsx waybar menu-entries` and `wsx menubar plugin` are
@@ -1324,6 +1325,14 @@ async fn commit_pr_status(
             g.pr_unresolved.remove(&id);
         }
     }
+    match status.comments {
+        Some(n) => {
+            g.pr_comments.insert(id, n);
+        }
+        None => {
+            g.pr_comments.remove(&id);
+        }
+    }
     // Write-through so `wsx waybar menu-entries` (a separate short-lived
     // process) sees PR state without calling gh.
     let _ = g.store.upsert_scm_pr(id, &status, now_ms / 1000);
@@ -1343,6 +1352,7 @@ mod pr_commit_tests {
             url: None,
             review: None,
             unresolved: None,
+            comments: None,
         }
     }
 
@@ -1460,6 +1470,7 @@ mod series_settle_tests {
             url: None,
             review: None,
             unresolved: None,
+            comments: None,
         }
     }
 

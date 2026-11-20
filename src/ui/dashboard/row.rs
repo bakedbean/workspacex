@@ -215,6 +215,9 @@ pub struct RowInputs {
     /// Unresolved review-thread count, drawn as digits after the mark
     /// (`✗3`). `None` or zero draw nothing; ignored without a verdict.
     pub unresolved: Option<u32>,
+    /// Human PR-comment count, drawn as a badge after the mark on any open
+    /// PR. `None` or zero draw nothing.
+    pub comments: Option<u32>,
     pub nerd_fonts: bool,
     /// The workspace's custom name color, chosen from the xterm-256 palette
     /// via the `C` picker. `None` = the theme's default styling for the span.
@@ -222,6 +225,17 @@ pub struct RowInputs {
     pub workspace_id: crate::data::store::WorkspaceId,
     /// Workspace tags, sorted; drawn dim after the branch name.
     pub tags: Vec<std::sync::Arc<str>>,
+}
+
+impl RowInputs {
+    /// The counts that trail this row's PR chip.
+    pub fn pr_counts(&self) -> crate::ui::theme::PrCounts {
+        crate::ui::theme::PrCounts {
+            unresolved: self.unresolved,
+            comments: self.comments,
+            nerd_fonts: self.nerd_fonts,
+        }
+    }
 }
 
 impl crate::ui::dashboard::sort::SortRow for RowInputs {
@@ -470,7 +484,7 @@ pub fn render(
         inputs.lifecycle,
         inputs.pr_number,
         inputs.review,
-        inputs.unresolved,
+        inputs.pr_counts(),
         pr_width,
         theme,
     ));
@@ -573,54 +587,59 @@ fn pr_chip(inputs: &RowInputs, pr_width: usize) -> Option<crate::ui::theme::PrCh
         inputs.lifecycle?,
         inputs.pr_number,
         inputs.review,
-        inputs.unresolved,
+        inputs.pr_counts(),
         pr_width,
     )
 }
 
 /// The PR-chip cell as spans, always exactly `pr_width` columns wide:
-/// `⏺ #123 open` in the lifecycle color, then the review mark (`✓`, `✗3`)
-/// in its own verdict color, then padding. Blank when there is no PR or the
+/// `⏺ #123 open` in the lifecycle color, then the review mark (`✓`, `✗ 3`)
+/// in its own verdict color, then the dim comment badge, then padding. Blank when there is no PR or the
 /// lifecycle is unknown. Shared by the dashboard row and the
 /// workspace-updates panel so the chip cannot drift between the two.
 pub fn pr_chip_spans(
     lifecycle: Option<BranchLifecycle>,
     pr_number: Option<u32>,
     review: Option<ReviewDecision>,
-    unresolved: Option<u32>,
+    counts: crate::ui::theme::PrCounts,
     pr_width: usize,
     theme: &Theme,
 ) -> Vec<Span<'static>> {
-    let chip = lifecycle
-        .and_then(|lc| crate::ui::theme::pr_chip(lc, pr_number, review, unresolved, pr_width));
+    let chip =
+        lifecycle.and_then(|lc| crate::ui::theme::pr_chip(lc, pr_number, review, counts, pr_width));
     let Some(chip) = chip else {
         return vec![Span::raw(" ".repeat(pr_width))];
     };
     let chip_style = theme
         .lifecycle_style(lifecycle)
         .unwrap_or_else(|| theme.dim_style());
-    // The verdict mark is its own span so it can carry the verdict's
-    // traffic-light color rather than the lifecycle's. It's painted
-    // first-come: the lifecycle half is truncated to whatever the column
-    // leaves after reserving the mark's columns, so the mark can't be
-    // clipped off the end.
-    match chip.mark() {
-        Some((mark, d)) => {
-            let head_width = pr_width.saturating_sub(display_width(&mark) + 1);
-            let head = truncate(&chip.lifecycle_text, head_width);
-            let used = display_width(&head) + 1 + display_width(&mark);
-            vec![
-                Span::styled(head, chip_style),
-                Span::raw(" ".to_string()),
-                Span::styled(mark, theme.review_style(d)),
-                Span::raw(" ".repeat(pr_width.saturating_sub(used))),
-            ]
-        }
-        None => vec![Span::styled(
+    // The verdict mark and comment badge are their own spans so each
+    // carries its own color. They're painted first-come: the lifecycle half
+    // is truncated to whatever the column leaves after reserving the tail,
+    // so neither can be clipped off the end.
+    let mut tail: Vec<(String, Style)> = Vec::new();
+    if let Some((mark, d)) = chip.mark() {
+        tail.push((mark, theme.review_style(d)));
+    }
+    if let Some(badge) = chip.comment_badge() {
+        tail.push((badge, theme.row_dim_style()));
+    }
+    if tail.is_empty() {
+        return vec![Span::styled(
             truncate_pad(&chip.lifecycle_text, pr_width),
             chip_style,
-        )],
+        )];
     }
+    let tail_width: usize = tail.iter().map(|(t, _)| 1 + display_width(t)).sum();
+    let head = truncate(&chip.lifecycle_text, pr_width.saturating_sub(tail_width));
+    let used = display_width(&head) + tail_width;
+    let mut spans = vec![Span::styled(head, chip_style)];
+    for (text, style) in tail {
+        spans.push(Span::raw(" ".to_string()));
+        spans.push(Span::styled(text, style));
+    }
+    spans.push(Span::raw(" ".repeat(pr_width.saturating_sub(used))));
+    spans
 }
 
 /// The line-diff cell as spans, always exactly `width` columns: `+N` in the
@@ -886,6 +905,7 @@ mod tests {
             lifecycle: None,
             review: None,
             unresolved: None,
+            comments: None,
             nerd_fonts: false,
             name_color: None,
             workspace_id: crate::data::store::WorkspaceId(0),
@@ -2823,7 +2843,7 @@ mod cell_tests {
             Some(BranchLifecycle::PrOpen),
             Some(42),
             Some(ReviewDecision::Approved),
-            None,
+            Default::default(),
             DEFAULT_PR_WIDTH,
             &theme,
         );
@@ -2833,14 +2853,62 @@ mod cell_tests {
             Some(BranchLifecycle::PrMerged),
             Some(7),
             None,
-            None,
+            Default::default(),
             12,
             &theme,
         );
         assert_eq!(width_of(&bare), 12);
-        let blank = pr_chip_spans(None, None, None, None, 9, &theme);
+        let blank = pr_chip_spans(None, None, None, Default::default(), 9, &theme);
         assert_eq!(width_of(&blank), 9);
         assert_eq!(text_of(&blank).trim(), "");
+    }
+
+    #[test]
+    fn comment_badge_is_dim_and_survives_a_tight_column() {
+        let theme = Theme::wsx();
+        let counts = crate::ui::theme::PrCounts {
+            unresolved: Some(3),
+            comments: Some(7),
+            nerd_fonts: false,
+        };
+        // Every legal column holds its width, even when mark + badge alone
+        // are wider than the narrowest one.
+        for nerd_fonts in [false, true] {
+            for n in [1, 10, 100] {
+                let counts = crate::ui::theme::PrCounts {
+                    unresolved: Some(n),
+                    comments: Some(n),
+                    nerd_fonts,
+                };
+                for width in MIN_PR_WIDTH..=MAX_PR_WIDTH {
+                    let spans = pr_chip_spans(
+                        Some(BranchLifecycle::PrOpen),
+                        Some(1234),
+                        Some(ReviewDecision::ChangesRequested),
+                        counts,
+                        width,
+                        &theme,
+                    );
+                    assert_eq!(width_of(&spans), width, "{:?}", text_of(&spans));
+                }
+            }
+        }
+        for width in [MIN_PR_WIDTH + 4, DEFAULT_PR_WIDTH, MAX_PR_WIDTH] {
+            let spans = pr_chip_spans(
+                Some(BranchLifecycle::PrOpen),
+                Some(1234),
+                Some(ReviewDecision::ChangesRequested),
+                counts,
+                width,
+                &theme,
+            );
+            assert_eq!(width_of(&spans), width);
+            let badge = spans
+                .iter()
+                .find(|s| s.content == "c7")
+                .unwrap_or_else(|| panic!("badge missing at {width}: {:?}", text_of(&spans)));
+            assert_eq!(badge.style.fg, theme.row_dim_style().fg);
+        }
     }
 
     #[test]
@@ -2850,7 +2918,7 @@ mod cell_tests {
             Some(BranchLifecycle::PrOpen),
             Some(42),
             Some(ReviewDecision::ChangesRequested),
-            Some(3),
+            crate::ui::theme::PrCounts::threads(Some(3)),
             DEFAULT_PR_WIDTH,
             &theme,
         );

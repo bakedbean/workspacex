@@ -512,7 +512,7 @@ pub fn render_updates_panel(
                 lifecycle: item.and_then(|i| i.row.lifecycle),
                 pr_number: item.and_then(|i| i.row.pr_number),
                 review: item.and_then(|i| i.row.review),
-                unresolved: item.and_then(|i| i.row.unresolved),
+                pr_counts: item.map(|i| i.row.pr_counts()).unwrap_or_default(),
                 diff: item.and_then(|i| i.row.diff),
             };
             lines.push(workspace_row(
@@ -713,7 +713,7 @@ struct RowData<'a> {
     lifecycle: Option<BranchLifecycle>,
     pr_number: Option<u32>,
     review: Option<crate::git::forge::ReviewDecision>,
-    unresolved: Option<u32>,
+    pr_counts: crate::ui::theme::PrCounts,
     diff: Option<crate::git::DiffStats>,
 }
 
@@ -835,7 +835,7 @@ fn workspace_row<'a>(
             row.lifecycle,
             row.pr_number,
             row.review,
-            row.unresolved,
+            row.pr_counts,
             pr_width,
             theme,
         ));
@@ -951,7 +951,7 @@ mod workspace_row_tests {
             lifecycle,
             pr_number: None,
             review: None,
-            unresolved: None,
+            pr_counts: Default::default(),
             diff: None,
         };
         workspace_row(
@@ -1281,7 +1281,7 @@ mod workspace_row_tests {
                     lifecycle: None,
                     pr_number: None,
                     review: None,
-                    unresolved: None,
+                    pr_counts: Default::default(),
                     diff: None,
                 };
                 let line = workspace_row(
@@ -1353,7 +1353,7 @@ mod workspace_row_tests {
                 lifecycle: None,
                 pr_number: None,
                 review: None,
-                unresolved: None,
+                pr_counts: Default::default(),
                 diff: None,
             };
             let line = workspace_row(
@@ -1392,7 +1392,7 @@ mod workspace_row_tests {
             lifecycle: None,
             pr_number: None,
             review: None,
-            unresolved: None,
+            pr_counts: Default::default(),
             diff: None,
         };
         let line = workspace_row(
@@ -1528,7 +1528,7 @@ mod workspace_row_tests {
             lifecycle,
             pr_number: Some(42),
             review: Some(crate::git::forge::ReviewDecision::ChangesRequested),
-            unresolved: Some(3),
+            pr_counts: crate::ui::theme::PrCounts::threads(Some(3)),
             diff: Some(crate::git::DiffStats {
                 added: 12,
                 removed: 3,
@@ -2676,6 +2676,7 @@ pub(super) mod test_fixtures {
                 lifecycle: None,
                 review: None,
                 unresolved: None,
+                comments: None,
                 nerd_fonts: false,
                 name_color: None,
                 workspace_id: w.id,

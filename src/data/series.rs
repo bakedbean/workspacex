@@ -387,7 +387,7 @@ mod tests {
             .conn()
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 31);
+        assert_eq!(v, crate::data::schema::SCHEMA_VERSION);
         store.migrate().unwrap();
         for t in ["series", "series_parts"] {
             let n: i64 = store
@@ -409,6 +409,7 @@ mod tests {
             url: None,
             review: None,
             unresolved: None,
+            comments: None,
         }
     }
 

@@ -68,6 +68,7 @@ async fn branch_rename_propagates_to_store() {
                 url: Some("https://github.com/o/r/pull/7".into()),
                 review: Some(wsx::git::forge::ReviewDecision::Approved),
                 unresolved: None,
+                comments: None,
             },
             1_000,
         )
@@ -204,6 +205,7 @@ async fn drift_does_not_repoll_pr_for_the_superseded_branch() {
                     url: Some("https://example.invalid/pull/111".into()),
                     review: Some(ReviewDecision::Approved),
                     unresolved: None,
+                    comments: None,
                 }),
                 // The new branch has no PR of its own — the case where a
                 // stale "#111 open" is most obviously wrong.
@@ -213,6 +215,7 @@ async fn drift_does_not_repoll_pr_for_the_superseded_branch() {
                     url: None,
                     review: None,
                     unresolved: None,
+                    comments: None,
                 }),
             })
         },

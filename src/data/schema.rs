@@ -18,7 +18,7 @@ use crate::error::Result;
 
 /// The `user_version` the last step of `migrate()` sets. Bump it with each
 /// new step.
-pub(crate) const SCHEMA_VERSION: i64 = 31;
+pub(crate) const SCHEMA_VERSION: i64 = 32;
 
 impl Store {
     pub(crate) fn migrate(&self) -> Result<()> {
@@ -262,6 +262,12 @@ impl Store {
         if v < 31 {
             self.conn().execute_batch(SCHEMA_V31_SERIES)?;
             self.conn().execute("PRAGMA user_version = 31", [])?;
+        }
+        if v < 32 {
+            // Human conversation-comment count on the PR. NULL means never
+            // fetched / couldn't fetch, distinct from 0.
+            self.add_column_if_missing("scm_cache", "pr_comments", "pr_comments INTEGER")?;
+            self.conn().execute("PRAGMA user_version = 32", [])?;
         }
         debug_assert_eq!(
             self.conn()

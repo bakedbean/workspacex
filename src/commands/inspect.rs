@@ -107,6 +107,8 @@ pub struct PrRecord {
     /// `approved`, `changes_requested`, `review_required`, or `None`.
     pub review: Option<String>,
     pub unresolved: Option<u32>,
+    /// Human conversation comments (bots excluded).
+    pub comments: Option<u32>,
     /// When this PR state was fetched (ms, like every timestamp here).
     pub fetched_at: Option<i64>,
 }
@@ -221,6 +223,7 @@ pub fn workspace_records(
                             .pr_review
                             .map(|d| crate::data::scm_cache::review_to_str(d).to_string()),
                         unresolved: c.pr_unresolved,
+                        comments: c.pr_comments,
                         // scm_cache stamps seconds; every timestamp this
                         // module emits is milliseconds.
                         fetched_at: c.fetched_at.map(|s| s * 1000),
@@ -474,6 +477,7 @@ mod tests {
                     url: Some("https://example.test/pr/42".into()),
                     review: Some(ReviewDecision::Approved),
                     unresolved: Some(2),
+                    comments: Some(4),
                 },
                 7,
             )
@@ -502,6 +506,7 @@ mod tests {
         assert_eq!(json["pr"]["url"], "https://example.test/pr/42");
         assert_eq!(json["pr"]["review"], "approved");
         assert_eq!(json["pr"]["unresolved"], 2);
+        assert_eq!(json["pr"]["comments"], 4);
         assert_eq!(json["pr"]["fetched_at"], 7000, "seconds in, ms out");
         assert_eq!(json["tags"], serde_json::json!([]));
     }

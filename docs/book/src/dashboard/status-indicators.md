@@ -65,6 +65,8 @@ The chip and the `⎇` glyph take the PR state's color: no PR, draft, open, conf
 | `✗`  | Changes requested; a number counts unresolved threads   |
 | `◌`  | Review required                                         |
 
+Any open PR, drafts included, can also show a comment count after the mark: the nerd-font comment icon and a number, or `c3` without nerd fonts. It counts general conversation comments from people. Inline review comments and bots (CI, coverage) aren't counted. Only the PR's latest 100 comments are looked at. Zero shows nothing, and in a very narrow PR column the count is the first thing dropped.
+
 PR data needs [`gh`](https://cli.github.com), installed and authenticated.
 
 ## Alerts

@@ -53,7 +53,7 @@ Each row has three zones.
 
 - the agent strip and the status glyph (a spinner while the agent works),
 - the **branch**, at its full length: the column is as wide as the longest branch name, so names never wrap (only a pane too narrow to fit one beside the PR chip wraps it),
-- the **PR chip**, as on the dashboard list's PR column: number, state, and the review mark with its unresolved-thread count. A workspace without a PR shows a dim `no PR`,
+- the **PR chip**, as on the dashboard list's PR column: number, state, the review mark with its unresolved-thread count, and the comment count. A workspace without a PR shows a dim `no PR`,
 - the **status word**, as on the dashboard row, with the running-process count and any badge,
 - commits ahead of the repo's base branch (`↑4 vs main`, from the repo's **Base branch** setting; `↑4 base` when it isn't set),
 - where the branch stands against its remote: `⇡2 unpushed` for commits not pushed yet and `⇣3 behind` for commits on the remote the workspace doesn't have, or a dim `not pushed` for a branch with commits but no upstream and no PR. Nothing when it is in sync,

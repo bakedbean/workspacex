@@ -53,13 +53,13 @@ Lists workspaces as tab-separated `repo  slug  branch  worktree_path` rows, opti
   "status": {"state": "working", "message": "running tests", "source": "model", "reported_at": 1790342366562},
   "recap": {"goal_short": "POST /widgets", "state_short": "tests failing", "next_short": "fix validation"},
   "agents": [{"id": 12, "label": "claude", "kind": "claude", "primary": true, "status": {"state": "working", "...": "..."}}],
-  "pr": {"state": "open", "number": 241, "url": "https://github.com/acme/backend/pull/241", "review": "approved", "unresolved": 0, "fetched_at": 1790342836000},
+  "pr": {"state": "open", "number": 241, "url": "https://github.com/acme/backend/pull/241", "review": "approved", "unresolved": 0, "comments": 2, "fetched_at": 1790342836000},
   "tags": ["spike"]
 }
 ```
 
 - `status` is the workspace's combined status. See [Status and recap](../agents/status-and-recap.md).
-- `pr` is the last PR state the dashboard or a desktop widget cached. `list` makes no network calls. `pr.state` is one of `no_pr`, `draft`, `open`, `conflicted`, `merged` or `closed`.
+- `pr` is the last PR state the dashboard or a desktop widget cached. `list` makes no network calls. `pr.state` is one of `no_pr`, `draft`, `open`, `conflicted`, `merged` or `closed`. `pr.comments` counts people's general comments on an open PR (bots left out), out of its latest 100.
 - A field that was never set is `null`.
 
 ## wsx workspace path

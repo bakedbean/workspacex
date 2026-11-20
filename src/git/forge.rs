@@ -184,7 +184,8 @@ pub struct PrStatus {
     /// conversation resolved — and renders as no number rather than a `0`.
     pub unresolved: Option<u32>,
     /// Human-authored conversation comments (not review comments) on an
-    /// open PR, or `None` when not fetched. Bot comments are excluded.
+    /// open PR, or `None` when not fetched. Bot comments are excluded, and
+    /// only the latest 100 comments are counted.
     pub comments: Option<u32>,
 }
 
@@ -469,8 +470,8 @@ async fn fetch_requires_approval(worktree: &Path, slug: &str, base: &str) -> Opt
 }
 
 /// A branch's full PR status: the `gh pr view` payload plus the follow-up
-/// probes (review gate, unresolved-thread count) that make the review mark
-/// accurate. Callers that only consume lifecycle/number — especially under
+/// probes (review gate, unresolved-thread and comment counts) that make the
+/// chip accurate. Callers that only consume lifecycle/number — especially under
 /// a deadline — should use [`fetch_pr_status_basic`] instead.
 pub async fn fetch_pr_status(worktree: &Path, branch: &str) -> Result<Option<PrStatus>> {
     fetch_pr_status_probed(worktree, branch, true).await
@@ -478,8 +479,8 @@ pub async fn fetch_pr_status(worktree: &Path, branch: &str) -> Result<Option<PrS
 
 /// [`fetch_pr_status`] minus the follow-up subprocesses: one `gh pr view`,
 /// nothing else. `review` still carries whatever verdict that payload
-/// reported, but no gate probe fills in a missing one and `unresolved`
-/// stays `None`. For callers like shared-workspace enrichment that wrap the
+/// reported, but no gate probe fills in a missing one and `unresolved` and
+/// `comments` stay `None`. For callers like shared-workspace enrichment that wrap the
 /// fetch in a hard timeout and read only lifecycle/number — a slow, unused
 /// probe there would burn the deadline and discard an already-known status.
 pub async fn fetch_pr_status_basic(worktree: &Path, branch: &str) -> Result<Option<PrStatus>> {
@@ -1263,6 +1264,14 @@ mod tests {
         let no_comments = r#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false}]}}}}}"#;
         assert_eq!(parse_pr_activity(no_comments).comments, None);
         assert_eq!(parse_pr_activity(no_comments).unresolved, Some(1));
+        let comments_only = r#"{"data":{"repository":{"pullRequest":{"comments":{"nodes":[]}}}}}"#;
+        assert_eq!(
+            parse_pr_activity(comments_only),
+            PrActivity {
+                unresolved: None,
+                comments: Some(0)
+            }
+        );
         let truncated = r#"{"data":{"repository":{"pullRequest":{"comments":{}}}}}"#;
         assert_eq!(parse_pr_activity(truncated), PrActivity::default());
     }

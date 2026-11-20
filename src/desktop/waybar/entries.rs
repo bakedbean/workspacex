@@ -718,6 +718,7 @@ mod entry_tests {
                     url: None,
                     review: None,
                     unresolved: None,
+                    comments: None,
                 },
                 0,
             )

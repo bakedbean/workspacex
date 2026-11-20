@@ -2871,6 +2871,24 @@ mod cell_tests {
             comments: Some(7),
             nerd_fonts: false,
         };
+        // Every legal column holds its width, even when mark + badge alone
+        // are wider than the narrowest one.
+        let wide = crate::ui::theme::PrCounts {
+            unresolved: Some(10),
+            comments: Some(10),
+            nerd_fonts: true,
+        };
+        for width in MIN_PR_WIDTH..=MAX_PR_WIDTH {
+            let spans = pr_chip_spans(
+                Some(BranchLifecycle::PrOpen),
+                Some(1234),
+                Some(ReviewDecision::ChangesRequested),
+                wide,
+                width,
+                &theme,
+            );
+            assert_eq!(width_of(&spans), width, "{:?}", text_of(&spans));
+        }
         for width in [MIN_PR_WIDTH + 4, DEFAULT_PR_WIDTH, MAX_PR_WIDTH] {
             let spans = pr_chip_spans(
                 Some(BranchLifecycle::PrOpen),

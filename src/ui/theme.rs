@@ -675,6 +675,11 @@ pub(crate) fn pr_chip(
             None => glyph.to_string(),
         };
     }
+    // The badge yields before the verdict: a tail wider than the whole
+    // column would otherwise overflow it and shift every later column.
+    if chip.tail_width() > max_width {
+        chip.comments = None;
+    }
     Some(chip)
 }
 
@@ -927,6 +932,18 @@ mod pr_chip_tests {
         let chip =
             pr_chip(PrOpen, Some(1234), None, with_comments(Some(5), false), 10).expect("chip");
         assert_eq!(chip.text(), "⏺ #1234 c5");
+    }
+
+    #[test]
+    fn the_badge_yields_when_the_tail_outgrows_the_column() {
+        let counts = PrCounts {
+            unresolved: Some(10),
+            comments: Some(10),
+            nerd_fonts: true,
+        };
+        let chip = pr_chip(PrOpen, Some(1234), Some(ChangesRequested), counts, 8).expect("chip");
+        assert_eq!(chip.comments, None);
+        assert_eq!(chip.mark().expect("mark").0, "✗ 10");
     }
 
     #[test]

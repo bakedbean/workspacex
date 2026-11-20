@@ -63,6 +63,7 @@ impl App {
             pr_lifecycle: std::collections::HashMap::new(),
             pr_review: std::collections::HashMap::new(),
             pr_unresolved: std::collections::HashMap::new(),
+            pr_comments: std::collections::HashMap::new(),
             pr_number: std::collections::HashMap::new(),
             pr_link_rect: None,
             dashboard_pr_rects: Vec::new(),
@@ -221,6 +222,9 @@ impl App {
             }
             if let Some(n) = row.pr_unresolved {
                 self.pr_unresolved.insert(ws.id, n);
+            }
+            if let Some(n) = row.pr_comments {
+                self.pr_comments.insert(ws.id, n);
             }
         }
     }
@@ -701,6 +705,8 @@ pub struct App {
     /// reports no count (probe failed, no verdict to hang it on) clears the
     /// key rather than leaving a stale number behind.
     pub pr_unresolved: std::collections::HashMap<crate::data::store::WorkspaceId, u32>,
+    /// Cached human PR-comment count per workspace; same removal rule.
+    pub pr_comments: std::collections::HashMap<crate::data::store::WorkspaceId, u32>,
     /// Screen rect of the clickable PR chip in the detail-bar header, with
     /// the workspace it belongs to. Set during draw, read by the mouse
     /// handler. Mirrors the `chip_rects` draw-populates / input-reads pattern.
@@ -1104,7 +1110,7 @@ mod scm_seed_tests {
             url: None,
             review: Some(ReviewDecision::Approved),
             unresolved: Some(3),
-            comments: None,
+            comments: Some(6),
         };
         store.upsert_scm_pr(ws, &status, 1).unwrap();
         store.upsert_scm_git(ws, true, 10, 4, 1).unwrap();
@@ -1127,6 +1133,7 @@ mod scm_seed_tests {
         assert_eq!(app.pr_number.get(&live), Some(&42));
         assert_eq!(app.pr_review.get(&live), Some(&ReviewDecision::Approved));
         assert_eq!(app.pr_unresolved.get(&live), Some(&3));
+        assert_eq!(app.pr_comments.get(&live), Some(&6));
         assert!(app.workspace_diff.is_empty());
         assert!(app.pr_last_poll_ms.is_empty());
         // No poll will ever refresh a missing worktree, so it gets no

@@ -724,6 +724,22 @@ mod tests {
     }
 
     #[test]
+    fn migrate_v32_scm_pr_comments_column_idempotent() {
+        let store = Store::open_in_memory().unwrap();
+        store.remigrate_from(1).unwrap(); // re-run must not error
+        let n: i64 = store
+            .conn()
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('scm_cache') \
+                 WHERE name = 'pr_comments'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "pr_comments column must exist exactly once");
+    }
+
+    #[test]
     fn settings_crud_round_trip() {
         let store = Store::open_in_memory().unwrap();
         assert!(store.get_setting("foo").unwrap().is_none());

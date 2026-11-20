@@ -129,16 +129,74 @@ async fn esc_clears_the_filter_before_leaving() {
     assert_eq!(app.dashboard.focused_repo, Some(repo));
 }
 
+/// Adds a repo named `name` holding one Ready workspace, then refreshes.
+fn add_repo_with_a_workspace(app: &mut App, name: &str) -> RepoId {
+    use crate::data::store::{NewWorkspace, WorkspaceState};
+    let rid = app
+        .store
+        .add_repo(&PathBuf::from(format!("/tmp/{name}")), name, "")
+        .unwrap();
+    let id = app
+        .store
+        .insert_workspace(&NewWorkspace {
+            repo_id: rid,
+            name: &format!("{name}-ws"),
+            branch: &format!("{name}/ws"),
+            worktree_path: &PathBuf::from(format!("/tmp/wsx-test/{name}-ws")),
+            yolo: false,
+            agent: crate::pty::session::AgentKind::Claude,
+            shared: false,
+        })
+        .unwrap();
+    app.store
+        .set_workspace_state(id, WorkspaceState::Ready)
+        .unwrap();
+    app.refresh().unwrap();
+    rid
+}
+
 #[tokio::test]
 async fn brackets_cycle_the_focused_repo_with_wrap() {
-    let (mut app, repo, other, _) = app();
+    let (mut app, repo, _, _) = app();
+    let third = add_repo_with_a_workspace(&mut app, "third");
     app.dashboard.focus_repo(repo);
     press(&mut app, KeyCode::Char(']')).await;
-    assert_eq!(app.dashboard.focused_repo, Some(other));
+    assert_eq!(
+        app.dashboard.focused_repo,
+        Some(third),
+        "skips empty \"other\""
+    );
     press(&mut app, KeyCode::Char(']')).await;
     assert_eq!(app.dashboard.focused_repo, Some(repo), "wraps to the first");
     press(&mut app, KeyCode::Char('[')).await;
-    assert_eq!(app.dashboard.focused_repo, Some(other), "wraps to the last");
+    assert_eq!(app.dashboard.focused_repo, Some(third), "wraps to the last");
+    press(&mut app, KeyCode::Char('[')).await;
+    assert_eq!(
+        app.dashboard.focused_repo,
+        Some(repo),
+        "skips empty going back"
+    );
+}
+
+/// Focused on an empty repo (say its last workspace was archived),
+/// the brackets still move on to the repos that have workspaces.
+#[tokio::test]
+async fn brackets_leave_an_empty_focused_repo() {
+    let (mut app, repo, other, _) = app();
+    app.dashboard.focus_repo(other);
+    press(&mut app, KeyCode::Char(']')).await;
+    assert_eq!(app.dashboard.focused_repo, Some(repo));
+}
+
+/// With only one repo holding workspaces, the brackets stay put.
+#[tokio::test]
+async fn brackets_stay_when_no_other_repo_has_workspaces() {
+    let (mut app, repo, _, _) = app();
+    app.dashboard.focus_repo(repo);
+    press(&mut app, KeyCode::Char(']')).await;
+    assert_eq!(app.dashboard.focused_repo, Some(repo));
+    press(&mut app, KeyCode::Char('[')).await;
+    assert_eq!(app.dashboard.focused_repo, Some(repo));
 }
 
 #[tokio::test]

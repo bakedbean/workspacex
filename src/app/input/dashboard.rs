@@ -180,12 +180,18 @@ pub(in crate::app::input) fn leave_repo_focus(app: &mut App) {
 }
 
 /// `[` / `]`: move the focus view to the previous / next repo in the saved
-/// repo order, wrapping at the ends.
+/// repo order, wrapping at the ends and skipping repos with no workspaces.
 pub(in crate::app::input) fn cycle_repo_focus(app: &mut App, forward: bool) {
     let Some(current) = app.dashboard.focused_repo else {
         return;
     };
-    let mut order: Vec<&crate::data::store::Repo> = app.repos.iter().collect();
+    // Skip repos with no workspaces; keep the current one so we know
+    // where we are even if its last workspace just went away.
+    let mut order: Vec<&crate::data::store::Repo> = app
+        .repos
+        .iter()
+        .filter(|r| r.id == current || app.workspaces.iter().any(|(rid, _)| *rid == r.id))
+        .collect();
     order.sort_by_key(|r| (r.sort_order, r.id.0));
     let Some(pos) = order.iter().position(|r| r.id == current) else {
         return;
@@ -196,6 +202,9 @@ pub(in crate::app::input) fn cycle_repo_focus(app: &mut App, forward: bool) {
     } else {
         (pos + n - 1) % n
     };
+    if next == pos {
+        return;
+    }
     let rid = order[next].id;
     enter_repo_focus(app, rid);
 }

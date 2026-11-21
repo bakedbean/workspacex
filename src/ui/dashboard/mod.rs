@@ -345,21 +345,32 @@ pub struct ListClickTargets {
 
 /// Resolve `(key, flat item index, (char offset, width))` spans into screen
 /// rects within a just-rendered list: `offset` is the list's scroll
-/// position, and every item is one row tall, so a flat index maps straight
-/// to a y offset. Spans scrolled out of view or off the right edge drop.
+/// position and `heights` each item's row count (repo headers are two rows:
+/// text plus rule). Spans anchor to their item's first row. Ratatui's `List`
+/// draws only items that fit whole, stopping at the first that doesn't, so
+/// the walk stops there too — a span on an item scrolled out of view, cut off
+/// at the bottom, or past the right edge drops.
 fn spans_to_rects<K: Copy>(
     list_area: Rect,
     offset: usize,
+    heights: &[usize],
     spans: impl IntoIterator<Item = (K, usize, (u16, u16))>,
 ) -> Vec<(K, Rect)> {
     let max_x = list_area.x.saturating_add(list_area.width);
+    // Top row of each item drawn from `offset` on, indexed by `idx - offset`.
+    let mut tops: Vec<u16> = Vec::new();
+    let mut y: usize = 0;
+    for &h in heights.iter().skip(offset) {
+        if y + h > list_area.height as usize {
+            break;
+        }
+        tops.push(y as u16);
+        y += h;
+    }
     spans
         .into_iter()
         .filter_map(|(key, flat_idx, (dx, w))| {
-            let dy = flat_idx.checked_sub(offset)?;
-            if dy >= list_area.height as usize {
-                return None;
-            }
+            let dy = *tops.get(flat_idx.checked_sub(offset)?)?;
             let x = list_area.x.saturating_add(dx);
             if x >= max_x {
                 return None;
@@ -368,7 +379,7 @@ fn spans_to_rects<K: Copy>(
                 key,
                 Rect {
                     x,
-                    y: list_area.y + dy as u16,
+                    y: list_area.y + dy,
                     width: w.min(max_x - x),
                     height: 1,
                 },
@@ -487,6 +498,7 @@ pub fn render_without_footer(
             ..Default::default()
         };
     }
+    let heights: Vec<usize> = items.iter().map(|i| i.height()).collect();
     let list = List::new(items).highlight_style(theme.selected_bg_style());
     f.render_stateful_widget(list, list_area, &mut state.list_state);
 
@@ -497,12 +509,13 @@ pub fn render_without_footer(
     let repo_names = spans_to_rects(
         list_area,
         offset,
+        &heights,
         name_spans
             .into_iter()
             .map(|(id, idx, span)| (crate::data::store::RepoId(id as i64), idx, span)),
     );
     ListClickTargets {
-        pr_chips: spans_to_rects(list_area, offset, chip_spans),
+        pr_chips: spans_to_rects(list_area, offset, &heights, chip_spans),
         repo_names,
         statuses,
         panel_files: panel.files,
@@ -1811,6 +1824,79 @@ fn render_by_attention<'a>(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod spans_to_rects_tests {
+    use super::*;
+    use ratatui::{buffer::Buffer, widgets::ListState, widgets::StatefulWidget};
+
+    /// Items: row, row, two-row header ("H" over a rule), row.
+    fn items() -> Vec<ratatui::widgets::ListItem<'static>> {
+        use ratatui::widgets::ListItem;
+        vec![
+            ListItem::new("a"),
+            ListItem::new("b"),
+            ListItem::new(vec![Line::from("H"), Line::from("-")]),
+            ListItem::new("c"),
+        ]
+    }
+
+    /// Render `items()` into a `rows`-tall list scrolled to `offset`, and
+    /// resolve one span per item. Returns the rects plus the painted buffer.
+    fn resolve(rows: u16, offset: usize) -> (Vec<(usize, Rect)>, Buffer) {
+        let items = items();
+        let heights: Vec<usize> = items.iter().map(|i| i.height()).collect();
+        let area = Rect::new(0, 0, 4, rows);
+        let mut buf = Buffer::empty(area);
+        let mut state = ListState::default().with_offset(offset);
+        StatefulWidget::render(List::new(items), area, &mut buf, &mut state);
+        let spans = (0..heights.len()).map(|i| (i, i, (0u16, 1u16)));
+        (spans_to_rects(area, state.offset(), &heights, spans), buf)
+    }
+
+    fn painted(buf: &Buffer, r: Rect) -> String {
+        buf[(r.x, r.y)].symbol().to_string()
+    }
+
+    #[test]
+    fn a_two_row_item_with_one_row_left_gets_no_target() {
+        // Three rows: a, b, then only one row for the two-row header, which
+        // List leaves undrawn — so its target must drop too.
+        let (rects, buf) = resolve(3, 0);
+        let keys: Vec<usize> = rects.iter().map(|(k, _)| *k).collect();
+        assert_eq!(keys, vec![0, 1]);
+        assert_eq!(buf[(0, 2)].symbol(), " ", "header not painted");
+    }
+
+    #[test]
+    fn targets_after_a_two_row_item_shift_down_by_its_height() {
+        let (rects, buf) = resolve(5, 0);
+        let ys: Vec<(usize, u16)> = rects.iter().map(|(k, r)| (*k, r.y)).collect();
+        assert_eq!(ys, vec![(0, 0), (1, 1), (2, 2), (3, 4)]);
+        for (k, r) in &rects {
+            let want = ["a", "b", "H", "c"][*k];
+            assert_eq!(painted(&buf, *r), want, "target {k} lands on its item");
+        }
+    }
+
+    #[test]
+    fn scrolled_targets_start_at_the_offset() {
+        let (rects, buf) = resolve(3, 2);
+        let ys: Vec<(usize, u16)> = rects.iter().map(|(k, r)| (*k, r.y)).collect();
+        assert_eq!(ys, vec![(2, 0), (3, 2)]);
+        assert_eq!(painted(&buf, rects[0].1), "H");
+        assert_eq!(painted(&buf, rects[1].1), "c");
+    }
+
+    #[test]
+    fn a_one_row_viewport_drops_a_two_row_item_at_the_top() {
+        // List still draws nothing for a too-tall item at the offset; the
+        // target must not appear over the blank row.
+        let (rects, buf) = resolve(1, 2);
+        assert!(rects.is_empty(), "{rects:?}");
+        assert_eq!(buf[(0, 0)].symbol(), " ");
+    }
+}
 
 #[cfg(test)]
 mod state_defaults {

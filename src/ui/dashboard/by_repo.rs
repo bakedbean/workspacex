@@ -1,11 +1,11 @@
 //! By-repo view: renders one section per repo, with a header that pairs the
-//! repo name with its path and embeds per-status counts on a horizontal rule,
-//! and a nested list of workspace rows underneath when expanded.
+//! repo name with its path and per-status counts, underlined by a horizontal
+//! rule, and a nested list of workspace rows underneath when expanded.
 //!
-//! The header reads `▾ ── name  /path/to/repo  ────  ? 1  ✓ 2    3 ws`:
+//! The header reads `▾    name  /path/to/repo        ? 1  ✓ 2    3 ws`:
 //! names right-justified to a shared column, then each path left-justified
-//! in the column that opens up after it, counts flush-right, and the rule
-//! filling between.
+//! in the column that opens up after it, counts flush-right, and a full-width
+//! rule on the line beneath.
 
 use crate::ui::dashboard::row::{self, RowInputs};
 use crate::ui::dashboard::sort::StatusCounts;
@@ -46,9 +46,6 @@ pub fn order_repos(repos: &mut [RepoView<'_>]) {
     repos.sort_by_key(|r| (r.sort_order, r.id));
 }
 
-/// Spaces flanking the filler rule on each side.
-const RULE_PAD: usize = 2;
-
 /// A clickable span on a repo header: `(cell offset in the line, width)`.
 type HeaderSpan = (u16, u16);
 
@@ -83,16 +80,12 @@ fn header_line(
     };
     spans.push(Span::styled(fold_glyph.to_string(), theme.dim_style()));
     spans.push(Span::raw(" ".to_string()));
-    // Right-justify the name, filling the blank space its left-pad opens up
-    // with a rule (matching the pinned-command row's filler). A space on each
-    // side keeps the rule from touching the glyph or the name.
+    // Right-justify the name with blank left-padding; the rule lives on its
+    // own line beneath the header.
     let name_len = view.name.chars().count();
     let pad = name_width.saturating_sub(name_len);
     if pad > 0 {
-        if pad > 1 {
-            spans.push(Span::styled("─".repeat(pad - 1), theme.dim_style()));
-        }
-        spans.push(Span::raw(" ".to_string()));
+        spans.push(Span::raw(" ".repeat(pad)));
     }
     let name_offset: usize = spans.iter().map(|s| s.width()).sum();
     let name_span = Span::styled(view.name.to_string(), theme.header_style());
@@ -110,28 +103,12 @@ fn header_line(
     // label needed — and the rule then runs to the right edge on its own.
     let right = count_spans(view.counts, theme);
 
-    // The rule fills the gap between the path and the flush-right counts,
-    // flanked by RULE_PAD spaces. Size it from the *actual* gap so the counts'
-    // right edge lands exactly at `width` — never force a minimum rule, which
-    // would push the line one column past `width` and clip them. With no counts
-    // there is nothing to separate on the right, so the trailing pad is dropped
-    // and the rule runs to the edge. When the gap is too small for a padded
-    // rule, fall back to plain spaces; if the left content plus the counts
-    // already overflow, the gap is zero.
-    let trail = if right.is_empty() { 0 } else { RULE_PAD };
+    // Plain spaces push the counts flush-right; if the left content plus
+    // the counts already overflow, the gap is zero.
     let used_left: usize = spans.iter().map(|s| s.content.chars().count()).sum();
     let used_right: usize = right.iter().map(|s| s.content.chars().count()).sum();
     let gap = width.saturating_sub(used_left + used_right);
-    if gap > RULE_PAD + trail {
-        let rule = "─".repeat(gap - RULE_PAD - trail);
-        spans.push(Span::raw(" ".repeat(RULE_PAD)));
-        spans.push(Span::styled(rule, theme.dim_style()));
-        if trail > 0 {
-            spans.push(Span::raw(" ".repeat(trail)));
-        }
-    } else {
-        spans.push(Span::raw(" ".repeat(gap)));
-    }
+    spans.push(Span::raw(" ".repeat(gap)));
     spans.extend(right);
     (Line::from(spans), name_hit)
 }
@@ -208,7 +185,14 @@ pub fn render_list(
         stripe.reset();
         let (line, name) = header_line(view, name_width, width, theme);
         names.push((view.id, items.len(), name));
-        items.push(ListItem::new(line));
+        // Empty repos have nothing under them to set off, so they skip the
+        // rule and stay a single row.
+        if view.counts.total() == 0 && view.hidden.is_empty() {
+            items.push(ListItem::new(line));
+        } else {
+            let rule = Line::from(Span::styled("─".repeat(width), theme.rule_style()));
+            items.push(ListItem::new(vec![line, rule]));
+        }
         if !view.expanded {
             continue;
         }
@@ -341,13 +325,12 @@ mod tests {
             "empty repo label dropped: {t:?}"
         );
         assert!(!t.contains(" ws"), "no count suffix for empty repo: {t:?}");
-        // Path still follows the name, and with no counts to separate on the
-        // right the rule runs all the way to the edge.
+        // Path still follows the name; the rule lives on its own line.
         assert!(
-            t.starts_with("  frontend  /home/eben/meals/frontend  ─"),
-            "path then rule to the edge: {t:?}"
+            t.starts_with("  frontend  /home/eben/meals/frontend"),
+            "path follows name: {t:?}"
         );
-        assert!(t.ends_with('─'), "no trailing pad without counts: {t:?}");
+        assert!(!t.contains('─'), "no inline rule: {t:?}");
     }
 
     /// Char column where the first occurrence of `needle` ends in the text.
@@ -429,7 +412,7 @@ mod tests {
     }
 
     #[test]
-    fn short_names_get_a_left_fill_rule() {
+    fn short_names_are_space_padded() {
         let theme = Theme::wsx();
         let repos = fixture::repos();
         let short = repos.iter().find(|r| r.name == "wsx").unwrap();
@@ -437,12 +420,12 @@ mod tests {
         let views = [make_view(short, 1, true), make_view(long, 2, true)];
         let name_width = name_align_width(&views);
 
-        // The shorter name's left-pad is filled with a rule (one space before
-        // the name), matching the pinned-command row's filler.
+        // The shorter name's left-pad is blank — the rule sits below the header.
         let short_t = header_text(&header_line(&views[0], name_width, 120, &theme).0);
-        assert!(short_t.contains("─ wsx"), "left-fill rule: {short_t:?}");
+        assert!(short_t.contains("      wsx  /"), "space pad: {short_t:?}");
+        assert!(!short_t.contains('─'), "no inline rule: {short_t:?}");
 
-        // The widest name has no left pad, so it hugs the glyph — no rule.
+        // The widest name has no left pad, so it hugs the glyph.
         let long_t = header_text(&header_line(&views[1], name_width, 120, &theme).0);
         assert!(long_t.starts_with("▾ scp-admin"), "no rule: {long_t:?}");
     }
@@ -466,6 +449,22 @@ mod tests {
         let items = render_list(&[view], row::ColumnWidths::default(), 0, 120, &theme).items;
         // 1 header + 4 workspaces + 1 spacer
         assert_eq!(items.len(), 6);
+    }
+
+    #[test]
+    fn rule_sits_under_non_empty_headers_only() {
+        let theme = Theme::wsx();
+        let repos = fixture::repos();
+        let wsx = repos.iter().find(|r| r.name == "wsx").unwrap();
+        let frontend = repos.iter().find(|r| r.name == "frontend").unwrap();
+        let views = [make_view(wsx, 1, false), make_view(frontend, 2, false)];
+        let items = render_list(&views, row::ColumnWidths::default(), 0, 120, &theme).items;
+        assert_eq!(
+            items[0].height(),
+            2,
+            "header + rule for a repo with workspaces"
+        );
+        assert_eq!(items[1].height(), 1, "empty repo: header only");
     }
 
     #[test]
@@ -518,22 +517,24 @@ mod tests {
         let n = views[0].workspaces.len();
         assert!(n >= 3, "fixture needs a few rows");
         let list = render_list(&views, row::ColumnWidths::default(), 0, 120, &theme);
-        let area = Rect::new(0, 0, 120, list.items.len() as u16);
+        let rows: usize = list.items.iter().map(|i| i.height()).sum();
+        let area = Rect::new(0, 0, 120, rows as u16);
         let mut buf = Buffer::empty(area);
         List::new(list.items).render(area, &mut buf);
         let bg = |y: usize| buf[(119, y as u16)].bg;
         let alt = theme.bg_alt;
         assert_ne!(bg(0), alt, "repo header plain");
+        assert_ne!(bg(1), alt, "header rule plain");
         for i in 0..n {
             let want = i % 2 == 1;
-            assert_eq!(bg(1 + i) == alt, want, "row {i} of first repo");
+            assert_eq!(bg(2 + i) == alt, want, "row {i} of first repo");
         }
-        // Header, n rows, spacer, then the second repo's header and rows.
-        let second = 1 + n + 1;
+        // Header + rule, n rows, spacer, then the second repo's header and rows.
+        let second = 2 + n + 1;
         assert_ne!(bg(second), alt, "second header plain");
-        assert_ne!(bg(second + 1), alt, "first row under the second repo plain");
+        assert_ne!(bg(second + 2), alt, "first row under the second repo plain");
         assert_eq!(
-            bg(second + 2),
+            bg(second + 3),
             alt,
             "second row under the second repo tinted"
         );
@@ -562,16 +563,17 @@ mod tests {
             workspaces: hidden_rows,
         }];
         let list = render_list(&[view], row::ColumnWidths::default(), 0, 120, &theme);
-        let area = Rect::new(0, 0, 120, list.items.len() as u16);
+        let rows: usize = list.items.iter().map(|i| i.height()).sum();
+        let area = Rect::new(0, 0, 120, rows as u16);
         let mut buf = Buffer::empty(area);
         List::new(list.items).render(area, &mut buf);
         let bg = |y: u16| buf[(119, y)].bg;
         let alt = theme.bg_alt;
-        // header, row, group line, hidden row, hidden row, spacer
-        assert_ne!(bg(1), alt, "first row plain");
-        assert_ne!(bg(2), alt, "group line plain");
-        assert_eq!(bg(3), alt, "first hidden row tinted, continuing the count");
-        assert_ne!(bg(4), alt, "second hidden row plain");
+        // header + rule, row, group line, hidden row, hidden row, spacer
+        assert_ne!(bg(2), alt, "first row plain");
+        assert_ne!(bg(3), alt, "group line plain");
+        assert_eq!(bg(4), alt, "first hidden row tinted, continuing the count");
+        assert_ne!(bg(5), alt, "second hidden row plain");
     }
 
     /// The selection highlight paints over the stripe, so a selected row
@@ -588,7 +590,8 @@ mod tests {
         let wsx = repos.iter().find(|r| r.name == "wsx").unwrap();
         let views = [make_view(wsx, 1, true)];
         let list = render_list(&views, row::ColumnWidths::default(), 0, 120, &theme);
-        let area = Rect::new(0, 0, 120, list.items.len() as u16);
+        let rows: usize = list.items.iter().map(|i| i.height()).sum();
+        let area = Rect::new(0, 0, 120, rows as u16);
         let mut buf = Buffer::empty(area);
         let mut state = ListState::default();
         state.select(Some(2)); // second workspace row: a tinted one
@@ -598,7 +601,8 @@ mod tests {
             &mut buf,
             &mut state,
         );
-        assert_eq!(buf[(119, 2)].bg, theme.selected_bg, "highlight over stripe");
-        assert_eq!(buf[(119, 4)].bg, theme.bg_alt, "other tinted rows keep it");
+        // The header item is two rows tall (text + rule), so item N sits at y N+1.
+        assert_eq!(buf[(119, 3)].bg, theme.selected_bg, "highlight over stripe");
+        assert_eq!(buf[(119, 5)].bg, theme.bg_alt, "other tinted rows keep it");
     }
 }

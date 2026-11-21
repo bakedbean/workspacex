@@ -106,6 +106,11 @@ pub struct DashboardState {
     /// interaction with the draft (typing, Backspace) clears the
     /// deadline so it doesn't wipe their fresh input mid-edit.
     pub reply_draft_clear_at_ms: Option<u64>,
+    /// The height the user dragged the detail bar to; `None` sizes it from
+    /// its config. Kept in the `detail_bar_height` setting.
+    pub detail_height: Option<u16>,
+    /// The press on the detail bar's top edge being dragged, if any.
+    pub detail_resize: Option<DetailResize>,
     /// The repo the dashboard is focused on, or `None` for every repo. While
     /// set, the list shows only that repo's workspaces, as tall rows. Not
     /// persisted.
@@ -252,6 +257,18 @@ impl DashboardState {
 
 // Hand-written rather than derived: `blocked_pin_max_age_secs` must default to
 // the pin window, not to `u64`'s zero, which would silently disable the pin.
+/// A press on the detail bar's top edge, dragging it to a new height.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DetailResize {
+    /// The row within the bar the press grabbed, so it follows the pointer.
+    pub grab: u16,
+    /// The screen row of the press.
+    pub from_row: u16,
+    /// The pointer has left `from_row`: until it does, the press is a
+    /// click and leaves the height alone.
+    pub moved: bool,
+}
+
 impl Default for DashboardState {
     fn default() -> Self {
         Self {
@@ -270,6 +287,8 @@ impl Default for DashboardState {
             selected: 0,
             reply_draft: String::new(),
             reply_draft_clear_at_ms: None,
+            detail_height: None,
+            detail_resize: None,
             focused_repo: None,
             focus_scroll: 0,
             focus_scroll_anchor: None,

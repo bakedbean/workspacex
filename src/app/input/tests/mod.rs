@@ -20,6 +20,7 @@ mod ctrl_x_shift_d;
 mod ctrl_z_suppression;
 mod dashboard;
 mod detail_bar_focus;
+mod detail_bar_resize;
 mod detail_scroll;
 mod global_settings;
 mod hide_rules;

@@ -221,7 +221,7 @@ A color is one of:
 - `#rrggbb`, or a 0–255 index.
 - An ANSI name: `red`, `bright-blue`, `white`.
 - A `[palette]` name.
-- A theme token: `dim row_dim path code bg_alt bg_soft ok warn err attention merged header_fg selected_fg selected_bg question stalled waiting thinking complete idle brand wordmark agent_claude agent_pi agent_hermes agent_codex agent_omp`. The `agent_*` tokens are each agent's fixed identity color.
+- A theme token: `dim row_dim rule path code bg_alt bg_soft ok warn err attention merged header_fg selected_fg selected_bg question stalled waiting thinking complete idle brand wordmark agent_claude agent_pi agent_hermes agent_codex agent_omp`. The `agent_*` tokens are each agent's fixed identity color.
 
 Palette names shadow theme tokens, which shadow ANSI names. This only affects the bar theme. `fg:dim` is a color, while `dimmed` is a text modifier.
 

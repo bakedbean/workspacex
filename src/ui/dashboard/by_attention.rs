@@ -159,7 +159,10 @@ pub fn render_list(
     theme: &Theme,
 ) -> Vec<ListItem<'static>> {
     let mut items: Vec<ListItem<'static>> = Vec::new();
+    // Each section header restarts the stripe.
+    let mut stripe = row::RowStripe::default();
     if !data.needs_attention.is_empty() {
+        stripe.reset();
         items.push(ListItem::new(section_header(
             "◆ NEEDS ATTENTION",
             data.needs_attention.len(),
@@ -169,10 +172,11 @@ pub fn render_list(
             theme,
         )));
         for r in &data.needs_attention {
-            items.push(ListItem::new(flat_row_line(r, widths, tick, theme, width)));
+            items.push(stripe.item(flat_row_line(r, widths, tick, theme, width), theme));
         }
     }
     if !data.working.is_empty() {
+        stripe.reset();
         items.push(ListItem::new(section_header(
             "● WORKING",
             data.working.len(),
@@ -182,10 +186,11 @@ pub fn render_list(
             theme,
         )));
         for r in &data.working {
-            items.push(ListItem::new(flat_row_line(r, widths, tick, theme, width)));
+            items.push(stripe.item(flat_row_line(r, widths, tick, theme, width), theme));
         }
     }
     if !data.recent.is_empty() {
+        stripe.reset();
         items.push(ListItem::new(section_header(
             "✓ RECENT",
             data.recent.len(),
@@ -195,10 +200,11 @@ pub fn render_list(
             theme,
         )));
         for r in &data.recent {
-            items.push(ListItem::new(flat_row_line(r, widths, tick, theme, width)));
+            items.push(stripe.item(flat_row_line(r, widths, tick, theme, width), theme));
         }
     }
     if !data.idle.is_empty() {
+        stripe.reset();
         items.push(ListItem::new(section_header(
             "  IDLE",
             data.idle.len(),
@@ -208,11 +214,12 @@ pub fn render_list(
             theme,
         )));
         for r in &data.idle {
-            items.push(ListItem::new(flat_row_line(r, widths, tick, theme, width)));
+            items.push(stripe.item(flat_row_line(r, widths, tick, theme, width), theme));
         }
     }
     if !data.hidden.is_empty() {
         let total: usize = data.hidden.iter().map(|(_, _, g)| g.workspaces.len()).sum();
+        stripe.reset();
         items.push(ListItem::new(section_header(
             "  HIDDEN",
             total,
@@ -236,14 +243,14 @@ pub fn render_list(
                         repo_name: repo_name.clone(),
                         row: w.clone(),
                     };
-                    items.push(ListItem::new(flat_row_line(
-                        &flat, widths, tick, theme, width,
-                    )));
+                    items
+                        .push(stripe.item(flat_row_line(&flat, widths, tick, theme, width), theme));
                 }
             }
         }
     }
     if !data.quiet_repos.is_empty() {
+        stripe.reset();
         items.push(ListItem::new(section_header(
             "  QUIET REPOS",
             data.quiet_repos.len(),
@@ -501,5 +508,35 @@ mod tests {
         let line = flat_row_line(&row, widths, 0, &theme, 120);
         let t: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(t.contains("wsx/bakedbean/repo-overview"), "{t:?}");
+    }
+
+    /// Every other workspace in a section takes the alternate background,
+    /// as in the focus view; each section header restarts the pattern.
+    #[test]
+    fn alternate_rows_are_tinted_per_section() {
+        use ratatui::{
+            buffer::Buffer,
+            layout::Rect,
+            widgets::{List, Widget},
+        };
+        let theme = Theme::wsx();
+        let data = partition(make_rows(), make_quiet());
+        let needs = data.needs_attention.len();
+        assert!(needs >= 3, "fixture needs a few attention rows");
+        let items = render_list(&data, row::ColumnWidths::default(), 0, 120, &theme);
+        let area = Rect::new(0, 0, 120, items.len() as u16);
+        let mut buf = Buffer::empty(area);
+        List::new(items).render(area, &mut buf);
+        let bg = |y: usize| buf[(119, y as u16)].bg;
+        let alt = theme.bg_alt;
+        assert_ne!(bg(0), alt, "section header plain");
+        for i in 0..needs {
+            assert_eq!(bg(1 + i) == alt, i % 2 == 1, "needs row {i}");
+        }
+        // WORKING header, then its rows restart plain.
+        let working = 1 + needs;
+        assert_ne!(bg(working), alt, "WORKING header plain");
+        assert_ne!(bg(working + 1), alt, "first WORKING row plain");
+        assert_eq!(bg(working + 2), alt, "second WORKING row tinted");
     }
 }

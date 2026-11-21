@@ -203,7 +203,9 @@ pub fn render_list(
     let mut items: Vec<ListItem<'static>> = Vec::new();
     let mut names: Vec<RepoHeaderSpan> = Vec::new();
     let name_width = name_align_width(repos);
+    let mut stripe = row::RowStripe::default();
     for view in repos {
+        stripe.reset();
         let (line, name) = header_line(view, name_width, width, theme);
         names.push((view.id, items.len(), name));
         items.push(ListItem::new(line));
@@ -211,7 +213,7 @@ pub fn render_list(
             continue;
         }
         for w in &view.workspaces {
-            items.push(ListItem::new(row::render(w, widths, tick, theme, width)));
+            items.push(stripe.item(row::render(w, widths, tick, theme, width), theme));
         }
         for g in &view.hidden {
             items.push(ListItem::new(
@@ -219,7 +221,7 @@ pub fn render_list(
             ));
             if g.expanded {
                 for w in &g.workspaces {
-                    items.push(ListItem::new(row::render(w, widths, tick, theme, width)));
+                    items.push(stripe.item(row::render(w, widths, tick, theme, width), theme));
                 }
             }
         }
@@ -498,5 +500,105 @@ mod tests {
         let names: Vec<&str> = view.workspaces.iter().map(|w| w.branch.as_str()).collect();
         assert_eq!(names[0], "bakedbean/theme-tokens", "stalled first");
         assert_eq!(names[1], "bakedbean/repo-overview", "question second");
+    }
+
+    /// Every other workspace under a repo takes the alternate background,
+    /// as in the focus view; each repo header restarts the pattern.
+    #[test]
+    fn alternate_rows_are_tinted_per_repo() {
+        use ratatui::{
+            buffer::Buffer,
+            layout::Rect,
+            widgets::{List, Widget},
+        };
+        let theme = Theme::wsx();
+        let repos = fixture::repos();
+        let wsx = repos.iter().find(|r| r.name == "wsx").unwrap();
+        let views = [make_view(wsx, 1, true), make_view(wsx, 2, true)];
+        let n = views[0].workspaces.len();
+        assert!(n >= 3, "fixture needs a few rows");
+        let list = render_list(&views, row::ColumnWidths::default(), 0, 120, &theme);
+        let area = Rect::new(0, 0, 120, list.items.len() as u16);
+        let mut buf = Buffer::empty(area);
+        List::new(list.items).render(area, &mut buf);
+        let bg = |y: usize| buf[(119, y as u16)].bg;
+        let alt = theme.bg_alt;
+        assert_ne!(bg(0), alt, "repo header plain");
+        for i in 0..n {
+            let want = i % 2 == 1;
+            assert_eq!(bg(1 + i) == alt, want, "row {i} of first repo");
+        }
+        // Header, n rows, spacer, then the second repo's header and rows.
+        let second = 1 + n + 1;
+        assert_ne!(bg(second), alt, "second header plain");
+        assert_ne!(bg(second + 1), alt, "first row under the second repo plain");
+        assert_eq!(
+            bg(second + 2),
+            alt,
+            "second row under the second repo tinted"
+        );
+    }
+
+    /// Rows under an expanded hidden group continue the stripe: the group
+    /// line itself neither takes the tint nor flips the pattern.
+    #[test]
+    fn hidden_group_rows_continue_the_stripe() {
+        use crate::data::hide_rules::{HideRule, PrCriterion};
+        use crate::ui::dashboard::hidden::HiddenGroupView;
+        use ratatui::{
+            buffer::Buffer,
+            layout::Rect,
+            widgets::{List, Widget},
+        };
+        let theme = Theme::wsx();
+        let repos = fixture::repos();
+        let wsx = repos.iter().find(|r| r.name == "wsx").unwrap();
+        let mut view = make_view(wsx, 1, true);
+        view.workspaces.truncate(1);
+        let hidden_rows = vec![view.workspaces[0].clone(), view.workspaces[0].clone()];
+        view.hidden = vec![HiddenGroupView {
+            rule: HideRule::Pr(PrCriterion::Merged),
+            expanded: true,
+            workspaces: hidden_rows,
+        }];
+        let list = render_list(&[view], row::ColumnWidths::default(), 0, 120, &theme);
+        let area = Rect::new(0, 0, 120, list.items.len() as u16);
+        let mut buf = Buffer::empty(area);
+        List::new(list.items).render(area, &mut buf);
+        let bg = |y: u16| buf[(119, y)].bg;
+        let alt = theme.bg_alt;
+        // header, row, group line, hidden row, hidden row, spacer
+        assert_ne!(bg(1), alt, "first row plain");
+        assert_ne!(bg(2), alt, "group line plain");
+        assert_eq!(bg(3), alt, "first hidden row tinted, continuing the count");
+        assert_ne!(bg(4), alt, "second hidden row plain");
+    }
+
+    /// The selection highlight paints over the stripe, so a selected row
+    /// that would be tinted still reads as selected.
+    #[test]
+    fn selection_highlight_wins_over_the_stripe() {
+        use ratatui::{
+            buffer::Buffer,
+            layout::Rect,
+            widgets::{List, ListState, StatefulWidget},
+        };
+        let theme = Theme::wsx();
+        let repos = fixture::repos();
+        let wsx = repos.iter().find(|r| r.name == "wsx").unwrap();
+        let views = [make_view(wsx, 1, true)];
+        let list = render_list(&views, row::ColumnWidths::default(), 0, 120, &theme);
+        let area = Rect::new(0, 0, 120, list.items.len() as u16);
+        let mut buf = Buffer::empty(area);
+        let mut state = ListState::default();
+        state.select(Some(2)); // second workspace row: a tinted one
+        StatefulWidget::render(
+            List::new(list.items).highlight_style(theme.selected_bg_style()),
+            area,
+            &mut buf,
+            &mut state,
+        );
+        assert_eq!(buf[(119, 2)].bg, theme.selected_bg, "highlight over stripe");
+        assert_eq!(buf[(119, 4)].bg, theme.bg_alt, "other tinted rows keep it");
     }
 }

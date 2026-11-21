@@ -305,6 +305,35 @@ pub fn agent_strip_spans(
     spans
 }
 
+/// Alternates a faint background across workspace rows so each reads as its
+/// own band, as the focus view does. Counted over workspace rows only:
+/// `reset` at each repo or section header, and group lines in between don't
+/// flip the pattern. The list's highlight paints over it, so the selected
+/// row still stands out.
+#[derive(Default)]
+pub struct RowStripe(usize);
+
+impl RowStripe {
+    pub fn reset(&mut self) {
+        self.0 = 0;
+    }
+
+    pub fn item(
+        &mut self,
+        line: Line<'static>,
+        theme: &Theme,
+    ) -> ratatui::widgets::ListItem<'static> {
+        let tinted = self.0 % 2 == 1;
+        self.0 += 1;
+        let item = ratatui::widgets::ListItem::new(line);
+        if tinted {
+            item.style(Style::default().bg(theme.bg_alt))
+        } else {
+            item
+        }
+    }
+}
+
 pub fn render(
     inputs: &RowInputs,
     widths: ColumnWidths,

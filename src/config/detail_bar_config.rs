@@ -80,6 +80,12 @@ impl DetailBarConfig {
     /// Number of always-on chrome rows (header + 2 rules + reply).
     pub const CHROME_ROWS: u16 = 4;
 
+    /// Rows a dragged bar always leaves the workspace list above it.
+    pub const LIST_MIN_ROWS: u16 = 10;
+
+    /// The setting holding the dragged height.
+    pub const HEIGHT_SETTING: &'static str = "detail_bar_height";
+
     /// The chrome rows this config draws: `CHROME_ROWS`, plus one for
     /// `bottom_rule`.
     pub fn chrome_rows(&self) -> u16 {
@@ -115,6 +121,28 @@ impl DetailBarConfig {
         let lo = self.height.min_rows.min(self.height.max_rows).max(floor);
         let hi = self.height.min_rows.max(self.height.max_rows).max(floor);
         target.clamp(lo, hi)
+    }
+
+    /// The rows a dragged bar may take in a `total`-row area: no shorter
+    /// than the chrome plus a content row (and `min_rows`), and always
+    /// leaving [`Self::LIST_MIN_ROWS`] above it for the workspace list.
+    pub fn drag_bounds(&self, total: u16) -> (u16, u16) {
+        let lo = self.minimum_height().max(self.chrome_rows() + 2);
+        let hi = total.saturating_sub(Self::LIST_MIN_ROWS).max(lo);
+        (lo, hi)
+    }
+
+    /// The bar's height in a `total`-row area: the user's dragged `chosen`
+    /// height when set (and the bar has a body to grow), else
+    /// [`Self::preferred_height`].
+    pub fn height_for(&self, total: u16, chosen: Option<u16>) -> u16 {
+        match chosen {
+            Some(h) if self.has_body() => {
+                let (lo, hi) = self.drag_bounds(total);
+                h.clamp(lo, hi)
+            }
+            _ => self.preferred_height(total),
+        }
     }
 
     /// Apply an override on top of self. Repo wins per-field for
@@ -335,6 +363,29 @@ mod tests {
             ..Default::default()
         };
         assert!(!cfg.has_body());
+    }
+
+    #[test]
+    fn height_for_uses_the_dragged_height_within_bounds() {
+        let cfg = DetailBarConfig::default();
+        assert_eq!(cfg.height_for(50, None), cfg.preferred_height(50));
+        assert_eq!(cfg.height_for(50, Some(30)), 30);
+        // Never squeezes the list below its minimum...
+        assert_eq!(
+            cfg.height_for(50, Some(49)),
+            50 - DetailBarConfig::LIST_MIN_ROWS
+        );
+        // ...nor the bar below min_rows.
+        assert_eq!(cfg.height_for(50, Some(1)), cfg.height.min_rows);
+    }
+
+    #[test]
+    fn height_for_ignores_the_dragged_height_without_a_body() {
+        let cfg = DetailBarConfig {
+            containers: vec![vec![], vec![]],
+            ..Default::default()
+        };
+        assert_eq!(cfg.height_for(50, Some(30)), cfg.chrome_rows());
     }
 
     #[test]

@@ -126,21 +126,22 @@ impl DetailBarConfig {
     /// The rows a dragged bar may take in a `total`-row area: no shorter
     /// than the chrome plus a content row (and `min_rows`), and always
     /// leaving [`Self::LIST_MIN_ROWS`] above it for the workspace list.
-    pub fn drag_bounds(&self, total: u16) -> (u16, u16) {
+    /// `None` when the bar has no body to grow, or `total` can't hold both.
+    pub fn drag_bounds(&self, total: u16) -> Option<(u16, u16)> {
+        if !self.has_body() {
+            return None;
+        }
         let lo = self.minimum_height().max(self.chrome_rows() + 2);
-        let hi = total.saturating_sub(Self::LIST_MIN_ROWS).max(lo);
-        (lo, hi)
+        let hi = total.checked_sub(Self::LIST_MIN_ROWS)?;
+        (hi >= lo).then_some((lo, hi))
     }
 
     /// The bar's height in a `total`-row area: the user's dragged `chosen`
-    /// height when set (and the bar has a body to grow), else
-    /// [`Self::preferred_height`].
+    /// height when set and [`Self::drag_bounds`] has room for it, clamped
+    /// to them; otherwise [`Self::preferred_height`].
     pub fn height_for(&self, total: u16, chosen: Option<u16>) -> u16 {
-        match chosen {
-            Some(h) if self.has_body() => {
-                let (lo, hi) = self.drag_bounds(total);
-                h.clamp(lo, hi)
-            }
+        match (chosen, self.drag_bounds(total)) {
+            (Some(h), Some((lo, hi))) => h.clamp(lo, hi),
             _ => self.preferred_height(total),
         }
     }
@@ -377,6 +378,20 @@ mod tests {
         );
         // ...nor the bar below min_rows.
         assert_eq!(cfg.height_for(50, Some(1)), cfg.height.min_rows);
+    }
+
+    #[test]
+    fn height_for_falls_back_when_the_list_minimum_cannot_hold() {
+        let cfg = DetailBarConfig::default();
+        let lo = cfg.minimum_height().max(cfg.chrome_rows() + 2);
+        let tight = lo + DetailBarConfig::LIST_MIN_ROWS;
+        assert_eq!(cfg.drag_bounds(tight), Some((lo, lo)));
+        assert_eq!(cfg.height_for(tight, Some(30)), lo);
+        assert_eq!(cfg.drag_bounds(tight - 1), None);
+        assert_eq!(
+            cfg.height_for(tight - 1, Some(30)),
+            cfg.preferred_height(tight - 1)
+        );
     }
 
     #[test]

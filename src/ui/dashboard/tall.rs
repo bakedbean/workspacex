@@ -1086,12 +1086,11 @@ pub fn render(
     let mut spans: Vec<(usize, usize)> = Vec::with_capacity(entries.len());
     let mut pr_hits: Vec<Option<(usize, u16, u16)>> = Vec::with_capacity(entries.len());
     for (i, e) in entries.iter().enumerate() {
-        // A section header hugs its first row and gets an extra gap above,
-        // so spacing alone shows which rows it heads.
-        let gap = match (i.checked_sub(1).map(|p| &entries[p]), e) {
-            (None, _) | (Some(TallEntry::Section(_)), _) => 0,
-            (Some(_), TallEntry::Section(_)) => 2,
-            _ => 1,
+        // Rows stack flush (striping separates them); only a section
+        // header gets a gap above, so spacing shows which rows it heads.
+        let gap = match (i, e) {
+            (1.., TallEntry::Section(_)) => 1,
+            _ => 0,
         };
         lines.extend(std::iter::repeat_n(Line::default(), gap));
         let (entry, pr_hit) = match e {
@@ -1917,15 +1916,15 @@ mod tests {
                 detail: &detail,
             },
         ];
-        // Each row is a strip and a footer, with a spacer between: 5 lines.
-        let (text, targets, _) = render_rows(&rows, Some(0), 4);
+        // Each row is a strip and a footer, stacked flush: 4 lines.
+        let (text, targets, _) = render_rows(&rows, Some(0), 3);
         assert!(text.contains("second"), "second head paints:\n{text}");
-        assert_eq!(targets.rows[1].1, Rect::new(0, 3, NARROW, 1));
+        assert_eq!(targets.rows[1].1, Rect::new(0, 2, NARROW, 1));
         assert_eq!(targets.pr_chips.len(), 1, "head on screen: chip live");
 
         let (_, targets, _) = render_rows(&rows, Some(0), 10);
         let last = targets.rows.last().unwrap().1;
-        assert_eq!(last.y + last.height, 5, "nothing below the content");
+        assert_eq!(last.y + last.height, 4, "nothing below the content");
     }
 
     /// Group lines sit between rows, take the selection tint, and report
@@ -1961,11 +1960,11 @@ mod tests {
             );
         })
         .unwrap();
-        // Row: strip + footer (lines 0-1), spacer, group on line 3.
+        // Row: strip + footer (lines 0-1), group flush on line 2.
         assert_eq!(targets.rows.len(), 1);
-        assert_eq!(targets.groups, vec![(1, Rect::new(0, 3, NARROW, 1))]);
+        assert_eq!(targets.groups, vec![(1, Rect::new(0, 2, NARROW, 1))]);
         let buf = term.backend().buffer();
-        assert_eq!(buf[(5, 3)].bg, Theme::wsx().selected_bg, "group tinted");
+        assert_eq!(buf[(5, 2)].bg, Theme::wsx().selected_bg, "group tinted");
     }
 
     /// Without a recap, the fallback text shows once: under a `last` label,
@@ -2869,13 +2868,13 @@ mod tests {
         assert_eq!(header("Open"), 0);
         assert_eq!(y(1), 1, "first row right under its header");
         assert_eq!(y(2), header("Done") + 1, "{lines:#?}");
-        let last_of_a = header("Done") - 3;
+        let last_of_a = header("Done") - 2;
         assert!(!lines[last_of_a].trim().is_empty(), "{lines:#?}");
         assert!(
             lines[last_of_a + 1..header("Done")]
                 .iter()
                 .all(|l| l.trim().is_empty()),
-            "two blank lines before the next header: {lines:#?}"
+            "one blank line before the next header: {lines:#?}"
         );
     }
 

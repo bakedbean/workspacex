@@ -241,7 +241,11 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
                 && on_detail_bar_edge(&d.rect, &m)
                 && !app.pr_link_rect.is_some_and(|(_, r)| rect_contains(&r, &m))
             {
-                app.dashboard.detail_resize_grab = Some(m.row - d.rect.y);
+                app.dashboard.detail_resize = Some(crate::ui::dashboard::DetailResize {
+                    grab: m.row - d.rect.y,
+                    from_row: m.row,
+                    moved: false,
+                });
                 return;
             }
 
@@ -514,27 +518,33 @@ fn on_detail_bar_edge(r: &ratatui::layout::Rect, m: &MouseEvent) -> bool {
 /// Route `m` to an in-flight detail-bar drag; returns whether it was
 /// consumed. Like [`side_panel_resize`]: each event sets the height from
 /// its own row, and a modal, a hidden bar, or a fresh press cancels it.
+/// A press released without leaving its row is a click: it changes and
+/// keeps nothing, so automatic sizing survives it.
 fn detail_bar_resize(app: &mut App, m: &MouseEvent) -> bool {
-    let Some(grab) = app.dashboard.detail_resize_grab else {
+    let Some(mut press) = app.dashboard.detail_resize else {
         return false;
     };
     let (Some(d), true) = (app.detail_bar_drag, app.modal.is_none()) else {
-        app.dashboard.detail_resize_grab = None;
+        app.dashboard.detail_resize = None;
         return false;
     };
     let release = match m.kind {
         MouseEventKind::Drag(MouseButton::Left) => false,
         MouseEventKind::Up(MouseButton::Left) => true,
         MouseEventKind::Down(_) => {
-            app.dashboard.detail_resize_grab = None;
+            app.dashboard.detail_resize = None;
             return false;
         }
         _ => return false,
     };
-    let height = d.height_at(m.row, grab);
+    press.moved |= m.row != press.from_row;
+    app.dashboard.detail_resize = (!release).then_some(press);
+    if !press.moved {
+        return true;
+    }
+    let height = d.height_at(m.row, press.grab);
     app.dashboard.detail_height = Some(height);
     if release {
-        app.dashboard.detail_resize_grab = None;
         if let Err(e) = app.store.set_setting(
             crate::config::detail_bar_config::DetailBarConfig::HEIGHT_SETTING,
             &height.to_string(),

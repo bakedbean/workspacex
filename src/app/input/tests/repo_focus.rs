@@ -554,8 +554,8 @@ fn the_view_draws_a_breadcrumb_and_one_tall_row_per_workspace() {
     assert!(
         app.dashboard_focus_row_rects
             .windows(2)
-            .all(|w| w[0].1.y + w[0].1.height < w[1].1.y),
-        "rows stack top to bottom with a gap"
+            .all(|w| w[0].1.y + w[0].1.height == w[1].1.y),
+        "rows stack top to bottom, flush"
     );
     assert!(app.dashboard_unfocus_rect.is_some());
     assert!(

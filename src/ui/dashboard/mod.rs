@@ -350,13 +350,21 @@ pub struct ListClickTargets {
 fn spans_to_rects<K: Copy>(
     list_area: Rect,
     offset: usize,
+    heights: &[usize],
     spans: impl IntoIterator<Item = (K, usize, (u16, u16))>,
 ) -> Vec<(K, Rect)> {
     let max_x = list_area.x.saturating_add(list_area.width);
     spans
         .into_iter()
         .filter_map(|(key, flat_idx, (dx, w))| {
-            let dy = flat_idx.checked_sub(offset)?;
+            if flat_idx < offset {
+                return None;
+            }
+            // Items can be taller than one row (repo headers carry a rule
+            // line), so sum the heights of the items scrolled into view above.
+            let dy: usize = (offset..flat_idx)
+                .map(|i| heights.get(i).copied().unwrap_or(1))
+                .sum();
             if dy >= list_area.height as usize {
                 return None;
             }
@@ -487,6 +495,7 @@ pub fn render_without_footer(
             ..Default::default()
         };
     }
+    let heights: Vec<usize> = items.iter().map(|i| i.height()).collect();
     let list = List::new(items).highlight_style(theme.selected_bg_style());
     f.render_stateful_widget(list, list_area, &mut state.list_state);
 
@@ -497,12 +506,13 @@ pub fn render_without_footer(
     let repo_names = spans_to_rects(
         list_area,
         offset,
+        &heights,
         name_spans
             .into_iter()
             .map(|(id, idx, span)| (crate::data::store::RepoId(id as i64), idx, span)),
     );
     ListClickTargets {
-        pr_chips: spans_to_rects(list_area, offset, chip_spans),
+        pr_chips: spans_to_rects(list_area, offset, &heights, chip_spans),
         repo_names,
         statuses,
         panel_files: panel.files,

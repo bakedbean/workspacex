@@ -41,6 +41,8 @@ The `detail_bar_config` setting holds a JSON value. Every field is optional, and
 | `containers`      | as above | Up to 4 columns of module IDs; `[]` leaves a column empty   |
 | `bottom_rule`     | `true`   | Draw a rule under the reply row; `false` saves a row        |
 
+To resize the bar by hand, drag its top edge (the header row or the rule under it) up or down. wsx remembers the dragged height across restarts in the `detail_bar_height` setting, which takes the place of `height` while it's set; unset it to go back to `height`. The bar never gets shorter than `min_rows`, and it always leaves the workspace list at least 10 rows.
+
 When every container is empty (`[[], [], []]`), the bar shrinks to its header and reply input. An unknown module ID shows a `[unknown: <id>]` placeholder.
 
 Set or edit the global value:

@@ -538,4 +538,67 @@ mod tests {
             "second row under the second repo tinted"
         );
     }
+
+    /// Rows under an expanded hidden group continue the stripe: the group
+    /// line itself neither takes the tint nor flips the pattern.
+    #[test]
+    fn hidden_group_rows_continue_the_stripe() {
+        use crate::data::hide_rules::{HideRule, PrCriterion};
+        use crate::ui::dashboard::hidden::HiddenGroupView;
+        use ratatui::{
+            buffer::Buffer,
+            layout::Rect,
+            widgets::{List, Widget},
+        };
+        let theme = Theme::wsx();
+        let repos = fixture::repos();
+        let wsx = repos.iter().find(|r| r.name == "wsx").unwrap();
+        let mut view = make_view(wsx, 1, true);
+        view.workspaces.truncate(1);
+        let hidden_rows = vec![view.workspaces[0].clone(), view.workspaces[0].clone()];
+        view.hidden = vec![HiddenGroupView {
+            rule: HideRule::Pr(PrCriterion::Merged),
+            expanded: true,
+            workspaces: hidden_rows,
+        }];
+        let list = render_list(&[view], row::ColumnWidths::default(), 0, 120, &theme);
+        let area = Rect::new(0, 0, 120, list.items.len() as u16);
+        let mut buf = Buffer::empty(area);
+        List::new(list.items).render(area, &mut buf);
+        let bg = |y: u16| buf[(119, y)].bg;
+        let alt = theme.bg_alt;
+        // header, row, group line, hidden row, hidden row, spacer
+        assert_ne!(bg(1), alt, "first row plain");
+        assert_ne!(bg(2), alt, "group line plain");
+        assert_eq!(bg(3), alt, "first hidden row tinted, continuing the count");
+        assert_ne!(bg(4), alt, "second hidden row plain");
+    }
+
+    /// The selection highlight paints over the stripe, so a selected row
+    /// that would be tinted still reads as selected.
+    #[test]
+    fn selection_highlight_wins_over_the_stripe() {
+        use ratatui::{
+            buffer::Buffer,
+            layout::Rect,
+            widgets::{List, ListState, StatefulWidget},
+        };
+        let theme = Theme::wsx();
+        let repos = fixture::repos();
+        let wsx = repos.iter().find(|r| r.name == "wsx").unwrap();
+        let views = [make_view(wsx, 1, true)];
+        let list = render_list(&views, row::ColumnWidths::default(), 0, 120, &theme);
+        let area = Rect::new(0, 0, 120, list.items.len() as u16);
+        let mut buf = Buffer::empty(area);
+        let mut state = ListState::default();
+        state.select(Some(2)); // second workspace row: a tinted one
+        StatefulWidget::render(
+            List::new(list.items).highlight_style(theme.selected_bg_style()),
+            area,
+            &mut buf,
+            &mut state,
+        );
+        assert_eq!(buf[(119, 2)].bg, theme.selected_bg, "highlight over stripe");
+        assert_eq!(buf[(119, 4)].bg, theme.bg_alt, "other tinted rows keep it");
+    }
 }

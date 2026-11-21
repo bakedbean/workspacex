@@ -375,11 +375,6 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
                 // A click on a repo header's name focuses that repo, same as
                 // `f` on the header.
                 enter_repo_focus(app, rid);
-            } else if let Some(repo_path) = repo_pr_link_target(app, &m) {
-                // Clicking a repo header's PR link opens that repo's open
-                // PRs filtered to the signed-in user — the by-hand route of
-                // "PRs tab, then filter by me", in one click.
-                crate::git::forge::open_author_prs_in_browser(&repo_path);
             } else if let Some((ws_id, _)) = app.procs_link_rect.filter(|(_, r)| {
                 m.column >= r.x
                     && m.column < r.x.saturating_add(r.width)

@@ -5,7 +5,6 @@
 //! handles GitHub PR-lifecycle detection via `gh`.
 
 pub mod forge;
-pub mod github_remotes;
 
 use crate::error::{Error, Result};
 use std::path::{Path, PathBuf};

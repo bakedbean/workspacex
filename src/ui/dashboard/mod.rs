@@ -56,9 +56,6 @@ pub struct DashboardInputs<'a> {
     pub workspaces: Vec<WorkspaceItem<'a>>,
     pub activity: &'a [u32],
     pub column_widths: row::ColumnWidths,
-    /// Which repos live on github.com — gates the per-repo PR link on the
-    /// by-repo headers.
-    pub github_remotes: &'a crate::git::github_remotes::GithubRemotes,
     /// The global nerd-fonts setting, for glyphs chosen outside `RowInputs`.
     pub nerd_fonts: bool,
     /// Fleet variables for theme modules, built once per frame.
@@ -324,9 +321,6 @@ type PrChipSpan = (crate::data::store::WorkspaceId, usize, (u16, u16));
 pub struct ListClickTargets {
     /// Each visible workspace row's PR chip — opens that PR in the browser.
     pub pr_chips: Vec<(crate::data::store::WorkspaceId, Rect)>,
-    /// Each visible repo header's PR link — opens that repo's open PRs
-    /// filtered to the signed-in user. Empty outside the by-repo view.
-    pub repo_pr_links: Vec<(crate::data::store::RepoId, Rect)>,
     /// Each `$statuses` tally item in the header — filters the list to that
     /// status, or clears the filter when it is the active one. Empty when
     /// the theme leaves `$statuses` off the header (the fallback strip row
@@ -460,11 +454,11 @@ pub fn render_without_footer(
         .panel
         .carve(f, chunks[3], inputs.panel.as_ref(), theme);
     let width = list_area.width as usize;
-    let (items, chip_spans, repo_link_spans, name_spans) = match state.group_mode {
+    let (items, chip_spans, name_spans) = match state.group_mode {
         GroupMode::Repo => render_by_repo(inputs, state, tick, width, theme),
         GroupMode::Attention => {
             let (items, chips) = render_by_attention(inputs, state, tick, width, theme);
-            (items, chips, Vec::new(), Vec::new())
+            (items, chips, Vec::new())
         }
     };
     // Nothing to show. An empty body reads as "the tool is broken", and the
@@ -500,19 +494,16 @@ pub fn render_without_footer(
     // rendered, so `list_state.offset()` reflects this frame's scroll
     // position.
     let offset = state.list_state.offset();
-    let repo_spans = |spans: Vec<by_repo::RepoPrLinkSpan>| {
-        spans_to_rects(
-            list_area,
-            offset,
-            spans
-                .into_iter()
-                .map(|(id, idx, span)| (crate::data::store::RepoId(id as i64), idx, span)),
-        )
-    };
+    let repo_names = spans_to_rects(
+        list_area,
+        offset,
+        name_spans
+            .into_iter()
+            .map(|(id, idx, span)| (crate::data::store::RepoId(id as i64), idx, span)),
+    );
     ListClickTargets {
         pr_chips: spans_to_rects(list_area, offset, chip_spans),
-        repo_pr_links: repo_spans(repo_link_spans),
-        repo_names: repo_spans(name_spans),
+        repo_names,
         statuses,
         panel_files: panel.files,
         panel_tabs: panel.tabs,
@@ -1539,8 +1530,7 @@ fn render_by_repo<'a>(
 ) -> (
     Vec<ratatui::widgets::ListItem<'static>>,
     Vec<PrChipSpan>,
-    Vec<by_repo::RepoPrLinkSpan>,
-    Vec<by_repo::RepoPrLinkSpan>,
+    Vec<by_repo::RepoHeaderSpan>,
 ) {
     let filter = RowFilter::of(state);
     let mut views: Vec<RepoView<'a>> = inputs
@@ -1579,7 +1569,6 @@ fn render_by_repo<'a>(
                 sort_order: r.sort_order,
                 workspaces,
                 hidden,
-                show_pr_link: inputs.github_remotes.is_github(r.id),
                 nerd_fonts: inputs.nerd_fonts,
             }
         })
@@ -1660,7 +1649,7 @@ fn render_by_repo<'a>(
     state.list_state.select(selected_idx);
 
     let list = by_repo::render_list(&views, widths, tick, width, theme);
-    (list.items, chip_spans, list.pr_links, list.names)
+    (list.items, chip_spans, list.names)
 }
 
 fn render_by_attention<'a>(

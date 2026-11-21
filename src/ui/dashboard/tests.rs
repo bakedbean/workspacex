@@ -112,7 +112,6 @@ fn render_to_strings_with(
         workspaces,
         activity: &activity,
         column_widths: row::ColumnWidths::default(),
-        github_remotes: &Default::default(),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
@@ -134,130 +133,6 @@ fn render_to_strings_with(
                 .collect::<String>()
         })
         .collect()
-}
-
-/// Only repos the `GithubRemotes` cache says live on github.com get a
-/// header PR link, and each returned rect must land exactly on the glyph
-/// painted in the buffer — not on the padding beside it.
-#[test]
-fn repo_pr_link_rects_land_on_rendered_glyphs() {
-    let fixtures = fixture::repos();
-    let repos: Vec<Repo> = fixtures
-        .iter()
-        .enumerate()
-        .map(|(i, r)| fake_repo(i as i64 + 1, &r.name, &r.path))
-        .collect();
-    // Every repo but the first is on GitHub.
-    let github = crate::git::github_remotes::GithubRemotes::probed(
-        repos.iter().map(|r| (r.id, r.id != repos[0].id)),
-    );
-    let (repo_refs, workspaces) = build_inputs(&fixtures, &repos);
-    let activity: Vec<u32> = (0..24).collect();
-    let inputs = DashboardInputs {
-        repos: repo_refs,
-        workspaces,
-        activity: &activity,
-        column_widths: row::ColumnWidths::default(),
-        github_remotes: &github,
-        nerd_fonts: false,
-        fleet: crate::ui::bar::fleet::empty(),
-        panel: None,
-    };
-    let mut state = DashboardState {
-        group_mode: GroupMode::Repo,
-        ..Default::default()
-    };
-    let theme = Theme::wsx();
-    let specs = crate::config::theme_file::bundled_default(&theme);
-    let mut term = Terminal::new(TestBackend::new(160, 40)).unwrap();
-    let mut rects: Vec<(RepoId, Rect)> = Vec::new();
-    term.draw(|f| {
-        rects =
-            render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme, &specs).repo_pr_links
-    })
-    .unwrap();
-    let buf = term.backend().buffer().clone();
-
-    let linked: Vec<RepoId> = rects.iter().map(|(id, _)| *id).collect();
-    let expected: Vec<RepoId> = repos
-        .iter()
-        .map(|r| r.id)
-        .filter(|id| *id != repos[0].id)
-        .collect();
-    assert_eq!(linked, expected, "only GitHub repos are clickable");
-
-    for (repo_id, r) in &rects {
-        let text: String = (r.x..r.x + r.width)
-            .map(|x| buf[(x, r.y)].symbol().to_string())
-            .collect();
-        assert_eq!(text, "PR", "rect for repo {repo_id:?} must cover its link");
-    }
-}
-
-/// A repo name of double-width characters pushes the link two cells right
-/// per character. The hit span must be measured in terminal cells, like the
-/// rendering is — counting Unicode scalars would leave the rect behind.
-#[test]
-fn repo_pr_link_rect_survives_a_wide_repo_name() {
-    let fixtures = fixture::repos();
-    let mut repos: Vec<Repo> = fixtures
-        .iter()
-        .enumerate()
-        .map(|(i, r)| fake_repo(i as i64 + 1, &r.name, &r.path))
-        .collect();
-    repos[0].name = "倉庫名".to_string(); // 3 chars, 6 cells
-    let github = crate::git::github_remotes::GithubRemotes::probed([(repos[0].id, true)]);
-    let (repo_refs, workspaces) = build_inputs(&fixtures, &repos);
-    let activity: Vec<u32> = (0..24).collect();
-    let inputs = DashboardInputs {
-        repos: repo_refs,
-        workspaces,
-        activity: &activity,
-        column_widths: row::ColumnWidths::default(),
-        github_remotes: &github,
-        nerd_fonts: false,
-        fleet: crate::ui::bar::fleet::empty(),
-        panel: None,
-    };
-    let mut state = DashboardState {
-        group_mode: GroupMode::Repo,
-        ..Default::default()
-    };
-    let theme = Theme::wsx();
-    let specs = crate::config::theme_file::bundled_default(&theme);
-    let mut term = Terminal::new(TestBackend::new(160, 40)).unwrap();
-    let mut rects: Vec<(RepoId, Rect)> = Vec::new();
-    term.draw(|f| {
-        rects =
-            render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme, &specs).repo_pr_links
-    })
-    .unwrap();
-    let buf = term.backend().buffer().clone();
-
-    let (_, r) = rects.first().expect("the wide-named repo is linked");
-    let text: String = (r.x..r.x + r.width)
-        .map(|x| buf[(x, r.y)].symbol().to_string())
-        .collect();
-    assert_eq!(text, "PR", "rect must track the link past a wide name");
-}
-
-/// The by-attention view has no repo headers, so it offers no repo links.
-#[test]
-fn by_attention_view_has_no_repo_pr_links() {
-    let inputs = fixture_dashboard_inputs();
-    let mut state = DashboardState {
-        group_mode: GroupMode::Attention,
-        ..Default::default()
-    };
-    let theme = Theme::wsx();
-    let specs = crate::config::theme_file::bundled_default(&theme);
-    let mut term = Terminal::new(TestBackend::new(160, 40)).unwrap();
-    let mut targets = ListClickTargets::default();
-    term.draw(|f| {
-        targets = render_without_footer(f, f.area(), &inputs, &mut state, 0, &theme, &specs)
-    })
-    .unwrap();
-    assert!(targets.repo_pr_links.is_empty());
 }
 
 /// Render `render_without_footer` with every fixture workspace given an open
@@ -286,7 +161,6 @@ fn assert_pr_rects_match_buffer(group: GroupMode, height: u16, select_last: bool
         workspaces,
         activity: &activity,
         column_widths: row::ColumnWidths::default(),
-        github_remotes: &Default::default(),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
@@ -405,7 +279,6 @@ fn footer_row_paints_chip_bg_but_no_bar_bg() {
         workspaces,
         activity: &activity,
         column_widths: row::ColumnWidths::default(),
-        github_remotes: &Default::default(),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
@@ -470,7 +343,6 @@ fn render_sets_list_state_to_selected_workspace_index() {
         workspaces,
         activity: &activity,
         column_widths: row::ColumnWidths::default(),
-        github_remotes: &Default::default(),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
@@ -518,7 +390,6 @@ fn selected_workspace_row_renders_with_thicker_gutter() {
         workspaces,
         activity: &activity,
         column_widths: row::ColumnWidths::default(),
-        github_remotes: &Default::default(),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
@@ -579,7 +450,6 @@ fn visible_targets_by_repo_matches_render_order() {
         workspaces,
         activity: &activity,
         column_widths: row::ColumnWidths::default(),
-        github_remotes: &Default::default(),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
@@ -621,7 +491,6 @@ fn visible_targets_by_repo_matches_render_order() {
             sort_order: r.sort_order,
             workspaces: Vec::new(),
             hidden: Vec::new(),
-            show_pr_link: false,
             nerd_fonts: false,
         })
         .collect();
@@ -701,7 +570,6 @@ fn visible_targets_matches_rendered_row_order_under_recency() {
         workspaces,
         activity: &activity,
         column_widths: row::ColumnWidths::default(),
-        github_remotes: &Default::default(),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
@@ -806,7 +674,6 @@ fn repo_order_breaks_sort_order_ties_by_id_in_lockstep() {
         workspaces: Vec::new(),
         activity: &activity,
         column_widths: row::ColumnWidths::default(),
-        github_remotes: &Default::default(),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
@@ -840,7 +707,6 @@ fn repo_order_breaks_sort_order_ties_by_id_in_lockstep() {
             sort_order: r.sort_order,
             workspaces: Vec::new(),
             hidden: Vec::new(),
-            show_pr_link: false,
             nerd_fonts: false,
         })
         .collect();
@@ -1014,7 +880,6 @@ fn fixture_dashboard_inputs() -> DashboardInputs<'static> {
         workspaces,
         activity,
         column_widths: row::ColumnWidths::default(),
-        github_remotes: Box::leak(Box::default()),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
@@ -1097,7 +962,7 @@ fn folded_repos_do_not_widen_the_strip() {
     let folded_repo_id = inputs.workspaces[0].repo.id;
     let mut state = DashboardState::default();
     state.folded.insert(folded_repo_id.0 as u64, true);
-    let (items, chips, _, _) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
+    let (items, chips, _) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
     assert!(!chips.is_empty(), "other repos still render rows");
     let (ws_id, flat_idx, (x, _w)) = chips[0];
     let rendered = item_text(&items[flat_idx]);
@@ -1127,7 +992,7 @@ fn chip_hit_spans_use_the_widened_strip() {
     let mut inputs = fixture_dashboard_inputs_with_pr();
     give_workspace_peers(&mut inputs, 0, 2);
     let mut state = DashboardState::default();
-    let (items, chips, _, _) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
+    let (items, chips, _) = render_by_repo(&inputs, &mut state, 0, 160, &Theme::wsx());
     let (ws_id, flat_idx, (x, _w)) = chips[0];
     let rendered = item_text(&items[flat_idx]);
     assert_eq!(
@@ -1165,7 +1030,6 @@ fn render_empty_body(repos: &[Repo], group: GroupMode, filter: Option<&str>) -> 
         workspaces: Vec::new(),
         activity: &activity,
         column_widths: row::ColumnWidths::default(),
-        github_remotes: &Default::default(),
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
@@ -1485,7 +1349,6 @@ mod hide_rules {
             workspaces: ws,
             activity: &[],
             column_widths: row::ColumnWidths::default(),
-            github_remotes: Box::leak(Box::default()),
             nerd_fonts: false,
             fleet: crate::ui::bar::fleet::empty(),
             panel: None,

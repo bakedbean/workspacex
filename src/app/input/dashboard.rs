@@ -117,25 +117,6 @@ pub(crate) fn status_click_target(
         .map(|(s, _)| *s)
 }
 
-/// The repo path a click should open the author-filtered PR list for, or
-/// `None` if the click missed every repo header's PR link. Resolving the
-/// path here (rather than in the mouse handler) keeps the decision
-/// testable without spawning a browser. A rect whose repo was unregistered
-/// between the draw and the click resolves to `None`.
-pub(crate) fn repo_pr_link_target(
-    app: &App,
-    m: &crossterm::event::MouseEvent,
-) -> Option<std::path::PathBuf> {
-    let (repo_id, _) = app
-        .dashboard_repo_pr_rects
-        .iter()
-        .find(|(_, r)| rect_contains(r, m))?;
-    app.repos
-        .iter()
-        .find(|r| r.id == *repo_id)
-        .map(|r| r.path.clone())
-}
-
 /// `f`: focus the dashboard on the selected row's repo, or leave the focus
 /// view when already in it.
 pub(in crate::app::input) fn toggle_repo_focus(app: &mut App) {

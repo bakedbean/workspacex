@@ -19,7 +19,6 @@ Hold `Shift` while you drag. Most terminals (Alacritty, Kitty, WezTerm, iTerm2, 
 | A key hint in the footer     | Presses that key                                         |
 | A status in the header tally (`? 2 question`) | [Filters the list](status-indicators.md#filtering-by-status) to that status; click it again, or press `esc`, to clear |
 | A row's PR chip (`⏺ #123 open`) | Opens the PR in your browser                          |
-| A repo header's PR link      | Opens your open PRs in that repo on GitHub               |
 | A repo header's name         | Shows only that repo, in the [focus view](repo-focus.md) |
 | A workspace in the focus view | Attaches to it                                          |
 | `◂ all repos` in the focus view | Goes back to every repo                               |
@@ -36,7 +35,5 @@ Hold `Shift` while you drag. Most terminals (Alacritty, Kitty, WezTerm, iTerm2, 
 | An agent pill                | Switches the pane to that agent                          |
 | A `$hosts` chip              | Opens that host's [shared workspaces](../integrations/shared-workspaces.md) |
 | The footer activity graph    | Picks the graph's time window                            |
-
-The repo PR link shows as `PR`, or as a pull-request icon with [`nerd_fonts`](../configuration/settings.md) on. It turns green when one of the repo's workspaces has an open PR. It appears only for repos whose `origin` is on github.com.
 
 Opening PRs needs [`gh`](https://cli.github.com), installed and authenticated.

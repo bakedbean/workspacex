@@ -110,7 +110,6 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     app.agent_chip_rects.clear();
     app.pr_link_rect = None;
     app.dashboard_pr_rects.clear();
-    app.dashboard_repo_pr_rects.clear();
     app.dashboard_status_rects.clear();
     app.dashboard_repo_name_rects.clear();
     app.dashboard_focus_row_rects.clear();

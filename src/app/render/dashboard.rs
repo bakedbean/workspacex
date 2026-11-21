@@ -90,7 +90,6 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
         workspaces,
         activity: &activity,
         column_widths,
-        github_remotes: &app.github_remotes,
         nerd_fonts,
         fleet: &fleet,
         // Filled below, once the selection is reconciled.
@@ -156,7 +155,6 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
         &app.bar_specs,
     );
     app.dashboard_pr_rects = click_targets.pr_chips;
-    app.dashboard_repo_pr_rects = click_targets.repo_pr_links;
     app.dashboard_status_rects = click_targets.statuses;
     app.dashboard_repo_name_rects = click_targets.repo_names;
     app.dashboard_focus_row_rects = click_targets.focus_rows;

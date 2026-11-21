@@ -63,7 +63,7 @@ pub use remote::{RemoteFormSeed, RemoteList, RemoteTagWrite, RemoteTarget};
 pub use repo_setting::RepoSettingField;
 pub use run::run;
 pub use state::App;
-pub use types::{AppEvent, AttachReady, PendingEdit, SelectionTarget, StoppedKind};
+pub use types::{AppEvent, AttachReady, DetailBarDrag, PendingEdit, SelectionTarget, StoppedKind};
 
 pub(crate) use global_setting::apply_global_setting;
 pub(crate) use reconcile::{reconcile_archive_result, reconcile_create_result};

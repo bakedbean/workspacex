@@ -70,6 +70,28 @@ pub enum StoppedKind {
     Complete,
 }
 
+/// The dashboard detail bar as drawn, for dragging its top edge: where it
+/// sits and the heights [`DetailBarConfig::drag_bounds`] allows it.
+///
+/// [`DetailBarConfig::drag_bounds`]: crate::config::detail_bar_config::DetailBarConfig::drag_bounds
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DetailBarDrag {
+    pub rect: ratatui::layout::Rect,
+    pub min: u16,
+    pub max: u16,
+}
+
+impl DetailBarDrag {
+    /// The bar's height with its grabbed row (`grab` rows below its top)
+    /// at `row`, its bottom edge held still, clamped to the bounds.
+    pub fn height_at(&self, row: u16, grab: u16) -> u16 {
+        let bottom = self.rect.y.saturating_add(self.rect.height);
+        bottom
+            .saturating_sub(row.saturating_sub(grab))
+            .clamp(self.min, self.max)
+    }
+}
+
 /// How many hourly activity buckets to retain, in memory and in the DB. Sized
 /// to the largest selectable usage-graph window (30 days), so the setting is
 /// purely a view over already-collected data rather than affecting retention.

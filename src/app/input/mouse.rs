@@ -87,7 +87,7 @@ pub(in crate::app::input) fn adjust_detail_scroll(
 }
 
 pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedApp, m: MouseEvent) {
-    if side_panel_resize(app, &m) {
+    if side_panel_resize(app, &m) || detail_bar_resize(app, &m) {
         return;
     }
     // The diff viewer covers the screen: every mouse event is its own.
@@ -232,6 +232,16 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
             // it) starts dragging it to a new width.
             if app.side_panel_rect.is_some_and(|r| on_panel_edge(&r, &m)) {
                 active_side_panel(app).resizing = true;
+                return;
+            }
+
+            // A press on the detail bar's header or the rule under it (off
+            // the header's PR chip) starts dragging the bar to a new height.
+            if let Some(d) = app.detail_bar_drag
+                && on_detail_bar_edge(&d.rect, &m)
+                && !app.pr_link_rect.is_some_and(|(_, r)| rect_contains(&r, &m))
+            {
+                app.dashboard.detail_resize_grab = Some(m.row - d.rect.y);
                 return;
             }
 
@@ -488,6 +498,48 @@ fn side_panel_resize(app: &mut App, m: &MouseEvent) -> bool {
             &width.to_string(),
         ) {
             tracing::warn!(error = %e, "failed to persist side_panel_width");
+        }
+    }
+    true
+}
+
+/// Whether `m` is on the detail bar at `r`'s header row or the rule under it.
+fn on_detail_bar_edge(r: &ratatui::layout::Rect, m: &MouseEvent) -> bool {
+    m.row >= r.y
+        && m.row <= r.y.saturating_add(1)
+        && m.column >= r.x
+        && m.column < r.x.saturating_add(r.width)
+}
+
+/// Route `m` to an in-flight detail-bar drag; returns whether it was
+/// consumed. Like [`side_panel_resize`]: each event sets the height from
+/// its own row, and a modal, a hidden bar, or a fresh press cancels it.
+fn detail_bar_resize(app: &mut App, m: &MouseEvent) -> bool {
+    let Some(grab) = app.dashboard.detail_resize_grab else {
+        return false;
+    };
+    let (Some(d), true) = (app.detail_bar_drag, app.modal.is_none()) else {
+        app.dashboard.detail_resize_grab = None;
+        return false;
+    };
+    let release = match m.kind {
+        MouseEventKind::Drag(MouseButton::Left) => false,
+        MouseEventKind::Up(MouseButton::Left) => true,
+        MouseEventKind::Down(_) => {
+            app.dashboard.detail_resize_grab = None;
+            return false;
+        }
+        _ => return false,
+    };
+    let height = d.height_at(m.row, grab);
+    app.dashboard.detail_height = Some(height);
+    if release {
+        app.dashboard.detail_resize_grab = None;
+        if let Err(e) = app.store.set_setting(
+            crate::config::detail_bar_config::DetailBarConfig::HEIGHT_SETTING,
+            &height.to_string(),
+        ) {
+            tracing::warn!(error = %e, "failed to persist detail_bar_height");
         }
     }
     true

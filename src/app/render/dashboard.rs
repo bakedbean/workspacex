@@ -75,7 +75,21 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
         detail_visible,
         &detail_cfg,
         reply_only,
+        app.dashboard.detail_height,
     );
+    // A full bar with a body to grow can be dragged taller or shorter by
+    // its top edge; the bounds are the ones `dashboard_regions` sized it in.
+    if let Some(rect) = detail_area.filter(|_| !reply_only && detail_cfg.has_body()) {
+        let room = if app.pm_visible {
+            pm_area.map_or(inner_area.height, |pm| {
+                inner_area.height.saturating_sub(pm.height)
+            })
+        } else {
+            inner_area.height
+        };
+        let (min, max) = detail_cfg.drag_bounds(room);
+        app.detail_bar_drag = Some(crate::app::DetailBarDrag { rect, min, max });
+    }
     let nerd_fonts = nerd_fonts_enabled(&app.store);
 
     // Build per-workspace inputs in V5 shape.
@@ -235,7 +249,23 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
                         &app.theme,
                     )
                 } else {
-                    crate::ui::dashboard::detail::render(f, detail_area, &mut inputs, &app.theme)
+                    let out = crate::ui::dashboard::detail::render(
+                        f,
+                        detail_area,
+                        &mut inputs,
+                        &app.theme,
+                    );
+                    // Mid-drag, the rule under the header (the drag handle)
+                    // draws highlighted, as the side panel's edge does.
+                    if app.dashboard.detail_resize_grab.is_some() && detail_area.height > 1 {
+                        let rule = ratatui::layout::Rect {
+                            y: detail_area.y + 1,
+                            height: 1,
+                            ..detail_area
+                        };
+                        f.buffer_mut().set_style(rule, app.theme.selected_style());
+                    }
+                    out
                 };
                 app.detail_container_rects = out.container_rects;
                 app.pr_link_rect = out.pr_link_rect.map(|r| (ws.id, r));
@@ -636,15 +666,19 @@ pub(super) fn dashboard_regions(
     detail_visible: bool,
     detail_cfg: &DetailBarConfig,
     reply_only: bool,
+    chosen_detail_h: Option<u16>,
 ) -> (
     ratatui::layout::Rect,
     Option<ratatui::layout::Rect>,
     Option<ratatui::layout::Rect>,
 ) {
+    let pm_h = ((u32::from(area.height) * 33 / 100) as u16).max(6);
     let detail_h = if reply_only {
         crate::ui::dashboard::detail::reply_only_height(detail_cfg)
+    } else if pm_visible {
+        detail_cfg.height_for(area.height.saturating_sub(pm_h), chosen_detail_h)
     } else {
-        detail_cfg.preferred_height(area.height)
+        detail_cfg.height_for(area.height, chosen_detail_h)
     };
     match (pm_visible, detail_visible) {
         (false, false) => (area, None, None),
@@ -663,7 +697,6 @@ pub(super) fn dashboard_regions(
             (chunks[0], None, Some(chunks[1]))
         }
         (true, true) => {
-            let pm_h = ((u32::from(area.height) * 33 / 100) as u16).max(6);
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([

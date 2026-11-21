@@ -26,6 +26,11 @@ impl App {
             .and_then(|w| w.parse::<u16>().ok());
         dashboard.panel.width = panel_width;
         dashboard.focus_panel.width = panel_width;
+        dashboard.detail_height = store
+            .get_setting(crate::config::detail_bar_config::DetailBarConfig::HEIGHT_SETTING)
+            .ok()
+            .flatten()
+            .and_then(|h| h.parse::<u16>().ok());
         let mut attached_panel = crate::ui::dashboard::side_panel::SidePanelState::default();
         attached_panel.width = panel_width;
         // Several tests construct an `App` only incidentally and then create
@@ -73,6 +78,7 @@ impl App {
             dashboard_focus_group_rects: Vec::new(),
             side_panel_tab_rects: Vec::new(),
             side_panel_rect: None,
+            detail_bar_drag: None,
             side_panel_file_rects: Vec::new(),
             dashboard_unfocus_rect: None,
             procs_link_rect: None,
@@ -945,6 +951,10 @@ pub struct App {
     /// The side panel, on whichever view drew it — the wheel over it
     /// scrolls it.
     pub side_panel_rect: Option<ratatui::layout::Rect>,
+    /// The dashboard detail bar's rect and the heights a drag may give it,
+    /// when it draws in full — a press on its top edge drags it taller or
+    /// shorter.
+    pub detail_bar_drag: Option<DetailBarDrag>,
     /// The side panel's file rows by file index, on whichever view drew
     /// it — a click opens that file's diff.
     pub side_panel_file_rects: Vec<(usize, ratatui::layout::Rect)>,

@@ -106,6 +106,12 @@ pub struct DashboardState {
     /// interaction with the draft (typing, Backspace) clears the
     /// deadline so it doesn't wipe their fresh input mid-edit.
     pub reply_draft_clear_at_ms: Option<u64>,
+    /// The height the user dragged the detail bar to; `None` sizes it from
+    /// its config. Kept in the `detail_bar_height` setting.
+    pub detail_height: Option<u16>,
+    /// While the detail bar's top edge is being dragged, the row within the
+    /// bar the press grabbed, so the grabbed row follows the pointer.
+    pub detail_resize_grab: Option<u16>,
     /// The repo the dashboard is focused on, or `None` for every repo. While
     /// set, the list shows only that repo's workspaces, as tall rows. Not
     /// persisted.
@@ -270,6 +276,8 @@ impl Default for DashboardState {
             selected: 0,
             reply_draft: String::new(),
             reply_draft_clear_at_ms: None,
+            detail_height: None,
+            detail_resize_grab: None,
             focused_repo: None,
             focus_scroll: 0,
             focus_scroll_anchor: None,

@@ -9,7 +9,7 @@ Hold `Shift` while you drag. Most terminals (Alacritty, Kitty, WezTerm, iTerm2, 
 ## Scrolling
 
 - The wheel scrolls the attached pane's history. If the agent handles the mouse itself, the wheel goes to the agent; hold `Shift` to scroll wsx's history instead. Over the [side panel](side-panel.md#in-the-attached-view) it scrolls the panel.
-- On the dashboard, the wheel over a [detail bar](detail-bar.md) container scrolls that container, and over the [side panel](side-panel.md) scrolls the panel. Elsewhere in the [focus view](repo-focus.md) it scrolls the workspaces.
+- On the dashboard, the wheel over a [detail bar](detail-bar.md) container scrolls that container, and over the [side panel](side-panel.md) scrolls the panel. Elsewhere it scrolls the workspace list without moving the selection, so rows the detail bar crowds out can be brought into view; moving the selection scrolls the list back to it. In the [focus view](repo-focus.md) it scrolls the workspaces.
 - In the side panel's [diff viewer](side-panel.md#the-diff-viewer), the wheel scrolls the diff, and a click or drag on the minimap jumps there.
 
 ## Clickable targets

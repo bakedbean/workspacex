@@ -68,6 +68,13 @@ pub struct DashboardInputs<'a> {
 #[derive(Debug)]
 pub struct DashboardState {
     pub list_state: ListState,
+    /// The list's first visible item while the wheel has scrolled it apart
+    /// from the selection, so rows the detail bar crowds out can be read
+    /// without moving the selection. `None` keeps the selection in view.
+    pub list_scroll: Option<usize>,
+    /// The selection `list_scroll` was set under. Once the selection
+    /// differs, the free scroll ends and the list follows the selection.
+    pub list_scroll_anchor: Option<SelectionTarget>,
     pub group_mode: GroupMode,
     /// How workspaces are ordered within a repo. Loaded from the
     /// `dashboard_sort_mode` setting at startup and persisted on toggle.
@@ -242,6 +249,14 @@ impl DashboardState {
         self.focus_scroll_anchor = None;
     }
 
+    /// Scroll the list by `lines` items (negative is up) without moving the
+    /// selection. The next frame clamps it to the content.
+    pub fn scroll_list(&mut self, lines: isize) {
+        let from = self.list_scroll.unwrap_or(self.list_state.offset());
+        self.list_scroll = Some(from.saturating_add_signed(lines));
+        self.list_scroll_anchor = self.selection.clone();
+    }
+
     /// Scroll the focus view by `lines` (negative is up). The next frame
     /// clamps it to the content and keeps part of the selected row showing.
     pub fn scroll_focus(&mut self, lines: isize) {
@@ -273,6 +288,8 @@ impl Default for DashboardState {
     fn default() -> Self {
         Self {
             list_state: ListState::default(),
+            list_scroll: None,
+            list_scroll_anchor: None,
             group_mode: GroupMode::default(),
             focus_group_by_pr: true,
             focus_panel: side_panel::SidePanelState::open_on(side_panel::PanelTab::Next),
@@ -360,6 +377,19 @@ pub struct ListClickTargets {
     pub panel_files: Vec<(usize, Rect)>,
     /// The focus view's `◂ all repos` link — leaves the focus view.
     pub unfocus: Option<Rect>,
+}
+
+/// The furthest the list can scroll: the offset that puts the last item on
+/// the area's bottom row, or 0 when everything fits.
+fn max_list_offset(heights: &[usize], area_height: usize) -> usize {
+    let mut below = 0;
+    for (i, h) in heights.iter().enumerate().rev() {
+        below += h;
+        if below > area_height {
+            return i + 1;
+        }
+    }
+    0
 }
 
 /// Resolve `(key, flat item index, (char offset, width))` spans into screen
@@ -518,8 +548,35 @@ pub fn render_without_footer(
         };
     }
     let heights: Vec<usize> = items.iter().map(|i| i.height()).collect();
-    let list = List::new(items).highlight_style(theme.selected_bg_style());
-    f.render_stateful_widget(list, list_area, &mut state.list_state);
+    let highlight = theme.selected_bg_style();
+    let list = List::new(items).highlight_style(highlight);
+    if state.list_scroll.is_some() && state.list_scroll_anchor != state.selection {
+        state.list_scroll = None;
+    }
+    if let Some(free) = state.list_scroll {
+        // Drawn without a selection so `List` keeps the offset rather than
+        // scrolling the selected row back into view; the highlight is laid
+        // on by hand when that row is on screen.
+        let offset = free.min(max_list_offset(&heights, list_area.height as usize));
+        state.list_scroll = Some(offset);
+        let mut free_state = ListState::default().with_offset(offset);
+        f.render_stateful_widget(list, list_area, &mut free_state);
+        *state.list_state.offset_mut() = free_state.offset();
+        if let Some(sel) = state.list_state.selected().filter(|&s| s >= offset) {
+            let top: usize = heights[offset..sel].iter().sum();
+            let height = heights.get(sel).copied().unwrap_or(0);
+            if top + height <= list_area.height as usize {
+                let row = Rect {
+                    y: list_area.y + top as u16,
+                    height: height as u16,
+                    ..list_area
+                };
+                f.buffer_mut().set_style(row, highlight);
+            }
+        }
+    } else {
+        f.render_stateful_widget(list, list_area, &mut state.list_state);
+    }
 
     // Convert flat-index spans into screen rects. The list has just
     // rendered, so `list_state.offset()` reflects this frame's scroll

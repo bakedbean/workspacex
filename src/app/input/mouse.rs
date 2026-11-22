@@ -127,6 +127,12 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
             app.dashboard.scroll_focus(if up { -3 } else { 3 });
             return;
         }
+        // On the list, the wheel scrolls the rows apart from the selection,
+        // so rows below the detail bar can be brought into view.
+        if app.modal.is_none() {
+            app.dashboard.scroll_list(if up { -3 } else { 3 });
+            return;
+        }
     }
 
     // Attached view: a plain wheel over a pane whose agent has mouse

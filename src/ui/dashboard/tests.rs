@@ -1855,3 +1855,98 @@ fn parse_show_tags_normalizes_dedupes_and_skips_invalid() {
     let names: Vec<&str> = tags.iter().map(|t| &**t).collect();
     assert_eq!(names, ["support", "ops"]);
 }
+
+/// The wheel scrolls the list past a selection near its top without moving
+/// the selection, and moving the selection hands scrolling back to it.
+#[test]
+fn wheel_scrolls_the_list_apart_from_the_selection() {
+    let fixtures = fixture::repos();
+    let repos: Vec<Repo> = fixtures
+        .iter()
+        .enumerate()
+        .map(|(i, r)| fake_repo(i as i64 + 1, &r.name, &r.path))
+        .collect();
+    let (repo_refs, workspaces) = build_inputs(&fixtures, &repos);
+    let first_id = workspaces[0].workspace_id;
+    let last_id = workspaces.last().unwrap().workspace_id;
+    let activity: Vec<u32> = (0..24).collect();
+    let inputs = DashboardInputs {
+        repos: repo_refs,
+        workspaces,
+        activity: &activity,
+        column_widths: row::ColumnWidths::default(),
+        nerd_fonts: false,
+        fleet: crate::ui::bar::fleet::empty(),
+        panel: None,
+    };
+    let mut state = DashboardState {
+        selection: Some(SelectionTarget::Workspace(first_id)),
+        ..Default::default()
+    };
+    let theme = Theme::wsx();
+    let specs = crate::config::theme_file::bundled_default(&theme);
+    let mut term = Terminal::new(TestBackend::new(160, 12)).unwrap();
+    let mut draw = |state: &mut DashboardState| {
+        term.draw(|f| {
+            render_without_footer(f, f.area(), &inputs, state, 0, &theme, &specs);
+        })
+        .unwrap();
+    };
+    draw(&mut state);
+    assert_eq!(state.list_state.offset(), 0);
+
+    // Far past the end: clamped so the last item sits on the bottom row.
+    state.scroll_list(1000);
+    draw(&mut state);
+    let max = state.list_state.offset();
+    assert!(max > 0, "the list scrolls on a short terminal");
+    assert_eq!(state.list_scroll, Some(max), "the clamp is kept");
+    assert_eq!(
+        state.selection,
+        Some(SelectionTarget::Workspace(first_id)),
+        "scrolling leaves the selection alone"
+    );
+
+    state.scroll_list(-1);
+    draw(&mut state);
+    assert_eq!(state.list_state.offset(), max - 1, "scrolls back up");
+
+    // A new selection ends the free scroll; the list follows it.
+    state.selection = Some(SelectionTarget::Workspace(last_id));
+    state.scroll_list(-1000);
+    state.selection = Some(SelectionTarget::Workspace(first_id));
+    draw(&mut state);
+    assert_eq!(state.list_scroll, None);
+    let sel = state.list_state.selected().unwrap();
+    assert_eq!(
+        state.list_state.offset(),
+        sel,
+        "scrolling up to the selection puts it on the top row"
+    );
+}
+
+#[test]
+fn max_list_offset_stops_at_the_last_item() {
+    assert_eq!(max_list_offset(&[1, 1, 1], 5), 0, "everything fits");
+    assert_eq!(
+        max_list_offset(&[2, 1, 1, 1], 3),
+        1,
+        "last items fill the area"
+    );
+    assert_eq!(max_list_offset(&[1, 1, 4], 3), 2, "an oversized last item");
+    assert_eq!(max_list_offset(&[], 3), 0);
+}
+
+/// A selection made after a wheel scroll but before the next frame is not
+/// swallowed by the next wheel tick: the list still follows it.
+#[test]
+fn wheel_after_an_unrendered_selection_change_follows_the_selection() {
+    let mut state = DashboardState {
+        selection: Some(SelectionTarget::Workspace(WorkspaceId(1))),
+        ..Default::default()
+    };
+    state.scroll_list(3);
+    state.selection = Some(SelectionTarget::Workspace(WorkspaceId(2)));
+    state.scroll_list(3);
+    assert_eq!(state.list_scroll, None);
+}

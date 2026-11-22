@@ -74,6 +74,27 @@ async fn wheel_outside_containers_does_not_touch_detail_offsets() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wheel_outside_containers_scrolls_the_list() {
+    let store = Store::open_in_memory().unwrap();
+    let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();
+    app.view = View::Dashboard;
+    handle_mouse(
+        &mut app,
+        &super::common::shared_app(),
+        mouse_at(MouseEventKind::ScrollDown, 50, 5),
+    )
+    .await;
+    assert_eq!(app.dashboard.list_scroll, Some(3));
+    handle_mouse(
+        &mut app,
+        &super::common::shared_app(),
+        mouse_at(MouseEventKind::ScrollUp, 50, 5),
+    )
+    .await;
+    assert_eq!(app.dashboard.list_scroll, Some(0));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wheel_in_attached_view_does_not_touch_detail_offsets() {
     let store = Store::open_in_memory().unwrap();
     let mut app = App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap();

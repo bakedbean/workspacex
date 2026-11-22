@@ -252,6 +252,13 @@ impl DashboardState {
     /// Scroll the list by `lines` items (negative is up) without moving the
     /// selection. The next frame clamps it to the content.
     pub fn scroll_list(&mut self, lines: isize) {
+        // A selection made since the free scroll began wins: the list
+        // must follow it on the next frame, so this tick is dropped
+        // rather than re-anchoring the stale offset to the new selection.
+        if self.list_scroll.is_some() && self.list_scroll_anchor != self.selection {
+            self.list_scroll = None;
+            return;
+        }
         let from = self.list_scroll.unwrap_or(self.list_state.offset());
         self.list_scroll = Some(from.saturating_add_signed(lines));
         self.list_scroll_anchor = self.selection.clone();
@@ -380,13 +387,15 @@ pub struct ListClickTargets {
 }
 
 /// The furthest the list can scroll: the offset that puts the last item on
-/// the area's bottom row, or 0 when everything fits.
+/// the area's bottom row, or 0 when everything fits. Never past the last
+/// item, even when that item alone is taller than the area.
 fn max_list_offset(heights: &[usize], area_height: usize) -> usize {
+    let last = heights.len().saturating_sub(1);
     let mut below = 0;
     for (i, h) in heights.iter().enumerate().rev() {
         below += h;
         if below > area_height {
-            return i + 1;
+            return (i + 1).min(last);
         }
     }
     0

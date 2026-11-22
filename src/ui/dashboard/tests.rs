@@ -1924,3 +1924,29 @@ fn wheel_scrolls_the_list_apart_from_the_selection() {
         "scrolling up to the selection puts it on the top row"
     );
 }
+
+#[test]
+fn max_list_offset_stops_at_the_last_item() {
+    assert_eq!(max_list_offset(&[1, 1, 1], 5), 0, "everything fits");
+    assert_eq!(
+        max_list_offset(&[2, 1, 1, 1], 3),
+        1,
+        "last items fill the area"
+    );
+    assert_eq!(max_list_offset(&[1, 1, 4], 3), 2, "an oversized last item");
+    assert_eq!(max_list_offset(&[], 3), 0);
+}
+
+/// A selection made after a wheel scroll but before the next frame is not
+/// swallowed by the next wheel tick: the list still follows it.
+#[test]
+fn wheel_after_an_unrendered_selection_change_follows_the_selection() {
+    let mut state = DashboardState {
+        selection: Some(SelectionTarget::Workspace(WorkspaceId(1))),
+        ..Default::default()
+    };
+    state.scroll_list(3);
+    state.selection = Some(SelectionTarget::Workspace(WorkspaceId(2)));
+    state.scroll_list(3);
+    assert_eq!(state.list_scroll, None);
+}

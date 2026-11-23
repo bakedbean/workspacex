@@ -116,14 +116,15 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     // summary row rather than parking invisibly.
     if let Some(SelectionTarget::Workspace(id)) = app.dashboard.selection {
         if !new_selectable.contains(&SelectionTarget::Workspace(id)) {
-            if let Some((repo, rule)) = app.hidden_group_of(id) {
-                let group = SelectionTarget::HiddenGroup { repo, rule };
-                if new_selectable.contains(&group) {
-                    app.dashboard.selection = Some(group);
-                }
-            } else if let Some(header) = dashboard::folded_section_of(&inputs, &app.dashboard, id) {
-                // Likewise a row that moved into a folded section.
-                app.dashboard.selection = Some(header);
+            // `hidden_group_of` ignores filters, so check the group is drawn.
+            let group = app
+                .hidden_group_of(id)
+                .map(|(repo, rule)| SelectionTarget::HiddenGroup { repo, rule })
+                .filter(|g| new_selectable.contains(g));
+            // Likewise a row that moved into a folded section.
+            let header = || dashboard::folded_section_of(&inputs, &app.dashboard, id);
+            if let Some(t) = group.or_else(header).filter(|t| new_selectable.contains(t)) {
+                app.dashboard.selection = Some(t);
             }
         }
     }

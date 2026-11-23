@@ -1975,3 +1975,67 @@ async fn section_folds_are_per_repo_and_ignored_ungrouped() {
     draw(&mut app);
     assert!(!app.selectable.contains(&SelectionTarget::Workspace(ids[0])));
 }
+
+/// Leaving the focus view from a section header selects the focused repo's
+/// header on the list, even unfolded, not whatever sits at the old index.
+#[tokio::test]
+async fn leaving_from_a_section_header_selects_the_repo() {
+    let (mut app, ids) = app_with_sections();
+    let repo = app.dashboard.focused_repo.unwrap();
+    app.dashboard.folded.insert(repo.0 as u64, false);
+    select_ws(&mut app, ids[3]);
+    press(&mut app, KeyCode::Char('{')).await;
+    draw(&mut app);
+    assert_eq!(
+        app.selected_target(),
+        Some(header(repo, FocusSection::Done))
+    );
+    press(&mut app, KeyCode::Char('f')).await;
+    draw(&mut app);
+    assert_eq!(app.dashboard.focused_repo, None);
+    assert_eq!(app.selected_target(), Some(SelectionTarget::Repo(repo)));
+}
+
+/// A filter shows hidden rows among the sections; one that disappears into
+/// a folded section still hands the selection to its header, though its
+/// hide-rule group isn't drawn.
+#[tokio::test]
+async fn filtered_hidden_row_folding_away_selects_its_header() {
+    let (mut app, repo, ids) = app_with_parked_group();
+    app.dashboard.filter = Some("#parked".into());
+    draw(&mut app);
+    select_ws(&mut app, ids[3]);
+    app.dashboard
+        .folded_sections
+        .insert((repo, FocusSection::NoPr));
+    draw(&mut app);
+    assert_eq!(
+        app.selected_target(),
+        Some(header(repo, FocusSection::NoPr))
+    );
+}
+
+/// Ungrouped, `zM` / `zR` leave the saved section folds alone.
+#[tokio::test]
+async fn z_chords_ignore_sections_when_ungrouped() {
+    let (mut app, ids) = app_with_sections();
+    let repo = app.dashboard.focused_repo.unwrap();
+    app.dashboard
+        .folded_sections
+        .insert((repo, FocusSection::Open));
+    app.dashboard.focus_group_by_pr = false;
+    draw(&mut app);
+    select_ws(&mut app, ids[2]);
+    press(&mut app, KeyCode::Char('z')).await;
+    press(&mut app, KeyCode::Char('M')).await;
+    press(&mut app, KeyCode::Char('z')).await;
+    press(&mut app, KeyCode::Char('z')).await;
+    assert_eq!(app.dashboard.folded_sections.len(), 1);
+    press(&mut app, KeyCode::Char('z')).await;
+    press(&mut app, KeyCode::Char('R')).await;
+    assert!(
+        app.dashboard
+            .folded_sections
+            .contains(&(repo, FocusSection::Open))
+    );
+}

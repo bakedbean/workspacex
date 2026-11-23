@@ -162,7 +162,12 @@ pub(in crate::app::input) fn leave_repo_focus(app: &mut App) {
         Some(explicit) => explicit,
         None => crate::ui::dashboard::sort::default_fold(current_repo_counts(app, rid)),
     };
-    if folded || app.selected_target().is_none() {
+    // A section header has no row on the list either.
+    let on_header = matches!(
+        app.selected_target(),
+        None | Some(SelectionTarget::FocusSection { .. })
+    );
+    if folded || on_header {
         app.dashboard.selection = Some(SelectionTarget::Repo(rid));
     }
 }
@@ -412,7 +417,10 @@ pub(in crate::app::input) fn set_focused_fold(app: &mut App, fold: bool) {
 /// default-fold heuristic so even default-folded repos open.
 pub(in crate::app::input) fn expand_all_repos(app: &mut App) {
     if let Some(repo) = app.dashboard.focused_repo {
-        app.dashboard.folded_sections.retain(|(r, _)| *r != repo);
+        // Ungrouped, there are no sections to open.
+        if app.dashboard.focus_group_by_pr {
+            app.dashboard.folded_sections.retain(|(r, _)| *r != repo);
+        }
         return;
     }
     for r in &app.repos {
@@ -424,6 +432,9 @@ pub(in crate::app::input) fn expand_all_repos(app: &mut App) {
 /// `true` in `dashboard.folded`. Overrides the renderer's heuristic.
 pub(in crate::app::input) fn fold_all_repos(app: &mut App) {
     if let Some(repo) = app.dashboard.focused_repo {
+        if !app.dashboard.focus_group_by_pr {
+            return;
+        }
         // The selection's section first, so the cursor lands on its header.
         if let Some(key) = selected_focus_section(app) {
             set_focus_section_fold(app, key, true);

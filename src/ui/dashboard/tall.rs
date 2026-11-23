@@ -234,8 +234,8 @@ pub struct TallTargets {
 pub enum TallEntry<'a> {
     Row(TallRow<'a>),
     Group(Line<'static>),
-    /// A PR-state header line; never a target.
-    Section(Line<'static>),
+    /// A PR-state header and the rule beneath it; never a target.
+    Section(Vec<Line<'static>>),
 }
 
 /// Width of the label column on detail lines (`prompt  `, `goal    `, …):
@@ -1098,7 +1098,8 @@ pub fn render(
                 let l = row_layout(r, glyphs, cols, tab, tick, theme);
                 (l.lines, l.pr_hit)
             }
-            TallEntry::Group(line) | TallEntry::Section(line) => (vec![line.clone()], None),
+            TallEntry::Group(line) => (vec![line.clone()], None),
+            TallEntry::Section(lines) => (lines.clone(), None),
         };
         spans.push((lines.len(), entry.len()));
         pr_hits.push(pr_hit);
@@ -2821,10 +2822,10 @@ mod tests {
             })
         };
         let entries = [
-            TallEntry::Section(Line::from("── Open · 2 ──")),
+            TallEntry::Section(vec![Line::from("Open · 2")]),
             row(&a),
             row(&b),
-            TallEntry::Section(Line::from("── Done · 1 ──")),
+            TallEntry::Section(vec![Line::from("Done · 1")]),
             row(&c),
         ];
         let (_, targets, buf) = split_render(&entries, 160, 40);
@@ -2857,9 +2858,9 @@ mod tests {
             })
         };
         let entries = [
-            TallEntry::Section(Line::from("── Open · 1 ──")),
+            TallEntry::Section(vec![Line::from("Open · 1")]),
             row(&a),
-            TallEntry::Section(Line::from("── Done · 1 ──")),
+            TallEntry::Section(vec![Line::from("Done · 1")]),
             row(&b),
         ];
         let (lines, targets, _) = split_render(&entries, 160, 40);
@@ -2996,7 +2997,7 @@ mod tests {
         let row = base_row("b");
         let detail = WorkspaceDetail::default();
         let entries = [
-            TallEntry::Section(Line::from("── Open · 1 ──")),
+            TallEntry::Section(vec![Line::from("Open · 1")]),
             TallEntry::Row(TallRow {
                 row: &row,
                 detail: &detail,
@@ -3154,7 +3155,7 @@ mod tests {
         let row = base_row("b");
         let detail = WorkspaceDetail::default();
         let entries = [
-            TallEntry::Section(Line::from("── Open · 1 ──")),
+            TallEntry::Section(vec![Line::from("Open · 1")]),
             TallEntry::Row(TallRow {
                 row: &row,
                 detail: &detail,

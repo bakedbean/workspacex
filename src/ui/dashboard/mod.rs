@@ -726,23 +726,20 @@ impl SectionTally {
     }
 }
 
-/// `━━ Open · 2 ━━━…` to `width`, in the section's color with the label
-/// bold, then any workspaces needing a look in their own colors:
-/// `━━ Open · 3 · ? 1 asking · ⏺ 1 conflict ━━━…`.
-fn section_header_line(
+/// `Open · 2` in the section's color, then any workspaces needing a look in
+/// their own colors (`Open · 3 · ? 1 asking · ⏺ 1 conflict`), padded to
+/// `width` and underlined by a full-width rule, as the list's repo headers are.
+fn section_header_lines(
     section: FocusSection,
     tally: SectionTally,
     width: usize,
     theme: &Theme,
-) -> Line<'static> {
+) -> Vec<Line<'static>> {
     let color = Style::default().fg(section_color(section, theme));
-    let mut spans = vec![
-        Span::styled("━━ ", color),
-        Span::styled(
-            format!("{} · {} ", section.label(), tally.count),
-            color.add_modifier(Modifier::BOLD),
-        ),
-    ];
+    let mut spans = vec![Span::styled(
+        format!("{} · {} ", section.label(), tally.count),
+        color,
+    )];
     let plural = |n: usize, word: &str| {
         if n == 1 {
             word.to_string()
@@ -779,8 +776,9 @@ fn section_header_line(
         ));
     }
     let used: usize = spans.iter().map(Span::width).sum();
-    spans.push(Span::styled("━".repeat(width.saturating_sub(used)), color));
-    Line::from(spans)
+    spans.push(Span::raw(" ".repeat(width.saturating_sub(used))));
+    let rule = Line::from(Span::styled("─".repeat(width), theme.rule_style()));
+    vec![Line::from(spans), rule]
 }
 
 /// One entry in the focus view, in display order.
@@ -988,7 +986,7 @@ fn render_focus(
                 detail: &w.detail,
             }),
             (FocusEntry::Section { section, tally }, _) => tall::TallEntry::Section(
-                section_header_line(*section, *tally, rows_area.width as usize, theme),
+                section_header_lines(*section, *tally, rows_area.width as usize, theme),
             ),
             (FocusEntry::Group(g), _) => {
                 tall::TallEntry::Group(hidden::hidden_group_line(g, None, inputs.nerd_fonts, theme))
@@ -2080,8 +2078,8 @@ mod reconcile_selection_tests {
 mod section_header_tests {
     use super::*;
 
-    /// In every built-in theme, each section's header is colored throughout
-    /// with a bold label, in a color no other section shares.
+    /// In every built-in theme, each section's label is unbolded in a color no
+    /// other section shares, over a full-width rule.
     #[test]
     fn every_section_header_is_colored_and_bold() {
         for name in ["wsx", "ansi", "dracula", "jellybeans", "nord"] {
@@ -2097,13 +2095,22 @@ mod section_header_tests {
                     count: 2,
                     ..Default::default()
                 };
-                let line = section_header_line(section, tally, 40, &theme);
+                let lines = section_header_lines(section, tally, 40, &theme);
                 let fg = section_color(section, &theme);
                 assert_ne!(fg, theme.dim, "{name}: {section:?} falls back to dim");
                 assert!(!seen.contains(&fg), "{name}: {section:?} shares {fg:?}");
-                assert!(line.spans.iter().all(|s| s.style.fg == Some(fg)));
-                assert!(line.spans[1].style.add_modifier.contains(Modifier::BOLD));
-                assert_eq!(line.width(), 40);
+                let label = &lines[0].spans[0];
+                assert_eq!(label.style.fg, Some(fg));
+                assert!(!label.style.add_modifier.contains(Modifier::BOLD));
+                assert_eq!(lines[0].width(), 40);
+                let rule = &lines[1];
+                assert_eq!(rule.width(), 40);
+                assert!(
+                    rule.spans
+                        .iter()
+                        .all(|s| s.content.chars().all(|c| c == '─'))
+                );
+                assert_eq!(rule.spans[0].style, theme.rule_style());
                 seen.push(fg);
             }
         }
@@ -2114,9 +2121,9 @@ mod section_header_tests {
     fn header_tallies_asking_stalled_and_conflicts() {
         let theme = Theme::wsx();
         let text = |t: SectionTally| -> String {
-            let line = section_header_line(FocusSection::Open, t, 80, &theme);
-            assert_eq!(line.width(), 80);
-            line.spans.iter().map(|s| s.content.as_ref()).collect()
+            let lines = section_header_lines(FocusSection::Open, t, 80, &theme);
+            assert_eq!(lines[0].width(), 80);
+            lines[0].spans.iter().map(|s| s.content.as_ref()).collect()
         };
         let all = SectionTally {
             count: 5,
@@ -2125,7 +2132,7 @@ mod section_header_tests {
             conflicts: 2,
         };
         assert!(
-            text(all).starts_with("━━ Open · 5 · ? 1 asking · ! 2 stalled · ⏺ 2 conflicts ━"),
+            text(all).starts_with("Open · 5 · ? 1 asking · ! 2 stalled · ⏺ 2 conflicts  "),
             "{}",
             text(all)
         );
@@ -2135,12 +2142,12 @@ mod section_header_tests {
             ..Default::default()
         };
         assert!(
-            text(one).starts_with("━━ Open · 3 · ⏺ 1 conflict ━"),
+            text(one).starts_with("Open · 3 · ⏺ 1 conflict  "),
             "{}",
             text(one)
         );
-        let line = section_header_line(FocusSection::Open, all, 80, &theme);
-        let asking = line
+        let lines = section_header_lines(FocusSection::Open, all, 80, &theme);
+        let asking = lines[0]
             .spans
             .iter()
             .find(|s| s.content.contains("asking"))

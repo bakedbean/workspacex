@@ -221,9 +221,10 @@ pub struct TallRow<'a> {
 pub struct TallTargets {
     /// Each visible row's whole block — a click attaches.
     pub rows: Vec<(WorkspaceId, Rect)>,
-    /// Each visible hidden-group summary line, by its index in the entries
-    /// passed to `render` — a click expands or collapses it.
-    pub groups: Vec<(usize, Rect)>,
+    /// Each visible hidden-group summary line or section header's label
+    /// line, by its index in the entries passed to `render` — a click
+    /// expands or collapses it.
+    pub headers: Vec<(usize, Rect)>,
     /// Each visible row's PR chip — a click opens the PR.
     pub pr_chips: Vec<(WorkspaceId, Rect)>,
 }
@@ -234,7 +235,8 @@ pub struct TallTargets {
 pub enum TallEntry<'a> {
     Row(TallRow<'a>),
     Group(Line<'static>),
-    /// A PR-state header and the rule beneath it; never a target.
+    /// A PR-state header and the rule beneath it; only the header line is
+    /// highlighted and clickable.
     Section(Vec<Line<'static>>),
 }
 
@@ -1139,6 +1141,12 @@ pub fn render(
         if is_row {
             row_ordinal += 1;
         }
+        // A section's rule isn't part of its target.
+        let len = if matches!(entries[i], TallEntry::Section(_)) {
+            1
+        } else {
+            len
+        };
         let Some(rect) = visible_rect(area, *scroll, top, len) else {
             continue;
         };
@@ -1153,11 +1161,10 @@ pub fn render(
         }
         let r = match &entries[i] {
             TallEntry::Row(r) => r.row,
-            TallEntry::Group(_) => {
-                targets.groups.push((i, rect));
+            TallEntry::Group(_) | TallEntry::Section(_) => {
+                targets.headers.push((i, rect));
                 continue;
             }
-            TallEntry::Section(_) => continue,
         };
         targets.rows.push((r.workspace_id, rect));
         // The PR chip is clickable only while its line is on screen.
@@ -1968,7 +1975,7 @@ mod tests {
         .unwrap();
         // Row: strip + footer (lines 0-1), group flush on line 2.
         assert_eq!(targets.rows.len(), 1);
-        assert_eq!(targets.groups, vec![(1, Rect::new(0, 2, NARROW, 1))]);
+        assert_eq!(targets.headers, vec![(1, Rect::new(0, 2, NARROW, 1))]);
         let buf = term.backend().buffer();
         assert_eq!(buf[(5, 2)].bg, Theme::wsx().selected_bg, "group tinted");
     }
@@ -2842,7 +2849,10 @@ mod tests {
         assert_ne!(bg(1), alt, "first row of a section is plain");
         assert_eq!(bg(2), alt);
         assert_ne!(bg(3), alt, "first row after the next header is plain");
-        assert!(targets.groups.is_empty(), "headers are not click targets");
+        // Headers are click targets on their label line, not the rule.
+        let headers: Vec<usize> = targets.headers.iter().map(|(i, _)| *i).collect();
+        assert_eq!(headers, vec![0, 3]);
+        assert!(targets.headers.iter().all(|(_, r)| r.height == 1));
     }
 
     /// A header hugs its first row and sits two blank lines below the

@@ -76,6 +76,7 @@ impl App {
             dashboard_repo_name_rects: Vec::new(),
             dashboard_focus_row_rects: Vec::new(),
             dashboard_focus_group_rects: Vec::new(),
+            dashboard_focus_section_rects: Vec::new(),
             side_panel_tab_rects: Vec::new(),
             side_panel_rect: None,
             detail_bar_drag: None,
@@ -933,6 +934,15 @@ pub struct App {
     /// order, consumed by `handle_mouse` to apply a clicked option. Cleared each
     /// frame; only populated while the picker modal is open.
     pub usage_window_option_rects: Vec<ratatui::layout::Rect>,
+    /// PR-section headers in the repo focus view — a click folds or
+    /// unfolds the section.
+    pub dashboard_focus_section_rects: Vec<(
+        (
+            crate::data::store::RepoId,
+            crate::ui::dashboard::FocusSection,
+        ),
+        ratatui::layout::Rect,
+    )>,
     /// Hidden-group rows in the repo focus view — a click expands or
     /// collapses the group.
     pub dashboard_focus_group_rects: Vec<(

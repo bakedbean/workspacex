@@ -47,6 +47,13 @@ pub(in crate::app::input) fn current_repo_counts(
 /// the target. Extracted from the original single-key `z` arm so the
 /// `zz` chord branch can reuse it.
 pub(in crate::app::input) fn toggle_focused_fold(app: &mut App) {
+    if app.dashboard.focused_repo.is_some() {
+        if let Some(key) = selected_focus_section(app) {
+            let fold = !app.dashboard.folded_sections.contains(&key);
+            set_focus_section_fold(app, key, fold);
+        }
+        return;
+    }
     let target_rid = app.selected_repo();
     if let Some(rid) = target_rid {
         let id = rid.0 as u64;
@@ -190,8 +197,8 @@ pub(in crate::app::input) fn cycle_repo_focus(app: &mut App, forward: bool) {
     enter_repo_focus(app, rid);
 }
 
-/// `}` / `{`: jump to the next section's first row, or back to the
-/// current section's top (then the previous one). Stops at the ends.
+/// `}` / `{`: jump to the next section's header, or back to the
+/// current section's header (then the previous one). Stops at the ends.
 pub(in crate::app::input) fn jump_focus_section(app: &mut App, forward: bool) {
     if app.dashboard.focused_repo.is_none() {
         return;
@@ -249,6 +256,54 @@ pub(crate) fn focus_group_click_target(
         .iter()
         .find(|(_, r)| rect_contains(r, m))
         .map(|(g, _)| g.clone())
+}
+
+type SectionKey = (
+    crate::data::store::RepoId,
+    crate::ui::dashboard::FocusSection,
+);
+
+/// The focus-view section the selection heads or sits under: the nearest
+/// header above it in nav order. `None` inside the hidden-groups tail.
+pub(in crate::app::input) fn selected_focus_section(app: &App) -> Option<SectionKey> {
+    let cur = app.selected_target()?;
+    let i = app.selectable.iter().position(|t| *t == cur)?;
+    app.selectable[..=i].iter().rev().find_map(|t| match t {
+        SelectionTarget::FocusSection { repo, section } => Some(Some((*repo, *section))),
+        SelectionTarget::HiddenGroup { .. } => Some(None),
+        _ => None,
+    })?
+}
+
+/// Fold or unfold a focus-view section. Folding moves the selection to its
+/// header, so the cursor doesn't vanish with the rows.
+pub(in crate::app::input) fn set_focus_section_fold(app: &mut App, key: SectionKey, fold: bool) {
+    if fold {
+        let (repo, section) = key;
+        app.dashboard.folded_sections.insert(key);
+        app.dashboard.selection = Some(SelectionTarget::FocusSection { repo, section });
+    } else {
+        app.dashboard.folded_sections.remove(&key);
+    }
+}
+
+/// The focus-view section header a click landed on.
+pub(crate) fn focus_section_click_target(
+    app: &App,
+    m: &crossterm::event::MouseEvent,
+) -> Option<SectionKey> {
+    app.dashboard_focus_section_rects
+        .iter()
+        .find(|(_, r)| rect_contains(r, m))
+        .map(|(k, _)| *k)
+}
+
+/// Select a section header and fold or unfold it — a click on it.
+pub(in crate::app::input) fn toggle_focus_section(app: &mut App, key: SectionKey) {
+    let (repo, section) = key;
+    app.dashboard.selection = Some(SelectionTarget::FocusSection { repo, section });
+    let fold = !app.dashboard.folded_sections.contains(&key);
+    set_focus_section_fold(app, key, fold);
 }
 
 /// Select a hidden group's row and expand or collapse it — a click on it
@@ -356,6 +411,10 @@ pub(in crate::app::input) fn set_focused_fold(app: &mut App, fold: bool) {
 /// `false` in `dashboard.folded`. Overrides the renderer's
 /// default-fold heuristic so even default-folded repos open.
 pub(in crate::app::input) fn expand_all_repos(app: &mut App) {
+    if let Some(repo) = app.dashboard.focused_repo {
+        app.dashboard.folded_sections.retain(|(r, _)| *r != repo);
+        return;
+    }
     for r in &app.repos {
         app.dashboard.folded.insert(r.id.0 as u64, false);
     }
@@ -364,6 +423,16 @@ pub(in crate::app::input) fn expand_all_repos(app: &mut App) {
 /// `zM` action: fold every registered repo by inserting an explicit
 /// `true` in `dashboard.folded`. Overrides the renderer's heuristic.
 pub(in crate::app::input) fn fold_all_repos(app: &mut App) {
+    if let Some(repo) = app.dashboard.focused_repo {
+        // The selection's section first, so the cursor lands on its header.
+        if let Some(key) = selected_focus_section(app) {
+            set_focus_section_fold(app, key, true);
+        }
+        for s in crate::ui::dashboard::FocusSection::ALL {
+            app.dashboard.folded_sections.insert((repo, s));
+        }
+        return;
+    }
     for r in &app.repos {
         app.dashboard.folded.insert(r.id.0 as u64, true);
     }
@@ -667,8 +736,12 @@ pub(in crate::app::input) async fn handle_key_dashboard(
                         app.dashboard.selection = Some(SelectionTarget::HiddenGroup { repo, rule });
                     }
                 }
-                // The focus view has no repo fold for `h` to close.
-                _ if app.dashboard.focused_repo.is_some() => {}
+                // In the focus view `h` folds the row's PR section instead.
+                _ if app.dashboard.focused_repo.is_some() => {
+                    if let Some(key) = selected_focus_section(app) {
+                        set_focus_section_fold(app, key, true);
+                    }
+                }
                 _ => set_focused_fold(app, true),
             }
         }
@@ -678,6 +751,9 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             Some(SelectionTarget::HiddenGroup { repo, rule }) => {
                 app.dashboard.expanded_hidden.insert((repo, rule));
             }
+            Some(SelectionTarget::FocusSection { repo, section }) => {
+                set_focus_section_fold(app, (repo, section), false)
+            }
             None => {}
         },
         (KeyCode::Enter, _) | (KeyCode::Char('i'), _) => match app.selected_target() {
@@ -685,6 +761,9 @@ pub(in crate::app::input) async fn handle_key_dashboard(
             Some(SelectionTarget::Repo(id)) => open_new_workspace(app, id, false, false),
             Some(SelectionTarget::HiddenGroup { repo, rule }) => {
                 app.dashboard.expanded_hidden.insert((repo, rule));
+            }
+            Some(SelectionTarget::FocusSection { repo, section }) => {
+                set_focus_section_fold(app, (repo, section), false)
             }
             None => {}
         },

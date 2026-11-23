@@ -381,6 +381,9 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
             } else if let Some(tab) = panel_tab_click_target(app, &m) {
                 // A side-panel tab shows that tab, same as `1`–`5`.
                 show_panel_tab(app, tab);
+            } else if let Some(key) = focus_section_click_target(app, &m) {
+                // A PR-section header in the focus view folds or unfolds it.
+                toggle_focus_section(app, key);
             } else if let Some(group) = focus_group_click_target(app, &m) {
                 // A hidden group's row in the focus view expands or
                 // collapses it.

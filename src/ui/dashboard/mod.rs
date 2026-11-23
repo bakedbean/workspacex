@@ -92,6 +92,8 @@ pub struct DashboardState {
         crate::data::store::RepoId,
         crate::data::hide_rules::HideRule,
     )>,
+    /// Focus-view PR sections the user collapsed this session. Not persisted.
+    pub folded_sections: std::collections::HashSet<(crate::data::store::RepoId, FocusSection)>,
     pub filter: Option<String>,
     /// The status picked by clicking a `$statuses` tally item in the header,
     /// or `None`. Narrows the list alongside `filter` (both must match);
@@ -305,6 +307,7 @@ impl Default for DashboardState {
             top_bar_show_tags: Vec::new(),
             folded: HashMap::new(),
             expanded_hidden: Default::default(),
+            folded_sections: Default::default(),
             filter: None,
             status_filter: None,
             selection: None,
@@ -376,6 +379,9 @@ pub struct ListClickTargets {
     /// Each hidden-group summary row in the focus view — expands or
     /// collapses that group.
     pub focus_groups: Vec<((RepoId, HideRule), Rect)>,
+    /// Each PR-section header's label line in the focus view — folds or
+    /// unfolds that section.
+    pub focus_sections: Vec<((RepoId, FocusSection), Rect)>,
     /// The side panel's tabs — a click shows that tab.
     pub panel_tabs: Vec<(side_panel::PanelTab, Rect)>,
     /// The side panel itself, for routing the wheel to it.
@@ -654,8 +660,8 @@ fn focused_workspaces<'w, 'a>(
 }
 
 /// The PR-state sections of the focus view, in display order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum FocusSection {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum FocusSection {
     NoPr,
     Draft,
     Open,
@@ -726,20 +732,22 @@ impl SectionTally {
     }
 }
 
-/// `Open · 2` in the section's color, then any workspaces needing a look in
+/// A fold glyph, `Open · 2` in the section's color, then any workspaces needing a look in
 /// their own colors (`Open · 3 · ? 1 asking · ⏺ 1 conflict`), padded to
 /// `width` and underlined by a full-width rule, as the list's repo headers are.
 fn section_header_lines(
     section: FocusSection,
     tally: SectionTally,
+    folded: bool,
     width: usize,
     theme: &Theme,
 ) -> Vec<Line<'static>> {
     let color = Style::default().fg(section_color(section, theme));
-    let mut spans = vec![Span::styled(
-        format!("{} · {} ", section.label(), tally.count),
-        color,
-    )];
+    let glyph = if folded { '▸' } else { '▾' };
+    let mut spans = vec![
+        Span::styled(format!("{glyph} "), theme.dim_style()),
+        Span::styled(format!("{} · {} ", section.label(), tally.count), color),
+    ];
     let plural = |n: usize, word: &str| {
         if n == 1 {
             word.to_string()
@@ -783,10 +791,11 @@ fn section_header_lines(
 
 /// One entry in the focus view, in display order.
 enum FocusEntry<'w, 'a> {
-    /// A PR-state header; never a selection or click target.
+    /// A PR-state header; folding it drops its rows from the entries.
     Section {
         section: FocusSection,
         tally: SectionTally,
+        folded: bool,
     },
     Workspace(&'w WorkspaceItem<'a>),
     /// A hide rule's summary row, with its rows ordered for display.
@@ -824,11 +833,15 @@ fn focus_entries<'w, 'a>(
         if rows.is_empty() {
             continue;
         }
+        let folded = state.folded_sections.contains(&(repo.id, section));
         out.push(FocusEntry::Section {
             section,
             tally: SectionTally::of(&rows),
+            folded,
         });
-        out.extend(rows.into_iter().map(FocusEntry::Workspace));
+        if !folded {
+            out.extend(rows.into_iter().map(FocusEntry::Workspace));
+        }
     }
     let by_id: HashMap<crate::data::store::WorkspaceId, &'w WorkspaceItem<'a>> = inputs
         .workspaces
@@ -855,7 +868,10 @@ fn focus_entries<'w, 'a>(
 impl FocusEntry<'_, '_> {
     fn target(&self, repo: RepoId) -> Option<SelectionTarget> {
         match self {
-            FocusEntry::Section { .. } => None,
+            FocusEntry::Section { section, .. } => Some(SelectionTarget::FocusSection {
+                repo,
+                section: *section,
+            }),
             FocusEntry::Workspace(w) => Some(SelectionTarget::Workspace(w.workspace_id)),
             FocusEntry::Group(g) => Some(SelectionTarget::HiddenGroup {
                 repo,
@@ -985,9 +1001,20 @@ fn render_focus(
                 row,
                 detail: &w.detail,
             }),
-            (FocusEntry::Section { section, tally }, _) => tall::TallEntry::Section(
-                section_header_lines(*section, *tally, rows_area.width as usize, theme),
-            ),
+            (
+                FocusEntry::Section {
+                    section,
+                    tally,
+                    folded,
+                },
+                _,
+            ) => tall::TallEntry::Section(section_header_lines(
+                *section,
+                *tally,
+                *folded,
+                rows_area.width as usize,
+                theme,
+            )),
             (FocusEntry::Group(g), _) => {
                 tall::TallEntry::Group(hidden::hidden_group_line(g, None, inputs.nerd_fonts, theme))
             }
@@ -1010,18 +1037,20 @@ fn render_focus(
         tick,
         theme,
     );
-    let focus_groups = targets
-        .groups
-        .into_iter()
-        .filter_map(|(i, rect)| match &entries[i] {
-            FocusEntry::Group(g) => Some(((repo.id, g.rule.clone()), rect)),
-            FocusEntry::Workspace(_) | FocusEntry::Section { .. } => None,
-        })
-        .collect();
+    let mut focus_groups = Vec::new();
+    let mut focus_sections = Vec::new();
+    for (i, rect) in targets.headers {
+        match &entries[i] {
+            FocusEntry::Group(g) => focus_groups.push(((repo.id, g.rule.clone()), rect)),
+            FocusEntry::Section { section, .. } => focus_sections.push(((repo.id, *section), rect)),
+            FocusEntry::Workspace(_) => {}
+        }
+    }
     ListClickTargets {
         pr_chips: targets.pr_chips,
         focus_rows: targets.rows,
         focus_groups,
+        focus_sections,
         unfocus,
         statuses,
         panel_files: panel_targets.files,
@@ -1165,7 +1194,10 @@ pub fn focus_section_starts(inputs: &DashboardInputs<'_>, state: &DashboardState
     let mut in_tail = false;
     for e in entries {
         match e {
-            FocusEntry::Section { .. } => starts.push(seen),
+            FocusEntry::Section { .. } => {
+                starts.push(seen);
+                seen += 1;
+            }
             FocusEntry::Group(_) if !in_tail => {
                 in_tail = true;
                 starts.push(seen);
@@ -1175,6 +1207,30 @@ pub fn focus_section_starts(inputs: &DashboardInputs<'_>, state: &DashboardState
         }
     }
     starts
+}
+
+/// The header of the folded focus-view section `id` falls in, if any.
+pub fn folded_section_of(
+    inputs: &DashboardInputs<'_>,
+    state: &DashboardState,
+    id: crate::data::store::WorkspaceId,
+) -> Option<SelectionTarget> {
+    let repo = focused_repo(inputs, state)?;
+    if !state.focus_group_by_pr {
+        return None;
+    }
+    let w = inputs
+        .workspaces
+        .iter()
+        .find(|w| w.workspace_id == id && w.repo.id == repo.id)?;
+    let section = section_of(w.row.lifecycle);
+    state
+        .folded_sections
+        .contains(&(repo.id, section))
+        .then_some(SelectionTarget::FocusSection {
+            repo: repo.id,
+            section,
+        })
 }
 
 pub fn visible_targets(
@@ -2095,11 +2151,11 @@ mod section_header_tests {
                     count: 2,
                     ..Default::default()
                 };
-                let lines = section_header_lines(section, tally, 40, &theme);
+                let lines = section_header_lines(section, tally, false, 40, &theme);
                 let fg = section_color(section, &theme);
                 assert_ne!(fg, theme.dim, "{name}: {section:?} falls back to dim");
                 assert!(!seen.contains(&fg), "{name}: {section:?} shares {fg:?}");
-                let label = &lines[0].spans[0];
+                let label = &lines[0].spans[1];
                 assert_eq!(label.style.fg, Some(fg));
                 assert!(!label.style.add_modifier.contains(Modifier::BOLD));
                 assert_eq!(lines[0].width(), 40);
@@ -2121,7 +2177,7 @@ mod section_header_tests {
     fn header_tallies_asking_stalled_and_conflicts() {
         let theme = Theme::wsx();
         let text = |t: SectionTally| -> String {
-            let lines = section_header_lines(FocusSection::Open, t, 80, &theme);
+            let lines = section_header_lines(FocusSection::Open, t, false, 80, &theme);
             assert_eq!(lines[0].width(), 80);
             lines[0].spans.iter().map(|s| s.content.as_ref()).collect()
         };
@@ -2132,7 +2188,7 @@ mod section_header_tests {
             conflicts: 2,
         };
         assert!(
-            text(all).starts_with("Open · 5 · ? 1 asking · ! 2 stalled · ⏺ 2 conflicts  "),
+            text(all).starts_with("▾ Open · 5 · ? 1 asking · ! 2 stalled · ⏺ 2 conflicts  "),
             "{}",
             text(all)
         );
@@ -2142,17 +2198,32 @@ mod section_header_tests {
             ..Default::default()
         };
         assert!(
-            text(one).starts_with("Open · 3 · ⏺ 1 conflict  "),
+            text(one).starts_with("▾ Open · 3 · ⏺ 1 conflict  "),
             "{}",
             text(one)
         );
-        let lines = section_header_lines(FocusSection::Open, all, 80, &theme);
+        let lines = section_header_lines(FocusSection::Open, all, false, 80, &theme);
         let asking = lines[0]
             .spans
             .iter()
             .find(|s| s.content.contains("asking"))
             .unwrap();
         assert_eq!(asking.style.fg, theme.status_style(Status::Question).fg);
+    }
+
+    /// The fold glyph leads the header, dim: `▾` open, `▸` folded.
+    #[test]
+    fn header_fold_glyph() {
+        let theme = Theme::wsx();
+        let t = SectionTally {
+            count: 2,
+            ..Default::default()
+        };
+        for (folded, glyph) in [(false, "▾ "), (true, "▸ ")] {
+            let lines = section_header_lines(FocusSection::Open, t, folded, 40, &theme);
+            assert_eq!(lines[0].spans[0].content, glyph);
+            assert_eq!(lines[0].spans[0].style, theme.dim_style());
+        }
     }
 
     /// Narrower than its label, the header clips rather than padding past the
@@ -2165,9 +2236,9 @@ mod section_header_tests {
             ..Default::default()
         };
         for width in [0, 5] {
-            let lines = section_header_lines(FocusSection::Open, t, width, &theme);
+            let lines = section_header_lines(FocusSection::Open, t, false, width, &theme);
             assert_eq!(lines.len(), 2);
-            assert_eq!(lines[0].width(), "Open · 2 ".chars().count());
+            assert_eq!(lines[0].width(), "▾ Open · 2 ".chars().count());
             assert_eq!(lines[1].width(), width);
         }
     }

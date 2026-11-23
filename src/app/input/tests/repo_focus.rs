@@ -581,7 +581,7 @@ fn the_breadcrumb_shows_the_pipeline_and_headers_tally_attention() {
         crumb.contains("No PR 1 › Draft 1 › Open 2 › Done 1"),
         "{crumb}"
     );
-    assert!(screen.contains("━━ Open · 2 · ⏺ 1 conflict ━"), "{screen}");
+    assert!(screen.contains("Open · 2 · ⏺ 1 conflict "), "{screen}");
     // The focus header's tally filters by status like the dashboard's.
     let crumb_y = screen
         .lines()
@@ -1304,10 +1304,10 @@ async fn sections_follow_pr_lifecycle() {
     app.dashboard.focus_repo(repo);
     let s = draw(&mut app);
     let (no_pr, draft, open, done) = (
-        line_of(&s, "━━ No PR · 1"),
-        line_of(&s, "━━ Draft · 1"),
-        line_of(&s, "━━ Open · 2"),
-        line_of(&s, "━━ Done · 1"),
+        line_of(&s, "No PR · 1"),
+        line_of(&s, "Draft · 1"),
+        line_of(&s, "Open · 2"),
+        line_of(&s, "Done · 1"),
     );
     assert!(no_pr < draft && draft < open && open < done, "{s}");
     let b = line_of(&s, "repo/b");
@@ -1322,9 +1322,9 @@ async fn empty_sections_are_omitted() {
     set_lifecycles(&mut app, &ids, &[Some(BranchLifecycle::PrOpen); 5]);
     app.dashboard.focus_repo(repo);
     let s = draw(&mut app);
-    assert!(s.contains("━━ Open · 5"), "{s}");
+    assert!(s.contains("Open · 5"), "{s}");
     for other in ["No PR", "Draft", "Done"] {
-        assert!(!s.contains(&format!("━━ {other}")), "{s}");
+        assert!(!s.contains(&format!("{other} · ")), "{s}");
     }
 }
 
@@ -1333,7 +1333,7 @@ async fn unpolled_rows_sit_under_no_pr() {
     let (mut app, repo, _, _) = app();
     app.dashboard.focus_repo(repo);
     let s = draw(&mut app);
-    assert!(s.contains("━━ No PR · 5"), "{s}");
+    assert!(s.contains("No PR · 5"), "{s}");
     assert!(s.contains("no PR"), "{s}");
     assert!(app.dashboard_pr_rects.is_empty(), "no PR chip to click");
 }
@@ -1400,7 +1400,7 @@ async fn focus_view_does_not_pin_blocked() {
     app.dashboard.focus_repo(repo);
     let s = draw(&mut app);
     let (d, c) = (line_of(&s, "repo/d"), line_of(&s, "repo/c"));
-    assert!(line_of(&s, "━━ Done") < d && d < c, "c is not pinned:\n{s}");
+    assert!(line_of(&s, "Done · ") < d && d < c, "c is not pinned:\n{s}");
 }
 
 #[tokio::test]
@@ -1416,8 +1416,8 @@ async fn selection_follows_a_workspace_across_sections() {
     set_lifecycles(&mut app, &ids[2..3], &[Some(PrOpen)]);
     let s = draw(&mut app);
     assert_eq!(selected_ws(&app), Some(ids[2]));
-    assert!(!s.contains("━━ Draft"), "{s}");
-    assert!(line_of(&s, "━━ Open · 5") < line_of(&s, "repo/c"), "{s}");
+    assert!(!s.contains("Draft · "), "{s}");
+    assert!(line_of(&s, "Open · 5") < line_of(&s, "repo/c"), "{s}");
 }
 
 #[tokio::test]
@@ -1444,8 +1444,8 @@ async fn hidden_groups_trail_the_sections() {
     );
     app.dashboard.focus_repo(repo);
     let s = draw(&mut app);
-    assert!(line_of(&s, "hidden") > line_of(&s, "━━ Open"), "{s}");
-    assert!(!s.contains("━━ Done"), "{s}");
+    assert!(line_of(&s, "hidden") > line_of(&s, "Open · "), "{s}");
+    assert!(!s.contains("Done · "), "{s}");
     assert_eq!(app.focus_section_starts, vec![0, 1, 2, 4]);
 }
 
@@ -1623,7 +1623,7 @@ async fn jump_reveals_the_section_header() {
     press(&mut app, KeyCode::Char('{')).await;
     draw20(&mut app);
     let s = draw20(&mut app);
-    assert!(s.contains("━━ Done · 8"), "{s}");
+    assert!(s.contains("Done · 8"), "{s}");
     assert!(s.contains("repo/w04"), "{s}");
 }
 
@@ -1663,7 +1663,7 @@ async fn narrow_focus_view_keeps_sections_and_whole_branches() {
     draw80(&mut app);
     let lines = draw80(&mut app);
     let screen = lines.join("\n");
-    for header in ["━━ No PR · 1", "━━ Open · 1", "━━ Done · 1"] {
+    for header in ["No PR · 1", "Open · 1", "Done · 1"] {
         assert!(screen.contains(header), "{header:?}:\n{screen}");
     }
     // The word starting at `x` on line `y`, if one starts there.
@@ -1695,7 +1695,7 @@ async fn natural_order_drops_headers_and_keeps_list_order() {
     let (mut app, _) = app_with_sections();
     app.dashboard.focus_group_by_pr = false;
     let s = draw(&mut app);
-    assert!(!s.contains("━━ No PR") && !s.contains("━━ Open"), "{s}");
+    assert!(!s.contains("No PR · ") && !s.contains("Open · "), "{s}");
     let lines: Vec<usize> = ["repo/a", "repo/b", "repo/c", "repo/d", "repo/e"]
         .iter()
         .map(|n| line_of(&s, n))

@@ -5,24 +5,24 @@ The focus view shows one repo on the dashboard and gives each of its workspaces 
 ```text
 ◂ all repos / workspacex  ~/src/workspacex  ──  No PR 1 › Draft 1 › Open 1 › Done 1    ? 1 question   ⠋ 1 thinking   · 2 idle    4 ws
 
-━━ No PR · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │  Prompt  Goal  Next  Commits 4  Files 7  Chat
-                                                                                             │ bakedbean/repo-focus-view vs main
+No PR · 1                                                                                    │  Prompt  Goal  Next  Commits 4  Files 7  Chat
+──────────────────────────────────────────────────────────────────────────────────────────── │ bakedbean/repo-focus-view vs main
 ▎▎ ⠋ bakedbean/try-new-parser     no PR          ▸ working  ● 2p  ↑1 vs main  not pushed  2m │ ─────────────────────────────────────
  ▎   ▎ claude  opus 4.8 61k/200k  #spike                                                     │ write the docs, then open the PR
                                                                                              │
-━━ Draft · 1 · ? 1 asking ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │ state
-                                                                                             │ implemented sections and the strip;
+Draft · 1 · ? 1 asking                                                                       │ state
+──────────────────────────────────────────────────────────────────────────────────────────── │ implemented sections and the strip;
 ▎▎ ? bakedbean/detail-bar-scroll  ⏷ #459 draft   └ asking         ↑2 vs main  ██▎ +61 −8 14m │ tests are green
  ▎   ▎ claude                                                                                │
                                                                                              │ Recap set 5h ago; the workspace has
-━━ Open · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │ kept working since.
-                                                                                             │
+Open · 1                                                                                     │ kept working since.
+──────────────────────────────────────────────────────────────────────────────────────────── │
 ▍▍ · bakedbean/repo-focus-view    ⏺ #461 open ✓  ▸ idle           ↑4 vs main ███ +184 −22 3h │
  ▍   part    3 · Repo focus view  #455 ⏺  #458 ⏺                                             │
  ▍   ▎ claude  opus 4.8 172k/200k  #ui                                                       │
                                                                                              │
-━━ Done · 1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ │
-                                                                                             │
+Done · 1                                                                                     │
+──────────────────────────────────────────────────────────────────────────────────────────── │
 ▎▎ ✓ bakedbean/fix-flaky-poller   ⏺ #455 merged  ▸ done           ↑0 vs main             48h │
  ▎   ▎ claude                                                                                │
 ```
@@ -32,7 +32,7 @@ The header line sums the repo up by PR stage (`No PR 1 › Draft 1 › Open 1 �
 
 ## Sections
 
-A header line (`━━ Open · 2 ━━━…`, with the workspace count, bold and in the section's color) starts each section. After the count it tallies the section's workspaces that need a look, each in its own color: those asking a question (`? 1 asking`), those stalled (`! 1 stalled`), and open PRs that conflict with their base (`⏺ 1 conflict`). Nothing is added when there are none.
+A header line (`Open · 2`, with the workspace count, in the section's color) underlined by a full-width rule starts each section, as on the main dashboard's repo headers. After the count it tallies the section's workspaces that need a look, each in its own color: those asking a question (`? 1 asking`), those stalled (`! 1 stalled`), and open PRs that conflict with their base (`⏺ 1 conflict`). Nothing is added when there are none.
 
 | Section | Holds |
 | --- | --- |

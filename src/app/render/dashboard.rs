@@ -116,11 +116,15 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     // summary row rather than parking invisibly.
     if let Some(SelectionTarget::Workspace(id)) = app.dashboard.selection {
         if !new_selectable.contains(&SelectionTarget::Workspace(id)) {
-            if let Some((repo, rule)) = app.hidden_group_of(id) {
-                let group = SelectionTarget::HiddenGroup { repo, rule };
-                if new_selectable.contains(&group) {
-                    app.dashboard.selection = Some(group);
-                }
+            // `hidden_group_of` ignores filters, so check the group is drawn.
+            let group = app
+                .hidden_group_of(id)
+                .map(|(repo, rule)| SelectionTarget::HiddenGroup { repo, rule })
+                .filter(|g| new_selectable.contains(g));
+            // Likewise a row that moved into a folded section.
+            let header = || dashboard::folded_section_of(&inputs, &app.dashboard, id);
+            if let Some(t) = group.or_else(header).filter(|t| new_selectable.contains(t)) {
+                app.dashboard.selection = Some(t);
             }
         }
     }
@@ -132,6 +136,16 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     // also drops a selection whose workspace was archived: `refresh()`
     // rebuilds `selectable` between draws, so the shape can be unchanged
     // here even though the target no longer exists.
+    // Entering a focus view clears the selection; land on the first
+    // workspace rather than the section header above it.
+    if app.dashboard.selection.is_none() && app.dashboard.focused_repo.is_some() {
+        if let Some(i) = new_selectable
+            .iter()
+            .position(|t| matches!(t, SelectionTarget::Workspace(_)))
+        {
+            app.dashboard.selected = i;
+        }
+    }
     let prev_selection = app.dashboard.selection.clone();
     let prev_selected = app.dashboard.selected;
     let (selection, selected) =
@@ -169,6 +183,7 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     app.dashboard_repo_name_rects = click_targets.repo_names;
     app.dashboard_focus_row_rects = click_targets.focus_rows;
     app.dashboard_focus_group_rects = click_targets.focus_groups;
+    app.dashboard_focus_section_rects = click_targets.focus_sections;
     app.side_panel_tab_rects = click_targets.panel_tabs;
     app.side_panel_rect = click_targets.panel_area;
     app.side_panel_file_rects = click_targets.panel_files;

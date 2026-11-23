@@ -20,7 +20,9 @@ impl App {
             return self.dashboard.focused_repo;
         };
         match target {
-            SelectionTarget::Repo(id) | SelectionTarget::HiddenGroup { repo: id, .. } => Some(id),
+            SelectionTarget::Repo(id)
+            | SelectionTarget::HiddenGroup { repo: id, .. }
+            | SelectionTarget::FocusSection { repo: id, .. } => Some(id),
             SelectionTarget::Workspace(wid) => self
                 .workspaces
                 .iter()
@@ -242,7 +244,8 @@ impl App {
         match t {
             SelectionTarget::Repo(id) => self.repos.iter().any(|r| r.id == id),
             SelectionTarget::Workspace(id) => self.workspaces.iter().any(|(_, w)| w.id == id),
-            SelectionTarget::HiddenGroup { repo, .. } => self.repos.iter().any(|r| r.id == repo),
+            SelectionTarget::HiddenGroup { repo, .. }
+            | SelectionTarget::FocusSection { repo, .. } => self.repos.iter().any(|r| r.id == repo),
         }
     }
 

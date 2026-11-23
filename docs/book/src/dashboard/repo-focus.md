@@ -5,23 +5,23 @@ The focus view shows one repo on the dashboard and gives each of its workspaces 
 ```text
 ◂ all repos / workspacex  ~/src/workspacex  ──  No PR 1 › Draft 1 › Open 1 › Done 1    ? 1 question   ⠋ 1 thinking   · 2 idle    4 ws
 
-No PR · 1                                                                                    │  Prompt  Goal  Next  Commits 4  Files 7  Chat
+▾ No PR · 1                                                                                  │  Prompt  Goal  Next  Commits 4  Files 7  Chat
 ──────────────────────────────────────────────────────────────────────────────────────────── │ bakedbean/repo-focus-view vs main
 ▎▎ ⠋ bakedbean/try-new-parser     no PR          ▸ working  ● 2p  ↑1 vs main  not pushed  2m │ ─────────────────────────────────────
  ▎   ▎ claude  opus 4.8 61k/200k  #spike                                                     │ write the docs, then open the PR
                                                                                              │
-Draft · 1 · ? 1 asking                                                                       │ state
+▾ Draft · 1 · ? 1 asking                                                                     │ state
 ──────────────────────────────────────────────────────────────────────────────────────────── │ implemented sections and the strip;
 ▎▎ ? bakedbean/detail-bar-scroll  ⏷ #459 draft   └ asking         ↑2 vs main  ██▎ +61 −8 14m │ tests are green
  ▎   ▎ claude                                                                                │
                                                                                              │ Recap set 5h ago; the workspace has
-Open · 1                                                                                     │ kept working since.
+▾ Open · 1                                                                                   │ kept working since.
 ──────────────────────────────────────────────────────────────────────────────────────────── │
 ▍▍ · bakedbean/repo-focus-view    ⏺ #461 open ✓  ▸ idle           ↑4 vs main ███ +184 −22 3h │
  ▍   part    3 · Repo focus view  #455 ⏺  #458 ⏺                                             │
  ▍   ▎ claude  opus 4.8 172k/200k  #ui                                                       │
                                                                                              │
-Done · 1                                                                                     │
+▾ Done · 1                                                                                   │
 ──────────────────────────────────────────────────────────────────────────────────────────── │
 ▎▎ ✓ bakedbean/fix-flaky-poller   ⏺ #455 merged  ▸ done           ↑0 vs main             48h │
  ▎   ▎ claude                                                                                │
@@ -32,7 +32,7 @@ The header line sums the repo up by PR stage (`No PR 1 › Draft 1 › Open 1 �
 
 ## Sections
 
-A header line (`Open · 2`, with the workspace count, in the section's color) underlined by a full-width rule starts each section, as on the main dashboard's repo headers. After the count it tallies the section's workspaces that need a look, each in its own color: those asking a question (`? 1 asking`), those stalled (`! 1 stalled`), and open PRs that conflict with their base (`⏺ 1 conflict`). Nothing is added when there are none.
+A header line (`▾ Open · 2`, with the workspace count, in the section's color) underlined by a full-width rule starts each section, as on the main dashboard's repo headers. After the count it tallies the section's workspaces that need a look, each in its own color: those asking a question (`? 1 asking`), those stalled (`! 1 stalled`), and open PRs that conflict with their base (`⏺ 1 conflict`). Nothing is added when there are none.
 
 | Section | Holds |
 | --- | --- |
@@ -41,7 +41,9 @@ A header line (`Open · 2`, with the workspace count, in the section's color) un
 | **Open** | Open PRs, including those with merge conflicts |
 | **Done** | Merged and closed PRs |
 
-Sections with no workspaces are left out. Within a section the dashboard's sort applies, but the focus view doesn't pin workspaces that just started asking or stalled to the top, as the list does; the sections already order the view by PR state. Hidden groups (see [Filters and hiding](#filters-and-hiding)) come after all the sections, as they are on the list. Headers are not selectable: `j` and `k` step over them.
+Sections with no workspaces are left out. Within a section the dashboard's sort applies, but the focus view doesn't pin workspaces that just started asking or stalled to the top, as the list does; the sections already order the view by PR state. Hidden groups (see [Filters and hiding](#filters-and-hiding)) come after all the sections, as they are on the list.
+
+Sections fold like the list's repo headers. `j` and `k` stop on each header; `h` on it folds the section and `l` or `enter` unfolds it. A folded header shows `▸` and keeps its count and tallies, and `j` / `k` step past its hidden rows. `h` on a workspace folds the section it's in and moves the selection to the header. `z z` toggles the selected section, and `z M` / `z R` fold and unfold every section of the repo. Clicking a header toggles it too. Folds are kept per repo until you quit wsx; turning the sections off with `G` sets them aside (and `z M` / `z R` do nothing) until you turn them back on.
 
 Press `G` to turn the sections off and see the workspaces in the list's own order instead, with no headers and with workspaces that just started asking or stalled pinned to the top again. `G` again brings the sections back. The choice is saved (the `dashboard_focus_group_by_pr` [setting](../configuration/settings.md#dashboard)). Without sections, `{` goes to the first workspace and `}` to the hidden groups.
 
@@ -96,7 +98,7 @@ Press `1` to `6` for a tab, `<` / `>` for the previous or next one, or click it.
 
 ## Moving around
 
-The focus view moves like the list: `j` / `k` (or the arrows) select the next or previous workspace, and `enter`, `i` or `l` attaches. `}` jumps to the first workspace of the next section and `{` to the previous one's. Pressed in the middle of a section, `{` goes to the top of the current section first. At the first and last section they do nothing. Hidden groups count as a section of their own. A jump, or `j` / `k` onto a section's first workspace, scrolls its header into view. Clicking anywhere on a workspace attaches to it, and clicking its PR chip opens the PR. `n` creates a workspace in the focused repo.
+The focus view moves like the list: `j` / `k` (or the arrows) select the next or previous workspace, and `enter`, `i` or `l` attaches. `}` jumps to the next section's header and `{` to the previous one's. Pressed in the middle of a section, `{` goes to the current section's header first. At the first and last section they do nothing. Hidden groups count as a section of their own. A jump, or `j` / `k` onto a section's first workspace, scrolls its header into view. Clicking anywhere on a workspace attaches to it, and clicking its PR chip opens the PR. `n` creates a workspace in the focused repo.
 
 The view keeps the selected workspace on screen. To read a workspace taller than the screen, page with `PgDn` / `PgUp` or scroll with the mouse wheel; the view stays put until you select a different workspace. The other workspace keys (`d`, `e`, `#`, `?`, and so on) act on the selected workspace as usual.
 

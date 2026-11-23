@@ -23,6 +23,11 @@ pub enum SelectionTarget {
         repo: crate::data::store::RepoId,
         rule: crate::data::hide_rules::HideRule,
     },
+    /// A PR-state section header in the repo focus view.
+    FocusSection {
+        repo: crate::data::store::RepoId,
+        section: crate::ui::dashboard::FocusSection,
+    },
 }
 
 /// Outcome of `ensure_workspace_session`. `AgentMissing` signals to callers

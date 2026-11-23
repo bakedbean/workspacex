@@ -5,6 +5,7 @@ use super::common::*;
 use super::*;
 use crate::data::store::{RepoId, Store, WorkspaceId};
 use crate::git::forge::BranchLifecycle;
+use crate::ui::dashboard::FocusSection;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -82,15 +83,19 @@ async fn f_on_a_header_focuses_its_repo_and_starts_on_the_first_workspace() {
     draw(&mut app);
     assert_eq!(
         app.selectable.len(),
-        5,
-        "only the repo's workspaces are selectable"
+        6,
+        "only the repo's section header and workspaces are selectable"
     );
+    assert!(matches!(
+        app.selectable[0],
+        SelectionTarget::FocusSection { .. }
+    ));
     assert!(
-        app.selectable
+        app.selectable[1..]
             .iter()
             .all(|t| matches!(t, SelectionTarget::Workspace(_)))
     );
-    assert_eq!(app.selected_target(), app.selectable.first().cloned());
+    assert_eq!(app.selected_target(), app.selectable.get(1).cloned());
 }
 
 #[tokio::test]
@@ -206,8 +211,7 @@ async fn brackets_do_nothing_outside_the_focus_view() {
     assert_eq!(app.dashboard.focused_repo, None);
 }
 
-/// j/k walk the rows in order; h does not fold anything out from under
-/// the view.
+/// j/k walk the rows in order, starting below the section header.
 #[tokio::test]
 async fn j_and_k_move_through_the_rows() {
     let (mut app, repo, _, _) = app();
@@ -220,16 +224,13 @@ async fn j_and_k_move_through_the_rows() {
             .position(|t| Some(t.clone()) == app.selected_target())
     };
 
-    assert_eq!(at(&app), Some(0));
+    assert_eq!(at(&app), Some(1));
     press(&mut app, KeyCode::Char('j')).await;
     press(&mut app, KeyCode::Down).await;
-    assert_eq!(at(&app), Some(2));
+    assert_eq!(at(&app), Some(3));
     press(&mut app, KeyCode::Char('k')).await;
-    assert_eq!(at(&app), Some(1));
-    press(&mut app, KeyCode::Char('h')).await;
-    assert_eq!(at(&app), Some(1));
+    assert_eq!(at(&app), Some(2));
     assert_eq!(app.dashboard.focused_repo, Some(repo));
-    assert!(app.dashboard.folded.is_empty(), "h folds nothing");
 }
 
 #[tokio::test]
@@ -887,7 +888,7 @@ fn hidden_groups_show_collapsed_in_the_focus_view() {
     assert!(screen.contains("#parked"), "group row drawn:\n{screen}");
     assert!(screen.contains("2 hidden"), "{screen}");
     assert!(!screen.contains("repo/d"), "members stay hidden:\n{screen}");
-    assert_eq!(app.selectable.len(), 4, "three rows and the group");
+    assert_eq!(app.selectable.len(), 5, "header, three rows and the group");
     assert_eq!(app.selectable.last(), Some(&parked(repo)));
     assert!(!app.selectable.contains(&SelectionTarget::Workspace(ids[3])));
     assert_eq!(app.dashboard_focus_group_rects.len(), 1);
@@ -908,7 +909,7 @@ async fn hidden_groups_expand_and_collapse_like_the_list() {
         "{screen}"
     );
     assert_eq!(
-        &app.selectable[3..],
+        &app.selectable[4..],
         &[
             parked(repo),
             SelectionTarget::Workspace(ids[3]),
@@ -922,15 +923,20 @@ async fn hidden_groups_expand_and_collapse_like_the_list() {
     press(&mut app, KeyCode::Char('h')).await;
     assert_eq!(app.selected_target(), Some(parked(repo)));
     draw(&mut app);
-    assert_eq!(app.selectable.len(), 4, "collapsed again");
+    assert_eq!(app.selectable.len(), 5, "collapsed again");
 
     press(&mut app, KeyCode::Enter).await;
     draw(&mut app);
-    assert_eq!(app.selectable.len(), 6, "Enter expands too");
-    // `h` on an ordinary row in the focus view still does nothing.
+    assert_eq!(app.selectable.len(), 7, "Enter expands too");
+    // `h` on an ordinary row folds its section, never the repo.
     app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
     press(&mut app, KeyCode::Char('h')).await;
     assert!(app.dashboard.folded.is_empty());
+    assert!(
+        app.dashboard
+            .folded_sections
+            .contains(&(repo, FocusSection::NoPr))
+    );
     assert_eq!(app.dashboard.focused_repo, Some(repo));
 }
 
@@ -1339,7 +1345,7 @@ async fn unpolled_rows_sit_under_no_pr() {
 }
 
 #[tokio::test]
-async fn headers_are_not_selectable() {
+async fn headers_are_selectable_in_nav_order() {
     use BranchLifecycle::*;
     let (mut app, repo, _, ids) = app();
     set_lifecycles(
@@ -1349,19 +1355,34 @@ async fn headers_are_not_selectable() {
     );
     app.dashboard.focus_repo(repo);
     draw(&mut app);
-    assert_eq!(app.selectable.len(), 5);
-    assert!(
-        app.selectable
-            .iter()
-            .all(|t| matches!(t, SelectionTarget::Workspace(_)))
+    let ws = SelectionTarget::Workspace;
+    assert_eq!(
+        app.selectable,
+        vec![
+            header(repo, FocusSection::NoPr),
+            ws(ids[1]),
+            ws(ids[4]),
+            header(repo, FocusSection::Draft),
+            ws(ids[2]),
+            header(repo, FocusSection::Open),
+            ws(ids[0]),
+            header(repo, FocusSection::Done),
+            ws(ids[3]),
+        ]
     );
-    // No PR holds b and e; j from the second lands on the Draft row.
-    app.select_index(1);
+    // j from No PR's last row stops on the Draft header, then its row.
+    app.select_index(2);
     draw(&mut app);
     press(&mut app, KeyCode::Char('j')).await;
     draw(&mut app);
+    assert_eq!(
+        app.selected_target(),
+        Some(header(repo, FocusSection::Draft))
+    );
+    press(&mut app, KeyCode::Char('j')).await;
+    draw(&mut app);
     assert_eq!(selected_ws(&app), Some(ids[2]));
-    assert_eq!(app.focus_section_starts, vec![0, 2, 3, 4]);
+    assert_eq!(app.focus_section_starts, vec![0, 3, 5, 7]);
 }
 
 #[tokio::test]
@@ -1446,7 +1467,7 @@ async fn hidden_groups_trail_the_sections() {
     let s = draw(&mut app);
     assert!(line_of(&s, "hidden") > line_of(&s, "Open · "), "{s}");
     assert!(!s.contains("Done · "), "{s}");
-    assert_eq!(app.focus_section_starts, vec![0, 1, 2, 4]);
+    assert_eq!(app.focus_section_starts, vec![0, 2, 4, 7]);
 }
 
 /// Selection (by workspace id) after each key press, drawing in between.
@@ -1454,6 +1475,20 @@ async fn press_drawn(app: &mut App, code: KeyCode) -> Option<WorkspaceId> {
     press(app, code).await;
     draw(app);
     selected_ws(app)
+}
+
+fn header(repo: RepoId, section: FocusSection) -> SelectionTarget {
+    SelectionTarget::FocusSection { repo, section }
+}
+
+fn select_ws(app: &mut App, id: WorkspaceId) {
+    let i = app
+        .selectable
+        .iter()
+        .position(|t| *t == SelectionTarget::Workspace(id))
+        .unwrap();
+    app.select_index(i);
+    draw(app);
 }
 
 /// Sections: No PR [b], Draft [c], Open [a, e], Done [d].
@@ -1476,38 +1511,39 @@ fn app_with_sections() -> (App, Vec<WorkspaceId>) {
     (app, ids)
 }
 
+/// Selection after each key press, drawing in between.
+async fn press_target(app: &mut App, code: KeyCode) -> Option<SelectionTarget> {
+    press(app, code).await;
+    draw(app);
+    app.selected_target()
+}
+
 #[tokio::test]
 async fn close_brace_jumps_to_next_section() {
+    use FocusSection::*;
     let (mut app, ids) = app_with_sections();
-    let (a, b, c, d) = (ids[0], ids[1], ids[2], ids[3]);
-    app.select_index(
-        app.selectable
-            .iter()
-            .position(|t| *t == SelectionTarget::Workspace(b))
-            .unwrap(),
-    );
-    draw(&mut app);
-    assert_eq!(press_drawn(&mut app, KeyCode::Char('}')).await, Some(c));
-    assert_eq!(press_drawn(&mut app, KeyCode::Char('}')).await, Some(a));
-    assert_eq!(press_drawn(&mut app, KeyCode::Char('}')).await, Some(d));
-    assert_eq!(press_drawn(&mut app, KeyCode::Char('}')).await, Some(d));
+    let repo = app.dashboard.focused_repo.unwrap();
+    select_ws(&mut app, ids[1]);
+    for s in [Draft, Open, Done, Done] {
+        assert_eq!(
+            press_target(&mut app, KeyCode::Char('}')).await,
+            Some(header(repo, s))
+        );
+    }
 }
 
 #[tokio::test]
 async fn open_brace_goes_to_section_top_then_previous() {
+    use FocusSection::*;
     let (mut app, ids) = app_with_sections();
-    let (a, b, c, e) = (ids[0], ids[1], ids[2], ids[4]);
-    app.select_index(
-        app.selectable
-            .iter()
-            .position(|t| *t == SelectionTarget::Workspace(e))
-            .unwrap(),
-    );
-    draw(&mut app);
-    assert_eq!(press_drawn(&mut app, KeyCode::Char('{')).await, Some(a));
-    assert_eq!(press_drawn(&mut app, KeyCode::Char('{')).await, Some(c));
-    assert_eq!(press_drawn(&mut app, KeyCode::Char('{')).await, Some(b));
-    assert_eq!(press_drawn(&mut app, KeyCode::Char('{')).await, Some(b));
+    let repo = app.dashboard.focused_repo.unwrap();
+    select_ws(&mut app, ids[4]);
+    for s in [Open, Draft, NoPr, NoPr] {
+        assert_eq!(
+            press_target(&mut app, KeyCode::Char('{')).await,
+            Some(header(repo, s))
+        );
+    }
 }
 
 #[tokio::test]
@@ -1516,20 +1552,14 @@ async fn section_keys_with_one_section_are_noops() {
     set_lifecycles(&mut app, &ids, &[Some(BranchLifecycle::PrOpen); 5]);
     app.dashboard.focus_repo(repo);
     draw(&mut app);
-    app.select_index(2);
-    draw(&mut app);
+    select_ws(&mut app, ids[2]);
     assert_eq!(
         press_drawn(&mut app, KeyCode::Char('}')).await,
         Some(ids[2])
     );
-    assert_eq!(
-        press_drawn(&mut app, KeyCode::Char('{')).await,
-        Some(ids[0])
-    );
-    assert_eq!(
-        press_drawn(&mut app, KeyCode::Char('{')).await,
-        Some(ids[0])
-    );
+    let top = Some(header(repo, FocusSection::Open));
+    assert_eq!(press_target(&mut app, KeyCode::Char('{')).await, top);
+    assert_eq!(press_target(&mut app, KeyCode::Char('{')).await, top);
 
     // No workspaces at all: nothing to select, nothing to panic on.
     let store = Store::open_in_memory().unwrap();
@@ -1573,7 +1603,11 @@ async fn section_starts_follow_the_filter() {
     // live `/` buffer types the key instead, so call the jump directly.
     super::super::dashboard::jump_focus_section(&mut app, true);
     draw(&mut app);
-    assert_eq!(selected_ws(&app), Some(ids[0]));
+    let repo = app.dashboard.focused_repo.unwrap();
+    assert_eq!(
+        app.selected_target(),
+        Some(header(repo, FocusSection::Open))
+    );
 }
 
 #[tokio::test]
@@ -1761,5 +1795,247 @@ async fn natural_order_braces_go_to_top_and_hidden_groups() {
         app.selected_target(),
         Some(parked(repo)),
         "}} goes to hidden groups"
+    );
+}
+
+/// `h` on a header folds it: the header and its count stay, its rows drop
+/// out of the screen and of nav. `l` and Enter unfold it.
+#[tokio::test]
+async fn h_folds_a_section_header_and_l_or_enter_unfolds_it() {
+    let (mut app, ids) = app_with_sections();
+    let repo = app.dashboard.focused_repo.unwrap();
+    let open = header(repo, FocusSection::Open);
+    app.dashboard.selection = Some(open.clone());
+    let s = draw(&mut app);
+    assert!(s.contains("▾ Open · 2"), "{s}");
+
+    press(&mut app, KeyCode::Char('h')).await;
+    let s = draw(&mut app);
+    assert!(s.contains("▸ Open · 2"), "count survives the fold:\n{s}");
+    assert!(!s.contains("repo/a") && !s.contains("repo/e"), "{s}");
+    assert!(!app.selectable.contains(&SelectionTarget::Workspace(ids[0])));
+    assert_eq!(app.selected_target(), Some(open.clone()));
+    // `h` again is idempotent.
+    press(&mut app, KeyCode::Char('h')).await;
+    draw(&mut app);
+    assert!(
+        app.dashboard
+            .folded_sections
+            .contains(&(repo, FocusSection::Open))
+    );
+
+    press(&mut app, KeyCode::Char('l')).await;
+    let s = draw(&mut app);
+    assert!(s.contains("▾ Open · 2") && s.contains("repo/a"), "{s}");
+
+    press(&mut app, KeyCode::Char('h')).await;
+    press(&mut app, KeyCode::Enter).await;
+    draw(&mut app);
+    assert!(app.selectable.contains(&SelectionTarget::Workspace(ids[0])));
+    assert!(
+        app.dashboard.folded.is_empty(),
+        "the repo fold is untouched"
+    );
+}
+
+/// `h` on a row folds its section and hands the selection to the header,
+/// as collapsing a hidden group from a member row does.
+#[tokio::test]
+async fn h_on_a_row_folds_its_section_onto_the_header() {
+    let (mut app, ids) = app_with_sections();
+    let repo = app.dashboard.focused_repo.unwrap();
+    select_ws(&mut app, ids[4]);
+    press(&mut app, KeyCode::Char('h')).await;
+    let s = draw(&mut app);
+    assert_eq!(
+        app.selected_target(),
+        Some(header(repo, FocusSection::Open))
+    );
+    assert!(!s.contains("repo/e"), "{s}");
+    // j steps past the folded section to the next header.
+    press(&mut app, KeyCode::Char('j')).await;
+    draw(&mut app);
+    assert_eq!(
+        app.selected_target(),
+        Some(header(repo, FocusSection::Done))
+    );
+}
+
+/// `zz` toggles the selection's section; `zM` folds every section of the
+/// focused repo and `zR` opens them, leaving the list's repo folds alone.
+#[tokio::test]
+async fn z_chords_fold_sections_in_the_focus_view() {
+    let (mut app, ids) = app_with_sections();
+    let repo = app.dashboard.focused_repo.unwrap();
+    select_ws(&mut app, ids[2]);
+    press(&mut app, KeyCode::Char('z')).await;
+    press(&mut app, KeyCode::Char('z')).await;
+    draw(&mut app);
+    assert_eq!(
+        app.selected_target(),
+        Some(header(repo, FocusSection::Draft))
+    );
+    assert!(!app.selectable.contains(&SelectionTarget::Workspace(ids[2])));
+    press(&mut app, KeyCode::Char('z')).await;
+    press(&mut app, KeyCode::Char('z')).await;
+    draw(&mut app);
+    assert!(app.selectable.contains(&SelectionTarget::Workspace(ids[2])));
+
+    select_ws(&mut app, ids[0]);
+    press(&mut app, KeyCode::Char('z')).await;
+    press(&mut app, KeyCode::Char('M')).await;
+    draw(&mut app);
+    assert_eq!(
+        app.selected_target(),
+        Some(header(repo, FocusSection::Open))
+    );
+    assert!(
+        app.selectable
+            .iter()
+            .all(|t| matches!(t, SelectionTarget::FocusSection { .. })),
+        "only headers left: {:?}",
+        app.selectable
+    );
+    press(&mut app, KeyCode::Char('z')).await;
+    press(&mut app, KeyCode::Char('R')).await;
+    draw(&mut app);
+    assert_eq!(app.selectable.len(), 9);
+    assert!(app.dashboard.folded.is_empty(), "repo folds untouched");
+}
+
+/// Clicking a header's label line selects it and toggles its fold.
+#[tokio::test]
+async fn clicking_a_section_header_toggles_it() {
+    let (mut app, ids) = app_with_sections();
+    let repo = app.dashboard.focused_repo.unwrap();
+    let (key, r) = *app
+        .dashboard_focus_section_rects
+        .iter()
+        .find(|((_, s), _)| *s == FocusSection::Draft)
+        .unwrap();
+    assert_eq!(key, (repo, FocusSection::Draft));
+    assert_eq!(r.height, 1, "the rule isn't part of the target");
+    assert_eq!(
+        focus_section_click_target(&app, &click(r.x, r.y)),
+        Some(key)
+    );
+    assert_eq!(focus_section_click_target(&app, &click(r.x, r.y + 1)), None);
+
+    toggle_focus_section(&mut app, key);
+    draw(&mut app);
+    assert_eq!(
+        app.selected_target(),
+        Some(header(repo, FocusSection::Draft))
+    );
+    assert!(!app.selectable.contains(&SelectionTarget::Workspace(ids[2])));
+    toggle_focus_section(&mut app, key);
+    draw(&mut app);
+    assert!(app.selectable.contains(&SelectionTarget::Workspace(ids[2])));
+}
+
+/// A selected row whose PR moves into a folded section hands the selection
+/// to that section's header rather than vanishing.
+#[tokio::test]
+async fn a_row_moving_into_a_folded_section_selects_its_header() {
+    let (mut app, ids) = app_with_sections();
+    let repo = app.dashboard.focused_repo.unwrap();
+    app.dashboard
+        .folded_sections
+        .insert((repo, FocusSection::Done));
+    select_ws(&mut app, ids[2]);
+    set_lifecycles(&mut app, &ids[2..3], &[Some(BranchLifecycle::PrMerged)]);
+    draw(&mut app);
+    assert_eq!(
+        app.selected_target(),
+        Some(header(repo, FocusSection::Done))
+    );
+}
+
+/// Folds are per repo, and moot ungrouped: `G` drops the headers and shows
+/// every row, and regrouping brings the fold back.
+#[tokio::test]
+async fn section_folds_are_per_repo_and_ignored_ungrouped() {
+    let (mut app, ids) = app_with_sections();
+    let repo = app.dashboard.focused_repo.unwrap();
+    app.dashboard
+        .folded_sections
+        .insert((repo, FocusSection::Open));
+    app.dashboard
+        .folded_sections
+        .insert((RepoId(repo.0 + 999), FocusSection::Done));
+    draw(&mut app);
+    assert!(app.selectable.contains(&SelectionTarget::Workspace(ids[3])));
+    assert!(!app.selectable.contains(&SelectionTarget::Workspace(ids[0])));
+
+    app.dashboard.focus_group_by_pr = false;
+    draw(&mut app);
+    assert_eq!(app.selectable.len(), 5);
+    assert!(app.dashboard_focus_section_rects.is_empty());
+    app.dashboard.focus_group_by_pr = true;
+    draw(&mut app);
+    assert!(!app.selectable.contains(&SelectionTarget::Workspace(ids[0])));
+}
+
+/// Leaving the focus view from a section header selects the focused repo's
+/// header on the list, even unfolded, not whatever sits at the old index.
+#[tokio::test]
+async fn leaving_from_a_section_header_selects_the_repo() {
+    let (mut app, ids) = app_with_sections();
+    let repo = app.dashboard.focused_repo.unwrap();
+    app.dashboard.folded.insert(repo.0 as u64, false);
+    select_ws(&mut app, ids[3]);
+    press(&mut app, KeyCode::Char('{')).await;
+    draw(&mut app);
+    assert_eq!(
+        app.selected_target(),
+        Some(header(repo, FocusSection::Done))
+    );
+    press(&mut app, KeyCode::Char('f')).await;
+    draw(&mut app);
+    assert_eq!(app.dashboard.focused_repo, None);
+    assert_eq!(app.selected_target(), Some(SelectionTarget::Repo(repo)));
+}
+
+/// A filter shows hidden rows among the sections; one that disappears into
+/// a folded section still hands the selection to its header, though its
+/// hide-rule group isn't drawn.
+#[tokio::test]
+async fn filtered_hidden_row_folding_away_selects_its_header() {
+    let (mut app, repo, ids) = app_with_parked_group();
+    app.dashboard.filter = Some("#parked".into());
+    draw(&mut app);
+    select_ws(&mut app, ids[3]);
+    app.dashboard
+        .folded_sections
+        .insert((repo, FocusSection::NoPr));
+    draw(&mut app);
+    assert_eq!(
+        app.selected_target(),
+        Some(header(repo, FocusSection::NoPr))
+    );
+}
+
+/// Ungrouped, `zM` / `zR` leave the saved section folds alone.
+#[tokio::test]
+async fn z_chords_ignore_sections_when_ungrouped() {
+    let (mut app, ids) = app_with_sections();
+    let repo = app.dashboard.focused_repo.unwrap();
+    app.dashboard
+        .folded_sections
+        .insert((repo, FocusSection::Open));
+    app.dashboard.focus_group_by_pr = false;
+    draw(&mut app);
+    select_ws(&mut app, ids[2]);
+    press(&mut app, KeyCode::Char('z')).await;
+    press(&mut app, KeyCode::Char('M')).await;
+    press(&mut app, KeyCode::Char('z')).await;
+    press(&mut app, KeyCode::Char('z')).await;
+    assert_eq!(app.dashboard.folded_sections.len(), 1);
+    press(&mut app, KeyCode::Char('z')).await;
+    press(&mut app, KeyCode::Char('R')).await;
+    assert!(
+        app.dashboard
+            .folded_sections
+            .contains(&(repo, FocusSection::Open))
     );
 }

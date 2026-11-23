@@ -1316,6 +1316,11 @@ mod tests {
     use crate::ui::dashboard::column_content::RowColumn;
     use crate::ui::dashboard::status::Status;
 
+    /// A section header as the focus view builds it: label, then rule.
+    fn section(label: &'static str) -> TallEntry<'static> {
+        TallEntry::Section(vec![Line::from(label), Line::from("─".repeat(40))])
+    }
+
     fn base_row(branch: &str) -> RowInputs {
         RowInputs {
             agent: AgentKind::Claude,
@@ -2822,10 +2827,10 @@ mod tests {
             })
         };
         let entries = [
-            TallEntry::Section(vec![Line::from("Open · 2")]),
+            section("Open · 2"),
             row(&a),
             row(&b),
-            TallEntry::Section(vec![Line::from("Done · 1")]),
+            section("Done · 1"),
             row(&c),
         ];
         let (_, targets, buf) = split_render(&entries, 160, 40);
@@ -2857,18 +2862,13 @@ mod tests {
                 detail: &detail,
             })
         };
-        let entries = [
-            TallEntry::Section(vec![Line::from("Open · 1")]),
-            row(&a),
-            TallEntry::Section(vec![Line::from("Done · 1")]),
-            row(&b),
-        ];
+        let entries = [section("Open · 1"), row(&a), section("Done · 1"), row(&b)];
         let (lines, targets, _) = split_render(&entries, 160, 40);
         let y = |id: i64| targets.rows.iter().find(|(w, _)| w.0 == id).unwrap().1.y as usize;
         let header = |label: &str| lines.iter().position(|l| l.contains(label)).unwrap();
         assert_eq!(header("Open"), 0);
-        assert_eq!(y(1), 1, "first row right under its header");
-        assert_eq!(y(2), header("Done") + 1, "{lines:#?}");
+        assert_eq!(y(1), 2, "first row right under its header's rule");
+        assert_eq!(y(2), header("Done") + 2, "{lines:#?}");
         let last_of_a = header("Done") - 2;
         assert!(!lines[last_of_a].trim().is_empty(), "{lines:#?}");
         assert!(
@@ -2997,7 +2997,7 @@ mod tests {
         let row = base_row("b");
         let detail = WorkspaceDetail::default();
         let entries = [
-            TallEntry::Section(vec![Line::from("Open · 1")]),
+            section("Open · 1"),
             TallEntry::Row(TallRow {
                 row: &row,
                 detail: &detail,
@@ -3022,7 +3022,7 @@ mod tests {
             );
         })
         .unwrap();
-        assert!(scroll >= 1, "scroll {scroll}");
+        assert!(scroll >= 2, "scroll {scroll}");
         assert_eq!(targets.rows.len(), 1, "row still clickable on screen");
     }
 
@@ -3148,40 +3148,54 @@ mod tests {
         assert!(!footer(&row).contains("shared") && !footer(&row).contains("layout"));
     }
 
-    /// In a viewport too short for the header and the row's first line,
-    /// following the selection shows the row, not just its header.
+    /// In a viewport too short for the header, its rule and the row's first
+    /// line, following the selection shows the row, not just its header;
+    /// one line taller and the header comes along.
     #[test]
     fn follow_skips_the_header_when_the_row_would_not_show() {
         let row = base_row("b");
         let detail = WorkspaceDetail::default();
         let entries = [
-            TallEntry::Section(vec![Line::from("Open · 1")]),
+            section("Open · 1"),
             TallEntry::Row(TallRow {
                 row: &row,
                 detail: &detail,
             }),
         ];
-        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 1)).unwrap();
-        let mut scroll = 0;
-        let mut targets = TallTargets::default();
-        term.draw(|f| {
-            targets = render(
-                f,
-                f.area(),
-                &entries,
-                &AgentGlyphs::default(),
-                Some(1),
-                &mut scroll,
-                true,
-                ColumnWidths::default(),
-                Some(ProseTab::Next),
-                0,
-                &Theme::wsx(),
+        for (height, want) in [(1, 2), (2, 2), (3, 0)] {
+            let mut term =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height)).unwrap();
+            let mut scroll = 0;
+            let mut targets = TallTargets::default();
+            term.draw(|f| {
+                targets = render(
+                    f,
+                    f.area(),
+                    &entries,
+                    &AgentGlyphs::default(),
+                    Some(1),
+                    &mut scroll,
+                    true,
+                    ColumnWidths::default(),
+                    Some(ProseTab::Next),
+                    0,
+                    &Theme::wsx(),
+                );
+            })
+            .unwrap();
+            assert_eq!(scroll, want, "height {height}");
+            assert_eq!(
+                targets.rows.len(),
+                1,
+                "height {height}: only the row is a target"
             );
-        })
-        .unwrap();
-        assert_eq!(scroll, 1, "row's first line at the top");
-        assert_eq!(targets.rows.len(), 1);
+            assert!(
+                targets
+                    .pr_chips
+                    .iter()
+                    .all(|(_, r)| r.y as usize + scroll >= 2)
+            );
+        }
     }
 
     #[test]

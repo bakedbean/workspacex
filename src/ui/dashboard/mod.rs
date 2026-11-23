@@ -2081,7 +2081,7 @@ mod section_header_tests {
     /// In every built-in theme, each section's label is unbolded in a color no
     /// other section shares, over a full-width rule.
     #[test]
-    fn every_section_header_is_colored_and_bold() {
+    fn every_section_header_is_colored_and_unbolded() {
         for name in ["wsx", "ansi", "dracula", "jellybeans", "nord"] {
             let theme = Theme::by_name(name);
             let mut seen: Vec<Color> = Vec::new();
@@ -2153,5 +2153,22 @@ mod section_header_tests {
             .find(|s| s.content.contains("asking"))
             .unwrap();
         assert_eq!(asking.style.fg, theme.status_style(Status::Question).fg);
+    }
+
+    /// Narrower than its label, the header clips rather than padding past the
+    /// width, and the rule spans exactly the width, down to zero.
+    #[test]
+    fn header_at_narrow_widths() {
+        let theme = Theme::wsx();
+        let t = SectionTally {
+            count: 2,
+            ..Default::default()
+        };
+        for width in [0, 5] {
+            let lines = section_header_lines(FocusSection::Open, t, width, &theme);
+            assert_eq!(lines.len(), 2);
+            assert_eq!(lines[0].width(), "Open · 2 ".chars().count());
+            assert_eq!(lines[1].width(), width);
+        }
     }
 }

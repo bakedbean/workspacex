@@ -63,6 +63,9 @@ pub struct DashboardInputs<'a> {
     /// The side panel's data for the selected workspace; `None` when the
     /// panel is closed or no workspace is selected.
     pub panel: Option<side_panel::PanelData>,
+    /// Repos left out of `repos` because `u` hides those with no
+    /// workspaces; 0 when nothing was hidden.
+    pub hidden_repos: usize,
 }
 
 #[derive(Debug)]
@@ -143,12 +146,17 @@ pub struct DashboardState {
     /// selected workspace to start with (`c` toggles it), its tab kept in
     /// the `dashboard_focus_tab` setting.
     pub focus_panel: side_panel::SidePanelState,
+    /// Whether repos with no workspaces are left off the list (`u`
+    /// toggles; `dashboard_hide_unused_repos` setting).
+    pub hide_unused_repos: bool,
 }
 
 /// Settings key holding the by-repo sort mode.
 pub const SORT_MODE_SETTING: &str = "dashboard_sort_mode";
 /// Settings key for the focus view's PR-state grouping (on/off).
 pub const FOCUS_GROUP_BY_PR_SETTING: &str = "dashboard_focus_group_by_pr";
+/// Settings key for leaving repos with no workspaces off the list (on/off).
+pub const HIDE_UNUSED_REPOS_SETTING: &str = "dashboard_hide_unused_repos";
 /// Settings key for the focus view's side-panel tab.
 pub const FOCUS_TAB_SETTING: &str = "dashboard_focus_tab";
 /// Settings key holding how long a blocked row keeps its pin, in seconds.
@@ -193,6 +201,8 @@ impl DashboardState {
             .unwrap_or_default();
         self.focus_group_by_pr =
             crate::config::settings::toggle_on(store, FOCUS_GROUP_BY_PR_SETTING);
+        self.hide_unused_repos =
+            crate::config::settings::toggle_on(store, HIDE_UNUSED_REPOS_SETTING);
         self.focus_panel.tab = get(FOCUS_TAB_SETTING)
             .and_then(|v| side_panel::PanelTab::from_key(v.trim()))
             .unwrap_or(side_panel::PanelTab::Next);
@@ -220,6 +230,13 @@ impl DashboardState {
         self.focus_scroll_anchor = None;
         let value = if self.focus_group_by_pr { "on" } else { "off" };
         let _ = store.set_setting(FOCUS_GROUP_BY_PR_SETTING, value);
+    }
+
+    /// Show or hide repos with no workspaces, and remember it.
+    pub fn toggle_hide_unused_repos(&mut self, store: &crate::data::store::Store) {
+        self.hide_unused_repos = !self.hide_unused_repos;
+        let value = if self.hide_unused_repos { "on" } else { "off" };
+        let _ = store.set_setting(HIDE_UNUSED_REPOS_SETTING, value);
     }
 
     /// Flip between repo and attention grouping. Shared by the dashboard's
@@ -302,6 +319,7 @@ impl Default for DashboardState {
             group_mode: GroupMode::default(),
             focus_group_by_pr: true,
             focus_panel: side_panel::SidePanelState::open_on(side_panel::PanelTab::Next),
+            hide_unused_repos: false,
             sort_mode: SortMode::default(),
             blocked_pin_max_age_secs: BLOCKED_PIN_MAX_AGE_DEFAULT_SECS,
             top_bar_show_tags: Vec::new(),
@@ -540,13 +558,15 @@ pub fn render_without_footer(
     // two causes need opposite responses: a filter that hid every row wants
     // the filter cleared, while a fresh install wants a repo registered —
     // which is CLI-only, so the remedy names the command rather than a key.
-    // Those are the only two reachable causes: once a repo exists, by-repo
-    // always draws its header and by-attention always draws it under QUIET
-    // REPOS, so `items` is empty only when there are no repos at all or a
-    // filter hid every row.
+    // Once a repo exists, by-repo always draws its header and by-attention
+    // always draws it under QUIET REPOS, so `items` is empty only when there
+    // are no repos at all, a filter hid every row, or `u` hid every repo
+    // because none has a workspace — which names its own way back.
     if items.is_empty() {
         let msg = if RowFilter::of(state).is_active() {
             "(no matching workspaces)"
+        } else if inputs.hidden_repos > 0 {
+            "(no workspaces · u shows unused repos)"
         } else {
             "(no repos · run wsx repo add <path>)"
         };

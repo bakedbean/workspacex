@@ -95,8 +95,11 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     let (window, activity) = usage_sparkline(app);
     let fleet = crate::ui::bar::fleet::FleetStats::collect(app).to_vars();
     let column_widths = read_column_widths(&app.store);
+    let repos = dashboard_repos(app, &app.repos);
+    let hidden_repos = app.repos.len() - repos.len();
     let mut inputs = dashboard::DashboardInputs {
-        repos: app.repos.iter().collect(),
+        repos,
+        hidden_repos,
         workspaces,
         activity: &activity,
         column_widths,
@@ -498,6 +501,26 @@ pub(crate) fn workspace_last_active_ms(
         .unwrap_or(0);
     let last_ms = session_last_ms.max(event_last_ms);
     (last_ms != 0).then_some(last_ms)
+}
+
+/// The repos the dashboard lists: every repo, or with `u`'s
+/// `hide_unused_repos` on, only those with a workspace. The focused repo
+/// always stays, so hiding can't drop the focus view out from under the user.
+/// Nav (`visible_targets`) reads the same list, so rows and selection agree.
+///
+/// `repos` is `app.repos` passed separately, as in `build_workspace_items`.
+pub(crate) fn dashboard_repos<'a>(
+    app: &App,
+    repos: &'a [crate::data::store::Repo],
+) -> Vec<&'a crate::data::store::Repo> {
+    repos
+        .iter()
+        .filter(|r| {
+            !app.dashboard.hide_unused_repos
+                || app.dashboard.focused_repo == Some(r.id)
+                || app.workspaces.iter().any(|(rid, _)| *rid == r.id)
+        })
+        .collect()
 }
 
 /// Every workspace as a dashboard item, in repo order. The dashboard list

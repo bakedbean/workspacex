@@ -205,6 +205,12 @@ pub const SETTINGS: &[SettingDef] = &[
         true,
         "Section the repo focus view by PR state; `G` there toggles it too.",
     ),
+    toggle(
+        "dashboard_hide_unused_repos",
+        "Dashboard",
+        false,
+        "Leave repos with no workspaces off the list; `u` toggles it too.",
+    ),
     choice(
         "dashboard_focus_tab",
         "Dashboard",
@@ -464,6 +470,7 @@ mod tests {
             "dashboard_pr_width",
             "dashboard_sort_mode",
             "dashboard_focus_group_by_pr",
+            "dashboard_hide_unused_repos",
             "dashboard_focus_tab",
             "dashboard_blocked_pin_max_age_secs",
             "top_bar_show_tags",

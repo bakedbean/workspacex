@@ -17,6 +17,7 @@ Every key in the wsx TUI, grouped by where you press it. Capital letters mean `S
 | `esc`                   | Clear a [status filter](status-indicators.md#filtering-by-status) set by clicking the header tally |
 | `o`                     | Sort by recency or by status (saved)                   |
 | `G`                     | Group by repo or by attention                          |
+| `u`                     | Show or hide repos with no workspaces (saved)          |
 | `f`                     | Show only the selected repo, [in detail](repo-focus.md); `f` or `esc` goes back |
 | `[` / `]` (focus view)  | Previous / next repo                                   |
 | `{` / `}` (focus view)  | Previous / next [section](repo-focus.md#sections)      |

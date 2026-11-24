@@ -805,8 +805,12 @@ fn section_header_lines(
     }
     let used: usize = spans.iter().map(Span::width).sum();
     spans.push(Span::raw(" ".repeat(width.saturating_sub(used))));
-    let rule = Line::from(Span::styled("─".repeat(width), theme.rule_style()));
-    vec![Line::from(spans), rule]
+    vec![Line::from(spans), header_rule(width, theme)]
+}
+
+/// The full-width rule under a focus-view header.
+fn header_rule(width: usize, theme: &Theme) -> Line<'static> {
+    Line::from(Span::styled("─".repeat(width), theme.rule_style()))
 }
 
 /// One entry in the focus view, in display order.
@@ -1036,7 +1040,11 @@ fn render_focus(
                 theme,
             )),
             (FocusEntry::Group(g), _) => {
-                tall::TallEntry::Group(hidden::hidden_group_line(g, None, inputs.nerd_fonts, theme))
+                let mut lines = vec![hidden::hidden_group_line(g, None, inputs.nerd_fonts, theme)];
+                if g.expanded {
+                    lines.push(header_rule(rows_area.width as usize, theme));
+                }
+                tall::TallEntry::Group(lines)
             }
             (FocusEntry::Workspace(_), None) => unreachable!("rows mirror entries"),
         })

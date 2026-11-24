@@ -940,6 +940,32 @@ async fn hidden_groups_expand_and_collapse_like_the_list() {
     assert_eq!(app.dashboard.focused_repo, Some(repo));
 }
 
+/// An open group's label is underlined like a section header; the rule goes
+/// away when it folds, and is never part of the label's click target.
+#[test]
+fn an_open_hidden_group_is_underlined() {
+    let (mut app, repo, _) = app_with_parked_group();
+    let rules = |s: &str| s.lines().filter(|l| l.contains(&"─".repeat(60))).count();
+    let folded = draw(&mut app);
+    let (group, _) = app.dashboard_focus_group_rects[0].clone();
+
+    toggle_focus_group(&mut app, group.clone());
+    let open = draw(&mut app);
+    let label = line_of(&open, "#parked  ·  2 hidden");
+    let section = line_of(&open, "No PR · 3");
+    // The list's columns, left of the panel's divider.
+    let line = |i: usize| open.lines().nth(i).unwrap().split('│').next().unwrap();
+    assert!(line(section + 1).contains(&"─".repeat(60)), "{open}");
+    assert_eq!(line(label + 1), line(section + 1), "{open}");
+    assert!(line(label + 2).contains("repo/d"), "{open}");
+    assert_eq!(rules(&open), rules(&folded) + 1, "{open}");
+    let (_, rect) = app.dashboard_focus_group_rects[0].clone();
+    assert_eq!((rect.y as usize, rect.height), (label, 1));
+
+    toggle_focus_group(&mut app, (repo, group.1));
+    assert_eq!(rules(&draw(&mut app)), rules(&folded));
+}
+
 /// Clicking a group's row toggles it and selects it.
 #[test]
 fn clicking_a_hidden_group_toggles_it() {

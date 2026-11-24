@@ -199,13 +199,17 @@ pub fn render_list(
         for w in &view.workspaces {
             items.push(stripe.item(row::render(w, widths, tick, theme, width), theme));
         }
-        for g in &view.hidden {
+        for (i, g) in view.hidden.iter().enumerate() {
             items.push(ListItem::new(
                 crate::ui::dashboard::hidden::hidden_group_line(g, None, view.nerd_fonts, theme),
             ));
             if g.expanded {
                 for w in &g.workspaces {
                     items.push(stripe.item(row::render(w, widths, tick, theme, width), theme));
+                }
+                // The repo's own spacer follows its last group.
+                if i + 1 < view.hidden.len() {
+                    items.push(ListItem::new(""));
                 }
             }
         }

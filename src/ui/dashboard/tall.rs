@@ -229,14 +229,15 @@ pub struct TallTargets {
     pub pr_chips: Vec<(WorkspaceId, Rect)>,
 }
 
-/// One entry in the focus view: a workspace's tall row, or the one-line
-/// summary of a hidden group (`▸ #parked · 3 hidden`), drawn as on the list.
+/// One entry in the focus view: a workspace's tall row, or a header whose
+/// first line alone is highlighted and clickable.
 #[derive(Debug, Clone)]
 pub enum TallEntry<'a> {
     Row(TallRow<'a>),
-    Group(Line<'static>),
-    /// A PR-state header and the rule beneath it; only the header line is
-    /// highlighted and clickable.
+    /// A hidden group's summary (`▸ #parked · 3 hidden`), drawn as on the
+    /// list, and the rule beneath it while the group is open.
+    Group(Vec<Line<'static>>),
+    /// A PR-state header and the rule beneath it.
     Section(Vec<Line<'static>>),
 }
 
@@ -1087,21 +1088,24 @@ pub fn render(
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut spans: Vec<(usize, usize)> = Vec::with_capacity(entries.len());
     let mut pr_hits: Vec<Option<(usize, u16, u16)>> = Vec::with_capacity(entries.len());
+    let mut seen_group = false;
     for (i, e) in entries.iter().enumerate() {
         // Rows stack flush (striping separates them); only a section
-        // header gets a gap above, so spacing shows which rows it heads.
-        let gap = match (i, e) {
-            (1.., TallEntry::Section(_)) => 1,
-            _ => 0,
+        // header, or a group after an open group's rows, gets a gap above,
+        // so spacing shows which rows each heads.
+        let gap = match e {
+            TallEntry::Section(_) => i > 0,
+            TallEntry::Group(_) => seen_group && matches!(entries[i - 1], TallEntry::Row(_)),
+            TallEntry::Row(_) => false,
         };
-        lines.extend(std::iter::repeat_n(Line::default(), gap));
+        seen_group |= matches!(e, TallEntry::Group(_));
+        lines.extend(gap.then(Line::default));
         let (entry, pr_hit) = match e {
             TallEntry::Row(r) => {
                 let l = row_layout(r, glyphs, cols, tab, tick, theme);
                 (l.lines, l.pr_hit)
             }
-            TallEntry::Group(line) => (vec![line.clone()], None),
-            TallEntry::Section(lines) => (lines.clone(), None),
+            TallEntry::Group(lines) | TallEntry::Section(lines) => (lines.clone(), None),
         };
         spans.push((lines.len(), entry.len()));
         pr_hits.push(pr_hit);
@@ -1141,12 +1145,8 @@ pub fn render(
         if is_row {
             row_ordinal += 1;
         }
-        // A section's rule isn't part of its target.
-        let len = if matches!(entries[i], TallEntry::Section(_)) {
-            1
-        } else {
-            len
-        };
+        // A header's rule isn't part of its target.
+        let len = if is_row { len } else { 1 };
         let Some(rect) = visible_rect(area, *scroll, top, len) else {
             continue;
         };
@@ -1951,7 +1951,7 @@ mod tests {
                 row: &a,
                 detail: &detail,
             }),
-            TallEntry::Group(Line::from("  ▸ #parked  ·  2 hidden")),
+            TallEntry::Group(vec![Line::from("  ▸ #parked  ·  2 hidden")]),
         ];
         let mut term =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(NARROW, 10)).unwrap();
@@ -2795,7 +2795,7 @@ mod tests {
                 row: &a,
                 detail: &detail,
             }),
-            TallEntry::Group(Line::from("  ▸ #parked  ·  1 hidden")),
+            TallEntry::Group(vec![Line::from("  ▸ #parked  ·  1 hidden")]),
             TallEntry::Row(TallRow {
                 row: &b,
                 detail: &detail,

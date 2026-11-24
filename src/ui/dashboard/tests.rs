@@ -115,6 +115,7 @@ fn render_to_strings_with(
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
+        hidden_repos: 0,
     };
     let mut state = DashboardState {
         group_mode: group,
@@ -164,6 +165,7 @@ fn assert_pr_rects_match_buffer(group: GroupMode, height: u16, select_last: bool
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
+        hidden_repos: 0,
     };
     let mut state = DashboardState {
         group_mode: group,
@@ -282,6 +284,7 @@ fn footer_row_paints_chip_bg_but_no_bar_bg() {
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
+        hidden_repos: 0,
     };
     let mut state = DashboardState::default();
     let theme = Theme::wsx();
@@ -346,6 +349,7 @@ fn render_sets_list_state_to_selected_workspace_index() {
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
+        hidden_repos: 0,
     };
     let mut state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -393,6 +397,7 @@ fn selected_workspace_row_renders_with_thicker_gutter() {
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
+        hidden_repos: 0,
     };
     let mut state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -453,6 +458,7 @@ fn visible_targets_by_repo_matches_render_order() {
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
+        hidden_repos: 0,
     };
     let state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -573,6 +579,7 @@ fn visible_targets_matches_rendered_row_order_under_recency() {
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
+        hidden_repos: 0,
     };
     let mut state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -677,6 +684,7 @@ fn repo_order_breaks_sort_order_ties_by_id_in_lockstep() {
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
+        hidden_repos: 0,
     };
     let state = DashboardState {
         group_mode: GroupMode::Repo,
@@ -883,6 +891,7 @@ fn fixture_dashboard_inputs() -> DashboardInputs<'static> {
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
+        hidden_repos: 0,
     }
 }
 
@@ -1033,6 +1042,7 @@ fn render_empty_body(repos: &[Repo], group: GroupMode, filter: Option<&str>) -> 
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
+        hidden_repos: 0,
     };
     let mut state = DashboardState {
         group_mode: group,
@@ -1352,6 +1362,7 @@ mod hide_rules {
             nerd_fonts: false,
             fleet: crate::ui::bar::fleet::empty(),
             panel: None,
+            hidden_repos: 0,
         }
     }
 
@@ -1878,6 +1889,7 @@ fn wheel_scrolls_the_list_apart_from_the_selection() {
         nerd_fonts: false,
         fleet: crate::ui::bar::fleet::empty(),
         panel: None,
+        hidden_repos: 0,
     };
     let mut state = DashboardState {
         selection: Some(SelectionTarget::Workspace(first_id)),

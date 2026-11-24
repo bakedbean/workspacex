@@ -95,8 +95,11 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
     let (window, activity) = usage_sparkline(app);
     let fleet = crate::ui::bar::fleet::FleetStats::collect(app).to_vars();
     let column_widths = read_column_widths(&app.store);
+    let repos = dashboard_repos(app, &app.repos);
+    let hidden_repos = app.repos.len() - repos.len();
     let mut inputs = dashboard::DashboardInputs {
-        repos: dashboard_repos(app, &app.repos),
+        repos,
+        hidden_repos,
         workspaces,
         activity: &activity,
         column_widths,

@@ -63,6 +63,9 @@ pub struct DashboardInputs<'a> {
     /// The side panel's data for the selected workspace; `None` when the
     /// panel is closed or no workspace is selected.
     pub panel: Option<side_panel::PanelData>,
+    /// Repos left out of `repos` because `u` hides those with no
+    /// workspaces; 0 when nothing was hidden.
+    pub hidden_repos: usize,
 }
 
 #[derive(Debug)]
@@ -562,7 +565,7 @@ pub fn render_without_footer(
     if items.is_empty() {
         let msg = if RowFilter::of(state).is_active() {
             "(no matching workspaces)"
-        } else if state.hide_unused_repos {
+        } else if inputs.hidden_repos > 0 {
             "(no workspaces · u shows unused repos)"
         } else {
             "(no repos · run wsx repo add <path>)"

@@ -86,3 +86,39 @@ async fn an_all_empty_list_says_how_to_show_them() {
     assert!(app.selectable.is_empty());
     assert!(screen.contains("u shows unused repos"), "{screen}");
 }
+
+#[tokio::test]
+async fn with_no_repos_the_empty_list_still_says_to_add_one() {
+    let (mut app, _) = make_app_with_n_repos(0);
+    app.dashboard.hide_unused_repos = true;
+    let screen = draw(&mut app);
+    assert!(screen.contains("wsx repo add"), "{screen}");
+    assert!(!screen.contains("u shows unused repos"), "{screen}");
+}
+
+#[tokio::test]
+async fn a_selected_empty_repo_hands_the_selection_to_a_visible_row() {
+    let (mut app, _, empty) = app_with_an_empty_repo();
+    draw(&mut app);
+    let idx = app
+        .selectable
+        .iter()
+        .position(|t| *t == SelectionTarget::Repo(empty))
+        .unwrap();
+    app.select_index(idx);
+    press(&mut app, 'u', KeyModifiers::NONE).await;
+    draw(&mut app);
+    let sel = app.dashboard.selection.clone().expect("still selected");
+    assert_ne!(sel, SelectionTarget::Repo(empty));
+    assert!(app.selectable.contains(&sel));
+}
+
+#[tokio::test]
+async fn attention_grouping_leaves_it_out_of_quiet_repos() {
+    let (mut app, _, _) = app_with_an_empty_repo();
+    app.dashboard.toggle_group_mode();
+    assert!(draw(&mut app).contains("empty"));
+    app.dashboard.hide_unused_repos = true;
+    let screen = draw(&mut app);
+    assert!(!screen.contains("empty"), "{screen}");
+}

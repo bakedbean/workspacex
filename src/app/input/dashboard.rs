@@ -918,6 +918,9 @@ pub(in crate::app::input) async fn handle_key_dashboard(
         (KeyCode::Char('o'), _) => {
             app.dashboard.cycle_sort_mode(&app.store);
         }
+        (KeyCode::Char('u'), _) => {
+            app.dashboard.toggle_hide_unused_repos(&app.store);
+        }
         (KeyCode::Char('z'), _) => {
             app.z_leader_pending = true;
         }

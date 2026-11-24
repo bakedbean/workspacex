@@ -42,6 +42,7 @@ mod side_panel;
 mod sort_mode;
 mod spawn;
 mod status_filter;
+mod unused_repos;
 mod updates_panel;
 mod workspace_lifecycle;
 mod workspace_tags;

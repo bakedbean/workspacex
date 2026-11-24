@@ -246,6 +246,7 @@ pub fn render_list(
                     items
                         .push(stripe.item(flat_row_line(&flat, widths, tick, theme, width), theme));
                 }
+                items.push(ListItem::new(""));
             }
         }
     }

@@ -1088,14 +1088,18 @@ pub fn render(
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut spans: Vec<(usize, usize)> = Vec::with_capacity(entries.len());
     let mut pr_hits: Vec<Option<(usize, u16, u16)>> = Vec::with_capacity(entries.len());
+    let mut seen_group = false;
     for (i, e) in entries.iter().enumerate() {
         // Rows stack flush (striping separates them); only a section
-        // header gets a gap above, so spacing shows which rows it heads.
-        let gap = match (i, e) {
-            (1.., TallEntry::Section(_)) => 1,
-            _ => 0,
+        // header, or a group after an open group's rows, gets a gap above,
+        // so spacing shows which rows each heads.
+        let gap = match e {
+            TallEntry::Section(_) => i > 0,
+            TallEntry::Group(_) => seen_group && matches!(entries[i - 1], TallEntry::Row(_)),
+            TallEntry::Row(_) => false,
         };
-        lines.extend(std::iter::repeat_n(Line::default(), gap));
+        seen_group |= matches!(e, TallEntry::Group(_));
+        lines.extend(gap.then(Line::default));
         let (entry, pr_hit) = match e {
             TallEntry::Row(r) => {
                 let l = row_layout(r, glyphs, cols, tab, tick, theme);

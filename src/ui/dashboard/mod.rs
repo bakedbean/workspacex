@@ -1799,7 +1799,8 @@ fn render_by_repo<'a>(
             }
             flat_idx += 1;
         }
-        for g in &mut view.hidden {
+        let groups = view.hidden.len();
+        for (i, g) in view.hidden.iter_mut().enumerate() {
             if selection
                 == Some(SelectionTarget::HiddenGroup {
                     repo: RepoId(view.id as i64),
@@ -1820,6 +1821,10 @@ fn render_by_repo<'a>(
                 if let Some(span) = row::pr_chip_hit_span(w, widths) {
                     chip_spans.push((w.workspace_id, flat_idx, span));
                 }
+                flat_idx += 1;
+            }
+            // Spacer between an open group and the next one
+            if i + 1 < groups {
                 flat_idx += 1;
             }
         }
@@ -1979,6 +1984,7 @@ fn render_by_attention<'a>(
                 }
                 flat_idx += 1;
             }
+            flat_idx += 1; // Spacer after an open group
         }
     }
     state.list_state.select(selected_idx);

@@ -1528,6 +1528,60 @@ mod hide_rules {
         assert!(!screen.contains("no-pr "), "other groups stay collapsed");
     }
 
+    /// Lines between an open group's last row and the next group's label,
+    /// and between that label and the one above when both are folded.
+    fn assert_open_group_is_spaced(mode: GroupMode) {
+        let repo = repo_with("pr:merged,pr:none");
+        let inputs = inputs(&repo, items(&repo));
+        let mut state = DashboardState {
+            group_mode: mode,
+            ..Default::default()
+        };
+        let y = |s: &str, n: &str| s.lines().position(|l| l.contains(n)).unwrap();
+        let folded = draw(&inputs, &mut state);
+        assert_eq!(
+            y(&folded, "no PR  ·  1 hidden"),
+            y(&folded, "merged  ·  2 hidden") + 1,
+            "{folded}"
+        );
+        state.expanded_hidden.insert((RepoId(1), MERGED));
+        let open = draw(&inputs, &mut state);
+        let next = y(&open, "no PR  ·  1 hidden");
+        assert_eq!(next, y(&open, "merged  ·  2 hidden") + 4, "{open}");
+        assert_eq!(open.lines().nth(next - 1).unwrap().trim(), "", "{open}");
+    }
+
+    #[test]
+    fn by_repo_open_group_is_spaced_from_the_next() {
+        assert_open_group_is_spaced(GroupMode::Repo);
+    }
+
+    #[test]
+    fn attention_open_group_is_spaced_from_the_next() {
+        assert_open_group_is_spaced(GroupMode::Attention);
+    }
+
+    /// The repo's own spacer already follows its last group.
+    #[test]
+    fn by_repo_last_open_group_adds_no_second_spacer() {
+        let repo = repo_with("pr:merged");
+        let other = Repo {
+            id: RepoId(2),
+            name: "other".into(),
+            path: "/r/other".into(),
+            sort_order: 1,
+            ..repo.clone()
+        };
+        let mut inputs = inputs(&repo, items(&repo));
+        inputs.repos.push(&other);
+        let mut state = DashboardState::default();
+        state.expanded_hidden.insert((RepoId(1), MERGED));
+        let s = draw(&inputs, &mut state);
+        let y = |n: &str| s.lines().position(|l| l.contains(n)).unwrap();
+        let last = y("merged-a").max(y("merged-b"));
+        assert_eq!(y("/r/other"), last + 2, "{s}");
+    }
+
     #[test]
     fn active_filter_bypasses_hide_rules() {
         let repo = repo_with("pr:merged,pr:none");

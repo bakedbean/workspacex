@@ -966,6 +966,42 @@ fn an_open_hidden_group_is_underlined() {
     assert_eq!(rules(&draw(&mut app)), rules(&folded));
 }
 
+/// An open group's rows are set off from the next group by one blank line;
+/// folded groups stack flush.
+#[test]
+fn an_open_hidden_group_parts_from_the_next() {
+    let (mut app, repo, ids) = app_with_parked_group();
+    app.store.add_workspace_tag(ids[2], "spike").unwrap();
+    app.store
+        .set_repo_hide_rules(
+            repo,
+            &crate::data::hide_rules::HideRules::parse(Some("tag:parked,tag:spike")),
+        )
+        .unwrap();
+    app.refresh().unwrap();
+    let folded = draw(&mut app);
+    assert_eq!(line_of(&folded, "#spike"), line_of(&folded, "#parked") + 1);
+
+    toggle_focus_group(
+        &mut app,
+        (repo, crate::data::hide_rules::HideRule::tag("parked")),
+    );
+    let open = draw(&mut app);
+    let spike = line_of(&open, "#spike  ·  1 hidden");
+    let list = |i: usize| {
+        open.lines()
+            .nth(i)
+            .unwrap()
+            .split('│')
+            .next()
+            .unwrap()
+            .trim()
+    };
+    assert_eq!(list(spike - 1), "", "{open}");
+    assert!(list(spike - 2).contains("claude  #parked"), "{open}");
+    assert_eq!(app.dashboard_focus_group_rects[1].1.y as usize, spike);
+}
+
 /// Clicking a group's row toggles it and selects it.
 #[test]
 fn clicking_a_hidden_group_toggles_it() {

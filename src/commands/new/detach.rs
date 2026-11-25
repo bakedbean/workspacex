@@ -107,13 +107,15 @@ pub(crate) fn plist(label: &str, argv: &[&OsStr], env: &Env, log: &Path) -> Stri
     )
 }
 
-fn launchctl(args: &[&str]) -> Option<String> {
+fn launchctl(args: &[&str]) -> std::result::Result<String, String> {
     let out = std::process::Command::new("/bin/launchctl")
         .args(args)
         .output()
-        .ok()
-        .filter(|o| o.status.success())?;
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+        .map_err(|e| format!("launchctl: {e}"))?;
+    if !out.status.success() {
+        return Err(failure(&out.stderr, out.status.code()));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 fn gui_domain() -> String {
@@ -123,29 +125,49 @@ fn gui_domain() -> String {
 /// Whether this process is outside the desktop session (an ssh login), where
 /// macOS keeps Claude's Keychain login out of reach.
 pub(crate) fn outside_desktop() -> bool {
-    cfg!(target_os = "macos")
-        && launchctl(&["managername"]).is_some_and(|name| name.trim() != "Aqua")
+    cfg!(target_os = "macos") && launchctl(&["managername"]).is_ok_and(|name| name.trim() != "Aqua")
 }
 
-/// Run `argv` as a one-off job in the desktop session. False when launchd
-/// refuses, as it does when nobody is logged in there.
-pub(crate) fn spawn_in_gui(label: &str, argv: &[&OsStr], env: &Env, log: &Path) -> Result<bool> {
+/// Run `argv` as a one-off job in the desktop session. The inner error is
+/// launchd's reason for refusing, as when nobody is logged in there.
+pub(crate) fn spawn_in_gui(
+    label: &str,
+    argv: &[&OsStr],
+    env: &Env,
+    log: &Path,
+) -> Result<std::result::Result<(), String>> {
     private_file(log)?;
     let file = log.with_extension("plist");
     private_file(&file)?.write_all(plist(label, argv, env, log).as_bytes())?;
-    let ok = launchctl(&["bootstrap", &gui_domain(), &file.to_string_lossy()]).is_some();
+    let started = launchctl(&["bootstrap", &gui_domain(), &file.to_string_lossy()]);
     let _ = std::fs::remove_file(&file);
-    Ok(ok)
+    Ok(started.map(|_| ()))
 }
 
-/// Whether the job is still running, not merely loaded.
-pub(crate) fn job_running(label: &str) -> bool {
-    launchctl(&["list", label]).is_some_and(|s| s.contains("\"PID\""))
+/// Whether the worker is running, by the pid it wrote; until it writes one it
+/// gets a few seconds to start. Not asked of launchd, whose `list` can't see
+/// a desktop-session job from an ssh login.
+pub(crate) fn worker_alive(pid_file: &Path, since_start: std::time::Duration) -> bool {
+    let pid = std::fs::read_to_string(pid_file)
+        .ok()
+        .and_then(|s| s.trim().parse().ok());
+    match pid {
+        Some(pid) => crate::agent::reachable::pid_alive(pid),
+        None => since_start < std::time::Duration::from_secs(10),
+    }
+}
+
+/// Why launchctl failed, from its stderr.
+fn failure(stderr: &[u8], code: Option<i32>) -> String {
+    match String::from_utf8_lossy(stderr).trim() {
+        "" => format!("launchctl exited with code {}", code.unwrap_or(-1)),
+        reason => reason.to_string(),
+    }
 }
 
 /// Remove the job. Ends the caller when it is that job.
 pub(crate) fn remove_job(label: &str) {
-    launchctl(&["bootout", &format!("{}/{label}", gui_domain())]);
+    let _ = launchctl(&["bootout", &format!("{}/{label}", gui_domain())]);
 }
 
 /// Copy `log` to `out` as it grows; returns the code in `exit_file`, or 1
@@ -336,5 +358,34 @@ mod tests {
                 .output();
             assert!(ok.unwrap().status.success());
         }
+    }
+
+    #[test]
+    fn a_worker_is_judged_by_its_own_pid_from_any_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("x.pid");
+        let (early, late) = (Duration::from_secs(1), Duration::from_secs(60));
+        assert!(worker_alive(&f, early), "still starting");
+        assert!(!worker_alive(&f, late), "never started");
+        std::fs::write(&f, std::process::id().to_string()).unwrap();
+        assert!(worker_alive(&f, late), "long-running");
+        let mut c = std::process::Command::new("true").spawn().unwrap();
+        c.wait().unwrap();
+        std::fs::write(&f, c.id().to_string()).unwrap();
+        assert!(!worker_alive(&f, early), "gone");
+        std::fs::write(&f, "").unwrap();
+        assert!(worker_alive(&f, early), "half-written");
+    }
+
+    #[test]
+    fn a_launchctl_failure_keeps_its_reason() {
+        assert_eq!(
+            failure(
+                b"Bootstrap failed: 125: Domain does not support it\n",
+                Some(125)
+            ),
+            "Bootstrap failed: 125: Domain does not support it"
+        );
+        assert_eq!(failure(b" \n", Some(5)), "launchctl exited with code 5");
     }
 }

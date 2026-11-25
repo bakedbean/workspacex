@@ -334,8 +334,14 @@ fn write_exit(path: &Path, code: i32) -> Result<()> {
     Ok(())
 }
 
+/// Where the worker writes its pid, for a follower that isn't its parent.
+fn pid_file(exit_file: &Path) -> PathBuf {
+    exit_file.with_extension("pid")
+}
+
 pub(crate) async fn run_worker(job_path: &Path, dirs: &crate::config::Dirs) -> Result<()> {
     let job: Job = serde_json::from_slice(&std::fs::read(job_path)?)?;
+    std::fs::write(pid_file(&job.exit_file), std::process::id().to_string())?;
     let _ = std::fs::remove_file(job_path);
     if let Err(e) = work(&job, dirs).await {
         println!("error: {e}");
@@ -564,17 +570,17 @@ pub(crate) fn launch(
             let mut argv = vec![exe.as_os_str()];
             argv.extend(args.iter().map(|a: &std::ffi::OsString| a.as_os_str()));
             let env = detach::worker_env(std::env::vars_os(), true);
-            if detach::spawn_in_gui(&label, &argv, &env, &log)? {
-                // launchd reports no pid for a moment after the bootstrap.
-                let began = std::time::Instant::now();
-                let mut alive =
-                    || began.elapsed() < Duration::from_secs(5) || detach::job_running(&label);
-                return detach::follow(&log, &exit_file, &mut alive, &mut out);
+            match detach::spawn_in_gui(&label, &argv, &env, &log)? {
+                Ok(()) => {
+                    let began = std::time::Instant::now();
+                    let mut alive = || detach::worker_alive(&pid_file(&exit_file), began.elapsed());
+                    return detach::follow(&log, &exit_file, &mut alive, &mut out);
+                }
+                Err(reason) => eprintln!(
+                    "warning: could not start in the desktop session ({reason}), so Claude \
+                     may not be able to read its login; is anyone logged in there?"
+                ),
             }
-            eprintln!(
-                "warning: nobody is logged in at the desktop, so Claude may not be \
-                 able to read its login"
-            );
         }
         write_job(None)?;
         let env = detach::worker_env(std::env::vars_os(), false);
@@ -589,6 +595,7 @@ pub(crate) fn launch(
     {
         println!("{line}");
     }
+    let _ = std::fs::remove_file(pid_file(&exit_file));
     let _ = std::fs::remove_file(&exit_file);
     result
 }
@@ -995,6 +1002,11 @@ mod tests {
         run_worker(&job, &dirs).await.unwrap();
 
         assert_eq!(std::fs::read_to_string(dir.join("exit")).unwrap(), "0");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("exit.pid")).unwrap(),
+            std::process::id().to_string(),
+            "the follower needs the worker's pid"
+        );
         assert!(!task_file.exists() && !job.exists());
         let mut got = String::new();
         for _ in 0..50 {

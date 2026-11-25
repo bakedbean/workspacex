@@ -179,6 +179,16 @@ useful either way.
 - ssh login (Background), fresh tmux server: "Not logged in", a session file
   with no bridge id, in both modes. **The Keychain test failed.** No trust
   prompt appeared; a logged-out Claude has no bridge id, so step 7's gate held.
+- ssh login, Claude started through a one-off launchd job in `gui/<uid>`: the
+  job ran as Aqua, bridge id after 2s, and the agent survived `bootout`.
+
+Outcome: on macOS, when `launchctl managername` is not `Aqua`, the worker of
+step 2 runs as a one-off launchd job in `gui/<uid>` instead of a `setsid` child,
+and boots itself out as its last act. It gets the caller's environment minus
+`SSH_*`. If the bootstrap fails (nobody is logged in at the desktop), it warns
+and uses the `setsid` worker; a logged-out Claude then shows up as "not visible
+yet" with its screen. A tmux server that was itself started over ssh still has
+no login, and is reported the same way.
 
 ## Testing
 

@@ -1,6 +1,8 @@
 //! The worker half of `wsx new`: create a workspace, start its agent, wait
 //! until the Claude app can reach it, and deliver the task.
 
+pub(crate) mod detach;
+
 use crate::data::store::{Store, Workspace, WorkspaceId};
 use crate::error::{Error, Result};
 use std::path::{Path, PathBuf};
@@ -331,6 +333,10 @@ pub(crate) async fn run_worker(job_path: &Path, dirs: &crate::config::Dirs) -> R
         }
         write_exit(&job.exit_file, 1)?;
     }
+    // Last: this ends the process when it is the job.
+    if let Some(label) = &job.launchd_label {
+        detach::remove_job(label);
+    }
     Ok(())
 }
 
@@ -458,6 +464,100 @@ fn remove_task(task_file: Option<&Path>) {
     if let Some(f) = task_file {
         let _ = std::fs::remove_file(f);
     }
+}
+
+/// Check what can be checked before anything is created.
+pub(crate) fn preflight(
+    store: &Store,
+    repo: &str,
+    agent: crate::pty::session::AgentKind,
+) -> Result<()> {
+    crate::cli::resolve::lookup_repo(store, repo)?;
+    if !crate::pty::tmux::is_available() {
+        return Err(Error::UserInput(format!(
+            "tmux >= 3.2 ({}) is not available on this host",
+            crate::pty::tmux::tmux_bin()
+        )));
+    }
+    if let Some(bin) = crate::pty::session::missing_agent_binary(agent) {
+        return Err(Error::AgentBinaryMissing(bin));
+    }
+    if agent == crate::pty::session::AgentKind::Claude
+        && !crate::agent::remote_control::enabled(store)
+    {
+        eprintln!("warning: remote_control is off, so the Claude app won't list this agent");
+    }
+    Ok(())
+}
+
+/// The foreground half: hand the job to a detached worker and follow it.
+/// Returns the exit code.
+pub(crate) fn launch(
+    dirs: &crate::config::Dirs,
+    repo: &str,
+    task: Option<&str>,
+    yolo: bool,
+    agent: crate::pty::session::AgentKind,
+) -> Result<i32> {
+    use std::io::Write;
+    let dir = dirs.log_dir().join("new");
+    std::fs::create_dir_all(&dir)?;
+    let stem = format!("{}-{}", crate::data::store::now_ms(), std::process::id());
+    let log = dir.join(format!("{stem}.log"));
+    let job_file = dir.join(format!("{stem}.job"));
+    let task_file = dir.join(format!("{stem}.task"));
+    if let Some(task) = task {
+        detach::private_file(&task_file)?.write_all(task.as_bytes())?;
+    }
+    let gui = detach::outside_desktop();
+    let label = format!("wsx.new.{stem}");
+    let write_job = |launchd_label: Option<String>| -> Result<()> {
+        let job = Job {
+            repo: repo.into(),
+            yolo,
+            agent: agent.store_value().into(),
+            task_file: task.map(|_| task_file.clone()),
+            exit_file: dir.join(format!("{stem}.exit")),
+            launchd_label,
+        };
+        let _ = std::fs::remove_file(&job_file);
+        detach::private_file(&job_file)?.write_all(&serde_json::to_vec(&job)?)?;
+        Ok(())
+    };
+    let exe = std::env::current_exe()?;
+    let args = [
+        "new".into(),
+        "--worker".into(),
+        job_file.clone().into_os_string(),
+    ];
+    let exit_file = dir.join(format!("{stem}.exit"));
+    let mut out = std::io::stdout();
+    let code = 'code: {
+        if gui {
+            write_job(Some(label.clone()))?;
+            let mut argv = vec![exe.as_os_str()];
+            argv.extend(args.iter().map(|a: &std::ffi::OsString| a.as_os_str()));
+            let env = detach::worker_env(std::env::vars_os(), true);
+            if detach::spawn_in_gui(&label, &argv, &env, &log)? {
+                // launchd reports no pid for a moment after the bootstrap.
+                let began = std::time::Instant::now();
+                let mut alive =
+                    || began.elapsed() < Duration::from_secs(5) || detach::job_running(&label);
+                break 'code detach::follow(&log, &exit_file, &mut alive, &mut out)?;
+            }
+            eprintln!(
+                "warning: nobody is logged in at the desktop, so Claude may not be \
+                 able to read its login"
+            );
+        }
+        write_job(None)?;
+        let env = detach::worker_env(std::env::vars_os(), false);
+        let mut child = detach::spawn(&exe, &args, &env, &log)?;
+        let mut alive = || matches!(child.try_wait(), Ok(None));
+        detach::follow(&log, &exit_file, &mut alive, &mut out)?
+    };
+    let _ = std::fs::remove_file(&exit_file);
+    Ok(code)
 }
 
 #[cfg(test)]
@@ -903,5 +1003,20 @@ mod tests {
             "1"
         );
         assert!(task_file.exists(), "the task is kept");
+    }
+
+    #[test]
+    fn preflight_refuses_before_anything_is_created() {
+        use crate::pty::session::AgentKind::Claude;
+        let mut env = crate::test_support::EnvGuard::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, _) = db_with_ws(tmp.path());
+        let fails = |repo: &str| preflight(&store, repo, Claude).unwrap_err().to_string();
+        assert!(fails("nope").contains("nope"));
+        env.set("WSX_TMUX_BIN", "/nonexistent/wsx-no-tmux");
+        assert!(fails("r").contains("wsx-no-tmux"));
+        env.set("WSX_TMUX_BIN", "true");
+        env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-no-claude");
+        assert!(fails("r").contains("wsx-no-claude"));
     }
 }

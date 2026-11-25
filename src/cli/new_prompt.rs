@@ -77,6 +77,29 @@ pub(crate) fn ask(repos: &[Repo], input: &mut dyn BufRead, out: &mut dyn Write) 
     })
 }
 
+/// The repo and task, asking only when no repo was given.
+pub(crate) fn resolve(
+    store: &Store,
+    repo: Option<String>,
+    task: Option<String>,
+    interactive: bool,
+) -> Result<Answers> {
+    if let Some(repo) = repo {
+        return Ok(Answers { repo, task });
+    }
+    if !interactive {
+        return Err(Error::Usage {
+            group: Some("new"),
+            msg: "give a repo: there is no terminal to ask on".into(),
+        });
+    }
+    ask(
+        &repos_by_recency(store)?,
+        &mut std::io::stdin().lock(),
+        &mut std::io::stdout(),
+    )
+}
+
 /// Yolo and agent kind: yolo unless `--no-yolo` or a restricted parent
 /// workspace says otherwise; the agent as in `workspace create`.
 pub(crate) fn create_flags(
@@ -223,5 +246,16 @@ mod tests {
         assert_eq!(f(Some("pi"), Some(&p)), AgentKind::Pi);
         assert_eq!(f(None, Some(&p)), AgentKind::Codex);
         assert_eq!(f(None, None), AgentKind::Claude);
+    }
+
+    #[test]
+    fn a_given_repo_asks_nothing_and_no_terminal_is_refused() {
+        let s = store_abc();
+        let got = resolve(&s, Some("a".into()), Some("t".into()), false).unwrap();
+        assert_eq!(got, ans("a", Some("t")));
+        assert!(matches!(
+            resolve(&s, None, None, false),
+            Err(Error::Usage { .. })
+        ));
     }
 }

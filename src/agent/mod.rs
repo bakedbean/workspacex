@@ -10,6 +10,7 @@ pub mod handoff;
 pub mod mcp;
 pub mod omp_config;
 pub mod pi_extension;
+pub mod reachable;
 pub mod related;
 pub mod remote_control;
 pub mod skill;

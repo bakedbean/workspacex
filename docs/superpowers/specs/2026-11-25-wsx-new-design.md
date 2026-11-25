@@ -96,14 +96,23 @@ Calls made here, for the user to check:
 
 | Outcome | Output | Exit |
 |---|---|---|
-| Reachable | `✓ … agent running, open the Claude app` | 0 |
-| Agent up, no bridge id within 60s | `agent started, but not visible to the Claude app yet`, the last screen lines, and how to attach | 1 |
-| Non-Claude, or `remote_control` off | `✓ … agent running` | 0 |
-| Agent exited or never started | the error, its last screen lines, that the workspace exists | 1 |
+| Reachable, task delivered (or none given) | `✓ … agent running, open the Claude app` | 0 |
+| Non-Claude, or `remote_control` off, task delivered | `✓ … agent running` | 0 |
+| Reachable, task not delivered within 120s | `agent running, but the task was not delivered`, and the retry command; on the dashboard path, that it is still queued | 1 |
+| Agent up, not reachable within 60s | `not visible to the Claude app yet`, the last screen lines, and how to attach | 1 |
+| Agent exited or never started | the error, its last screen lines, that the workspace exists, and the retry command | 1 |
 
-Attaching is `tmux attach -t =<session>`, where a trust or login prompt can be
-answered from the phone. A task that was not delivered is queued, so the
-dashboard delivers it when it next runs; the output says so.
+Attaching is `tmux attach -t =<session>`, where a prompt can be answered from
+the phone. When reachability times out, the follower exits but the worker keeps
+watching for 30 minutes and delivers the task once the agent is reachable, so
+clearing the prompt is enough. The output says so.
+
+The task stays in a file until delivered; every failure prints its path. A
+failed headless delivery is never queued automatically: `send_text_when_settled`
+can return false after writing, and a queued message makes the next dashboard
+start the agent unasked. Where avoiding loss and avoiding duplication conflict,
+the task is kept for the user to resend. The retry command is
+`wsx agent send --workspace <repo>/<slug> --file <task file> primary`.
 
 ## Design
 
@@ -112,8 +121,9 @@ dashboard delivers it when it next runs; the output says so.
 2. **Detach.** After the questions, re-run the binary as a hidden worker in a
    new session (`setsid`, via the existing `libc` dependency), logging to a
    file under `Dirs::log_dir()`. The foreground process follows the log and
-   exits with the worker's code. Disconnecting or Ctrl-C ends only the
-   follower. The task reaches the worker by file or stdin, not argv.
+   reports the outcome. Disconnecting or Ctrl-C ends only the
+   follower. Once the outcome is known the follower exits with its code, even if
+   the worker is still watching. The task reaches the worker by file or stdin, not argv.
 3. **Create** through `data::workspace::create` with `shared = true`.
 4. **Start, dashboard first.** Use the share-request path unchanged. Only a
    request successfully withdrawn unclaimed falls through to step 5; any other
@@ -126,16 +136,17 @@ dashboard delivers it when it next runs; the output says so.
    naming stay one code path. Afterwards drop the session: that ends the tmux
    client and leaves the agent running. A dashboard opened later reattaches,
    because the session name is stored and `new-session -A` is idempotent.
-6. **Deliver the task.** Dashboard path: enqueue once the agent is live. Headless
-   path: inject into the held session with `send_text_when_settled`, and enqueue
-   only if that returns false. Keep the session open until this ends. Never run
-   the general inbox drain from the worker; it would start other workspaces'
-   agents.
-7. **Check reachability** (Claude, `remote_control` on). Poll the session files
+6. **Check reachability** (Claude, `remote_control` on). Poll the session files
    for one whose `cwd` is the worktree, whose pid is alive, and whose
-   `bridgeSessionId` is set. Compare canonical paths. If the session file exists
-   but has no such key, or no files exist at all, treat it as not confirmed. This
-   runs alongside step 6, since a blocking prompt would hold up both.
+   `bridgeSessionId` is set. Compare canonical paths. A missing file or key
+   means not confirmed.
+7. **Deliver the task, only after step 6 passes** where it applies. Claude's
+   readiness check is only "on the alternate screen", so typing earlier could
+   put the task, and an Enter, into a trust prompt. Headless: inject into the
+   held session with `send_text_when_settled`. Dashboard: enqueue the message,
+   then wait up to 120s for it to be marked delivered. Hold the session until
+   this ends, and never run the general inbox drain from the worker; it would
+   start other workspaces' agents.
 
 ## First thing to build: a spike
 
@@ -147,7 +158,11 @@ server already running, and report back to the user:
   existing server started from the desktop session may work where a new one
   doesn't.
 - **Directory trust.** Does a non-yolo Claude in a new worktree stop at a trust
-  prompt before remote control connects?
+  prompt before remote control connects? Confirm that `bridgeSessionId` is
+  absent while any such prompt is showing, since step 7 relies on it.
+
+If a trust prompt appears on new worktrees, stop and ask: one step would not
+hold by default, and pre-trusting them means writing Claude's config.
 
 If the Keychain test fails, stop and bring options to the user before building
 the headless path. The likely ones are `claude setup-token` with a stored

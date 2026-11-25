@@ -172,6 +172,14 @@ the headless path. The likely ones are `claude setup-token` with a stored
 token, or starting the tmux server from a login item. The dashboard path is
 useful either way.
 
+### Spike results (2026-11-25, Claude Code 2.1.332)
+
+- Desktop login (`launchctl managername` = Aqua): bridge id after 2s, no trust
+  prompt, yolo and restricted.
+- ssh login (Background), fresh tmux server: "Not logged in", a session file
+  with no bridge id, in both modes. **The Keychain test failed.** No trust
+  prompt appeared; a logged-out Claude has no bridge id, so step 7's gate held.
+
 ## Testing
 
 - Parsing, the yolo default with and without a parent workspace and

@@ -4,7 +4,8 @@ use super::*;
 use crate::pty::session::Session;
 
 /// Share `ws` and start its agents in tmux, returning the primary's session.
-/// Dropping that session ends only its tmux client; the agent lives on.
+/// Call `Session::detach_tmux_client` before dropping it, so that only its
+/// tmux client ends and the agent lives on untouched.
 pub(crate) fn start(app: &mut App, ws: WorkspaceId) -> Result<Arc<Session>> {
     // Inside tmux a missing binary is not a spawn error: the pane just exits.
     for inst in app.store.workspace_agents(ws)? {
@@ -134,13 +135,14 @@ mod tests {
         .await;
         assert_eq!(tmux::capture_pane("wsx-not-a-session"), None);
 
+        session.detach_tmux_client().await;
         drop(session);
         drop(app);
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(tmux::has_session(&name), "agent must outlive the starter");
 
         let mut again = App::new_headless(Store::open(&db).unwrap(), tmp.path().into()).unwrap();
-        let _session = start(&mut again, ws).unwrap();
+        let session = start(&mut again, ws).unwrap();
         tokio::time::sleep(Duration::from_millis(500)).await;
         let panes = std::process::Command::new(tmux::tmux_bin())
             .env_remove("TMUX")
@@ -149,6 +151,7 @@ mod tests {
             .unwrap();
         let panes = String::from_utf8_lossy(&panes.stdout).lines().count();
         assert_eq!(panes, 1, "reattached, not duplicated");
+        session.detach_tmux_client().await;
     }
 
     #[tokio::test]

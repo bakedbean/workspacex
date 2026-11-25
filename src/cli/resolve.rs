@@ -104,7 +104,7 @@ pub(in crate::cli) fn effective_create_flags(
     (yolo, agent)
 }
 
-pub(in crate::cli) fn lookup_repo(
+pub(crate) fn lookup_repo(
     store: &crate::data::store::Store,
     name: &str,
 ) -> Result<crate::data::store::Repo> {
@@ -253,7 +253,7 @@ pub(in crate::cli) fn retry_send_hint(repo: &str, slug: &str, prompt: &str) -> S
 }
 
 /// Quote one argument for a command line printed back to the user.
-pub(in crate::cli) fn shell_quote(s: &str) -> String {
+pub(crate) fn shell_quote(s: &str) -> String {
     shlex::try_quote(s)
         .map(|c| c.into_owned())
         // Only fails on interior NUL, which cannot reach here through

@@ -202,6 +202,16 @@ pub fn capture_pane(name: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Detach the one client on `tty`, leaving other clients and the session.
+pub fn detach_client(tty: &std::path::Path) -> bool {
+    tmux_cmd()
+        .arg("detach-client")
+        .arg("-t")
+        .arg(tty)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
 /// `window-size latest` stops simultaneously attached clients (desk + laptop)
 /// from letterboxing each other to the smallest screen. Must run after the
 /// session exists; the client spawn is asynchronous, so retry briefly in a

@@ -1,6 +1,6 @@
 # `wsx new`: one-step workspace creation from a phone
 
-Status: awaiting approval
+Status: approved 2026-11-25
 
 ## Intent and why
 

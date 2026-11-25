@@ -12,23 +12,35 @@ pub(crate) type Env = Vec<(OsString, OsString)>;
 /// `vars` as the worker should see them. `gui`: for a job in the desktop
 /// session, which has its own ssh agent.
 pub(crate) fn worker_env(vars: impl Iterator<Item = (OsString, OsString)>, gui: bool) -> Env {
-    // An agent running `wsx new` must not pass its identity on.
-    const AGENT: [&str; 3] = [
+    // An agent running `wsx new` must not pass its identity on. Extends the
+    // list in sandbox/agent-env.sh; configuration variables stay.
+    const AGENT: &[&str] = &[
+        "AI_AGENT",
         "CLAUDECODE",
-        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_EFFORT",
+        "CLAUDE_JOB_DIR",
+        "CLAUDE_PID",
+        "CLAUDE_CODE_BRIDGE_SESSION_ID",
+        "CLAUDE_CODE_CHILD_NOTES_DIR",
+        "CLAUDE_CODE_CHILD_SESSION",
         "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_CODE_SESSION_ATTENDED",
+        "CLAUDE_CODE_SESSION_ID",
+        "WSX_AGENT_INSTANCE_ID",
+        "WSX_WORKSPACE_ID",
     ];
     let mut env: Env = vars
-        .filter(|(k, v)| {
+        .filter(|(k, _)| {
             let key = k.to_string_lossy();
-            let bad_term = key == "TERM" && (v.is_empty() || v == "dumb");
-            !(bad_term || AGENT.contains(&&*key) || (gui && key.starts_with("SSH_")))
+            !(key == "TERM" || AGENT.contains(&&*key) || (gui && key.starts_with("SSH_")))
         })
         .collect();
-    // The tmux client refuses to start without one.
-    if !env.iter().any(|(k, _)| k == "TERM") {
-        env.push(("TERM".into(), "xterm-256color".into()));
-    }
+    // The worker's PTY is its own: the caller's TERM says nothing about it,
+    // and one unknown here would stop the tmux client.
+    env.push(("TERM".into(), "xterm-256color".into()));
     env
 }
 
@@ -201,7 +213,9 @@ mod tests {
         assert_eq!(term(&[]), want("xterm-256color"));
         assert_eq!(term(&[("TERM", "dumb")]), want("xterm-256color"));
         assert_eq!(term(&[("TERM", "")]), want("xterm-256color"));
-        assert_eq!(term(&[("TERM", "screen")]), want("screen"));
+        // The worker's terminal is its own, so the caller's (say, kitty's, with
+        // no terminfo entry here) says nothing about it.
+        assert_eq!(term(&[("TERM", "xterm-bogus")]), want("xterm-256color"));
     }
 
     #[test]
@@ -210,11 +224,30 @@ mod tests {
             ("CLAUDECODE", "1"),
             ("CLAUDE_CODE_SESSION_ID", "x"),
             ("CLAUDE_CODE_ENTRYPOINT", "cli"),
+            ("CLAUDE_CODE_MESSAGING_SOCKET", "x"),
+            ("CLAUDE_CODE_MESSAGING_TOKEN", "x"),
+            ("CLAUDE_CODE_BRIDGE_SESSION_ID", "x"),
+            ("CLAUDE_CODE_CHILD_SESSION", "x"),
+            ("CLAUDE_PID", "1"),
+            ("CLAUDE_JOB_DIR", "x"),
+            ("WSX_WORKSPACE_ID", "1"),
+            ("WSX_AGENT_INSTANCE_ID", "1"),
+            ("CLAUDE_CONFIG_DIR", "/c"),
+            ("WSX_CLAUDE_BIN", "c"),
             ("CLAUDE_CODE_USE_BEDROCK", "1"),
             ("PATH", "/bin"),
         ];
         let keys: Vec<_> = env_of(&vars, false).into_iter().map(|(k, _)| k).collect();
-        assert_eq!(keys, ["CLAUDE_CODE_USE_BEDROCK", "PATH", "TERM"]);
+        assert_eq!(
+            keys,
+            [
+                "CLAUDE_CONFIG_DIR",
+                "WSX_CLAUDE_BIN",
+                "CLAUDE_CODE_USE_BEDROCK",
+                "PATH",
+                "TERM"
+            ]
+        );
     }
 
     #[test]

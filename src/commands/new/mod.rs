@@ -226,19 +226,19 @@ pub(crate) struct Job {
     pub exit_file: PathBuf,
     /// Set when the worker is a launchd job, which must remove itself.
     pub launchd_label: Option<String>,
+    /// The agent that ran `wsx new`, if one did.
+    pub from: Option<i64>,
 }
 
 /// Queue `task` for a dashboard once, and wait for it to land.
 async fn deliver_by_dashboard(
     store: &Store,
     ws: WorkspaceId,
+    from: Option<i64>,
     task: &str,
     wait: Duration,
 ) -> Delivery {
-    let from = std::env::var("WSX_AGENT_INSTANCE_ID")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .map(crate::data::store::AgentInstanceId);
+    let from = from.map(crate::data::store::AgentInstanceId);
     let queued = store.primary_instance_id(ws).and_then(|target| {
         let target = target.ok_or_else(|| Error::UserInput("no primary agent".into()))?;
         store.enqueue_message(ws, target, from, task)
@@ -274,6 +274,10 @@ struct Live<'a> {
     session_name: String,
     /// The held tmux client, when this process started the agent.
     held: Option<std::sync::Arc<crate::pty::session::Session>>,
+    /// The agent that ran `wsx new`, if one did.
+    from: Option<i64>,
+    /// The agent's own screen has been seen.
+    captured: bool,
 }
 
 impl Backend for Live<'_> {
@@ -281,7 +285,14 @@ impl Backend for Live<'_> {
         crate::pty::tmux::has_session(&self.session_name)
     }
     fn screen(&mut self) -> Option<String> {
-        crate::pty::tmux::capture_pane(&self.session_name)
+        if let Some(text) = crate::pty::tmux::capture_pane(&self.session_name) {
+            self.captured |= !text.trim().is_empty();
+            return Some(text);
+        }
+        // With no agent screen ever seen, what our tmux client printed is all
+        // there is; after one, it would only be "[exited]".
+        let held = self.held.as_ref().filter(|_| !self.captured)?;
+        Some(held.parser.lock().ok()?.screen().contents())
     }
     fn reachable(&mut self) -> bool {
         use crate::agent::reachable;
@@ -295,7 +306,7 @@ impl Backend for Live<'_> {
         use crate::app::messaging::{DELIVERY_QUIET_MS, DELIVERY_TIMEOUT_MS};
         let Some(session) = &self.held else {
             let wait = Duration::from_millis(DELIVERY_TIMEOUT_MS);
-            return deliver_by_dashboard(self.store, self.ws.id, task, wait).await;
+            return deliver_by_dashboard(self.store, self.ws.id, self.from, task, wait).await;
         };
         // Never queued on failure: a false can follow a write that landed.
         if session
@@ -418,7 +429,11 @@ async fn start_and_drive(
         .ok_or_else(|| Error::UserInput("the agent has no tmux session".into()))?;
     // Headless, the tmux client creates its session after the spawn returns.
     for _ in 0..50 {
-        if tmux::has_session(&session_name) {
+        let client_gone = held.as_ref().is_some_and(|s| {
+            let status = s.status.read().unwrap();
+            matches!(*status, crate::pty::session::SessionStatus::Exited { .. })
+        });
+        if client_gone || tmux::has_session(&session_name) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -437,6 +452,8 @@ async fn start_and_drive(
         ws,
         session_name: session_name.clone(),
         held,
+        from: job.from,
+        captured: false,
     };
     let task_file = job.task_file.as_deref();
     let mut wrote = Ok(());
@@ -464,6 +481,12 @@ fn remove_task(task_file: Option<&Path>) {
     if let Some(f) = task_file {
         let _ = std::fs::remove_file(f);
     }
+}
+
+/// After a failed run, where the task is, if it still exists.
+fn kept_task(task_file: &Path, code: i32) -> Option<String> {
+    (code != 0 && task_file.exists())
+        .then(|| format!("the task is kept in {}", task_file.display()))
 }
 
 /// Check what can be checked before anything is created.
@@ -519,6 +542,9 @@ pub(crate) fn launch(
             task_file: task.map(|_| task_file.clone()),
             exit_file: dir.join(format!("{stem}.exit")),
             launchd_label,
+            from: std::env::var("WSX_AGENT_INSTANCE_ID")
+                .ok()
+                .and_then(|v| v.parse().ok()),
         };
         let _ = std::fs::remove_file(&job_file);
         detach::private_file(&job_file)?.write_all(&serde_json::to_vec(&job)?)?;
@@ -532,7 +558,7 @@ pub(crate) fn launch(
     ];
     let exit_file = dir.join(format!("{stem}.exit"));
     let mut out = std::io::stdout();
-    let code = 'code: {
+    let mut run = || -> Result<i32> {
         if gui {
             write_job(Some(label.clone()))?;
             let mut argv = vec![exe.as_os_str()];
@@ -543,7 +569,7 @@ pub(crate) fn launch(
                 let began = std::time::Instant::now();
                 let mut alive =
                     || began.elapsed() < Duration::from_secs(5) || detach::job_running(&label);
-                break 'code detach::follow(&log, &exit_file, &mut alive, &mut out)?;
+                return detach::follow(&log, &exit_file, &mut alive, &mut out);
             }
             eprintln!(
                 "warning: nobody is logged in at the desktop, so Claude may not be \
@@ -554,10 +580,17 @@ pub(crate) fn launch(
         let env = detach::worker_env(std::env::vars_os(), false);
         let mut child = detach::spawn(&exe, &args, &env, &log)?;
         let mut alive = || matches!(child.try_wait(), Ok(None));
-        detach::follow(&log, &exit_file, &mut alive, &mut out)?
+        detach::follow(&log, &exit_file, &mut alive, &mut out)
     };
+    let result = run();
+    // The worker reports the task itself; say it here only when it couldn't.
+    if !exit_file.exists()
+        && let Some(line) = kept_task(&task_file, *result.as_ref().unwrap_or(&1))
+    {
+        println!("{line}");
+    }
     let _ = std::fs::remove_file(&exit_file);
-    Ok(code)
+    result
 }
 
 #[cfg(test)]
@@ -853,7 +886,10 @@ mod tests {
                     tokio::time::sleep(Duration::from_millis(5)).await;
                 }
             };
-            let (got, ()) = tokio::join!(deliver_by_dashboard(&store, ws, "go", wait), dashboard);
+            let (got, ()) = tokio::join!(
+                deliver_by_dashboard(&store, ws, None, "go", wait),
+                dashboard
+            );
             assert_eq!(got, want);
         }
     }
@@ -862,7 +898,7 @@ mod tests {
     async fn a_dashboard_delivery_that_never_lands_stays_queued_once() {
         let tmp = tempfile::tempdir().unwrap();
         let (store, ws) = db_with_ws(tmp.path());
-        let got = deliver_by_dashboard(&store, ws, "go", Duration::from_millis(50)).await;
+        let got = deliver_by_dashboard(&store, ws, None, "go", Duration::from_millis(50)).await;
         assert_eq!(got, Delivery::Queued);
         assert_eq!(store.undelivered_messages().unwrap().len(), 1);
     }
@@ -952,6 +988,7 @@ mod tests {
             task_file: Some(task_file.clone()),
             exit_file: dir.join("exit"),
             launchd_label: None,
+            from: None,
         };
         std::fs::write(&job, serde_json::to_string(&body).unwrap()).unwrap();
 
@@ -995,6 +1032,7 @@ mod tests {
             task_file: Some(task_file.clone()),
             exit_file: tmp.path().join("exit"),
             launchd_label: None,
+            from: None,
         };
         std::fs::write(&job, serde_json::to_string(&body).unwrap()).unwrap();
         run_worker(&job, &dirs).await.unwrap();
@@ -1018,5 +1056,64 @@ mod tests {
         env.set("WSX_TMUX_BIN", "true");
         env.set("WSX_CLAUDE_BIN", "/nonexistent/wsx-no-claude");
         assert!(fails("r").contains("wsx-no-claude"));
+    }
+
+    #[tokio::test]
+    async fn a_queued_task_carries_its_sender() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, ws) = db_with_ws(tmp.path());
+        let me = store.primary_instance_id(ws).unwrap().unwrap();
+        deliver_by_dashboard(&store, ws, Some(me.0), "go", Duration::ZERO).await;
+        let m = store.undelivered_messages().unwrap().remove(0);
+        assert_eq!(m.from_agent_id, Some(me));
+    }
+
+    #[test]
+    fn a_failed_run_names_the_task_it_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("x.task");
+        assert_eq!(kept_task(&f, 1), None, "no task");
+        std::fs::write(&f, "t").unwrap();
+        assert!(kept_task(&f, 1).unwrap().contains(&*f.to_string_lossy()));
+        assert_eq!(kept_task(&f, 0), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn with_no_tmux_session_the_screen_is_what_the_client_printed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (store, ws) = db_with_ws(tmp.path());
+        let mut cmd = portable_pty::CommandBuilder::new("/bin/sh");
+        cmd.args(["-c", "echo unsuitable terminal"]);
+        cmd.cwd("/tmp");
+        let held = crate::pty::session::spawn_command_session(
+            cmd,
+            80,
+            24,
+            crate::pty::session::AgentKind::Claude,
+            "sh".into(),
+            None,
+        )
+        .unwrap();
+        let mut live = Live {
+            store: &store,
+            ws: store.workspace_by_id(ws).unwrap().unwrap(),
+            session_name: "wsx-test-no-such-session".into(),
+            held: Some(held.into()),
+            from: None,
+            captured: false,
+        };
+        let mut seen = String::new();
+        for _ in 0..50 {
+            seen = live.screen().unwrap_or_default();
+            if seen.contains("unsuitable terminal") {
+                // Once the agent's own screen was seen, the client's parting
+                // "[exited]" must not replace it.
+                live.captured = true;
+                assert_eq!(live.screen(), None);
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("screen: {seen:?}");
     }
 }

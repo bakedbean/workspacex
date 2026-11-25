@@ -213,6 +213,14 @@ mod tests {
         spawn(Path::new("/bin/sh"), &[os("-c"), os(script)], &env, log).unwrap()
     }
 
+    struct KillOnDrop(Child);
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
     fn env_of(vars: &[(&str, &str)], gui: bool) -> Vec<(String, String)> {
         let it = vars.iter().map(|(k, v)| (os(k), os(v)));
         worker_env(it, gui)
@@ -286,11 +294,10 @@ mod tests {
     #[test]
     fn the_worker_leads_its_own_session() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut c = sh("sleep 5", &tmp.path().join("log"));
-        let sid = unsafe { libc::getsid(c.id() as i32) };
-        assert_eq!(sid, c.id() as i32);
-        c.kill().unwrap();
-        c.wait().unwrap();
+        // Alive until killed, however long this thread is held up.
+        let c = KillOnDrop(sh("exec tail -f /dev/null", &tmp.path().join("log")));
+        let pid = c.0.id() as i32;
+        assert_eq!(unsafe { libc::getsid(pid) }, pid);
     }
 
     #[test]

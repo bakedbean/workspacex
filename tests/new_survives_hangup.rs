@@ -75,6 +75,7 @@ fn the_task_arrives_once_after_the_terminal_hangs_up() {
     let dir = tmp.path().canonicalize().unwrap();
     let sb = Sandbox(dir.clone());
     let (typed, setting_up) = (dir.join("typed"), dir.join("setting-up"));
+    let hung_up = dir.join("hung-up");
     script(
         &dir.join("agent.sh"),
         &format!(
@@ -109,7 +110,12 @@ fn the_task_arrives_once_after_the_terminal_hangs_up() {
     }
     sb.wsx(&["repo", "add", repo.to_str().unwrap(), "--name", "r"]);
     sb.wsx(&["config", "set", "remote_control", "off"]);
-    let setup = format!("touch '{}'; sleep 2", setting_up.display());
+    // Held until the hangup is done; gives up so a failed test leaves nothing.
+    let setup = format!(
+        "touch '{}'; i=0; while [ ! -e '{}' ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done",
+        setting_up.display(),
+        hung_up.display()
+    );
     sb.wsx(&["repo", "set-setup", "r", &setup]);
 
     let mut cmd = sb.cmd(env!("CARGO_BIN_EXE_wsx"));
@@ -127,6 +133,7 @@ fn the_task_arrives_once_after_the_terminal_hangs_up() {
         "the hangup ends the follower"
     );
     assert!(!typed.exists(), "still setting up");
+    std::fs::write(&hung_up, "").unwrap();
 
     let got = || std::fs::read_to_string(&typed).unwrap_or_default();
     until("the task", 40, || got().contains("do the thing"));

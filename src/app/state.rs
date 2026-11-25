@@ -8,6 +8,16 @@ use super::*;
 
 impl App {
     pub fn new(store: Store, worktree_base: PathBuf) -> Result<Self> {
+        Self::build(store, worktree_base, true)
+    }
+
+    /// An `App` for a process that isn't a dashboard: skips the startup
+    /// sweeps, which would disturb another process's running create.
+    pub(crate) fn new_headless(store: Store, worktree_base: PathBuf) -> Result<Self> {
+        Self::build(store, worktree_base, false)
+    }
+
+    fn build(store: Store, worktree_base: PathBuf, sweep: bool) -> Result<Self> {
         let theme_name = store
             .get_setting("theme")
             .ok()
@@ -168,12 +178,14 @@ impl App {
             shared_detached: std::collections::HashSet::new(),
             shared_detached_polled_ms: 0,
         };
-        // Sweep stale Pending rows from previous runs.
-        let _ = app
-            .store
-            .sweep_stale_pending(crate::data::store::STALE_PENDING_AFTER);
-        // Resolve setup rows stranded by a crashed process (see sweep_stale_running).
-        let _ = app.store.sweep_stale_running();
+        if sweep {
+            // Sweep stale Pending rows from previous runs.
+            let _ = app
+                .store
+                .sweep_stale_pending(crate::data::store::STALE_PENDING_AFTER);
+            // Resolve setup rows stranded by a crashed process (see sweep_stale_running).
+            let _ = app.store.sweep_stale_running();
+        }
         // Load the retained bucketed activity for the sparkline (up to
         // MAX_ACTIVITY_HOURS); the configured window selects how much is shown.
         if let Ok(buckets) = app

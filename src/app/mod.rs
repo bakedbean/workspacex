@@ -48,6 +48,7 @@ pub use crate::app::bell::{BellPattern, alert_decision, fire_bell};
 pub use crate::app::render::draw_for_test;
 
 pub(crate) mod global_setting;
+pub(crate) mod headless;
 pub(crate) mod reconcile;
 pub(crate) mod remote;
 pub(crate) mod repo_setting;

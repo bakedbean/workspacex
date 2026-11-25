@@ -25,6 +25,7 @@ wsx sets `$WSX_WORKSPACE_ID` and `$WSX_AGENT_INSTANCE_ID` in every agent session
 
 | Group | Purpose | Page |
 | --- | --- | --- |
+| `wsx new` | Create a workspace and start its agent in one step | [wsx new](new.md) |
 | `wsx workspace` | Create, list, rename, share, tag and archive workspaces | [wsx workspace](workspace.md) |
 | `wsx repo` | Register repositories and set per-repo settings | [wsx repo](repo.md) |
 | `wsx agent` | Add, remove and message agents | [wsx agent](agent.md) |

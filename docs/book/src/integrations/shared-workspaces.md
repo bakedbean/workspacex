@@ -23,6 +23,7 @@ A running agent can't move into or out of tmux, so it must restart:
 
 - `T` restarts running agents right away and resumes their conversations. Stopped agents start in tmux.
 - `share` and `unshare` change only the flag. Running agents keep their old mode until they restart.
+- [`wsx new`](../cli-reference/new.md) creates a shared workspace and starts its agent, with or without a dashboard.
 - `share --restart` asks the dashboard on that host to do what `T` does, then waits and prints the tmux session names. It needs wsx running on the host, and fails without changes if no dashboard answers within a few seconds.
 
 See [`wsx workspace share`](../cli-reference/workspace.md#wsx-workspace-share).

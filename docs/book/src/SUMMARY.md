@@ -38,6 +38,7 @@
   - [Shared workspaces](integrations/shared-workspaces.md)
   - [Desktop widgets](integrations/desktop-widgets.md)
 - [CLI reference](cli-reference/index.md)
+  - [wsx new](cli-reference/new.md)
   - [wsx workspace](cli-reference/workspace.md)
   - [wsx repo](cli-reference/repo.md)
   - [wsx agent](cli-reference/agent.md)

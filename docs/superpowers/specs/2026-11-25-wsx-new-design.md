@@ -71,6 +71,8 @@ Agreed with the user:
 - `wsx new <repo> [task words...]` asks nothing, so it can be a Termius snippet.
 - Repos are listed most recently used first.
 - The slug is generated; the agent renames it from the task, as today.
+- The workspace is yolo by default; `--no-yolo` starts it restricted, with
+  permission prompts in the Claude app. (This differs from `create`.)
 - A running dashboard starts the agent; otherwise `wsx new` starts it in tmux
   and the dashboard picks it up later. The workspace is always tmux-shared.
 
@@ -81,12 +83,13 @@ Calls made here, for the user to check:
   asks again. One registered repo skips the repo question. Archived workspaces
   are not counted if their rows are gone.
 - **Task parsing.** Everything after the repo is the task. Flags go before the
-  repo: `wsx new [--yolo] [--agent <kind>] [<repo> [task...]]`. With no
+  repo: `wsx new [--no-yolo] [--agent <kind>] [<repo> [task...]]`. With no
   terminal on stdin and no repo, it is a usage error rather than a hang.
-- **Yolo and agent kind** default as in `create`: not yolo, and the
-  `coding_agent` setting, with inheritance when run inside a workspace. From
-  the phone, permission prompts appear in the Claude app; a snippet can pass
-  `--yolo`.
+- **Agent kind** defaults as in `create`: the `coding_agent` setting, with
+  inheritance when run inside a workspace.
+- **Yolo inside a workspace** follows that workspace's mode, so an agent in a
+  restricted workspace doesn't get an unrestricted one by default. `--no-yolo`
+  still wins.
 - **Failures before creating anything:** tmux < 3.2 or missing, agent binary
   missing, unknown repo. Claude with `remote_control` off prints that the app
   won't list it, and continues.
@@ -157,8 +160,8 @@ server already running, and report back to the user:
 - **Keychain.** Can Claude in a tmux server started over ssh read its login? An
   existing server started from the desktop session may work where a new one
   doesn't.
-- **Directory trust.** Does a non-yolo Claude in a new worktree stop at a trust
-  prompt before remote control connects? Confirm that `bridgeSessionId` is
+- **Directory trust.** Does Claude in a new worktree, yolo and with
+  `--no-yolo`, stop at a trust prompt before remote control connects? Confirm that `bridgeSessionId` is
   absent while any such prompt is showing, since step 7 relies on it.
 
 If a trust prompt appears on new worktrees, stop and ask: one step would not
@@ -171,7 +174,8 @@ useful either way.
 
 ## Testing
 
-- Parsing, repo ordering, and prompts with injected input.
+- Parsing, the yolo default with and without a parent workspace and
+  `--no-yolo`, repo ordering, and prompts with injected input.
 - Claim path, withdrawn path, and failed-after-claim (must not fall back).
 - Session-file matching against fixtures: missing key, dead pid, other cwd,
   malformed JSON.

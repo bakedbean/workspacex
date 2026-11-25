@@ -105,7 +105,7 @@ Calls made here, for the user to check:
 | Agent up, not reachable within 60s | `not visible to the Claude app yet`, the last screen lines, and how to attach | 1 |
 | Agent exited or never started | the error, its last screen lines, that the workspace exists, and the retry command | 1 |
 
-Attaching is `tmux attach -t =<session>`, where a prompt can be answered from
+Attaching is `tmux attach -t '=<session>'`, where a prompt can be answered from
 the phone. When reachability times out, the follower exits but the worker keeps
 watching for 30 minutes and delivers the task once the agent is reachable, so
 clearing the prompt is enough. The output says so.

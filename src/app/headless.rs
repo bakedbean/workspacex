@@ -154,6 +154,8 @@ mod tests {
     #[tokio::test]
     async fn a_missing_worktree_is_an_error_and_raises_no_modal() {
         let tmp = tempfile::tempdir().unwrap();
+        let mut env = EnvGuard::new();
+        env.set("WSX_CLAUDE_BIN", "/bin/sh");
         let store = Store::open_in_memory().unwrap();
         let ws = add(&store, &tmp.path().join("gone"), WorkspaceState::Ready);
         let mut app = App::new_headless(store, tmp.path().into()).unwrap();

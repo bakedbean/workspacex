@@ -211,11 +211,7 @@ pub async fn share_and_restart(
         match store.share_request_state(id)? {
             ShareRequestState::Pending if start.elapsed() >= waits.claim => {
                 if store.withdraw_share_request(id)? {
-                    return Err(Error::UserInput(
-                        "no wsx dashboard on this host picked up the request; \
-                         start `wsx` here, since only the dashboard can restart its agents"
-                            .into(),
-                    ));
+                    return Err(Error::NoDashboard);
                 }
             }
             ShareRequestState::Pending | ShareRequestState::Claimed => {
@@ -601,10 +597,10 @@ mod tests {
 
         let err = share_and_restart(&store, &ws, quick_waits(), |_| false)
             .await
-            .unwrap_err()
-            .to_string();
+            .unwrap_err();
 
-        assert!(err.contains("no wsx dashboard"), "{err}");
+        assert!(matches!(err, crate::error::Error::NoDashboard), "{err:?}");
+        assert!(err.to_string().contains("no wsx dashboard"), "{err}");
         assert!(
             store
                 .claim_share_requests(|_| true)
@@ -614,6 +610,37 @@ mod tests {
             "the request must be withdrawn, not left for a later dashboard"
         );
         assert!(!store.workspace_by_id(ws.id).unwrap().unwrap().shared);
+    }
+
+    /// Claim the one request, finishing it with `error` unless it is `None`.
+    async fn claim_then(store: &Store, error: Option<&str>) {
+        loop {
+            if let Some(req) = store.claim_share_requests(|_| true).unwrap().claimed.pop() {
+                if error.is_some() {
+                    store.finish_share_request(req.id, error).unwrap();
+                }
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_claimed_request_that_fails_or_hangs_is_not_no_dashboard() {
+        for error in [Some("x"), None] {
+            let store = Store::open_in_memory().unwrap();
+            seed(&store);
+            let ws = direct_ws(&store);
+            let (res, ()) = tokio::join!(
+                share_and_restart(&store, &ws, quick_waits(), |_| false),
+                claim_then(&store, error)
+            );
+            let err = res.unwrap_err();
+            assert!(
+                !matches!(err, crate::error::Error::NoDashboard),
+                "{error:?}: {err:?}"
+            );
+        }
     }
 
     #[tokio::test]

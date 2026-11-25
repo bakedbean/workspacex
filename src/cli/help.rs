@@ -25,6 +25,10 @@ pub fn render_group_help(name: &str) -> String {
         return render_root_help();
     };
     let mut out = format!("wsx {} — {}\n\n", g.name, g.blurb);
+    if let Some(usage) = g.usage {
+        out.push_str(&format!("USAGE:\n  {usage}\n"));
+        return out;
+    }
     out.push_str(&format!("USAGE:\n  wsx {} <command> [args]\n\n", g.name));
     out.push_str("COMMANDS:\n");
     let width = g.commands.iter().map(|c| c.usage.len()).max().unwrap_or(0);

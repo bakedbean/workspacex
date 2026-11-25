@@ -13,13 +13,22 @@ pub struct CmdInfo {
 pub struct GroupInfo {
     pub name: &'static str,
     pub blurb: &'static str,
+    /// Usage line for a group that is itself a command, with no subcommands.
+    pub usage: Option<&'static str>,
     pub commands: &'static [CmdInfo],
 }
 
 pub static GROUPS: &[GroupInfo] = &[
     GroupInfo {
+        name: "new",
+        blurb: "Create a workspace, start its agent, and give it a task",
+        usage: Some("wsx new [--no-yolo] [--agent <kind>] [<repo> [task...]]"),
+        commands: &[],
+    },
+    GroupInfo {
         name: "workspace",
         blurb: "Create, list, rename, and archive workspaces",
+        usage: None,
         commands: &[
             CmdInfo {
                 usage: "create <repo> [--name <slug>] [--yolo] [--shared] [--start [--json]] [--agent <kind>] [--prompt <text>] [--continues <slug>]",
@@ -62,6 +71,7 @@ pub static GROUPS: &[GroupInfo] = &[
     GroupInfo {
         name: "agent",
         blurb: "List, add, remove, and message agents in a workspace",
+        usage: None,
         commands: &[
             CmdInfo {
                 usage: "list [--workspace <repo>/<slug>] [--json]",
@@ -102,6 +112,7 @@ pub static GROUPS: &[GroupInfo] = &[
     GroupInfo {
         name: "repo",
         blurb: "Register and configure repositories",
+        usage: None,
         commands: &[
             CmdInfo {
                 usage: "add <path> [--name <name>] [--prefix <prefix>]",
@@ -172,6 +183,7 @@ pub static GROUPS: &[GroupInfo] = &[
     GroupInfo {
         name: "config",
         blurb: "Get and set global settings",
+        usage: None,
         commands: &[
             CmdInfo {
                 usage: "get <key>",
@@ -194,6 +206,7 @@ pub static GROUPS: &[GroupInfo] = &[
     GroupInfo {
         name: "theme",
         blurb: "Validate and scaffold the bar theme file (~/.config/wsx/theme.toml)",
+        usage: None,
         commands: &[
             CmdInfo {
                 usage: "check [<path>]",
@@ -212,6 +225,7 @@ pub static GROUPS: &[GroupInfo] = &[
     GroupInfo {
         name: "remote",
         blurb: "Run saved remote shortcuts",
+        usage: None,
         commands: &[CmdInfo {
             usage: "[<name>]",
             blurb: "List remotes, or run the named remote shortcut",
@@ -220,6 +234,7 @@ pub static GROUPS: &[GroupInfo] = &[
     GroupInfo {
         name: "shared",
         blurb: "Inspect tmux-shared workspaces",
+        usage: None,
         commands: &[CmdInfo {
             usage: "list [--json] [--all]",
             blurb: "List shared workspaces (--all: every ready one) and their agent sessions",
@@ -228,6 +243,7 @@ pub static GROUPS: &[GroupInfo] = &[
     GroupInfo {
         name: "setup",
         blurb: "One-off setup helpers",
+        usage: None,
         commands: &[
             CmdInfo {
                 usage: "install-skill",
@@ -250,6 +266,7 @@ pub static GROUPS: &[GroupInfo] = &[
     GroupInfo {
         name: "status",
         blurb: "Report agent-driven workspace status",
+        usage: None,
         commands: &[
             CmdInfo {
                 usage: "(no command)",
@@ -277,6 +294,7 @@ pub static GROUPS: &[GroupInfo] = &[
     GroupInfo {
         name: "recap",
         blurb: "Maintain the agent-authored workspace recap",
+        usage: None,
         commands: &[
             CmdInfo {
                 usage: "set [--goal|--state|--next <text>] [--goal-short|--state-short|--next-short <text>]",
@@ -297,6 +315,7 @@ pub static GROUPS: &[GroupInfo] = &[
     GroupInfo {
         name: "series",
         blurb: "The numbered chain of workspaces a feature ships through (joined via `workspace create --continues`)",
+        usage: None,
         commands: &[
             CmdInfo {
                 usage: "[show] [--workspace <repo>/<slug>] [--json]",
@@ -311,6 +330,7 @@ pub static GROUPS: &[GroupInfo] = &[
     GroupInfo {
         name: "context",
         blurb: "Workspace context digest for editor-hosted agents",
+        usage: None,
         commands: &[
             CmdInfo {
                 usage: "show [--workspace <repo>/<slug>]",
@@ -326,6 +346,7 @@ pub static GROUPS: &[GroupInfo] = &[
     GroupInfo {
         name: "waybar",
         blurb: "Linux waybar status module and workspace jumper",
+        usage: None,
         commands: &[
             CmdInfo {
                 usage: "status",
@@ -352,6 +373,7 @@ pub static GROUPS: &[GroupInfo] = &[
     GroupInfo {
         name: "desktop",
         blurb: "Desktop-neutral workspace status and jump, for panel widgets",
+        usage: None,
         commands: &[
             CmdInfo {
                 usage: "status",
@@ -366,6 +388,7 @@ pub static GROUPS: &[GroupInfo] = &[
     GroupInfo {
         name: "menubar",
         blurb: "macOS menubar (SwiftBar) status module and workspace jumper",
+        usage: None,
         commands: &[
             CmdInfo {
                 usage: "plugin",

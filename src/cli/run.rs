@@ -499,6 +499,7 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 }
             }
         }
+        CliAction::New { .. } | CliAction::NewWorker { .. } => todo!(),
         CliAction::WorkspaceCreate {
             repo,
             name,

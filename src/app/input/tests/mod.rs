@@ -19,6 +19,7 @@ mod ctrl_d_suppression;
 mod ctrl_x_shift_d;
 mod ctrl_z_suppression;
 mod dashboard;
+mod detail_bar_column_resize;
 mod detail_bar_focus;
 mod detail_bar_resize;
 mod detail_scroll;

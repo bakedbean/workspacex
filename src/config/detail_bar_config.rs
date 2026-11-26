@@ -765,7 +765,10 @@ mod tests {
 
     #[test]
     fn widths_round_trip_and_reject_malformed() {
-        assert_eq!(DetailBarConfig::parse_widths("30, 50,40"), Some(vec![30, 50, 40]));
+        assert_eq!(
+            DetailBarConfig::parse_widths("30, 50,40"),
+            Some(vec![30, 50, 40])
+        );
         assert_eq!(
             DetailBarConfig::format_widths(&[30, 50, 40]),
             "30,50,40".to_string()

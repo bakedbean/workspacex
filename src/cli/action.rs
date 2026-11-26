@@ -138,6 +138,17 @@ pub enum CliAction {
         /// Also list ready workspaces that aren't shared.
         all: bool,
     },
+    /// `wsx new`: create a workspace and start its agent in one step.
+    New {
+        repo: Option<String>,
+        task: Option<String>,
+        no_yolo: bool,
+        agent: Option<String>,
+    },
+    /// Hidden: the detached half of `wsx new`.
+    NewWorker {
+        job: std::path::PathBuf,
+    },
     WorkspaceCreate {
         repo: String,
         name: Option<String>,

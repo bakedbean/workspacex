@@ -192,6 +192,26 @@ pub fn kill_session(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The visible text of a session's pane; `None` when it isn't running.
+pub fn capture_pane(name: &str) -> Option<String> {
+    let out = tmux_cmd()
+        .args(["capture-pane", "-p", "-t", &format!("={name}:")])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Detach the one client on `tty`, leaving other clients and the session.
+pub fn detach_client(tty: &std::path::Path) -> bool {
+    tmux_cmd()
+        .arg("detach-client")
+        .arg("-t")
+        .arg(tty)
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
 /// `window-size latest` stops simultaneously attached clients (desk + laptop)
 /// from letterboxing each other to the smallest screen. Must run after the
 /// session exists; the client spawn is asynchronous, so retry briefly in a

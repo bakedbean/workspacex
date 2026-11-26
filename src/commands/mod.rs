@@ -13,6 +13,7 @@
 pub mod context;
 pub mod external;
 pub mod inspect;
+pub(crate) mod new;
 pub mod pinned;
 pub mod remotes;
 pub mod series;

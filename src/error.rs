@@ -27,6 +27,11 @@ pub enum Error {
         group: Option<&'static str>,
         msg: String,
     },
+    #[error(
+        "no wsx dashboard on this host picked up the request; \
+         start `wsx` here, since only the dashboard can restart its agents"
+    )]
+    NoDashboard,
     #[error("cancelled")]
     Cancelled,
 }

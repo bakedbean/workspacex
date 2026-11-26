@@ -499,6 +499,36 @@ pub async fn run_cli(action: CliAction, dirs: &Dirs) -> Result<()> {
                 }
             }
         }
+        CliAction::NewWorker { job } => crate::commands::new::run_worker(&job, dirs).await?,
+        CliAction::New {
+            repo,
+            task,
+            no_yolo,
+            agent,
+        } => {
+            let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
+            let answers = super::new_prompt::resolve(&store, repo, task, interactive);
+            let (repo, task) = match answers {
+                Ok(a) => (a.repo, a.task),
+                Err(Error::Cancelled) => {
+                    println!();
+                    std::process::exit(1);
+                }
+                Err(e) => return Err(e),
+            };
+            let parent = resolve_current_workspace(&store).ok();
+            let default_agent = crate::pty::session::AgentKind::from_store(&store);
+            let (yolo, kind) = super::new_prompt::create_flags(
+                no_yolo,
+                agent.as_deref(),
+                parent.as_ref(),
+                default_agent,
+            );
+            crate::commands::new::preflight(&store, &repo, kind)?;
+            drop(store);
+            let code = crate::commands::new::launch(dirs, &repo, task.as_deref(), yolo, kind)?;
+            std::process::exit(code);
+        }
         CliAction::WorkspaceCreate {
             repo,
             name,

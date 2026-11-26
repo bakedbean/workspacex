@@ -11,6 +11,7 @@ use crate::error::{Error, Result};
 pub(crate) mod agent;
 pub(crate) mod config;
 pub(crate) mod desktop;
+pub(crate) mod new;
 pub(crate) mod repo;
 pub(crate) mod reporting;
 pub(crate) mod series;
@@ -20,6 +21,7 @@ pub(crate) mod workspace;
 use agent::parse_agent;
 use config::parse_config;
 use desktop::{parse_desktop, parse_menubar, parse_remote, parse_setup, parse_waybar};
+use new::parse_new;
 use repo::parse_repo;
 use reporting::{parse_context, parse_recap, parse_status};
 use series::parse_series;
@@ -127,6 +129,11 @@ pub fn parse_args(args: Vec<String>) -> Result<CliAction> {
     }
 
     let group = first.as_deref().expect("None handled above");
+
+    // Before the help scan below: a `--help` after the repo is task text.
+    if group == "new" {
+        return parse_new(&mut rest.into_iter()).map_err(|e| tag_group(e, group));
+    }
 
     // Per-group help. `--help`/`-h` are flag-style and may appear anywhere
     // (`wsx agent send --help`); bare `help` is only a help request in the

@@ -279,6 +279,22 @@ impl Session {
         let _ = self.killer.lock().unwrap().kill();
     }
 
+    /// Let a tmux-backed session go without touching its agent. Needed before
+    /// the last drop: portable-pty types a newline and Ctrl-D as its writer
+    /// drops, which a client still attached passes on to the agent.
+    pub(crate) async fn detach_tmux_client(&self) {
+        let Some(tty) = self.tmux_session.as_ref().and(self.tty_name.as_deref()) else {
+            return;
+        };
+        crate::pty::tmux::detach_client(tty);
+        for _ in 0..30 {
+            if matches!(*self.status.read().unwrap(), SessionStatus::Exited { .. }) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
     /// Kill the child (attach client) AND, for tmux-backed sessions, the tmux
     /// session holding the agent. Explicit user intent — "kill this agent".
     pub fn kill_backend(&self) {

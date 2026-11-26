@@ -12,6 +12,7 @@ pub(crate) mod action;
 pub(crate) mod groups;
 pub(crate) mod help;
 pub(crate) mod mail;
+pub(crate) mod new_prompt;
 pub(crate) mod parse;
 pub(crate) mod resolve;
 pub(crate) mod run;

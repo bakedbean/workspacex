@@ -2462,6 +2462,7 @@ fn registry_matches_dispatched_groups() {
     // Every group the dispatcher accepts must have a help entry, and every
     // help entry must be a real group. Update BOTH when adding a command group.
     let dispatched = [
+        "new",
         "workspace",
         "agent",
         "repo",
@@ -4173,4 +4174,82 @@ async fn workspace_create_continues_joins_the_parents_series() {
     let s = store.series_for_workspace(two.id).unwrap().unwrap();
     let slugs: Vec<(u32, &str)> = s.parts.iter().map(|p| (p.part, p.slug.as_str())).collect();
     assert_eq!(slugs, vec![(1, "one"), (2, "two")]);
+}
+
+/// `parse` for `wsx new`, flattened to comparable parts.
+fn parse_new(args: &[&str]) -> (Option<String>, Option<String>, bool, Option<String>) {
+    let mut v = vec!["new"];
+    v.extend(args);
+    match parse(&v).unwrap() {
+        CliAction::New {
+            repo,
+            task,
+            no_yolo,
+            agent,
+        } => (repo, task, no_yolo, agent),
+        other => panic!("expected New, got {other:?}"),
+    }
+}
+
+#[test]
+fn new_parses_flags_repo_and_task() {
+    let s = |v: &str| Some(v.to_string());
+    assert_eq!(parse_new(&[]), (None, None, false, None));
+    assert_eq!(
+        parse_new(&["r", "fix", "the", "login"]),
+        (s("r"), s("fix the login"), false, None)
+    );
+    assert_eq!(
+        parse_new(&["--no-yolo", "--agent", "codex", "r"]),
+        (s("r"), None, true, s("codex"))
+    );
+    assert_eq!(parse_new(&["r", "  "]), (s("r"), None, false, None));
+}
+
+#[test]
+fn new_treats_flags_after_the_repo_as_task_text() {
+    let (repo, task, no_yolo, _) = parse_new(&["r", "explain", "--help", "and", "--no-yolo"]);
+    assert_eq!(repo.as_deref(), Some("r"));
+    assert_eq!(task.as_deref(), Some("explain --help and --no-yolo"));
+    assert!(!no_yolo);
+}
+
+#[test]
+fn new_help_and_bad_flags() {
+    for h in ["--help", "-h"] {
+        assert!(matches!(
+            parse(&["new", h]).unwrap(),
+            CliAction::Help(HelpTopic::Group("new"))
+        ));
+    }
+    let err = parse(&["new", "--agent", "nope", "r"])
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("claude") && err.contains("codex"), "{err}");
+    assert!(matches!(
+        parse(&["new", "--bogus"]),
+        Err(Error::Usage { .. })
+    ));
+    assert!(matches!(
+        parse(&["new", "--agent"]),
+        Err(Error::Usage { .. })
+    ));
+}
+
+#[test]
+fn new_worker_takes_a_job_path() {
+    match parse(&["new", "--worker", "/tmp/j.json"]).unwrap() {
+        CliAction::NewWorker { job } => assert_eq!(job, std::path::Path::new("/tmp/j.json")),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn new_help_shows_its_own_usage() {
+    let h = render_group_help("new");
+    assert!(
+        h.contains("wsx new [--no-yolo] [--agent <kind>] [<repo> [task...]]"),
+        "{h}"
+    );
+    assert!(!h.contains("wsx new <command>"), "{h}");
 }

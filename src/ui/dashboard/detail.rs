@@ -365,13 +365,21 @@ fn render_body_region(
     // or in proportion to the widths the user dragged them to — with a
     // single 1-cell separator chunk between each pair. No additional gap
     // cells — module renderers already pad their content internally.
-    let weights = inputs.column_weights.filter(|w| w.len() == n);
+    // Saved widths keep each container its minimum while they all fit.
+    let widths = inputs
+        .column_weights
+        .filter(|w| w.len() == n)
+        .map(|w| DetailBarConfig::container_widths(w, area.width.saturating_sub(n as u16 - 1)));
     let mut h_constraints: Vec<Constraint> = Vec::with_capacity(2 * n - 1);
     for i in 0..n {
         if i > 0 {
             h_constraints.push(Constraint::Length(1));
         }
-        h_constraints.push(Constraint::Fill(weights.map_or(1, |w| w[i])));
+        h_constraints.push(
+            widths
+                .as_ref()
+                .map_or(Constraint::Fill(1), |w| Constraint::Length(w[i])),
+        );
     }
     let h_chunks = Layout::default()
         .direction(Direction::Horizontal)

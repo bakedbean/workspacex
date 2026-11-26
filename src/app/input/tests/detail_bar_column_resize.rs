@@ -233,3 +233,22 @@ async fn a_narrow_terminal_offers_no_separator() {
     draw_at(&mut app, 79);
     assert!(app.detail_columns.is_empty());
 }
+
+/// A container dragged to its minimum keeps it when the terminal narrows,
+/// so long as every container still fits its minimum.
+#[tokio::test]
+async fn a_minimum_width_survives_a_narrower_terminal() {
+    let mut app = app();
+    let (x, y) = separator(&columns(&app), 0);
+    let shared = shared_app();
+    for (kind, col) in [
+        (MouseEventKind::Down(MouseButton::Left), x),
+        (MouseEventKind::Up(MouseButton::Left), 0),
+    ] {
+        handle_mouse(&mut app, &shared, left(kind, col, y)).await;
+    }
+    draw_at(&mut app, 80);
+    let narrow = widths(&columns(&app));
+    assert_eq!(narrow[0], DetailBarConfig::CONTAINER_MIN_WIDTH);
+    assert_eq!(narrow.iter().sum::<u16>(), 78);
+}

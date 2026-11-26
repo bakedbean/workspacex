@@ -459,6 +459,65 @@ mod instance_event_tests {
             .unwrap();
     }
 
+    /// Subagents are gathered from every Claude session in the workspace —
+    /// the primary's and each peer's — and the entry goes once none run.
+    #[tokio::test]
+    async fn subagents_merge_across_claude_instances_and_clear_when_done() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let worktree = dir.path();
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store.add_repo(worktree, "subs", "").unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "subs",
+                branch: "subs",
+                worktree_path: worktree,
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store.add_primary_agent(ws, AgentKind::Claude, 0).unwrap();
+        let peer = store.add_workspace_agent(ws, AgentKind::Claude).unwrap();
+        let app: SharedApp = Arc::new(Mutex::new(App::new(store, worktree.to_path_buf()).unwrap()));
+        let agent = |session: &str, id: &str, desc: &str| {
+            let file = worktree.join(format!("{session}.jsonl"));
+            std::fs::write(&file, "").unwrap();
+            let subs = crate::activity::subagents::subagents_dir(&file);
+            std::fs::create_dir_all(&subs).unwrap();
+            let meta = subs.join(format!("agent-{id}.meta.json"));
+            std::fs::write(&meta, serde_json::json!({"description": desc}).to_string()).unwrap();
+            (file, meta)
+        };
+        let (primary_file, primary_meta) = agent("primary", "p1", "from primary");
+        let (peer_file, peer_meta) = agent("peer", "q1", "from peer");
+        {
+            let mut g = app.lock().await;
+            let events = |f: &Path| crate::activity::events::WorkspaceEvents {
+                file_path: Some(f.to_path_buf()),
+                ..Default::default()
+            };
+            g.workspace_events.insert(ws, events(&primary_file));
+            g.agent_events.insert(peer.id, events(&peer_file));
+        }
+        refresh_subagents(&app, ws, AgentKind::Claude).await;
+        {
+            let g = app.lock().await;
+            let mut got: Vec<&str> = g.workspace_subagents[&ws]
+                .iter()
+                .map(|s| s.description.as_str())
+                .collect();
+            got.sort();
+            assert_eq!(got, ["from peer", "from primary"]);
+        }
+        for meta in [primary_meta, peer_meta] {
+            std::fs::write(&meta, r#"{"finished": true}"#).unwrap();
+        }
+        refresh_subagents(&app, ws, AgentKind::Claude).await;
+        assert!(!app.lock().await.workspace_subagents.contains_key(&ws));
+    }
+
     /// The priming pass must leave every workspace scanned with its last
     /// event in hand, so the first frame can sort by real recency.
     #[tokio::test]
@@ -1145,7 +1204,63 @@ async fn refresh_local(app: SharedApp, t: PollTarget) {
     //    without waiting for the next poll tick. Path/agent are
     //    passed from the snapshot above so the helper doesn't
     //    re-walk `App::workspaces` (would make this loop O(n²)).
-    tail_workspace_events(app, id, path, ws_agent).await;
+    tail_workspace_events(app.clone(), id, path, ws_agent).await;
+
+    // 4) Running Claude subagents, from beside the transcripts the tail
+    //    just resolved.
+    refresh_subagents(&app, id, ws_agent).await;
+}
+
+/// Rescan the subagents of every Claude session in workspace `id`. The
+/// session files come from the tail's caches: the primary's in
+/// `workspace_events`, each peer's in `agent_events`.
+async fn refresh_subagents(
+    app: &SharedApp,
+    id: WorkspaceId,
+    ws_agent: crate::pty::session::AgentKind,
+) {
+    use crate::pty::session::AgentKind;
+    let files: Vec<std::path::PathBuf> = {
+        let g = app.lock().await;
+        let roster = g.agent_roster.get(&id).map(Vec::as_slice).unwrap_or(&[]);
+        let primary_is_claude = match roster.iter().find(|i| i.is_primary) {
+            Some(p) => p.agent == AgentKind::Claude,
+            None => ws_agent == AgentKind::Claude,
+        };
+        let primary = primary_is_claude
+            .then(|| {
+                g.workspace_events
+                    .get(&id)
+                    .and_then(|e| e.file_path.clone())
+            })
+            .flatten();
+        let peers = roster
+            .iter()
+            .filter(|i| !i.is_primary && i.agent == AgentKind::Claude)
+            .filter_map(|i| g.agent_events.get(&i.id).and_then(|e| e.file_path.clone()));
+        primary.into_iter().chain(peers).collect()
+    };
+    let scanned = if files.is_empty() {
+        Vec::new()
+    } else {
+        let now_ms = crate::util::time::now_ms();
+        tokio::task::spawn_blocking(move || {
+            let mut all: Vec<_> = files
+                .iter()
+                .flat_map(|f| crate::activity::subagents::scan(f, now_ms))
+                .collect();
+            all.sort_by_key(|s| s.started_ms);
+            all
+        })
+        .await
+        .unwrap_or_default()
+    };
+    let mut g = app.lock().await;
+    if scanned.is_empty() {
+        g.workspace_subagents.remove(&id);
+    } else {
+        g.workspace_subagents.insert(id, scanned);
+    }
 }
 
 /// PR lifecycle for every workspace, throttled to once per 30s each — `gh`

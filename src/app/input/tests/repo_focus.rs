@@ -337,6 +337,8 @@ async fn the_focus_panel_starts_open_and_switches_tabs() {
     press(&mut app, KeyCode::Char('>')).await;
     assert_eq!(app.dashboard.focus_panel.tab, PanelTab::Chat);
     press(&mut app, KeyCode::Char('>')).await;
+    assert_eq!(app.dashboard.focus_panel.tab, PanelTab::Agents);
+    press(&mut app, KeyCode::Char('>')).await;
     assert_eq!(app.dashboard.focus_panel.tab, PanelTab::Prompt, "wraps");
 }
 
@@ -374,6 +376,39 @@ async fn six_shows_the_latest_message_beside_a_recap() {
     assert_eq!(
         app.store.get_setting(FOCUS_TAB_SETTING).unwrap().as_deref(),
         Some("chat")
+    );
+}
+
+/// `7` shows the workspace's running subagents, counted on the tab, and
+/// saves the tab.
+#[tokio::test]
+async fn seven_shows_the_running_subagents() {
+    use crate::ui::dashboard::FOCUS_TAB_SETTING;
+    use crate::ui::dashboard::side_panel::PanelTab;
+    let (mut app, repo, _, ids) = app();
+    app.workspace_subagents.insert(
+        ids[0],
+        vec![crate::activity::subagents::Subagent {
+            id: "a1".into(),
+            agent_type: "Explore".into(),
+            description: "UNIQUE-TASK".into(),
+            background: true,
+            activity: Some("Grep(fn poll)".into()),
+            started_ms: crate::util::time::now_ms(),
+            last_write_ms: crate::util::time::now_ms(),
+        }],
+    );
+    app.dashboard.focus_repo(repo);
+    app.dashboard.selection = Some(SelectionTarget::Workspace(ids[0]));
+    press(&mut app, KeyCode::Char('7')).await;
+    assert_eq!(app.dashboard.focus_panel.tab, PanelTab::Agents);
+    let screen = draw(&mut app);
+    assert!(screen.contains("Agents 1"), "{screen}");
+    assert!(screen.contains("UNIQUE-TASK"), "{screen}");
+    assert!(screen.contains("Explore · Grep(fn poll)"), "{screen}");
+    assert_eq!(
+        app.store.get_setting(FOCUS_TAB_SETTING).unwrap().as_deref(),
+        Some("agents")
     );
 }
 

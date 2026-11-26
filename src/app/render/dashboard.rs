@@ -236,6 +236,11 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
                     events: app.workspace_events.get(&ws.id),
                     recap: app.recaps.get(&ws.id),
                     procs,
+                    subagents: app
+                        .workspace_subagents
+                        .get(&ws.id)
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]),
                     diff: app.workspace_diff.get(&ws.id).copied(),
                     diff_per_file: app.workspace_diff_per_file.get(&ws.id),
                     lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
@@ -398,6 +403,11 @@ pub(crate) fn side_panel_data(
         } else {
             Default::default()
         },
+        subagents: app
+            .workspace_subagents
+            .get(&id)
+            .cloned()
+            .unwrap_or_default(),
     })
 }
 

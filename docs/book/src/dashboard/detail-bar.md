@@ -12,8 +12,23 @@ The bar holds 1–4 equal-width columns, called containers. Each container stack
 | `recent_chat`     | The latest messages between you and the agent                 |
 | `processes`       | [Tracked processes](process-tracking.md) in the worktree      |
 | `recent_files`    | Files the agent edited recently, with line counts             |
+| `agents`          | Claude subagents running in the workspace, and what each is doing |
 
 `session_summary` falls back to the session's first prompt when the agent hasn't written a recap. Scroll a container with the mouse wheel.
+
+`agents` isn't in the default layout; add it to a container to show it. It counts the subagents (from Claude's Agent tool) running across the workspace's Claude sessions, the primary's and any peers', and lists each with its task, how long it has run, its type and its latest tool call, named the way Claude Code's footer names it:
+
+```text
+2 subagents running
+● Find the poller                       1m
+  Explore · Grep(fn poll)
+● Review the diff                      12s
+  general-purpose · Bash(Run the tests)
+```
+
+wsx reads this from the files Claude Code keeps beside each session's transcript, so it updates with the dashboard's 2-second poll and needs no setup. A subagent drops off when Claude marks it finished, or when the Claude session it belongs to exits. One whose transcript hasn't changed in 15 minutes shows `quiet 20m · ` (in the warn color) ahead of what it last did: it may be waiting on a slow build or command, or its session may have died without wsx seeing it exit. After 2 hours of silence it's taken for abandoned and dropped. Other agent kinds don't report subagents.
+
+The activity line shows what the subagent last ran or looked up, such as a Bash command's description (or the command itself), a search pattern, a URL or a web search query, just as the dashboard already shows the main agent's current command.
 
 ## Replying
 
@@ -60,6 +75,9 @@ wsx config set detail_bar_config '{"height": {"percent": 45, "max_rows": 24}}'
 
 # One full-width chat column
 wsx config set detail_bar_config '{"containers": [["recent_chat"]]}'
+
+# Running subagents above processes and files
+wsx config set detail_bar_config '{"containers": [["session_summary"], ["recent_chat"], ["agents", "processes", "recent_files"]]}'
 
 # Hide the bar
 wsx config set detail_bar_config '{"visible": false}'

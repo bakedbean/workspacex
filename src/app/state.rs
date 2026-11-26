@@ -97,6 +97,7 @@ impl App {
             diff_last_poll_ms: std::collections::HashMap::new(),
             workspace_events: std::collections::HashMap::new(),
             agent_events: std::collections::HashMap::new(),
+            workspace_subagents: std::collections::HashMap::new(),
             pushed_status: std::collections::HashMap::new(),
             agent_roster: std::collections::HashMap::new(),
             workspace_activity: std::collections::HashMap::new(),
@@ -754,6 +755,13 @@ pub struct App {
     pub agent_events: std::collections::HashMap<
         crate::data::store::AgentInstanceId,
         crate::activity::events::WorkspaceEvents,
+    >,
+    /// Claude subagents still running in each workspace, across its Claude
+    /// instances, oldest first. Refilled by the local poll after each
+    /// transcript tail; a workspace with none has no entry.
+    pub workspace_subagents: std::collections::HashMap<
+        crate::data::store::WorkspaceId,
+        Vec<crate::activity::subagents::Subagent>,
     >,
     /// Last agent-pushed status per workspace, loaded from the store in
     /// `refresh()` (which fires on every external-change tick — a sibling

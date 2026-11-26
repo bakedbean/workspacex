@@ -10,6 +10,7 @@ On the dashboard, press `c` to open it for the selected workspace:
 - **Commits**: the commits on the branch that the repo's base branch doesn't have, newest first, as a short hash and its full subject. The tab counts them all, but the list stops at the newest 200 and says how many older ones it left out.
 - **Files**: each file the branch changed against its base, with its `+N −M` line counts (`binary` for a binary file), under a total. Paths wrap rather than being shortened. These are committed changes; uncommitted ones aren't listed.
 - **Chat**: the agent's latest message, rendered as markdown, as the detail bar's RECENT CHAT shows it.
+- **Agents**: the Claude subagents running in the workspace, each with its task, how long it has run, its type and its latest tool call, as the detail bar's [`agents` module](detail-bar.md#layout) shows them. The tab shows the count while any are running (`Agents 2`).
 
 ```text
 │  Prompt  Goal  Next  Commits 2  Files 7  Chat
@@ -21,13 +22,13 @@ On the dashboard, press `c` to open it for the selected workspace:
 │ 392b182  fix(dashboard): drop "clean"
 ```
 
-Press `1` to `6` for the tabs in bar order (Prompt, Goal, Next, Commits, Files, Chat; Commits and Files used to be `1` and `2`), `<` / `>` for the previous or next tab, or click a tab; each opens the panel if it's closed. Tabs that don't fit the panel's width wrap onto a second line. The text tabs are never cut short; the mouse wheel over the panel scrolls it, and so do the keys once the panel has the keyboard (`→`; see below). Drag the panel's left edge to resize it; the dashboard and the attached view share the width, and wsx remembers it across restarts. `c` or `esc` closes it, and it remembers its tab. With a repo header or a hidden group selected, the panel asks you to select a workspace.
+Press `1` to `7` for the tabs in bar order (Prompt, Goal, Next, Commits, Files, Chat, Agents; Commits and Files used to be `1` and `2`), `<` / `>` for the previous or next tab, or click a tab; each opens the panel if it's closed. Tabs that don't fit the panel's width wrap onto a second line. The text tabs are never cut short; the mouse wheel over the panel scrolls it, and so do the keys once the panel has the keyboard (`→`; see below). Drag the panel's left edge to resize it; the dashboard and the attached view share the width, and wsx remembers it across restarts. `c` or `esc` closes it, and it remembers its tab. With a repo header or a hidden group selected, the panel asks you to select a workspace.
 
 The Commits and Files tabs need the repo's **Base branch** setting (repo settings, `s`) to know what to compare against. After you change that setting, the panel shows `loading…` until the lists against the new base arrive (within about ten seconds); it never shows the old base's lists in their place. The panel stays hidden on terminals under 100 columns wide.
 
 ## Browsing changed files
 
-Press `→` to move the keyboard into the panel, on the tab it shows, or opening it on Files if it's closed. On the Prompt, Goal, Next, Commits and Chat tabs, `j` / `k` (`↓` / `↑`), `PgDn` / `PgUp` and `g` / `G` scroll the tab, and `←` / `esc` give the keys back. On Files, the file under the cursor is highlighted:
+Press `→` to move the keyboard into the panel, on the tab it shows, or opening it on Files if it's closed. On the Prompt, Goal, Next, Commits, Chat and Agents tabs, `j` / `k` (`↓` / `↑`), `PgDn` / `PgUp` and `g` / `G` scroll the tab, and `←` / `esc` give the keys back. On Files, the file under the cursor is highlighted:
 
 | Key           | Action                                   |
 |---------------|------------------------------------------|

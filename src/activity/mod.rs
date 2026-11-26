@@ -15,6 +15,7 @@ pub use sessionx::activity::{codex_events, events, pi_events};
 pub mod hermes_events;
 pub mod omp_events;
 pub mod proc;
+pub mod subagents;
 
 use crate::pty::session::AgentKind;
 use std::path::{Path, PathBuf};

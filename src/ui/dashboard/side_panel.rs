@@ -1,6 +1,6 @@
 //! The side panel: the selected workspace's first prompt, recap goal, next
-//! step, agent's latest message, commits or changed files, one at a time
-//! under a tab bar.
+//! step, agent's latest message, commits, changed files or running
+//! subagents, one at a time under a tab bar.
 //!
 //! ```text
 //! │ Prompt  Goal  Next  Commits 4   Files 7  Chat
@@ -51,17 +51,21 @@ pub enum PanelTab {
     Files,
     /// The agent's latest message, as the detail bar's RECENT CHAT shows it.
     Chat,
+    /// The Claude subagents running in the workspace and what each is
+    /// doing, as the detail bar's AGENTS module shows them.
+    Agents,
 }
 
 impl PanelTab {
-    /// Every tab, in tab-bar order; `1`–`6` on the dashboard pick them.
-    pub const ALL: [PanelTab; 6] = [
+    /// Every tab, in tab-bar order; `1`–`7` on the dashboard pick them.
+    pub const ALL: [PanelTab; 7] = [
         PanelTab::Prompt,
         PanelTab::Goal,
         PanelTab::Next,
         PanelTab::Commits,
         PanelTab::Files,
         PanelTab::Chat,
+        PanelTab::Agents,
     ];
 
     pub fn label(self) -> &'static str {
@@ -70,6 +74,7 @@ impl PanelTab {
             PanelTab::Goal => "Goal",
             PanelTab::Next => "Next",
             PanelTab::Chat => "Chat",
+            PanelTab::Agents => "Agents",
             PanelTab::Commits => "Commits",
             PanelTab::Files => "Files",
         }
@@ -82,6 +87,7 @@ impl PanelTab {
             PanelTab::Goal => "goal",
             PanelTab::Next => "next",
             PanelTab::Chat => "chat",
+            PanelTab::Agents => "agents",
             PanelTab::Commits => "commits",
             PanelTab::Files => "files",
         }
@@ -320,6 +326,8 @@ pub struct PanelData {
     pub lists: Option<std::sync::Arc<crate::git::BranchLists>>,
     pub ahead: Option<u32>,
     pub prose: PanelProse,
+    /// Claude subagents running in the workspace, oldest first.
+    pub subagents: Vec<crate::activity::subagents::Subagent>,
 }
 
 /// What the text tabs show, in full.
@@ -349,6 +357,7 @@ impl PanelData {
             files: self.lists.as_deref().map(|l| l.files.as_slice()),
             ahead: self.ahead,
             prose: Some(&self.prose),
+            subagents: &self.subagents,
         }
     }
 }
@@ -371,6 +380,8 @@ pub struct PanelInputs<'a> {
     pub ahead: Option<u32>,
     /// The text tabs' content; `None` reads as nothing known yet.
     pub prose: Option<&'a PanelProse>,
+    /// Claude subagents running in the workspace, oldest first.
+    pub subagents: &'a [crate::activity::subagents::Subagent],
 }
 
 /// How the panel is scrolled and where its file cursor is, for one draw.
@@ -445,6 +456,8 @@ pub fn render(
                 .commits
                 .map(|c| c.len().max(s.ahead.map_or(0, |a| a as usize))),
             PanelTab::Files => s.files.map(<[_]>::len),
+            // Counted only while some run, so the bar stays short.
+            PanelTab::Agents => Some(s.subagents.len()).filter(|n| *n > 0),
             PanelTab::Prompt | PanelTab::Goal | PanelTab::Next | PanelTab::Chat => None,
         });
         let text = match count {
@@ -582,6 +595,16 @@ fn body_lines(
     if let Some(lines) = prose_lines(tab, s.prose, width, theme) {
         return lines;
     }
+    if tab == PanelTab::Agents {
+        use crate::ui::detail_modules::agents;
+        let mut lines = vec![agents::count_line(s.subagents.len(), theme)];
+        if !s.subagents.is_empty() {
+            lines.push(Line::default());
+            let now_ms = crate::util::time::now_ms();
+            lines.extend(agents::subagent_lines(s.subagents, width, theme, now_ms));
+        }
+        return lines;
+    }
     let Some(base) = s.base else {
         return note(
             "Set a base branch in repo settings (s) to list this branch's commits and files.",
@@ -615,6 +638,7 @@ fn body_lines(
         PanelTab::Prompt | PanelTab::Goal | PanelTab::Next | PanelTab::Chat => {
             unreachable!("prose_lines draws the text tabs")
         }
+        PanelTab::Agents => unreachable!("drawn above"),
     }
 }
 
@@ -633,7 +657,7 @@ fn prose_lines(
     let note = |t: &str| paragraphs(t, width, theme.dim_style());
     let label = |t: &str| Line::from(Span::styled(t.to_string(), theme.dim_style()));
     let lines = match tab {
-        PanelTab::Commits | PanelTab::Files => return None,
+        PanelTab::Commits | PanelTab::Files | PanelTab::Agents => return None,
         PanelTab::Prompt => match text(&p.prompt) {
             Some(t) => paragraphs(t, width, Style::default()),
             None => note("No prompt read from the agent's session log yet."),
@@ -900,6 +924,7 @@ mod tests {
             files: Some(&f),
             ahead: None,
             prose: None,
+            subagents: &[],
         };
         let (lines, targets) = draw(PanelTab::Commits, Some(inputs), 44, 14, &mut 0);
         assert!(
@@ -931,7 +956,7 @@ mod tests {
             "{lines:?}"
         );
         assert!(lines[1].contains("Files"), "{lines:?}");
-        assert_eq!(targets.tabs.len(), 6);
+        assert_eq!(targets.tabs.len(), PanelTab::ALL.len());
         let files = targets
             .tabs
             .iter()
@@ -949,8 +974,64 @@ mod tests {
             files: None,
             ahead: None,
             prose: Some(prose),
+            subagents: &[],
         };
         draw(tab, Some(inputs), 50, h, scroll).0
+    }
+
+    fn subagent(desc: &str, activity: &str) -> crate::activity::subagents::Subagent {
+        crate::activity::subagents::Subagent {
+            id: desc.into(),
+            agent_type: "Explore".into(),
+            description: desc.into(),
+            background: true,
+            activity: Some(activity.into()),
+            started_ms: crate::util::time::now_ms(),
+            last_write_ms: crate::util::time::now_ms(),
+        }
+    }
+
+    /// The Agents tab counts running subagents on the bar and lists each
+    /// with what it is doing; it needs no base branch.
+    #[test]
+    fn agents_tab_counts_and_lists_running_subagents() {
+        let subs = [
+            subagent("Find the poller", "Grep(fn poll)"),
+            subagent("Review the diff", "Bash(Run the tests)"),
+        ];
+        let inputs = PanelInputs {
+            branch: "b",
+            base: None,
+            commits: None,
+            files: None,
+            ahead: None,
+            prose: None,
+            subagents: &subs,
+        };
+        let (lines, _) = draw(PanelTab::Agents, Some(inputs), 60, 14, &mut 0);
+        let all = lines.join("\n");
+        assert!(all.contains("Agents 2"), "{all}");
+        assert!(all.contains("2 subagents running"), "{all}");
+        assert!(all.contains("● Find the poller"), "{all}");
+        assert!(all.contains("Explore · Bash(Run the tests)"), "{all}");
+    }
+
+    /// With none running, the tab drops its count and says so.
+    #[test]
+    fn agents_tab_with_none_running_says_so() {
+        let inputs = PanelInputs {
+            branch: "b",
+            base: None,
+            commits: None,
+            files: None,
+            ahead: None,
+            prose: None,
+            subagents: &[],
+        };
+        let (lines, _) = draw(PanelTab::Agents, Some(inputs), 60, 8, &mut 0);
+        let all = lines.join("\n");
+        assert!(!all.contains("Agents 0"), "{all}");
+        assert!(all.contains("No subagents running."), "{all}");
     }
 
     /// Text tabs show their field in full, keeping paragraph breaks, and
@@ -1076,6 +1157,7 @@ mod tests {
             files: Some(&f),
             ahead: None,
             prose: None,
+            subagents: &[],
         };
         let (lines, _) = draw(PanelTab::Files, Some(inputs), 44, 16, &mut 0);
         let all = lines.join("\n");
@@ -1098,6 +1180,7 @@ mod tests {
             files: None,
             ahead: None,
             prose: None,
+            subagents: &[],
         };
         let (lines, _) = draw(PanelTab::Commits, Some(inputs), 40, 8, &mut 0);
         assert!(lines.join(" ").contains("base branch"), "{lines:?}");
@@ -1131,6 +1214,7 @@ mod tests {
             files: None,
             ahead: None,
             prose: None,
+            subagents: &[],
         };
         let mut scroll = 999;
         let (lines, _) = draw(PanelTab::Commits, Some(inputs), 40, 10, &mut scroll);
@@ -1154,6 +1238,7 @@ mod tests {
             files: Some(&f),
             ahead: Some(2),
             prose: None,
+            subagents: &[],
         };
         let (lines, _) = draw(PanelTab::Files, Some(inputs), 44, 10, &mut 0);
         let all = lines.join("\n");
@@ -1181,6 +1266,7 @@ mod tests {
             files: None,
             ahead: Some(250),
             prose: None,
+            subagents: &[],
         };
         let (lines, _) = draw(PanelTab::Commits, Some(inputs), 44, 14, &mut 0);
         let all = lines.join("\n");
@@ -1205,6 +1291,7 @@ mod tests {
             files: None,
             ahead: Some(1),
             prose: None,
+            subagents: &[],
         };
         for h in [6u16, 4] {
             let (lines, _) = draw(PanelTab::Commits, Some(inputs), 40, h, &mut 999);
@@ -1236,6 +1323,7 @@ mod tests {
             files: Some(files),
             ahead: Some(0),
             prose: None,
+            subagents: &[],
         }
     }
 
@@ -1394,11 +1482,11 @@ mod tests {
     #[test]
     fn tabs_step_both_ways_and_round_trip_their_keys() {
         let mut p = SidePanelState::default();
-        p.show(PanelTab::Chat);
+        p.show(PanelTab::Agents);
         p.next_tab();
         assert_eq!(p.tab, PanelTab::Prompt, "wraps");
         p.prev_tab();
-        assert_eq!(p.tab, PanelTab::Chat);
+        assert_eq!(p.tab, PanelTab::Agents);
         for t in PanelTab::ALL {
             assert_eq!(PanelTab::from_key(t.key()), Some(t));
         }

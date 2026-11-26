@@ -25,6 +25,8 @@ pub struct DetailContext<'a> {
     /// The workspace's latest `wsx recap set` digest, when it has one.
     pub recap: Option<&'a WorkspaceRecap>,
     pub procs: &'a [ProcInfo],
+    /// Claude subagents running in the workspace, oldest first.
+    pub subagents: &'a [crate::activity::subagents::Subagent],
     pub diff: Option<DiffStats>,
     pub diff_per_file: Option<&'a HashMap<String, DiffStats>>,
     pub lifecycle: Option<BranchLifecycle>,
@@ -89,15 +91,17 @@ impl Default for Registry {
     }
 }
 
+pub mod agents;
 pub mod markdown;
 pub mod processes;
 pub mod recent_chat;
 pub mod recent_files;
 pub mod session_summary;
 
-/// Populate `reg` with the four built-in modules: session summary,
-/// recent chat, processes, and recent files.
+/// Populate `reg` with the built-in modules: session summary, recent
+/// chat, processes, recent files, and agents.
 pub fn register_builtins(reg: &mut Registry) {
+    reg.register(Box::new(agents::Agents));
     reg.register(Box::new(session_summary::SessionSummary));
     reg.register(Box::new(recent_chat::RecentChat));
     reg.register(Box::new(processes::Processes));
@@ -152,6 +156,7 @@ pub(crate) mod tests_helpers {
             events: None,
             recap: None,
             procs: &[],
+            subagents: &[],
             diff: None,
             diff_per_file: None,
             lifecycle: None,
@@ -253,6 +258,13 @@ mod tests {
         let mut reg = Registry::new();
         register_builtins(&mut reg);
         assert!(reg.get("processes").is_some());
+    }
+
+    #[test]
+    fn register_builtins_includes_agents() {
+        let mut reg = Registry::new();
+        register_builtins(&mut reg);
+        assert!(reg.get("agents").is_some());
     }
 
     #[test]

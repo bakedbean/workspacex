@@ -403,6 +403,11 @@ pub(crate) fn side_panel_data(
         } else {
             Default::default()
         },
+        subagents: app
+            .workspace_subagents
+            .get(&id)
+            .cloned()
+            .unwrap_or_default(),
     })
 }
 

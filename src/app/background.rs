@@ -511,11 +511,74 @@ mod instance_event_tests {
             got.sort();
             assert_eq!(got, ["from peer", "from primary"]);
         }
-        for meta in [primary_meta, peer_meta] {
-            std::fs::write(&meta, r#"{"finished": true}"#).unwrap();
+        // A peer whose session exited has no subagents left, whatever its
+        // meta files say.
+        app.lock()
+            .await
+            .sessions
+            .insert_fake_session(peer.id, SessionStatus::Exited { code: 0 });
+        refresh_subagents(&app, ws, AgentKind::Claude).await;
+        {
+            let g = app.lock().await;
+            let got: Vec<&str> = g.workspace_subagents[&ws]
+                .iter()
+                .map(|s| s.description.as_str())
+                .collect();
+            assert_eq!(got, ["from primary"]);
         }
+        let _ = peer_meta;
+        std::fs::write(&primary_meta, r#"{"finished": true}"#).unwrap();
         refresh_subagents(&app, ws, AgentKind::Claude).await;
         assert!(!app.lock().await.workspace_subagents.contains_key(&ws));
+    }
+
+    /// A scan that fails keeps the last good list rather than reporting
+    /// that nothing runs.
+    #[tokio::test]
+    async fn a_failed_subagent_scan_keeps_the_last_list() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let worktree = dir.path();
+        let store = Store::open_in_memory().unwrap();
+        let repo_id = store.add_repo(worktree, "subs", "").unwrap();
+        let ws = store
+            .insert_workspace(&NewWorkspace {
+                repo_id,
+                name: "subs",
+                branch: "subs",
+                worktree_path: worktree,
+                yolo: false,
+                agent: AgentKind::Claude,
+                shared: false,
+            })
+            .unwrap();
+        store.add_primary_agent(ws, AgentKind::Claude, 0).unwrap();
+        let app: SharedApp = Arc::new(Mutex::new(App::new(store, worktree.to_path_buf()).unwrap()));
+        let file = worktree.join("sess.jsonl");
+        std::fs::write(&file, "").unwrap();
+        let subs = crate::activity::subagents::subagents_dir(&file);
+        std::fs::create_dir_all(&subs).unwrap();
+        std::fs::write(
+            subs.join("agent-a1.meta.json"),
+            r#"{"description": "kept"}"#,
+        )
+        .unwrap();
+        app.lock().await.workspace_events.insert(
+            ws,
+            crate::activity::events::WorkspaceEvents {
+                file_path: Some(file.clone()),
+                ..Default::default()
+            },
+        );
+        refresh_subagents(&app, ws, AgentKind::Claude).await;
+        assert_eq!(app.lock().await.workspace_subagents[&ws].len(), 1);
+        // The subagents path turns unlistable.
+        std::fs::remove_dir_all(&subs).unwrap();
+        std::fs::write(&subs, "not a directory").unwrap();
+        refresh_subagents(&app, ws, AgentKind::Claude).await;
+        assert_eq!(
+            app.lock().await.workspace_subagents[&ws][0].description,
+            "kept"
+        );
     }
 
     /// The priming pass must leave every workspace scanned with its last
@@ -1213,21 +1276,33 @@ async fn refresh_local(app: SharedApp, t: PollTarget) {
 
 /// Rescan the subagents of every Claude session in workspace `id`. The
 /// session files come from the tail's caches: the primary's in
-/// `workspace_events`, each peer's in `agent_events`.
+/// `workspace_events`, each peer's in `agent_events`. An instance whose
+/// session has exited has no subagents left, whatever its files say. A
+/// scan that fails leaves the last good list in place.
 async fn refresh_subagents(
     app: &SharedApp,
     id: WorkspaceId,
     ws_agent: crate::pty::session::AgentKind,
 ) {
-    use crate::pty::session::AgentKind;
+    use crate::pty::session::{AgentKind, SessionStatus};
     let files: Vec<std::path::PathBuf> = {
         let g = app.lock().await;
+        let exited = |inst: crate::data::store::AgentInstanceId| {
+            g.sessions.get(inst).is_some_and(|s| {
+                matches!(
+                    *s.status
+                        .read()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner),
+                    SessionStatus::Exited { .. }
+                )
+            })
+        };
         let roster = g.agent_roster.get(&id).map(Vec::as_slice).unwrap_or(&[]);
-        let primary_is_claude = match roster.iter().find(|i| i.is_primary) {
-            Some(p) => p.agent == AgentKind::Claude,
+        let primary_live_claude = match roster.iter().find(|i| i.is_primary) {
+            Some(p) => p.agent == AgentKind::Claude && !exited(p.id),
             None => ws_agent == AgentKind::Claude,
         };
-        let primary = primary_is_claude
+        let primary = primary_live_claude
             .then(|| {
                 g.workspace_events
                     .get(&id)
@@ -1236,24 +1311,34 @@ async fn refresh_subagents(
             .flatten();
         let peers = roster
             .iter()
-            .filter(|i| !i.is_primary && i.agent == AgentKind::Claude)
+            .filter(|i| !i.is_primary && i.agent == AgentKind::Claude && !exited(i.id))
             .filter_map(|i| g.agent_events.get(&i.id).and_then(|e| e.file_path.clone()));
         primary.into_iter().chain(peers).collect()
     };
     let scanned = if files.is_empty() {
-        Vec::new()
+        Ok(Vec::new())
     } else {
         let now_ms = crate::util::time::now_ms();
-        tokio::task::spawn_blocking(move || {
-            let mut all: Vec<_> = files
-                .iter()
-                .flat_map(|f| crate::activity::subagents::scan(f, now_ms))
-                .collect();
+        let scan = tokio::task::spawn_blocking(move || {
+            let mut all = Vec::new();
+            for f in &files {
+                all.extend(crate::activity::subagents::scan(f, now_ms)?);
+            }
             all.sort_by_key(|s| s.started_ms);
-            all
+            Ok::<_, std::io::Error>(all)
         })
-        .await
-        .unwrap_or_default()
+        .await;
+        match scan {
+            Ok(result) => result,
+            Err(e) => Err(std::io::Error::other(e)),
+        }
+    };
+    let scanned = match scanned {
+        Ok(scanned) => scanned,
+        Err(e) => {
+            tracing::debug!(workspace = id.0, error = %e, "subagent scan failed; keeping the last list");
+            return;
+        }
     };
     let mut g = app.lock().await;
     if scanned.is_empty() {

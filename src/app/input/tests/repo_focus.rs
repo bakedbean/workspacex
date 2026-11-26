@@ -395,6 +395,7 @@ async fn seven_shows_the_running_subagents() {
             background: true,
             activity: Some("Grep(fn poll)".into()),
             started_ms: crate::util::time::now_ms(),
+            last_write_ms: crate::util::time::now_ms(),
         }],
     );
     app.dashboard.focus_repo(repo);

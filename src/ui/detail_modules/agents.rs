@@ -102,6 +102,7 @@ mod tests {
             background: true,
             activity: activity.map(String::from),
             started_ms,
+            last_write_ms: started_ms,
         }
     }
 

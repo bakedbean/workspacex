@@ -987,6 +987,7 @@ mod tests {
             background: true,
             activity: Some(activity.into()),
             started_ms: crate::util::time::now_ms(),
+            last_write_ms: crate::util::time::now_ms(),
         }
     }
 

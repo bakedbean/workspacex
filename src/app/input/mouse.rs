@@ -87,7 +87,7 @@ pub(in crate::app::input) fn adjust_detail_scroll(
 }
 
 pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedApp, m: MouseEvent) {
-    if side_panel_resize(app, &m) || detail_bar_resize(app, &m) {
+    if side_panel_resize(app, &m) || detail_bar_resize(app, &m) || detail_column_resize(app, &m) {
         return;
     }
     // The diff viewer covers the screen: every mouse event is its own.
@@ -252,6 +252,18 @@ pub(in crate::app::input) async fn handle_mouse(app: &mut App, shared: &SharedAp
                     from_row: m.row,
                     moved: false,
                 });
+                return;
+            }
+
+            // A press on a separator between detail-bar containers starts
+            // dragging it sideways to share their width differently.
+            if let Some(right) = detail_separator_at(&app.detail_columns, &m) {
+                app.dashboard.detail_column_resize =
+                    Some(crate::ui::dashboard::DetailColumnResize {
+                        right,
+                        from_column: m.column,
+                        moved: false,
+                    });
                 return;
             }
 
@@ -561,6 +573,82 @@ fn detail_bar_resize(app: &mut App, m: &MouseEvent) -> bool {
             tracing::warn!(error = %e, "failed to persist detail_bar_height");
         }
     }
+    true
+}
+
+/// The container right of the separator `m` is on, if any. A separator
+/// sits one cell right of each column but the last, spanning its rows.
+fn detail_separator_at(columns: &[ratatui::layout::Rect], m: &MouseEvent) -> Option<usize> {
+    columns
+        .windows(2)
+        .position(|pair| {
+            let left = pair[0];
+            m.column == left.x.saturating_add(left.width)
+                && m.row >= left.y
+                && m.row < left.y.saturating_add(left.height)
+        })
+        .map(|i| i + 1)
+}
+
+/// The column widths with the separator left of container `right` moved
+/// to screen column `column`: only that container and the one before it
+/// change, sharing their combined width, each keeping
+/// [`DetailBarConfig::CONTAINER_MIN_WIDTH`] (or half the pair, if less).
+///
+/// [`DetailBarConfig::CONTAINER_MIN_WIDTH`]: crate::config::detail_bar_config::DetailBarConfig::CONTAINER_MIN_WIDTH
+pub(in crate::app::input) fn detail_widths_at(
+    columns: &[ratatui::layout::Rect],
+    right: usize,
+    column: u16,
+) -> Option<Vec<u16>> {
+    let (l, r) = (columns.get(right.checked_sub(1)?)?, columns.get(right)?);
+    let pair = l.width + r.width;
+    let lo = crate::config::detail_bar_config::DetailBarConfig::CONTAINER_MIN_WIDTH.min(pair / 2);
+    let left = column.saturating_sub(l.x).clamp(lo, pair - lo);
+    let mut widths: Vec<u16> = columns.iter().map(|c| c.width).collect();
+    widths[right - 1] = left;
+    widths[right] = pair - left;
+    Some(widths)
+}
+
+/// Route `m` to an in-flight container-separator drag; returns whether it
+/// was consumed. Like [`detail_bar_resize`]: each event sets the widths
+/// from its own column, a modal, a hidden bar, or a fresh press cancels
+/// it, and a press released without leaving its column is a click.
+fn detail_column_resize(app: &mut App, m: &MouseEvent) -> bool {
+    let Some(mut press) = app.dashboard.detail_column_resize else {
+        return false;
+    };
+    if app.modal.is_some() || app.detail_columns.len() <= press.right {
+        app.dashboard.detail_column_resize = None;
+        return false;
+    }
+    let release = match m.kind {
+        MouseEventKind::Drag(MouseButton::Left) => false,
+        MouseEventKind::Up(MouseButton::Left) => true,
+        MouseEventKind::Down(_) => {
+            app.dashboard.detail_column_resize = None;
+            return false;
+        }
+        _ => return false,
+    };
+    press.moved |= m.column != press.from_column;
+    app.dashboard.detail_column_resize = (!release).then_some(press);
+    if !press.moved {
+        return true;
+    }
+    let Some(widths) = detail_widths_at(&app.detail_columns, press.right, m.column) else {
+        return true;
+    };
+    if release {
+        if let Err(e) = app.store.set_setting(
+            crate::config::detail_bar_config::DetailBarConfig::WIDTHS_SETTING,
+            &crate::config::detail_bar_config::DetailBarConfig::format_widths(&widths),
+        ) {
+            tracing::warn!(error = %e, "failed to persist detail_bar_widths");
+        }
+    }
+    app.dashboard.detail_widths = Some(widths);
     true
 }
 

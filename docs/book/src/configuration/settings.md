@@ -82,6 +82,7 @@ Bell values are `off`, `single`, `double` or `triple`. `off` silences the bell b
 | `dashboard_pr_width` | `16` | Width of the PR column, clamped to 8–24. |
 | `side_panel_width` | about a third of the screen, 36–64 | Width of the [side panel](../dashboard/side-panel.md), set by dragging its left edge: at least 24 columns, always leaving the rows at least 40. Unset it to go back to automatic sizing. |
 | `detail_bar_height` | unset | Height of the [detail bar](../dashboard/detail-bar.md), set by dragging its top edge: at least its `min_rows`, always leaving the list at least 10 rows. While set, it replaces the config's `height`, except on screens too short for both, where the bar sizes itself automatically. Unset it to go back to automatic sizing. |
+| `detail_bar_widths` | unset | Widths of the [detail bar](../dashboard/detail-bar.md)'s containers, comma-separated, set by dragging the line between two of them: each keeps at least 12 columns where all of them fit. They apply as proportions, so the split holds when the terminal is resized, and only when the count matches the containers drawn. Unset it to share the width evenly. |
 | `detail_bar_config` | built-in | JSON for the detail pane. See [Detail bar](../dashboard/detail-bar.md) for the schema. |
 | `usage_graph_window` | `24h` | Window of the `$usage` activity graph: `24h`, `1w` or `1mo`. Shown only when a [theme](themes.md) places `$usage`. |
 | `pinned_commands` | unset | `Label=command` lines shown as chips. See [Pinned commands](../attached-view/pinned-commands.md). |

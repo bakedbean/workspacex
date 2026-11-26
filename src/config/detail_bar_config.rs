@@ -85,6 +85,10 @@ impl DetailBarConfig {
 
     /// The setting holding the dragged height.
     pub const HEIGHT_SETTING: &'static str = "detail_bar_height";
+    /// The setting holding the dragged container widths, comma-separated.
+    pub const WIDTHS_SETTING: &'static str = "detail_bar_widths";
+    /// Columns a dragged container always keeps.
+    pub const CONTAINER_MIN_WIDTH: u16 = 12;
 
     /// The chrome rows this config draws: `CHROME_ROWS`, plus one for
     /// `bottom_rule`.
@@ -146,6 +150,49 @@ impl DetailBarConfig {
         }
     }
 
+    /// Parse the [`Self::WIDTHS_SETTING`] value: positive widths, one per
+    /// container. `None` when malformed, so the containers share evenly.
+    pub fn parse_widths(raw: &str) -> Option<Vec<u16>> {
+        let widths = raw
+            .split(',')
+            .map(|w| w.trim().parse::<u16>().ok().filter(|&w| w > 0))
+            .collect::<Option<Vec<u16>>>()?;
+        (!widths.is_empty()).then_some(widths)
+    }
+
+    /// Split `avail` columns among containers in proportion to `weights`,
+    /// each keeping [`Self::CONTAINER_MIN_WIDTH`] while all of them fit
+    /// (otherwise purely in proportion). The widths always sum to `avail`.
+    pub fn container_widths(weights: &[u16], avail: u16) -> Vec<u16> {
+        let min = Self::CONTAINER_MIN_WIDTH;
+        let n = weights.len();
+        let enforce = n > 0 && u32::from(avail) >= u32::from(min) * n as u32;
+        // Containers pinned at the minimum; the rest share what's left.
+        let mut pinned = vec![false; n];
+        loop {
+            let free = avail - pinned.iter().filter(|&&p| p).count() as u16 * min;
+            let widths = proportional(weights, &pinned, free, min);
+            let short: Vec<usize> = (0..n)
+                .filter(|&i| enforce && !pinned[i] && widths[i] < min)
+                .collect();
+            if short.is_empty() {
+                return widths;
+            }
+            for i in short {
+                pinned[i] = true;
+            }
+        }
+    }
+
+    /// Format widths for [`Self::WIDTHS_SETTING`].
+    pub fn format_widths(widths: &[u16]) -> String {
+        widths
+            .iter()
+            .map(u16::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
     /// Apply an override on top of self. Repo wins per-field for
     /// scalars; `containers` is whole-replace.
     pub fn with_override(mut self, ovr: &DetailBarOverride) -> Self {
@@ -197,6 +244,44 @@ impl DetailBarConfig {
         // Empty inner lists (spacer containers) are kept — the user
         // opted in. Module-ID validity is checked at render time.
     }
+}
+
+/// `free` columns split among the unpinned `weights` by largest remainder;
+/// pinned entries get `min`.
+fn proportional(weights: &[u16], pinned: &[bool], free: u16, min: u16) -> Vec<u16> {
+    let total: u32 = weights
+        .iter()
+        .zip(pinned)
+        .filter(|(_, p)| !**p)
+        .map(|(&w, _)| u32::from(w))
+        .sum();
+    let mut widths: Vec<u16> = Vec::with_capacity(weights.len());
+    let mut rems: Vec<(u32, usize)> = Vec::new();
+    for (i, (&w, &p)) in weights.iter().zip(pinned).enumerate() {
+        if p || total == 0 {
+            widths.push(if p { min } else { 0 });
+            continue;
+        }
+        let share = u32::from(free) * u32::from(w);
+        widths.push((share / total) as u16);
+        rems.push((share % total, i));
+    }
+    let mut left = free
+        - widths
+            .iter()
+            .zip(pinned)
+            .filter(|(_, p)| !**p)
+            .map(|(w, _)| *w)
+            .sum::<u16>();
+    rems.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    for (_, i) in rems {
+        if left == 0 {
+            break;
+        }
+        widths[i] += 1;
+        left -= 1;
+    }
+    widths
 }
 
 /// Partial override of `DetailBarConfig`. `None` fields inherit from base.
@@ -738,5 +823,43 @@ mod tests {
         assert!(!cfg.visible);
         assert_eq!(cfg.height.percent, 25);
         assert_eq!(cfg.containers, DetailBarConfig::default().containers);
+    }
+
+    #[test]
+    fn widths_round_trip_and_reject_malformed() {
+        assert_eq!(
+            DetailBarConfig::parse_widths("30, 50,40"),
+            Some(vec![30, 50, 40])
+        );
+        assert_eq!(
+            DetailBarConfig::format_widths(&[30, 50, 40]),
+            "30,50,40".to_string()
+        );
+        for bad in ["", "30,,40", "30,0", "-1,4", "a,b"] {
+            assert_eq!(DetailBarConfig::parse_widths(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn container_widths_keep_the_minimum_while_it_fits() {
+        // Purely proportional, summing to the room.
+        assert_eq!(
+            DetailBarConfig::container_widths(&[2, 1, 1], 160),
+            vec![80, 40, 40]
+        );
+        assert_eq!(
+            DetailBarConfig::container_widths(&[1, 1, 1], 100),
+            vec![34, 33, 33]
+        );
+        // A container dragged to the minimum at 118 columns stays there at 78.
+        let w = DetailBarConfig::container_widths(&[12, 53, 53], 78);
+        assert_eq!(w, vec![12, 33, 33]);
+        // Pinning one can push another under: both pin.
+        let w = DetailBarConfig::container_widths(&[1, 2, 50], 40);
+        assert_eq!(w, vec![12, 12, 16]);
+        // Too narrow for every minimum: proportional, still summing.
+        let w = DetailBarConfig::container_widths(&[1, 1, 4], 30);
+        assert_eq!(w.iter().sum::<u16>(), 30);
+        assert_eq!(w, vec![5, 5, 20]);
     }
 }

@@ -75,7 +75,7 @@ Bell values are `off`, `single`, `double` or `triple`. `off` silences the bell b
 | `dashboard_sort_mode` | `recency` | Workspace order within a repo: `recency` or `status`. `o` toggles it. |
 | `dashboard_focus_group_by_pr` | `on` | Section the [repo focus view](../dashboard/repo-focus.md#sections) by PR state; `off` keeps the list's order. `G` in the focus view toggles it. |
 | `dashboard_hide_unused_repos` | `off` | Leave repos with no workspaces off the dashboard list. The repo you're [focused](../dashboard/repo-focus.md) on always shows. `u` toggles it. |
-| `dashboard_focus_tab` | `next` | The tab the repo focus view's [side panel](../dashboard/repo-focus.md#side-panel) shows: `next`, `goal`, `prompt`, `commits`, `files` or `chat`. `1`–`6`, `<` and `>` in the focus view switch it. |
+| `dashboard_focus_tab` | `next` | The tab the repo focus view's [side panel](../dashboard/repo-focus.md#side-panel) shows: `next`, `goal`, `prompt`, `commits`, `files`, `chat` or `agents`. `1`–`7`, `<` and `>` in the focus view switch it. |
 | `dashboard_blocked_pin_max_age_secs` | `86400` | How long a workspace blocked on you stays pinned to the top in `recency` mode. |
 | `top_bar_show_tags` | unset | Tags, separated by commas or spaces, that keep a workspace in the attached view's top bar when a tag hide rule hides it from the dashboard. A workspace with any listed tag ignores every tag rule; PR hide rules still apply. Names are lowercased, and invalid ones are ignored. After `wsx config set`, restart wsx to apply; the `,` drawer applies it at once. |
 | `dashboard_branch_width` | `28` | Width of the branch column, clamped to 10–80. |

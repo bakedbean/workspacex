@@ -123,6 +123,13 @@ pub struct DashboardState {
     pub detail_height: Option<u16>,
     /// The press on the detail bar's top edge being dragged, if any.
     pub detail_resize: Option<DetailResize>,
+    /// The widths the user dragged the detail bar's containers to, one per
+    /// container; `None` shares the width evenly. Kept in the
+    /// `detail_bar_widths` setting.
+    pub detail_widths: Option<Vec<u16>>,
+    /// The press on a separator between detail-bar containers being
+    /// dragged, if any.
+    pub detail_column_resize: Option<DetailColumnResize>,
     /// The repo the dashboard is focused on, or `None` for every repo. While
     /// set, the list shows only that repo's workspaces, as tall rows. Not
     /// persisted.
@@ -310,6 +317,20 @@ pub struct DetailResize {
     pub moved: bool,
 }
 
+/// A press on the separator between two detail-bar containers, dragging
+/// it sideways to share their width differently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DetailColumnResize {
+    /// The container right of the separator; the drag resizes it and the
+    /// one before it.
+    pub right: usize,
+    /// The screen column of the press.
+    pub from_column: u16,
+    /// The pointer has left `from_column`: until it does, the press is a
+    /// click and leaves the widths alone.
+    pub moved: bool,
+}
+
 impl Default for DashboardState {
     fn default() -> Self {
         Self {
@@ -334,6 +355,8 @@ impl Default for DashboardState {
             reply_draft_clear_at_ms: None,
             detail_height: None,
             detail_resize: None,
+            detail_widths: None,
+            detail_column_resize: None,
             focused_repo: None,
             focus_scroll: 0,
             focus_scroll_anchor: None,

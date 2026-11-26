@@ -104,6 +104,7 @@ pub fn draw(f: &mut ratatui::Frame, app: &mut App) {
     // branch overwrites this with live values when the detail bar renders.
     // Prevents stale rects from triggering wheel events on invisible containers.
     app.detail_container_rects = [None; 4];
+    app.detail_columns.clear();
     app.attached_pane_rects.clear();
     app.attached_pane_focus_rects.clear();
     app.attached_pane_close_rects.clear();

@@ -41,6 +41,11 @@ impl App {
             .ok()
             .flatten()
             .and_then(|h| h.parse::<u16>().ok());
+        dashboard.detail_widths = store
+            .get_setting(crate::config::detail_bar_config::DetailBarConfig::WIDTHS_SETTING)
+            .ok()
+            .flatten()
+            .and_then(|w| crate::config::detail_bar_config::DetailBarConfig::parse_widths(&w));
         let mut attached_panel = crate::ui::dashboard::side_panel::SidePanelState::default();
         attached_panel.width = panel_width;
         // Several tests construct an `App` only incidentally and then create
@@ -160,6 +165,7 @@ impl App {
             detail_scroll_offsets: [0; 4],
             detail_scroll_last_workspace: None,
             detail_container_rects: [None; 4],
+            detail_columns: Vec::new(),
             attached_pane_rects: Vec::new(),
             attached_pane_focus_rects: Vec::new(),
             attached_pane_close_rects: Vec::new(),
@@ -923,6 +929,10 @@ pub struct App {
     /// draw and consumed by `handle_mouse` for hit-testing wheel events.
     /// Mirrors the `chip_rects` draw-populates-input-reads pattern.
     pub detail_container_rects: [Option<ratatui::layout::Rect>; 4],
+    /// The detail bar's container columns as last drawn, left to right,
+    /// when two or more sit side by side: the separators between them drag
+    /// sideways to resize the pair. Empty otherwise.
+    pub detail_columns: Vec<ratatui::layout::Rect>,
     /// Per-pane `(session, content rect)` from the last attached-view draw.
     /// Consumed by `handle_mouse` to find the pane under the cursor and
     /// forward wheel events to a mouse-aware agent. Cleared each frame.

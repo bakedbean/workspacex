@@ -85,6 +85,10 @@ impl DetailBarConfig {
 
     /// The setting holding the dragged height.
     pub const HEIGHT_SETTING: &'static str = "detail_bar_height";
+    /// The setting holding the dragged container widths, comma-separated.
+    pub const WIDTHS_SETTING: &'static str = "detail_bar_widths";
+    /// Columns a dragged container always keeps.
+    pub const CONTAINER_MIN_WIDTH: u16 = 12;
 
     /// The chrome rows this config draws: `CHROME_ROWS`, plus one for
     /// `bottom_rule`.
@@ -144,6 +148,25 @@ impl DetailBarConfig {
             (Some(h), Some((lo, hi))) => h.clamp(lo, hi),
             _ => self.preferred_height(total),
         }
+    }
+
+    /// Parse the [`Self::WIDTHS_SETTING`] value: positive widths, one per
+    /// container. `None` when malformed, so the containers share evenly.
+    pub fn parse_widths(raw: &str) -> Option<Vec<u16>> {
+        let widths = raw
+            .split(',')
+            .map(|w| w.trim().parse::<u16>().ok().filter(|&w| w > 0))
+            .collect::<Option<Vec<u16>>>()?;
+        (!widths.is_empty()).then_some(widths)
+    }
+
+    /// Format widths for [`Self::WIDTHS_SETTING`].
+    pub fn format_widths(widths: &[u16]) -> String {
+        widths
+            .iter()
+            .map(u16::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
     }
 
     /// Apply an override on top of self. Repo wins per-field for
@@ -738,5 +761,17 @@ mod tests {
         assert!(!cfg.visible);
         assert_eq!(cfg.height.percent, 25);
         assert_eq!(cfg.containers, DetailBarConfig::default().containers);
+    }
+
+    #[test]
+    fn widths_round_trip_and_reject_malformed() {
+        assert_eq!(DetailBarConfig::parse_widths("30, 50,40"), Some(vec![30, 50, 40]));
+        assert_eq!(
+            DetailBarConfig::format_widths(&[30, 50, 40]),
+            "30,50,40".to_string()
+        );
+        for bad in ["", "30,,40", "30,0", "-1,4", "a,b"] {
+            assert_eq!(DetailBarConfig::parse_widths(bad), None, "{bad:?}");
+        }
     }
 }

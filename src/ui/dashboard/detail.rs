@@ -63,6 +63,10 @@ pub struct DetailInputs<'a> {
     /// Per-slot scroll offsets. Borrowed mutably so the container can
     /// clamp them to the current content height during render.
     pub scroll_offsets: &'a mut [u16; 4],
+    /// The container widths the user dragged to, one per container; used
+    /// as proportions so they scale with the terminal. `None`, or a count
+    /// that doesn't match the containers drawn, shares the width evenly.
+    pub column_weights: Option<&'a [u16]>,
 }
 
 #[derive(Debug, Default)]
@@ -73,6 +77,10 @@ pub struct DetailDrawOutput {
     pub chip_rects: Vec<(usize, ratatui::layout::Rect)>,
     pub container_rects: [Option<ratatui::layout::Rect>; 4],
     pub pr_link_rect: Option<ratatui::layout::Rect>,
+    /// Each container column's full rect (rules included), left to right,
+    /// when two or more draw side by side — a separator sits one cell
+    /// right of each column but the last, and dragging it resizes the pair.
+    pub columns: Vec<ratatui::layout::Rect>,
 }
 
 /// Render the detail bar into `area`. No-op when `area.height` is below
@@ -181,7 +189,7 @@ pub fn render(
         .into_iter()
         .find_map(|(rect, hit)| (hit == crate::ui::bar::segment::Hit::Pr).then_some(rect));
 
-    let container_rects = render_body_region(f, body_region, inputs, theme);
+    let (container_rects, columns) = render_body_region(f, body_region, inputs, theme);
 
     // The detail bar's PR chip, diff count, and procs count live in the header
     // strip and row (above/elsewhere), so the chip row here carries pinned
@@ -213,6 +221,7 @@ pub fn render(
         chip_rects,
         container_rects,
         pr_link_rect,
+        columns,
     }
 }
 
@@ -301,13 +310,13 @@ fn render_body_region(
     area: Rect,
     inputs: &mut DetailInputs<'_>,
     theme: &Theme,
-) -> [Option<Rect>; 4] {
+) -> ([Option<Rect>; 4], Vec<Rect>) {
     use ratatui::layout::{Constraint, Direction, Layout};
     use ratatui::widgets::Paragraph;
 
     let mut rects: [Option<Rect>; 4] = [None; 4];
     if area.height < 2 || area.width == 0 {
-        return rects;
+        return (rects, Vec::new());
     }
     let cfg = inputs.config;
 
@@ -333,7 +342,7 @@ fn render_body_region(
     f.render_widget(Paragraph::new(rule_line), bottom_rule);
 
     if !cfg.has_body() {
-        return rects;
+        return (rects, Vec::new());
     }
 
     // Narrow-terminal collapse: < 80 cols → first non-empty container only.
@@ -349,19 +358,20 @@ fn render_body_region(
 
     let n = containers.len();
     if n == 0 {
-        return rects;
+        return (rects, Vec::new());
     }
 
-    // Horizontal split: N columns share the remaining width equally
-    // (Fill(1)), with a single 1-cell separator chunk between each
-    // pair. No additional gap cells — module renderers already pad
-    // their content internally.
+    // Horizontal split: N columns share the remaining width — evenly,
+    // or in proportion to the widths the user dragged them to — with a
+    // single 1-cell separator chunk between each pair. No additional gap
+    // cells — module renderers already pad their content internally.
+    let weights = inputs.column_weights.filter(|w| w.len() == n);
     let mut h_constraints: Vec<Constraint> = Vec::with_capacity(2 * n - 1);
     for i in 0..n {
         if i > 0 {
             h_constraints.push(Constraint::Length(1));
         }
-        h_constraints.push(Constraint::Fill(1));
+        h_constraints.push(Constraint::Fill(weights.map_or(1, |w| w[i])));
     }
     let h_chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -446,7 +456,12 @@ fn render_body_region(
         f.render_widget(Paragraph::new(sep_lines), sep_area);
     }
 
-    rects
+    let columns = if n > 1 {
+        h_chunks.iter().step_by(2).copied().collect()
+    } else {
+        Vec::new()
+    };
+    (rects, columns)
 }
 
 fn render_container(
@@ -785,6 +800,7 @@ mod tests {
                 bar_specs: &specs,
                 fleet: crate::ui::bar::fleet::empty(),
                 scroll_offsets: &mut offsets,
+                column_weights: None,
             };
             render(f, Rect::new(0, 0, 80, 0), &mut inputs, &theme);
         });
@@ -1250,6 +1266,7 @@ mod tests {
             bar_specs: &specs,
             fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
+            column_weights: None,
         };
         let text = render_to_text(&mut inputs, 120, 10);
         assert!(
@@ -1299,6 +1316,7 @@ mod tests {
             bar_specs: &specs,
             fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
+            column_weights: None,
         };
         let text = render_to_text(&mut inputs, 60, 10);
         let lines: Vec<&str> = text.lines().collect();
@@ -1350,6 +1368,7 @@ mod tests {
             bar_specs: &specs,
             fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
+            column_weights: None,
         };
         let text = render_to_text(&mut inputs, 60, h);
         assert!(text.contains("Reply to agent"), "h={h}: {text}");
@@ -1403,6 +1422,7 @@ mod tests {
             bar_specs: &specs,
             fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
+            column_weights: None,
         };
         // Width 100, height exactly the chrome: 4 rows plus the default
         // bottom rule.
@@ -1457,6 +1477,7 @@ mod tests {
             bar_specs: &specs,
             fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
+            column_weights: None,
         };
         let text = render_to_text(&mut inputs, 70, 10);
         assert!(text.contains("SESSION SUMMARY"), "summary kept: {text:?}");
@@ -1516,6 +1537,7 @@ mod tests {
             bar_specs: &specs,
             fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
+            column_weights: None,
         };
         let text = render_to_text(&mut inputs, 120, 10);
         assert!(
@@ -1563,6 +1585,7 @@ mod tests {
             bar_specs: &specs,
             fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
+            column_weights: None,
         };
         let text = render_to_text(&mut inputs, 120, 10);
         assert!(text.contains("RECENT CHAT"), "chat title: {text:?}");
@@ -1628,6 +1651,7 @@ mod tests {
             bar_specs: &specs,
             fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
+            column_weights: None,
         };
         let text = render_to_text(&mut inputs, 120, 12);
         // Chip labels must appear, and "Reply to agent" must still appear
@@ -1686,6 +1710,7 @@ mod tests {
             bar_specs: &specs,
             fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
+            column_weights: None,
         };
         // Capture render's returned rects via a closure-bound outer mut
         // (Terminal::draw can't propagate values out of its closure).
@@ -1745,6 +1770,7 @@ mod tests {
             bar_specs: &specs,
             fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
+            column_weights: None,
         };
         let text = render_to_text(&mut inputs, 120, 12);
         let module_line = text
@@ -1801,6 +1827,7 @@ mod tests {
             bar_specs: &specs,
             fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
+            column_weights: None,
         };
         let with_disabled = render_to_text(&mut inputs, 120, 12);
         let stock = bar_specs();
@@ -1855,6 +1882,7 @@ mod tests {
             bar_specs: &specs,
             fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
+            column_weights: None,
         };
         let (w, h) = (100u16, 12u16);
         let mut terminal =
@@ -1932,6 +1960,7 @@ mod tests {
             bar_specs: &specs,
             fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
+            column_weights: None,
         };
         // Area height exactly CHROME_ROWS (4). With chips present we need 5.
         let mut terminal =
@@ -2139,6 +2168,7 @@ mod tests {
             bar_specs: &specs,
             fleet: crate::ui::bar::fleet::empty(),
             scroll_offsets: &mut offsets,
+            column_weights: None,
         };
         let text = render_to_text(&mut inputs, 120, 10);
         let lines: Vec<&str> = text.lines().collect();

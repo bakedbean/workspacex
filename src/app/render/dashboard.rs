@@ -259,6 +259,7 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
                     bar_specs: &app.bar_specs,
                     fleet: &fleet,
                     scroll_offsets: &mut app.detail_scroll_offsets,
+                    column_weights: app.dashboard.detail_widths.as_deref(),
                 };
                 let out = if reply_only {
                     crate::ui::dashboard::detail::render_reply_only(
@@ -284,6 +285,20 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
                         };
                         f.buffer_mut().set_style(rule, app.theme.selected_style());
                     }
+                    // Likewise the separator being dragged sideways.
+                    if let Some(sep) = app
+                        .dashboard
+                        .detail_column_resize
+                        .and_then(|p| out.columns.get(p.right.wrapping_sub(1)))
+                    {
+                        let sep = ratatui::layout::Rect {
+                            x: sep.x + sep.width,
+                            width: 1,
+                            ..*sep
+                        };
+                        f.buffer_mut().set_style(sep, app.theme.selected_style());
+                    }
+                    app.detail_columns = out.columns.clone();
                     out
                 };
                 app.detail_container_rects = out.container_rects;

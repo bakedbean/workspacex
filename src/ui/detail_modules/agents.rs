@@ -10,7 +10,9 @@
 //!   general-purpose · Bash(Run the tests)
 //! ```
 //!
-//! [`subagent_lines`] draws the list for the side panel's Agents tab too.
+//! A subagent silent for a while shows `quiet 20m · ` ahead of its last
+//! activity. [`subagent_lines`] draws the list for the side panel's Agents
+//! tab too.
 
 use crate::activity::subagents::Subagent;
 use crate::ui::detail_modules::{DetailContext, DetailModule};
@@ -76,15 +78,29 @@ pub fn subagent_lines(
             Span::styled(format!("{}{age}", " ".repeat(gap)), theme.dim_style()),
         ]));
         let activity = s.activity.as_deref().unwrap_or("starting…");
-        let detail = if s.agent_type.is_empty() || s.description.is_empty() {
-            activity.to_string()
+        let kind = if s.agent_type.is_empty() || s.description.is_empty() {
+            String::new()
         } else {
-            format!("{} · {activity}", s.agent_type)
+            format!("{} · ", s.agent_type)
         };
-        out.push(Line::from(Span::styled(
-            format!("  {}", truncate(&detail, width.saturating_sub(2))),
-            theme.row_dim_style(),
-        )));
+        // Silent a while: it may be on a slow command, or its session may
+        // have died under it. Say so ahead of what it last did.
+        let quiet = s
+            .quiet_for(now_ms)
+            .map(|ms| format!("quiet {} · ", crate::util::time::format_age(ms)))
+            .unwrap_or_default();
+        let room = width.saturating_sub(2);
+        let quiet_shown = truncate(&quiet, room);
+        let rest = truncate(
+            &format!("{kind}{activity}"),
+            room.saturating_sub(display_width(&quiet_shown)),
+        );
+        let mut spans = vec![Span::raw("  ")];
+        if !quiet_shown.is_empty() {
+            spans.push(Span::styled(quiet_shown, theme.warn_style()));
+        }
+        spans.push(Span::styled(rest, theme.row_dim_style()));
+        out.push(Line::from(spans));
     }
     out
 }
@@ -127,9 +143,12 @@ mod tests {
 
     #[test]
     fn each_subagent_shows_its_task_age_type_and_activity() {
+        // The module reads the clock; recent stamps keep them from reading
+        // as quiet.
+        let t = crate::util::time::now_ms();
         let subs = [
-            sub("Find the poller", "Explore", Some("Grep(fn poll)"), 0),
-            sub("Review", "general-purpose", None, 50_000),
+            sub("Find the poller", "Explore", Some("Grep(fn poll)"), t),
+            sub("Review", "general-purpose", None, t),
         ];
         let mut ctx = stub_context();
         ctx.subagents = Box::leak(Box::new(subs));
@@ -139,6 +158,19 @@ mod tests {
         assert_eq!(out[2], "  Explore · Grep(fn poll)");
         assert_eq!(out[4], "  general-purpose · starting…");
         assert_eq!(out.len(), 5);
+    }
+
+    #[test]
+    fn a_quiet_subagent_says_how_long_before_its_last_activity() {
+        let quiet_ms = crate::activity::subagents::QUIET_AFTER_MS + 5 * 60_000;
+        let subs = [sub(
+            "Build",
+            "general-purpose",
+            Some("Bash(cargo build)"),
+            0,
+        )];
+        let out = text(&subagent_lines(&subs, 60, &Theme::default(), quiet_ms));
+        assert_eq!(out[1], "  quiet 20m · general-purpose · Bash(cargo build)");
     }
 
     #[test]

@@ -26,7 +26,9 @@ The bar holds 1–4 equal-width columns, called containers. Each container stack
   general-purpose · Bash(Run the tests)
 ```
 
-wsx reads this from the files Claude Code keeps beside each session's transcript, so it updates with the dashboard's 2-second poll and needs no setup. A subagent drops off when Claude marks it finished. One whose transcript hasn't changed in 15 minutes is taken for left behind by a session that crashed. Other agent kinds don't report subagents.
+wsx reads this from the files Claude Code keeps beside each session's transcript, so it updates with the dashboard's 2-second poll and needs no setup. A subagent drops off when Claude marks it finished, or when the Claude session it belongs to exits. One whose transcript hasn't changed in 15 minutes shows `quiet 20m · ` (in the warn color) ahead of what it last did: it may be waiting on a slow build or command, or its session may have died without wsx seeing it exit. After 2 hours of silence it's taken for abandoned and dropped. Other agent kinds don't report subagents.
+
+The activity line shows what the subagent last ran or looked up, such as a Bash command's description (or the command itself), a search pattern, a URL or a web search query, just as the dashboard already shows the main agent's current command.
 
 ## Replying
 

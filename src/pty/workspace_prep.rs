@@ -134,11 +134,13 @@ fn strip_wsx_block(source: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(combined)
 }
 
-/// Append `name` to the gitdir's `info/exclude` if not already present.
+/// Append `name` to the repo's `info/exclude` if not already present.
 ///
 /// `<worktree>/.git` may be either a directory (normal clone) or a file
-/// containing `gitdir: <path>` (git worktree). We follow the file to the
-/// real gitdir before writing.
+/// containing `gitdir: <path>` (git worktree). For a linked worktree git
+/// reads `info/exclude` only from the *common* dir named by the gitdir's
+/// `commondir` file, never the per-worktree gitdir, so the entry goes there
+/// and applies to every worktree of the repo.
 ///
 /// Best-effort: silently no-ops on any IO/parse error or if `.git/` is
 /// absent. `info/exclude` is per-gitdir-local and never committed.
@@ -147,6 +149,10 @@ fn ensure_git_exclude(worktree: &Path, name: &str) {
     let gitdir = match resolve_gitdir(&dot_git, worktree) {
         Some(p) => p,
         None => return,
+    };
+    let gitdir = match std::fs::read_to_string(gitdir.join("commondir")) {
+        Ok(rel) if !rel.trim().is_empty() => gitdir.join(rel.trim()),
+        _ => gitdir,
     };
     let info_dir = gitdir.join("info");
     if !info_dir.exists() && std::fs::create_dir_all(&info_dir).is_err() {
@@ -483,6 +489,37 @@ mod tests {
             let exclude = tmp.path().join(rel).join("info/exclude");
             let contents = read(&exclude);
             assert!(contents.contains("AGENTS.md"));
+        }
+
+        /// git ignores a linked worktree's own `info/exclude`; only the common
+        /// dir's is read. Checked against real git, not a hand-built layout.
+        #[test]
+        fn linked_worktree_entry_lands_where_git_reads_it() {
+            let git = |dir: &std::path::Path, args: &[&str]| {
+                let out = std::process::Command::new("git")
+                    .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                    .args(args)
+                    .current_dir(dir)
+                    .output()
+                    .unwrap();
+                assert!(out.status.success(), "{out:?}");
+                String::from_utf8(out.stdout).unwrap()
+            };
+            let tmp = tempfile::tempdir().unwrap();
+            let repo = tmp.path().join("repo");
+            fs::create_dir_all(&repo).unwrap();
+            git(&repo, &["init", "-q"]);
+            git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+            let wt = tmp.path().join("wt");
+            git(&repo, &["worktree", "add", "-q", wt.to_str().unwrap()]);
+
+            fs::write(wt.join("AGENTS.md"), "x").unwrap();
+            super::ensure_git_exclude(&wt, "AGENTS.md");
+            assert_eq!(
+                git(&wt, &["status", "--porcelain"]),
+                "",
+                "AGENTS.md must be hidden"
+            );
         }
 
         #[test]

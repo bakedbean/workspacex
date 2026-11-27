@@ -33,7 +33,7 @@ Values are validated the same way as `wsx config set`. Dashboard sort, pin, and 
 | Key | Default | Effect |
 |---|---|---|
 | `branch_prefix` | unset | Names new branches `<prefix>/<workspace>`. Unset, the branch is the bare workspace name. |
-| `coding_agent` | `claude` | Agent for new workspaces: `claude`, `pi`, `hermes`, `codex` or `omp`. See [Coding agents](../agents/coding-agents.md). |
+| `coding_agent` | `claude` | Agent for new workspaces: `claude`, `pi`, `hermes`, `codex`, `omp` or `agy`. See [Coding agents](../agents/coding-agents.md). |
 
 ## Agent sessions
 

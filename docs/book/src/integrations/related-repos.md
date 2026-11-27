@@ -9,7 +9,7 @@ wsx repo edit-related-repos backend      # edit the list in $EDITOR
 
 The value is a comma-separated list of registered repo names. When a workspace in `backend` starts its agent, wsx:
 
-- passes each related repo's source path with `--add-dir` (Claude Code and oh-my-pi);
+- passes each related repo's source path with `--add-dir` (Claude Code, oh-my-pi, and Antigravity CLI);
 - tells the agent to treat those paths as read-only;
 - tells the agent that when a related repo needs changes, it should create a workspace there with `wsx workspace create`, hand the task to that workspace's agent with `wsx agent send`, and tell you which workspace owns it.
 

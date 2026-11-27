@@ -1,14 +1,14 @@
 # Introduction
 
-wsx is a terminal UI that runs Claude Code, Pi, Hermes, Codex, or oh-my-pi
-sessions in their own git worktrees. Use it to launch, watch, and steer many
+wsx is a terminal UI that runs Claude Code, Pi, Hermes, Codex, oh-my-pi, or
+Antigravity sessions in their own git worktrees. Use it to launch, watch, and steer many
 agent sessions in parallel from one dashboard, including several agents
 working together in one workspace.
 
 ## Key features
 
 - **Parallel sessions in worktrees**: each workspace gets its own branch, worktree, and agent session. See [Dashboard](dashboard/index.md).
-- **Multiple coding agents**: pick Claude, Pi, Hermes, Codex, or oh-my-pi per workspace. See [Coding agents](agents/coding-agents.md).
+- **Multiple coding agents**: pick Claude, Pi, Hermes, Codex, oh-my-pi, or Antigravity CLI per workspace. See [Coding agents](agents/coding-agents.md).
 - **Multi-agent workspaces**: run several agents in one worktree and have them message each other. See [Multi-agent workspaces](agents/multi-agent-workspaces.md).
 - **Attention alerts**: status glyphs, a terminal bell, and a live activity line show which sessions need you. See [Status indicators](dashboard/status-indicators.md).
 - **Agent status and recaps**: agents report their status and a goal/state/next recap with `wsx status` and `wsx recap`. See [Status and recap](agents/status-and-recap.md).

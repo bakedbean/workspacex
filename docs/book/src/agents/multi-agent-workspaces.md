@@ -118,6 +118,7 @@ When you quit and restart wsx, each agent resumes its own conversation, even whe
 | `codex`  | `codex resume <id>`, after the agent's first turn ends                            |
 | `pi`     | `pi --session-id <id>`. Follows `/new`, `/resume`, and forks.                     |
 | `omp`    | `omp --resume=<file>`. Follows `/new`.                                            |
+| `agy`    | `agy --conversation <id>`, with the id from wsx's status hooks                    |
 | `hermes` | The primary resumes its newest session. Added agents start fresh.                 |
 
 - Until wsx has an agent's session id, the primary uses its harness's "continue latest" and an added agent starts fresh.

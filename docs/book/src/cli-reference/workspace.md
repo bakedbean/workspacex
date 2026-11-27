@@ -17,7 +17,7 @@ Creates a branch and worktree in `<repo>`, like `n` on the dashboard.
 | `--shared` | Run the workspace's agents under tmux. See [Shared workspaces](../integrations/shared-workspaces.md). |
 | `--start` | Have the running dashboard start the agents in tmux, wait until they're live, and print the sessions to attach to. Implies `--shared`. |
 | `--json` | With `--start` only: print the workspace record on stdout, even when the start fails. |
-| `--agent <kind>` | `claude`, `pi`, `hermes`, `codex` or `omp`. Overrides the `coding_agent` setting. See [Coding agents](../agents/coding-agents.md). |
+| `--agent <kind>` | `claude`, `pi`, `hermes`, `codex`, `omp` or `agy`. Overrides the `coding_agent` setting. See [Coding agents](../agents/coding-agents.md). |
 | `--prompt <text>` | Queue a first task for the primary agent, like an immediate [`wsx agent send`](agent.md#wsx-agent-send). |
 | `--continues <slug>` | Join `<slug>`'s [series](#wsx-series-show) as its next part, starting a series if `<slug>` isn't in one. `<slug>` must be a workspace in the same repo. |
 

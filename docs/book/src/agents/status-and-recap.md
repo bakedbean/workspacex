@@ -35,15 +35,16 @@ See [`wsx status set`](../cli-reference/status-recap-context.md#wsx-status-set) 
 
 ## Automatic status from hooks
 
-Claude and Codex report status without the agent's help. wsx wires their lifecycle events to `wsx status from-hook` (Claude) or Codex's `notify`.
+Claude, Codex, and agy report status without the agent's help. wsx wires their lifecycle events to `wsx status from-hook` (Claude, agy) or Codex's `notify`.
 
 | Event                                              | Status    |
 | -------------------------------------------------- | --------- |
-| You submit a prompt (Claude)                       | `working` |
+| You submit a prompt (Claude, agy)                  | `working` |
 | Permission prompt, `AskUserQuestion`, or plan approval (Claude) | `blocked` |
 | Claude's idle notification                         | `waiting` |
-| Turn ends with a question (ends in `?`)            | `blocked` |
-| Turn ends while subagents or shell tasks run (Claude) | `busy` |
+| Turn ends with a question (ends in `?`; not agy)   | `blocked` |
+| Turn ends on an error (agy)                        | `blocked` |
+| Turn ends while subagents or shell tasks run (Claude, agy) | `busy` |
 | Turn ends otherwise                                | `done`    |
 
 A status the agent sets itself holds through the end of that turn:

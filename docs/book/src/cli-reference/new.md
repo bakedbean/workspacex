@@ -11,7 +11,7 @@ With no repo it asks for one (most recently used first; Enter picks the first) a
 | Flag | Meaning |
 | --- | --- |
 | `--no-yolo` | Start restricted. The default is yolo, unlike `wsx workspace create`. Run inside a workspace, it follows that workspace's mode. |
-| `--agent <kind>` | claude, pi, hermes, codex or omp. Defaults to the enclosing workspace's agent, else `coding_agent`. |
+| `--agent <kind>` | claude, pi, hermes, codex, omp or agy. Defaults to the enclosing workspace's agent, else `coding_agent`. |
 
 ## What it does
 

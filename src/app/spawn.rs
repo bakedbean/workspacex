@@ -107,7 +107,7 @@ pub(crate) fn recorded_resume_id(
         AgentKind::Pi => pi_session_exists(worktree, id),
         AgentKind::Codex => codex_session_exists(id),
         AgentKind::Omp => omp_session_exists(id),
-        AgentKind::Hermes => false,
+        AgentKind::Hermes | AgentKind::Agy => false,
     };
     on_disk.then(|| id.to_string())
 }

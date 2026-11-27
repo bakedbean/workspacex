@@ -1,7 +1,7 @@
 //! Per-agent command construction.
 //!
 //! Builds the `CommandBuilder` for each [`AgentKind`]
-//! (claude/pi/hermes/codex/omp)
+//! (claude/pi/hermes/codex/omp/agy)
 //! from a worktree path + [`SpawnMode`], including rename system-prompt
 //! rendering and the injected-prompt composition shared by the AGENTS.md and
 //! Codex `-c` delivery paths. Pure functions over paths/modes — no `Session`
@@ -823,6 +823,22 @@ pub fn build_omp_command(
         cmd.arg(parts.join("\n\n"));
     }
 
+    cmd
+}
+
+/// Build a `CommandBuilder` for Google's Antigravity CLI (`agy`, or whatever
+/// `WSX_AGY_BIN` points to) inside `cwd`. Inherits the current process env.
+pub fn build_agy_command(
+    cwd: &Path,
+    _mode: &SpawnMode,
+    _remote: crate::agent::remote_control::RemoteOpts,
+) -> CommandBuilder {
+    let bin = std::env::var("WSX_AGY_BIN").unwrap_or_else(|_| "agy".to_string());
+    let mut cmd = CommandBuilder::new(bin);
+    cmd.cwd(cwd);
+    for (k, v) in std::env::vars() {
+        cmd.env(k, v);
+    }
     cmd
 }
 

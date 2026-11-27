@@ -10,6 +10,7 @@ const AGENT_PI: Color = Color::Rgb(0xa9, 0x7b, 0xd6); // purple
 const AGENT_HERMES: Color = Color::Rgb(0xf0, 0xd0, 0x66); // yellow
 const AGENT_CODEX: Color = Color::Rgb(0x5b, 0x9d, 0xe0); // blue
 const AGENT_OMP: Color = Color::Rgb(0x5f, 0xc9, 0x8e); // green
+const AGENT_AGY: Color = Color::Rgb(0xe0, 0x6c, 0x9f); // pink
 
 /// Brand accent — the electric blue of the "x" and cursor block in the
 /// "workspace x" wordmark. Matches the site's `--accent` token (#5ab0ff).
@@ -306,6 +307,7 @@ impl Theme {
             "agent_hermes" => AGENT_HERMES,
             "agent_codex" => AGENT_CODEX,
             "agent_omp" => AGENT_OMP,
+            "agent_agy" => AGENT_AGY,
             _ => return None,
         })
     }
@@ -461,6 +463,7 @@ impl Theme {
             AgentKind::Hermes => AGENT_HERMES,
             AgentKind::Codex => AGENT_CODEX,
             AgentKind::Omp => AGENT_OMP,
+            AgentKind::Agy => AGENT_AGY,
         };
         Style::default().fg(fg)
     }
@@ -1159,6 +1162,10 @@ mod tests {
         assert_eq!(
             t.agent_style(AgentKind::Codex).fg,
             Some(Color::Rgb(0x5b, 0x9d, 0xe0))
+        );
+        assert_eq!(
+            t.agent_style(AgentKind::Agy).fg,
+            Some(Color::Rgb(0xe0, 0x6c, 0x9f))
         );
     }
 

@@ -78,7 +78,7 @@ pub fn for_agent(agent: AgentKind) -> &'static dyn StatusIntegration {
         AgentKind::Claude => &CLAUDE,
         AgentKind::Codex => &CODEX,
         AgentKind::Pi => &PI,
-        AgentKind::Hermes | AgentKind::Omp => &NOOP,
+        AgentKind::Hermes | AgentKind::Omp | AgentKind::Agy => &NOOP,
     }
 }
 

@@ -689,6 +689,7 @@ pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
         AgentKind::Hermes => has_prior_hermes_session(worktree),
         AgentKind::Codex => has_prior_codex_session(worktree),
         AgentKind::Omp => has_prior_omp_session(worktree),
+        AgentKind::Agy => false,
     }
 }
 

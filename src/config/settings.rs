@@ -88,7 +88,7 @@ pub const SETTINGS: &[SettingDef] = &[
     choice(
         "coding_agent",
         "General",
-        &["claude", "pi", "hermes", "codex", "omp"],
+        &["claude", "pi", "hermes", "codex", "omp", "agy"],
         "Agent started in new workspaces.",
     ),
     // Agent sessions

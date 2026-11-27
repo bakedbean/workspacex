@@ -713,13 +713,17 @@ fn omp_ready(screen: &vt100::Screen) -> bool {
 /// its composer inline: an input row starting `>` between two full-width
 /// `─` rules, the status line under them. Its directory-trust dialog is also
 /// on the alternate screen with the cursor hidden, and marks its selected row
-/// with the same `>`, so both halves of the screen-state check matter even
-/// though the spawn's `--settings` trust normally keeps that dialog away.
+/// with the same `>`; the hidden cursor is what rejects both, even though the
+/// spawn's `--settings` trust normally keeps that dialog away.
+///
+/// The alternate screen itself is deliberately not checked: a shared
+/// workspace views agy through `tmux attach`, whose client holds the outer
+/// alternate screen for the whole session, so the check would never pass.
 ///
 /// Matched on the rule–input–rule shape rather than wording; the bottom-half
 /// restriction keeps rules inside rendered markdown from counting.
 fn agy_ready(screen: &vt100::Screen) -> bool {
-    if screen.alternate_screen() || screen.hide_cursor() {
+    if screen.hide_cursor() {
         return false;
     }
     let (rows, cols) = screen.size();
@@ -2124,6 +2128,22 @@ mod tests {
             ready_for_input(AgentKind::Agy, p.screen()),
             "agy is ready once its rule-input-rule composer is drawn"
         );
+
+        // Seen through `tmux attach` (shared workspaces) the same composer
+        // sits on the outer alternate screen; it is still a composer.
+        let mut p = Parser::new(24, 80, 1000);
+        // agy's own `ESC[?1049l` never reaches the tmux client's screen.
+        let inline = boot_fixture!("agy-composer.bin");
+        let leave = b"\x1b[?1049l";
+        let at = inline
+            .windows(leave.len())
+            .position(|w| w == leave)
+            .unwrap();
+        p.process(b"\x1b[?1049h");
+        p.process(&inline[..at]);
+        p.process(&inline[at + leave.len()..]);
+        assert!(p.screen().alternate_screen());
+        assert!(ready_for_input(AgentKind::Agy, p.screen()));
     }
 
     #[test]

@@ -612,6 +612,8 @@ async fn await_ack(rx: tokio::sync::oneshot::Receiver<()>, timeout_ms: u64) -> b
 /// - **Pi** also renders inline: see `pi_ready`.
 /// - **omp** renders inline too, and spends its first ~557ms painting a
 ///   welcome splash into a screen with no composer at all. See `omp_ready`.
+/// - **agy** spends its first ~650ms on an alternate-screen sign-in splash,
+///   then paints its composer inline. See `agy_ready`.
 /// - **Hermes** has no signal here, and that is a gap, not a decision — the
 ///   binary is not installed on the machine this was investigated on, so there
 ///   was no cold boot to read a marker off, and inventing one from guesswork is
@@ -623,7 +625,8 @@ pub(crate) fn ready_for_input(agent: AgentKind, screen: &vt100::Screen) -> bool 
         AgentKind::Claude => screen.alternate_screen(),
         AgentKind::Codex => codex_ready(screen),
         AgentKind::Pi => pi_ready(screen),
-        AgentKind::Hermes | AgentKind::Agy => true,
+        AgentKind::Hermes => true,
+        AgentKind::Agy => agy_ready(screen),
         AgentKind::Omp => omp_ready(screen),
     }
 }
@@ -700,6 +703,35 @@ fn omp_ready(screen: &vt100::Screen) -> bool {
     };
     (rows / 2..rows.saturating_sub(1))
         .any(|row| framed(row, '\u{256d}', '\u{256e}') && framed(row + 1, '\u{2570}', '\u{256f}'))
+}
+
+/// agy is ready when its composer is drawn inline with the cursor visible.
+///
+/// Read off a real cold boot (`tests/fixtures/agent-boot/agy-*.bin`, agy
+/// 1.5.18). agy opens on the alternate screen with the cursor hidden for a
+/// sign-in spinner (t=300–899ms), then leaves it (`ESC[?1049l`) and paints
+/// its composer inline: an input row starting `>` between two full-width
+/// `─` rules, the status line under them. Its directory-trust dialog is also
+/// on the alternate screen with the cursor hidden, and marks its selected row
+/// with the same `>`, so both halves of the screen-state check matter even
+/// though the spawn's `--settings` trust normally keeps that dialog away.
+///
+/// Matched on the rule–input–rule shape rather than wording; the bottom-half
+/// restriction keeps rules inside rendered markdown from counting.
+fn agy_ready(screen: &vt100::Screen) -> bool {
+    if screen.alternate_screen() || screen.hide_cursor() {
+        return false;
+    }
+    let (rows, cols) = screen.size();
+    let min_run = usize::from(cols / 2).max(1);
+    let line = |row: u16| screen.contents_between(row, 0, row, cols);
+    let rule = |row: u16| {
+        let l = line(row);
+        let t = l.trim();
+        t.chars().count() >= min_run && t.chars().all(|c| c == '\u{2500}')
+    };
+    (rows / 2..rows.saturating_sub(2))
+        .any(|r| rule(r) && line(r + 1).trim_start().starts_with('>') && rule(r + 2))
 }
 
 /// Pi is ready when the chrome around its composer is on screen.
@@ -817,6 +849,11 @@ impl Session {
 /// form was never control-safe either. Live checks of this path live in
 /// `docs/manual-tests/agent-send-long-body.md`.
 ///
+/// agy takes the wrapper too, measured over a real PTY against agy 1.5.18: a
+/// ~4 KB body between paste markers arrived whole and submitted on the CR,
+/// while the same body written plain stalled the composer. agy renders a
+/// paste inline as text, not as a placeholder.
+///
 /// omp is the one where the wrapper would actively hurt, and it was checked
 /// rather than assumed. Its editor runs its own `BracketedPasteHandler` and
 /// turns a payload it accepts as a paste into a `[Paste #N]` marker, so
@@ -827,16 +864,14 @@ impl Session {
 pub(crate) fn submit_writes(agent: AgentKind, text: &str) -> (Vec<u8>, Vec<u8>) {
     let enter = b"\r".to_vec();
     match agent {
-        AgentKind::Codex | AgentKind::Claude => {
+        AgentKind::Codex | AgentKind::Claude | AgentKind::Agy => {
             let mut body = Vec::with_capacity(text.len() + 12);
             body.extend_from_slice(b"\x1b[200~");
             body.extend_from_slice(text.as_bytes());
             body.extend_from_slice(b"\x1b[201~");
             (body, enter)
         }
-        AgentKind::Pi | AgentKind::Hermes | AgentKind::Omp | AgentKind::Agy => {
-            (text.as_bytes().to_vec(), enter)
-        }
+        AgentKind::Pi | AgentKind::Hermes | AgentKind::Omp => (text.as_bytes().to_vec(), enter),
     }
 }
 
@@ -1914,6 +1949,15 @@ mod tests {
     }
 
     #[test]
+    fn submit_writes_wraps_agy_in_bracketed_paste() {
+        // Measured: a ~4 KB plain body stalled agy's composer; pasted it
+        // arrived whole and submitted on the separate CR.
+        let (body, enter) = submit_writes(AgentKind::Agy, "hello\nworld");
+        assert_eq!(body, b"\x1b[200~hello\nworld\x1b[201~".to_vec());
+        assert_eq!(enter, b"\r".to_vec());
+    }
+
+    #[test]
     fn submit_writes_keeps_other_agents_plain() {
         // Pi/Hermes/omp submit on a plain text + CR; no bracketed paste so
         // their proven-working behavior is untouched. omp additionally must
@@ -2062,6 +2106,38 @@ mod tests {
             ready_for_input(AgentKind::Omp, p.screen()),
             "omp is ready once its composer frame is drawn"
         );
+    }
+
+    #[test]
+    fn agy_is_not_ready_mid_boot_and_is_ready_once_its_composer_paints() {
+        // Real capture: agy holds the alternate screen with the cursor hidden
+        // for a sign-in spinner, then drops back and paints its composer
+        // inline at t=949ms.
+        let mut p = Parser::new(24, 80, 1000);
+        p.process(boot_fixture!("agy-preboot.bin"));
+        assert!(
+            !ready_for_input(AgentKind::Agy, p.screen()),
+            "agy's sign-in splash has no composer"
+        );
+        p.process(boot_fixture!("agy-composer.bin"));
+        assert!(
+            ready_for_input(AgentKind::Agy, p.screen()),
+            "agy is ready once its rule-input-rule composer is drawn"
+        );
+    }
+
+    #[test]
+    fn agy_is_not_ready_while_its_trust_dialog_holds_the_screen() {
+        // Real capture of agy in an untrusted directory (no `--settings`).
+        let mut p = Parser::new(24, 80, 1000);
+        p.process(boot_fixture!("agy-trust-dialog.bin"));
+        let screen = p.screen().contents();
+        assert!(
+            screen.contains("Do you trust the contents of this project?")
+                && screen.contains("> Yes, I trust this folder"),
+            "fixture should end on the trust dialog: {screen:?}"
+        );
+        assert!(!ready_for_input(AgentKind::Agy, p.screen()));
     }
 
     #[test]

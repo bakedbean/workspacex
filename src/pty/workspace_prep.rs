@@ -7,6 +7,11 @@
 //! Pure side-effecting helpers over a worktree path + SpawnMode;
 //! `prepare_*_workspace` are re-exported from `pty::session` for the spawn path.
 //!
+//! agy gets the same treatment through a different file: it has no
+//! `--append-system-prompt`, but loads `.agents/rules/*.md` marked
+//! `trigger: always_on`, so wsx owns a whole rule file there instead of a
+//! block inside a shared one (`prepare_agy_workspace`).
+//!
 //! Codex used to share this mechanism. It no longer does — its instructions go
 //! through `-c developer_instructions` in `pty::command`, so
 //! `prepare_codex_workspace` writes nothing to the worktree.
@@ -206,9 +211,110 @@ pub(crate) fn prepare_codex_workspace(_cwd: &Path, _mode: &SpawnMode) {
     crate::agent::codex_commands::sync_claude_commands_for_codex();
 }
 
+/// Worktree-relative path of the always-on rule file wsx owns for agy.
+pub(crate) const AGY_RULE_PATH: &str = ".agents/rules/wsx.md";
+
+/// The body of agy's wsx rule file, or `None` when there is nothing to say.
+///
+/// agy reads `AGENTS.md` / `GEMINI.md` natively but not `CLAUDE.md`, so a
+/// repo whose only project instructions are a `CLAUDE.md` gets it pulled in
+/// with agy's `@[label](path)` include rather than copied (a copy would go
+/// stale as the repo's file changes).
+fn agy_rule_body(cwd: &Path, mode: &SpawnMode) -> Option<String> {
+    let injected = compose_injected_prompt(mode);
+    let claude_md = cwd.join("CLAUDE.md");
+    let include =
+        (claude_md.is_file() && !cwd.join("AGENTS.md").exists() && !cwd.join("GEMINI.md").exists())
+            .then(|| format!("@[CLAUDE.md]({})", claude_md.display()));
+    let parts: Vec<String> = [injected, include].into_iter().flatten().collect();
+    if parts.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "---\ntrigger: always_on\n---\n<!-- Written by wsx on every agy spawn; edits are overwritten. -->\n\n{}\n",
+        parts.join("\n\n")
+    ))
+}
+
+/// Prepare a worktree for an agy spawn: (re)write wsx's always-on rule file
+/// and hide it from `git status`, or remove it when there is nothing to
+/// inject so a disabled doctrine doesn't linger. Best-effort like the Hermes
+/// path: agy still launches if any of this fails.
+pub(crate) fn prepare_agy_workspace(cwd: &Path, mode: &SpawnMode) {
+    let path = cwd.join(AGY_RULE_PATH);
+    match agy_rule_body(cwd, mode) {
+        Some(body) => {
+            if std::fs::read_to_string(&path).ok().as_deref() != Some(body.as_str()) {
+                if let Some(dir) = path.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                let _ = std::fs::write(&path, body);
+            }
+            ensure_git_exclude(cwd, AGY_RULE_PATH);
+        }
+        None => {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod agy_rule_file {
+        use super::super::{AGY_RULE_PATH, prepare_agy_workspace};
+        use crate::pty::session::SpawnMode;
+        use std::fs;
+
+        fn mode(doctrine: Option<&str>) -> SpawnMode {
+            SpawnMode::Continue {
+                custom_instructions: None,
+                doctrine: doctrine.map(str::to_string),
+                additional_dirs: vec![],
+                yolo: false,
+                resume_session_id: None,
+            }
+        }
+
+        #[test]
+        fn writes_always_on_rule_and_excludes_it() {
+            let tmp = tempfile::tempdir().unwrap();
+            fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
+            prepare_agy_workspace(tmp.path(), &mode(Some("DOCTRINE")));
+            let body = fs::read_to_string(tmp.path().join(AGY_RULE_PATH)).unwrap();
+            assert!(body.starts_with("---\ntrigger: always_on\n---\n"), "{body}");
+            assert!(body.contains("DOCTRINE"));
+            let exclude = fs::read_to_string(tmp.path().join(".git/info/exclude")).unwrap();
+            assert!(exclude.lines().any(|l| l == AGY_RULE_PATH), "{exclude}");
+        }
+
+        #[test]
+        fn removes_rule_when_nothing_to_inject() {
+            let tmp = tempfile::tempdir().unwrap();
+            prepare_agy_workspace(tmp.path(), &mode(Some("DOCTRINE")));
+            assert!(tmp.path().join(AGY_RULE_PATH).exists());
+            prepare_agy_workspace(tmp.path(), &mode(None));
+            assert!(!tmp.path().join(AGY_RULE_PATH).exists());
+        }
+
+        #[test]
+        fn includes_claude_md_only_when_agy_has_no_native_rules_file() {
+            let tmp = tempfile::tempdir().unwrap();
+            fs::write(tmp.path().join("CLAUDE.md"), "project rules").unwrap();
+            prepare_agy_workspace(tmp.path(), &mode(None));
+            let body = fs::read_to_string(tmp.path().join(AGY_RULE_PATH)).unwrap();
+            let include = format!("@[CLAUDE.md]({})", tmp.path().join("CLAUDE.md").display());
+            assert!(body.contains(&include), "{body}");
+
+            fs::write(tmp.path().join("AGENTS.md"), "native").unwrap();
+            prepare_agy_workspace(tmp.path(), &mode(None));
+            assert!(
+                !tmp.path().join(AGY_RULE_PATH).exists(),
+                "AGENTS.md already reaches agy; nothing left to write"
+            );
+        }
+    }
 
     mod hermes_git_exclude {
         use std::fs;

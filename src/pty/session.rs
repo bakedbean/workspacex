@@ -42,7 +42,9 @@ pub use crate::pty::command::{
 
 // AGENTS.md / git-exclude / spawn-prep plumbing now lives in `workspace_prep`;
 // `prepare_*_workspace` are called by `spawn_session` below.
-pub(crate) use crate::pty::workspace_prep::{prepare_codex_workspace, prepare_hermes_workspace};
+pub(crate) use crate::pty::workspace_prep::{
+    prepare_agy_workspace, prepare_codex_workspace, prepare_hermes_workspace,
+};
 
 /// True if `err`'s `Display` output looks like portable-pty's
 /// "binary not found on PATH" error.
@@ -984,7 +986,10 @@ pub fn spawn_session(
             let overlay = crate::agent::omp_config::ensure_overlay_default();
             build_omp_command(cwd, &mode, remote, overlay.as_deref())
         }
-        AgentKind::Agy => build_agy_command(cwd, &mode, remote),
+        AgentKind::Agy => {
+            prepare_agy_workspace(cwd, &mode);
+            build_agy_command(cwd, &mode, remote)
+        }
     };
     if let Some(id) = identity {
         child_cmd.env("WSX_WORKSPACE_ID", id.workspace_id.to_string());

@@ -92,7 +92,7 @@ wsx runs the binary of the same name from `PATH`. Override the path with `WSX_<A
 - agy has no flag for extra instructions, so wsx writes them to `.agents/rules/wsx.md` as an always-on rule on each start, and deletes the file when there is nothing to write.
   - agy reads `AGENTS.md` and `GEMINI.md` but not `CLAUDE.md`. In a repo that has only a `CLAUDE.md`, the rule includes it by path.
   - The file is added to `.git/info/exclude`.
-- Status comes from agy hooks. wsx adds a `wsx-status` entry to `.agents/hooks.json` next to any hooks the repo already has. If wsx created the file, it is added to `.git/info/exclude`. A tracked `hooks.json` shows as modified. A `hooks.json` that isn't valid JSON is left alone, and status then comes only from `wsx status set`.
+- Status comes from agy hooks. wsx adds a `wsx-status` entry to `.agents/hooks.json` next to any hooks the repo already has, and adds the file to `.git/info/exclude`. A tracked `hooks.json` shows as modified. A `hooks.json` that isn't valid JSON is left alone, and status then comes only from `wsx status set`.
 - Each agy agent resumes its own conversation with `--conversation <id>`.
 - Yolo passes `--dangerously-skip-permissions`.
 - `WSX_AGY_MODEL` sets the model for new conversations.

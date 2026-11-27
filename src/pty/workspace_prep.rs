@@ -248,8 +248,9 @@ pub(crate) const AGY_HOOKS_PATH: &str = ".agents/hooks.json";
 /// Merge wsx's status hook entry into `.agents/hooks.json`, keyed by
 /// `agent::status::agy::HOOK_NAME` so a repo's own named hooks stay as they
 /// are. A file that isn't a JSON object is left alone (status then falls back
-/// to tiers 1 and 3) rather than overwritten. Only a file wsx created is
-/// hidden from `git status`; a tracked one shows the added key.
+/// to tiers 1 and 3) rather than overwritten. The path is always excluded:
+/// that hides an untracked file and is a no-op for a tracked one, which shows
+/// the added key as a modification.
 fn write_agy_hooks(cwd: &Path, wsx_bin: &Path) {
     use crate::agent::status::agy::{HOOK_NAME, hook_entry};
     let path = cwd.join(AGY_HOOKS_PATH);
@@ -265,15 +266,15 @@ fn write_agy_hooks(cwd: &Path, wsx_bin: &Path) {
     let Ok(new) = serde_json::to_string_pretty(&serde_json::Value::Object(root)) else {
         return;
     };
-    if existing.as_deref() == Some(new.as_str()) {
-        return;
+    if existing.as_deref() != Some(new.as_str()) {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if std::fs::write(&path, new).is_err() {
+            return;
+        }
     }
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if std::fs::write(&path, new).is_ok() && existing.is_none() {
-        ensure_git_exclude(cwd, AGY_HOOKS_PATH);
-    }
+    ensure_git_exclude(cwd, AGY_HOOKS_PATH);
 }
 
 /// Prepare a worktree for an agy spawn: wire the status hooks, then (re)write

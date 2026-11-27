@@ -21,9 +21,9 @@ pub use crate::pty::agent_kind::AgentKind;
 #[cfg(test)]
 pub use crate::pty::session_detect::pi_session_dir_for_test;
 pub use crate::pty::session_detect::{
-    CrumbEvidence, OmpCrumbSnapshot, claude_session_exists, codex_session_exists,
-    newest_pi_session_id, omp_breadcrumb_session_file, omp_crumb_snapshot, omp_session_exists,
-    omp_terminal_id, pi_session_exists, pi_session_id_is_valid,
+    CrumbEvidence, OmpCrumbSnapshot, agy_conversation_exists, claude_session_exists,
+    codex_session_exists, newest_pi_session_id, omp_breadcrumb_session_file, omp_crumb_snapshot,
+    omp_session_exists, omp_terminal_id, pi_session_exists, pi_session_id_is_valid,
 };
 pub(crate) use crate::pty::session_detect::{
     claude_session_file, codex_session_file, pi_session_file,

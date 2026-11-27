@@ -236,11 +236,47 @@ fn agy_rule_body(cwd: &Path, mode: &SpawnMode) -> Option<String> {
     ))
 }
 
-/// Prepare a worktree for an agy spawn: (re)write wsx's always-on rule file
-/// and hide it from `git status`, or remove it when there is nothing to
-/// inject so a disabled doctrine doesn't linger. Best-effort like the Hermes
-/// path: agy still launches if any of this fails.
+/// Worktree-relative path of agy's hooks file.
+pub(crate) const AGY_HOOKS_PATH: &str = ".agents/hooks.json";
+
+/// Merge wsx's status hook entry into `.agents/hooks.json`, keyed by
+/// `agent::status::agy::HOOK_NAME` so a repo's own named hooks stay as they
+/// are. A file that isn't a JSON object is left alone (status then falls back
+/// to tiers 1 and 3) rather than overwritten. Only a file wsx created is
+/// hidden from `git status`; a tracked one shows the added key.
+fn write_agy_hooks(cwd: &Path, wsx_bin: &Path) {
+    use crate::agent::status::agy::{HOOK_NAME, hook_entry};
+    let path = cwd.join(AGY_HOOKS_PATH);
+    let existing = std::fs::read_to_string(&path).ok();
+    let mut root = match existing.as_deref() {
+        None => serde_json::Map::new(),
+        Some(text) => match serde_json::from_str::<serde_json::Value>(text) {
+            Ok(serde_json::Value::Object(map)) => map,
+            _ => return,
+        },
+    };
+    root.insert(HOOK_NAME.to_string(), hook_entry(wsx_bin));
+    let Ok(new) = serde_json::to_string_pretty(&serde_json::Value::Object(root)) else {
+        return;
+    };
+    if existing.as_deref() == Some(new.as_str()) {
+        return;
+    }
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if std::fs::write(&path, new).is_ok() && existing.is_none() {
+        ensure_git_exclude(cwd, AGY_HOOKS_PATH);
+    }
+}
+
+/// Prepare a worktree for an agy spawn: wire the status hooks, then (re)write
+/// wsx's always-on rule file and hide it from `git status`, or remove it when
+/// there is nothing to inject so a disabled doctrine doesn't linger.
+/// Best-effort like the Hermes path: agy still launches if any of this fails.
 pub(crate) fn prepare_agy_workspace(cwd: &Path, mode: &SpawnMode) {
+    let wsx_bin = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("wsx"));
+    write_agy_hooks(cwd, &wsx_bin);
     let path = cwd.join(AGY_RULE_PATH);
     match agy_rule_body(cwd, mode) {
         Some(body) => {
@@ -261,6 +297,41 @@ pub(crate) fn prepare_agy_workspace(cwd: &Path, mode: &SpawnMode) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod agy_hooks_file {
+        use super::super::{AGY_HOOKS_PATH, write_agy_hooks};
+        use std::fs;
+        use std::path::Path;
+
+        #[test]
+        fn creates_hooks_file_and_excludes_it() {
+            let tmp = tempfile::tempdir().unwrap();
+            fs::create_dir_all(tmp.path().join(".git/info")).unwrap();
+            write_agy_hooks(tmp.path(), Path::new("/bin/wsx"));
+            let v: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(tmp.path().join(AGY_HOOKS_PATH)).unwrap())
+                    .unwrap();
+            assert!(v["wsx-status"]["Stop"].is_array(), "{v}");
+            let exclude = fs::read_to_string(tmp.path().join(".git/info/exclude")).unwrap();
+            assert!(exclude.lines().any(|l| l == AGY_HOOKS_PATH), "{exclude}");
+        }
+
+        #[test]
+        fn merges_beside_a_repos_own_hooks_and_leaves_garbage_alone() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join(AGY_HOOKS_PATH);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, r#"{"lint": {"PostToolUse": []}}"#).unwrap();
+            write_agy_hooks(tmp.path(), Path::new("/bin/wsx"));
+            let v: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            assert!(v["lint"].is_object() && v["wsx-status"].is_object(), "{v}");
+
+            fs::write(&path, "not json").unwrap();
+            write_agy_hooks(tmp.path(), Path::new("/bin/wsx"));
+            assert_eq!(fs::read_to_string(&path).unwrap(), "not json");
+        }
+    }
 
     mod agy_rule_file {
         use super::super::{AGY_RULE_PATH, prepare_agy_workspace};

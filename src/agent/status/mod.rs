@@ -5,8 +5,11 @@
 //!
 //! To add Codex / Pi / Hermes deterministic reporting: add a module here, impl
 //! `StatusIntegration`, and route it in `for_agent`. Call its `spawn_wiring`
-//! from that agent's spawn builder. Nothing else changes.
+//! from that agent's spawn builder. Nothing else changes. agy is the exception
+//! to `spawn_wiring`: its hooks live in a file, written by its workspace prep
+//! from `agy::hook_entry`.
 
+pub mod agy;
 pub mod claude;
 pub mod codex;
 pub mod pi;
@@ -61,10 +64,11 @@ impl StatusIntegration for NoopStatus {
 static CLAUDE: claude::ClaudeStatus = claude::ClaudeStatus;
 static CODEX: codex::CodexStatus = codex::CodexStatus;
 static PI: pi::PiStatus = pi::PiStatus;
+static AGY: agy::AgyStatus = agy::AgyStatus;
 static NOOP: NoopStatus = NoopStatus;
 
-/// The status integration for an agent kind. Claude (hooks) and Codex (notify)
-/// report status; pi reports only its session identity (via the wsx
+/// The status integration for an agent kind. Claude and agy (hooks) and Codex
+/// (notify) report status; pi reports only its session identity (via the wsx
 /// extension); Hermes and omp are no-ops.
 ///
 /// omp is a no-op by necessity rather than by deferral: its hook capability is
@@ -78,7 +82,8 @@ pub fn for_agent(agent: AgentKind) -> &'static dyn StatusIntegration {
         AgentKind::Claude => &CLAUDE,
         AgentKind::Codex => &CODEX,
         AgentKind::Pi => &PI,
-        AgentKind::Hermes | AgentKind::Omp | AgentKind::Agy => &NOOP,
+        AgentKind::Agy => &AGY,
+        AgentKind::Hermes | AgentKind::Omp => &NOOP,
     }
 }
 
@@ -106,6 +111,15 @@ mod tests {
                     .is_none()
             );
         }
+    }
+
+    #[test]
+    fn agy_resolves_to_agy_integration() {
+        let ev = serde_json::json!({"hookEventName": "Stop", "fullyIdle": true});
+        assert_eq!(
+            for_agent(AgentKind::Agy).parse_event(&ev),
+            Some(ReportedState::Done)
+        );
     }
 
     #[test]

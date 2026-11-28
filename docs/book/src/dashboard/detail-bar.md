@@ -49,7 +49,9 @@ Press `b` on the dashboard to open the layout editor. It shows the bar's contain
 
 The module menu lists every module with a description. `[x]` marks the modules already in the focused container, and `in 2` marks a module that sits in another container. Press `enter` to add the highlighted module to the focused container. If it sits in another container, it moves, since a module shows once. If it's already in the focused container, `enter` takes it out. `d` removes it from wherever it sits. The menu stays open so you can add several modules; `esc` goes back to the containers.
 
-The editor changes the selected repo's override when that override sets `containers` (the title then reads `repo <name>`). Otherwise it changes the global layout. Adding, deleting, or swapping containers keeps the widths you dragged for the others.
+The editor changes the selected repo's override when that override sets `containers` (the title then reads `repo <name>`). Otherwise it changes the global layout. It rewrites only `containers`, so the other fields stay as you wrote them. If the stored JSON doesn't parse, the editor shows an error instead of saving; fix the JSON with `wsx config edit detail_bar_config` or the repo's `s` drawer.
+
+Adding, deleting, or swapping containers keeps the widths you dragged for the others. Those widths live in one `detail_bar_widths` setting shared by every repo, the same setting dragging writes, so an edit in one repo's layout reshapes them for all repos with as many containers. `r` also forgets the dragged widths, so the default layout starts evenly split.
 
 ## Replying
 

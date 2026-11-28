@@ -3,7 +3,7 @@
 //! never displays a layout that isn't stored.
 
 use crate::app::App;
-use crate::app::detail_bar_layout::{LayoutScope, WidthsEdit, save_layout};
+use crate::app::detail_bar_layout::{LayoutScope, WidthsEdit, save_layout, stored_layout};
 use crate::config::detail_bar_config::DetailBarConfig;
 use crate::config::detail_bar_layout::{self as ops, Containers, Pos};
 use crate::ui::modal::{LayoutEditor, Modal};
@@ -79,7 +79,7 @@ fn column_keys(app: &mut App, k: KeyEvent, ed: &mut LayoutEditor) -> bool {
         }
         KeyCode::Char('r') => {
             let default = DetailBarConfig::default().containers;
-            apply(app, ed, WidthsEdit::Keep, "", |c| {
+            apply(app, ed, WidthsEdit::Clear, "", |c| {
                 *c = default;
                 Some((0, 0))
             });
@@ -104,22 +104,23 @@ fn menu_keys(app: &mut App, k: KeyEvent, ed: &mut LayoutEditor, sel: usize) -> b
         // Toggle the module in the focused container: add it (moving it
         // from another container), or take it out if it's already here.
         KeyCode::Enter | KeyCode::Char(' ') => match ops::find(&ed.containers, id) {
-            Some(pos) if pos.0 == col => {
-                apply(app, ed, WidthsEdit::Keep, "", |c| ops::remove(c, pos));
+            Some((c, _)) if c == col => {
+                let cursor = ed.cursor;
+                apply(app, ed, WidthsEdit::Keep, "", |c| {
+                    ops::remove_id(c, id).then_some(cursor)
+                });
             }
             _ => apply(app, ed, WidthsEdit::Keep, "", |c| ops::place(c, id, col)),
         },
         KeyCode::Char('d' | 'x') | KeyCode::Delete | KeyCode::Backspace => {
-            match ops::find(&ed.containers, id) {
-                Some(pos) => {
-                    let cursor = ed.cursor;
-                    apply(app, ed, WidthsEdit::Keep, "", |c| {
-                        ops::remove(c, pos).map(|_| cursor)
-                    });
-                    ed.cursor = ops::clamp(&ed.containers, ed.cursor);
-                }
-                None => ed.notice = Some("that module isn't in the bar".into()),
-            }
+            let cursor = ed.cursor;
+            apply(
+                app,
+                ed,
+                WidthsEdit::Keep,
+                "that module isn't in the bar",
+                |c| ops::remove_id(c, id).then_some(cursor),
+            );
         }
         _ => {}
     }
@@ -127,7 +128,8 @@ fn menu_keys(app: &mut App, k: KeyEvent, ed: &mut LayoutEditor, sel: usize) -> b
 }
 
 /// Run `edit` on a copy of the layout and save the result; on success
-/// the editor takes the new layout and the cursor `edit` returned. An
+/// the editor takes the new layout and the cursor `edit` returned (and
+/// on failure, whatever layout is stored). An
 /// edit returning `None` doesn't apply: `refused` (when not empty)
 /// becomes the notice and nothing is saved.
 fn apply(
@@ -144,7 +146,7 @@ fn apply(
         }
         return;
     };
-    if next == ed.containers {
+    if next == ed.containers && widths == WidthsEdit::Keep {
         ed.cursor = cursor;
         return;
     }
@@ -153,12 +155,16 @@ fn apply(
             ed.containers = next;
             ed.cursor = ops::clamp(&ed.containers, cursor);
         }
+        // Part of the save may have landed (the layout, but not the
+        // widths): show what is stored, not what was intended.
         Err(e) => {
             let target = match ed.scope {
                 LayoutScope::Global => "global".to_string(),
                 LayoutScope::Repo(_) => ed.scope_label.clone(),
             };
             ed.notice = Some(format!("could not save the {target} layout: {e}"));
+            ed.containers = stored_layout(app, ed.scope);
+            ed.cursor = ops::clamp(&ed.containers, ed.cursor);
         }
     }
 }

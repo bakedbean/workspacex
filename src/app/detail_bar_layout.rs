@@ -3,12 +3,20 @@
 //! The editor changes one `containers` list: the selected repo's own
 //! override when it has one, else the global `detail_bar_config`. Every
 //! edit is saved immediately, so the bar behind the drawer follows along.
+//!
+//! Only the `containers` key is rewritten: other fields, including any
+//! this version doesn't know, are kept as stored.
+//!
+//! The dragged column widths (`detail_bar_widths`) are one global
+//! setting whichever repo's bar is showing, as with dragging itself, so
+//! container edits reshape them in either scope.
 
 use super::App;
 use crate::config::detail_bar_config::{DetailBarConfig, DetailBarOverride};
 use crate::config::detail_bar_layout::Containers;
 use crate::data::store::RepoId;
 use crate::error::{Error, Result};
+use serde_json::{Map, Value};
 
 /// Which stored layout the editor writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +37,8 @@ pub enum WidthsEdit {
     Remove(usize),
     /// These two containers traded places.
     Swap(usize, usize),
+    /// The layout was replaced wholesale (reset): forget the widths.
+    Clear,
 }
 
 /// The layout the editor should open on for `repo` (the selection's
@@ -46,41 +56,80 @@ pub(crate) fn layout_for(app: &App, repo: Option<RepoId>) -> (LayoutScope, Conta
     (LayoutScope::Global, cfg.containers)
 }
 
+/// The layout stored for `scope` now, as the bar resolves it. The
+/// editor re-reads this after a failed save, so it never shows a layout
+/// that differs from what is stored.
+pub(crate) fn stored_layout(app: &App, scope: LayoutScope) -> Containers {
+    match scope {
+        LayoutScope::Repo(id) => match app.repos.iter().find(|r| r.id == id) {
+            Some(repo) => crate::config::detail_bar_config::resolve(repo, &app.store).containers,
+            None => crate::config::detail_bar_config::resolve_global_only(&app.store).containers,
+        },
+        LayoutScope::Global => {
+            crate::config::detail_bar_config::resolve_global_only(&app.store).containers
+        }
+    }
+}
+
 /// Store `containers` in `scope`, and reshape the saved column widths
-/// by `widths`. The other fields of the stored config are kept.
+/// by `widths`. Refuses to overwrite stored JSON that doesn't parse as
+/// an object, rather than replacing a hand edit with defaults.
 pub(crate) fn save_layout(
     app: &mut App,
     scope: LayoutScope,
     containers: &Containers,
     widths: WidthsEdit,
 ) -> Result<()> {
-    let json = |e: serde_json::Error| Error::UserInput(format!("detail_bar_config: {e}"));
+    let mut containers = containers.clone();
+    containers.truncate(crate::config::detail_bar_layout::MAX_CONTAINERS);
+    let value = serde_json::to_value(&containers)
+        .map_err(|e| Error::UserInput(format!("detail_bar_config: {e}")))?;
     match scope {
         LayoutScope::Global => {
-            let mut cfg = app
-                .store
-                .get_setting("detail_bar_config")?
-                .and_then(|s| serde_json::from_str::<DetailBarConfig>(&s).ok())
-                .unwrap_or_default();
-            cfg.containers = containers.clone();
-            cfg.sanitize();
-            let raw = serde_json::to_string_pretty(&cfg).map_err(json)?;
+            let stored = app.store.get_setting("detail_bar_config")?;
+            let raw = with_containers(
+                stored.as_deref(),
+                value,
+                "wsx config edit detail_bar_config",
+            )?;
             app.store.set_setting("detail_bar_config", &raw)?;
         }
         LayoutScope::Repo(id) => {
-            let current = app
+            let stored = app
                 .repos
                 .iter()
                 .find(|r| r.id == id)
                 .and_then(|r| r.detail_bar_config.clone());
-            let mut ovr = repo_override(current.as_deref());
-            ovr.containers = Some(containers.clone());
-            let raw = serde_json::to_string_pretty(&ovr).map_err(json)?;
+            let raw = with_containers(
+                stored.as_deref(),
+                value,
+                "the repo's detail_bar_config (s on the dashboard)",
+            )?;
             app.store.set_repo_detail_bar_config(id, Some(&raw))?;
             app.repos = app.store.repos()?;
         }
     }
     reshape_widths(app, widths, containers.len())
+}
+
+/// `stored` (a JSON object, or nothing) with its `containers` key set to
+/// `containers`, pretty-printed. `fix` names where to repair JSON that
+/// isn't an object.
+fn with_containers(stored: Option<&str>, containers: Value, fix: &str) -> Result<String> {
+    let mut obj = match stored.map(str::trim).filter(|s| !s.is_empty()) {
+        None => Map::new(),
+        Some(raw) => match serde_json::from_str::<Value>(raw) {
+            Ok(Value::Object(obj)) => obj,
+            _ => {
+                return Err(Error::UserInput(format!(
+                    "the stored detail_bar_config isn't a valid JSON object; fix it with {fix}"
+                )));
+            }
+        },
+    };
+    obj.insert("containers".into(), containers);
+    serde_json::to_string_pretty(&Value::Object(obj))
+        .map_err(|e| Error::UserInput(format!("detail_bar_config: {e}")))
 }
 
 /// A repo's stored override; malformed JSON reads as empty, as the
@@ -94,11 +143,16 @@ fn repo_override(raw: Option<&str>) -> DetailBarOverride {
 /// layout before it; widths that already don't match are left alone
 /// (the bar shares evenly for them anyway).
 fn reshape_widths(app: &mut App, edit: WidthsEdit, new_len: usize) -> Result<()> {
+    if edit == WidthsEdit::Clear {
+        app.store.delete_setting(DetailBarConfig::WIDTHS_SETTING)?;
+        app.dashboard.detail_widths = None;
+        return Ok(());
+    }
     let Some(mut widths) = app.dashboard.detail_widths.clone() else {
         return Ok(());
     };
     let old_len = match edit {
-        WidthsEdit::Keep | WidthsEdit::Swap(..) => new_len,
+        WidthsEdit::Keep | WidthsEdit::Swap(..) | WidthsEdit::Clear => new_len,
         WidthsEdit::Insert(_) => new_len - 1,
         WidthsEdit::Remove(_) => new_len + 1,
     };
@@ -106,7 +160,7 @@ fn reshape_widths(app: &mut App, edit: WidthsEdit, new_len: usize) -> Result<()>
         return Ok(());
     }
     match edit {
-        WidthsEdit::Keep => return Ok(()),
+        WidthsEdit::Keep | WidthsEdit::Clear => return Ok(()),
         WidthsEdit::Insert(at) => {
             let avg =
                 widths.iter().map(|&w| u32::from(w)).sum::<u32>() / widths.len().max(1) as u32;
@@ -239,6 +293,71 @@ mod tests {
                 .unwrap()
                 .as_deref(),
             Some("10,20,20")
+        );
+    }
+
+    #[test]
+    fn save_keeps_fields_it_does_not_know() {
+        let (mut app, _) = app();
+        app.store
+            .set_setting(
+                "detail_bar_config",
+                r#"{"bottom_rule": false, "future_field": {"x": 1}}"#,
+            )
+            .unwrap();
+        let l = layout(&[&["agents"]]);
+        save_layout(&mut app, LayoutScope::Global, &l, WidthsEdit::Keep).unwrap();
+        let raw = app.store.get_setting("detail_bar_config").unwrap().unwrap();
+        let v: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["future_field"]["x"], 1);
+        assert_eq!(v["bottom_rule"], false);
+        assert_eq!(v["containers"], serde_json::json!([["agents"]]));
+    }
+
+    #[test]
+    fn malformed_stored_json_is_not_overwritten() {
+        let (mut app, rid) = app();
+        app.store
+            .set_setting("detail_bar_config", "{not json")
+            .unwrap();
+        let l = layout(&[&["agents"]]);
+        let err = save_layout(&mut app, LayoutScope::Global, &l, WidthsEdit::Keep).unwrap_err();
+        assert!(err.to_string().contains("wsx config edit"), "{err}");
+        assert_eq!(
+            app.store
+                .get_setting("detail_bar_config")
+                .unwrap()
+                .as_deref(),
+            Some("{not json")
+        );
+        // What the editor falls back to is what the bar shows: defaults.
+        assert_eq!(
+            stored_layout(&app, LayoutScope::Global),
+            DetailBarConfig::default().containers
+        );
+
+        app.store
+            .set_repo_detail_bar_config(rid, Some("[1, 2]"))
+            .unwrap();
+        app.refresh().unwrap();
+        assert!(save_layout(&mut app, LayoutScope::Repo(rid), &l, WidthsEdit::Keep).is_err());
+    }
+
+    #[test]
+    fn clear_forgets_the_widths() {
+        let (mut app, _) = app();
+        app.store
+            .set_setting(DetailBarConfig::WIDTHS_SETTING, "1,2")
+            .unwrap();
+        app.dashboard.detail_widths = Some(vec![1, 2]);
+        let l = DetailBarConfig::default().containers;
+        save_layout(&mut app, LayoutScope::Global, &l, WidthsEdit::Clear).unwrap();
+        assert_eq!(app.dashboard.detail_widths, None);
+        assert!(
+            app.store
+                .get_setting(DetailBarConfig::WIDTHS_SETTING)
+                .unwrap()
+                .is_none()
         );
     }
 

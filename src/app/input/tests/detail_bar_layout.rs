@@ -212,3 +212,52 @@ async fn repo_with_containers_override_edits_that_override() {
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn menu_toggle_clears_duplicates_of_a_module() {
+    let mut app = app();
+    app.store
+        .set_setting(
+            "detail_bar_config",
+            r#"{"containers": [["agents", "agents"], ["agents"]]}"#,
+        )
+        .unwrap();
+    open(&mut app).await;
+    press(&mut app, KeyCode::Char('a')).await;
+    press_all(&mut app, "jjjj").await; // AGENTS
+    press(&mut app, KeyCode::Enter).await; // in container 1: toggles out
+    assert_eq!(stored(&app), ids(&[&[], &[]]));
+}
+
+#[tokio::test]
+async fn failed_save_shows_the_stored_layout() {
+    let mut app = app();
+    app.store
+        .set_setting("detail_bar_config", "{broken")
+        .unwrap();
+    open(&mut app).await;
+    press(&mut app, KeyCode::Char('d')).await;
+    let ed = editor(&app);
+    assert!(
+        ed.notice.as_deref().unwrap().contains("could not save"),
+        "{:?}",
+        ed.notice
+    );
+    assert_eq!(ed.containers, DetailBarConfig::default().containers);
+    assert_eq!(
+        app.store
+            .get_setting("detail_bar_config")
+            .unwrap()
+            .as_deref(),
+        Some("{broken")
+    );
+}
+
+#[tokio::test]
+async fn reset_forgets_dragged_widths() {
+    let mut app = app();
+    app.dashboard.detail_widths = Some(vec![5, 1, 1]);
+    open(&mut app).await;
+    press(&mut app, KeyCode::Char('r')).await;
+    assert_eq!(app.dashboard.detail_widths, None);
+}

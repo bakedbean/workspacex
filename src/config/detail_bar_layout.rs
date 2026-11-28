@@ -5,7 +5,8 @@
 //! fifth container…), leaving the layout untouched.
 //!
 //! A module appears at most once: [`place`] moves a module that is
-//! already in the layout instead of duplicating it.
+//! already in the layout instead of duplicating it, and folds any
+//! duplicates a hand-edited layout carries into that one copy.
 //!
 //! [`DetailBarConfig`]: super::detail_bar_config::DetailBarConfig
 
@@ -27,16 +28,26 @@ pub fn find(containers: &Containers, id: &str) -> Option<Pos> {
 }
 
 /// Append `id` to container `col`, taking it out of wherever it already
-/// was. `None` when `col` doesn't exist.
+/// was (every copy of it). `None` when `col` doesn't exist.
 pub fn place(containers: &mut Containers, id: &str, col: usize) -> Option<Pos> {
     if col >= containers.len() {
         return None;
     }
-    if let Some((c, r)) = find(containers, id) {
-        containers[c].remove(r);
-    }
+    remove_id(containers, id);
     containers[col].push(id.to_string());
     Some((col, containers[col].len() - 1))
+}
+
+/// Take every copy of `id` out of the layout. Returns whether any was
+/// there.
+pub fn remove_id(containers: &mut Containers, id: &str) -> bool {
+    let mut found = false;
+    for mods in containers.iter_mut() {
+        let before = mods.len();
+        mods.retain(|m| m != id);
+        found |= mods.len() != before;
+    }
+    found
 }
 
 /// Take the module at `pos` out of the layout. Returns the cursor's new
@@ -140,6 +151,21 @@ mod tests {
         let mut l = layout(&[&["a", "b"], &["c"]]);
         assert_eq!(place(&mut l, "a", 1), Some((1, 1)));
         assert_eq!(l, layout(&[&["b"], &["c", "a"]]));
+    }
+
+    #[test]
+    fn place_folds_duplicates_into_one_copy() {
+        let mut l = layout(&[&["a", "b", "a"], &["a"]]);
+        assert_eq!(place(&mut l, "a", 1), Some((1, 0)));
+        assert_eq!(l, layout(&[&["b"], &["a"]]));
+    }
+
+    #[test]
+    fn remove_id_takes_every_copy() {
+        let mut l = layout(&[&["a", "b"], &["a"]]);
+        assert!(remove_id(&mut l, "a"));
+        assert_eq!(l, layout(&[&["b"], &[]]));
+        assert!(!remove_id(&mut l, "a"));
     }
 
     #[test]

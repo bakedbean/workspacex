@@ -55,7 +55,7 @@ wsx runs the binary of the same name from `PATH`. Override the path with `WSX_<A
 
 - Hermes has no flag for extra instructions, so wsx writes them into a `<!-- BEGIN wsx-managed -->` block at the end of the worktree's `AGENTS.md` on each start.
   - When wsx creates `AGENTS.md`, it copies the repo's `CLAUDE.md` into it.
-  - An untracked `AGENTS.md` is added to `.git/info/exclude`.
+  - An untracked `AGENTS.md` is added to the main repo's `.git/info/exclude`. Git reads only that one, so the entry hides an untracked `AGENTS.md` in every worktree of the repo, including the main checkout.
   - A tracked `AGENTS.md` shows as modified while the block is present.
 - On resume, wsx picks the newest Hermes session started since the workspace's first Hermes spawn. If two worktrees start Hermes within a few seconds, it can pick the wrong one.
 - Added Hermes agents always start fresh.
@@ -87,6 +87,8 @@ wsx runs the binary of the same name from `PATH`. Override the path with `WSX_<A
 - Pinned chips that name a bundled skill are sent as `/skill:<name>`. See [Agent skills](skills.md#pinning-skills-as-chips).
 
 ## agy
+
+Tested with agy 1.5.18. Install agy and sign in once before using it in wsx.
 
 - wsx passes `--settings` with the worktree and its related repos in `trustedWorkspaces`, so agy's folder-trust prompt doesn't block the session. That setting lasts only for the session, and your `~/.gemini/antigravity-cli/settings.json` is never edited.
 - agy has no flag for extra instructions, so wsx writes them to `.agents/rules/wsx.md` as an always-on rule on each start, and deletes the file when there is nothing to write.

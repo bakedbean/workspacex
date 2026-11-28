@@ -60,10 +60,25 @@ wsx
 9. **Layout editor.** With a workspace selected, press `b`. Expected:
    a drawer titled `Detail bar layout — global` shows the containers
    side by side. Press `l`, then `a`. Expected: the module menu lists
-   all five modules, `RECENT CHAT` marked `[x]` and `SESSION SUMMARY`
+   all six modules, `RECENT CHAT` marked `[x]` and `SESSION SUMMARY`
    marked `in 1`. Walk to `AGENTS` and press Enter. Expected: AGENTS
    is marked `[x]` and appears in the bar's second column. Press Esc,
    move onto AGENTS, and press `d`. Expected: it leaves the drawer and
    the bar. Press `n`, then `X`. Expected: a fourth column appears in
    the drawer and the bar, then goes away. Press `r`, then `b`.
    Expected: the default layout, and the drawer closes.
+
+10. **Git module.** Select a workspace whose branch has commits ahead
+    of the repo's base branch and an uncommitted edit. Press `b`, then
+    `a`, walk to `GIT`, and press Enter, then Esc twice. Expected: a
+    GIT section shows `↑N vs <base>`, `N mod`, and a row of commit bars
+    ending in `+X −Y`. If the branch has an upstream and commits not yet
+    pushed to it, `⇡N unpushed` follows the first count. The counts and
+    totals match that workspace's tall row in the repo focus view (`f`
+    on its repo); bar heights may differ, since the focus view scales
+    them across every row. Drag the column narrow. Expected: the parts
+    wrap onto more lines, and none is cut off.
+    Widen it again. Expected: below the bars, a blank line, then the
+    branch's commits newest first, each `<hash>  <subject>`, matching the
+    side panel's Commits tab (`4`). With more commits than the container
+    is tall, the mouse wheel over it scrolls the list.

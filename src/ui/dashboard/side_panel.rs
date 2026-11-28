@@ -732,7 +732,11 @@ fn paragraphs(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
 
 /// `a1b2c3d  subject`, the subject wrapping under itself so the hashes
 /// stay in a column.
-fn commit_lines(commits: &[BranchCommit], width: usize, theme: &Theme) -> Vec<Line<'static>> {
+pub(crate) fn commit_lines(
+    commits: &[BranchCommit],
+    width: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     for c in commits {
         let indent = display_width(&c.hash) + 2;

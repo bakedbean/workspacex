@@ -12,6 +12,9 @@ impl DetailModule for RecentChat {
     fn title(&self) -> &'static str {
         "RECENT CHAT"
     }
+    fn description(&self) -> &'static str {
+        "The agent's latest turns"
+    }
     fn lines(&self, ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'static>> {
         build_lines(ctx, width)
     }

@@ -19,6 +19,9 @@ impl DetailModule for SessionSummary {
     fn title(&self) -> &'static str {
         "SESSION SUMMARY"
     }
+    fn description(&self) -> &'static str {
+        "Recap, status, last activity, and tool trace"
+    }
 
     fn lines(&self, ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'static>> {
         build_lines(ctx, width)

@@ -720,8 +720,9 @@ fn omp_ready(screen: &vt100::Screen) -> bool {
 /// workspace views agy through `tmux attach`, whose client holds the outer
 /// alternate screen for the whole session, so the check would never pass.
 ///
-/// Matched on the rule–input–rule shape rather than wording; the bottom-half
-/// restriction keeps rules inside rendered markdown from counting.
+/// Matched on the rule–input–rule shape around the cursor's row rather than
+/// wording: agy paints the composer near the top of a tall terminal, and
+/// anchoring on the cursor keeps rules inside rendered markdown from counting.
 fn agy_ready(screen: &vt100::Screen) -> bool {
     if screen.hide_cursor() {
         return false;
@@ -734,8 +735,12 @@ fn agy_ready(screen: &vt100::Screen) -> bool {
         let t = l.trim();
         t.chars().count() >= min_run && t.chars().all(|c| c == '\u{2500}')
     };
-    (rows / 2..rows.saturating_sub(2))
-        .any(|r| rule(r) && line(r + 1).trim_start().starts_with('>') && rule(r + 2))
+    let (row, _) = screen.cursor_position();
+    row >= 1
+        && row + 1 < rows
+        && rule(row - 1)
+        && line(row).trim_start().starts_with('>')
+        && rule(row + 1)
 }
 
 /// Pi is ready when the chrome around its composer is on screen.
@@ -2144,6 +2149,25 @@ mod tests {
         p.process(&inline[at + leave.len()..]);
         assert!(p.screen().alternate_screen());
         assert!(ready_for_input(AgentKind::Agy, p.screen()));
+    }
+
+    #[test]
+    fn agy_is_ready_when_its_composer_paints_near_the_top_of_a_tall_terminal() {
+        // Real 60x100 capture: agy paints its composer just below the banner,
+        // at rows 11-13, not in the bottom half.
+        let mut p = Parser::new(60, 100, 1000);
+        p.process(boot_fixture!("agy-composer-tall.bin"));
+        assert!(ready_for_input(AgentKind::Agy, p.screen()));
+    }
+
+    #[test]
+    fn agy_ignores_a_quoted_block_between_rules_away_from_the_cursor() {
+        // Markdown in the transcript can render rule / `> quote` / rule; only
+        // the row holding the cursor is the composer.
+        let mut p = Parser::new(24, 80, 1000);
+        let rule = "\u{2500}".repeat(80);
+        p.process(format!("{rule}\r\n> quoted\r\n{rule}\r\n\r\nworking...").as_bytes());
+        assert!(!ready_for_input(AgentKind::Agy, p.screen()));
     }
 
     #[test]

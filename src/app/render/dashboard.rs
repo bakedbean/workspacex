@@ -243,6 +243,12 @@ pub(super) fn draw_dashboard(f: &mut ratatui::Frame, app: &mut App, area: ratatu
                         .unwrap_or(&[]),
                     diff: app.workspace_diff.get(&ws.id).copied(),
                     diff_per_file: app.workspace_diff_per_file.get(&ws.id),
+                    git_status: app.workspace_status.get(&ws.id).copied(),
+                    ahead_of_base: app.workspace_ahead_of_base.get(&ws.id).copied(),
+                    commits: app
+                        .workspace_branch_lists
+                        .get(&ws.id)
+                        .map_or(&[], |l| l.commits.as_slice()),
                     lifecycle: app.pr_lifecycle.get(&ws.id).copied(),
                     pr_title: None,
                     pr_number: app.pr_number.get(&ws.id).copied(),

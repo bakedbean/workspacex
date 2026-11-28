@@ -29,6 +29,13 @@ pub struct DetailContext<'a> {
     pub subagents: &'a [crate::activity::subagents::Subagent],
     pub diff: Option<DiffStats>,
     pub diff_per_file: Option<&'a HashMap<String, DiffStats>>,
+    /// Working-tree counts against the upstream, from `git status`.
+    pub git_status: Option<crate::git::WorkspaceStatus>,
+    /// Commits on the branch that the repo's base branch lacks.
+    pub ahead_of_base: Option<u32>,
+    /// The branch's commits against the base branch, newest first. Only
+    /// the newest `tall::DIFF_BARS` carry line stats.
+    pub commits: &'a [crate::git::BranchCommit],
     pub lifecycle: Option<BranchLifecycle>,
     pub pr_title: Option<&'a str>,
     pub pr_number: Option<u32>,
@@ -109,6 +116,7 @@ impl Default for Registry {
 }
 
 pub mod agents;
+pub mod git;
 pub mod markdown;
 pub mod processes;
 pub mod recent_chat;
@@ -116,7 +124,7 @@ pub mod recent_files;
 pub mod session_summary;
 
 /// Populate `reg` with the built-in modules: session summary, recent
-/// chat, processes, recent files, and agents. This order is the order
+/// chat, processes, recent files, agents, and git. This order is the order
 /// the layout editor's module menu lists them in.
 pub fn register_builtins(reg: &mut Registry) {
     reg.register(Box::new(session_summary::SessionSummary));
@@ -124,6 +132,7 @@ pub fn register_builtins(reg: &mut Registry) {
     reg.register(Box::new(processes::Processes));
     reg.register(Box::new(recent_files::RecentFiles));
     reg.register(Box::new(agents::Agents));
+    reg.register(Box::new(git::Git));
 }
 
 #[cfg(test)]
@@ -177,6 +186,9 @@ pub(crate) mod tests_helpers {
             subagents: &[],
             diff: None,
             diff_per_file: None,
+            git_status: None,
+            ahead_of_base: None,
+            commits: &[],
             lifecycle: None,
             pr_title: None,
             pr_number: None,
@@ -272,7 +284,7 @@ mod tests {
     fn builtins_all_describe_themselves() {
         let mut reg = Registry::new();
         register_builtins(&mut reg);
-        assert_eq!(reg.modules().count(), 5);
+        assert_eq!(reg.modules().count(), 6);
         for m in reg.modules() {
             assert!(!m.description().is_empty(), "{} has no description", m.id());
         }
@@ -304,6 +316,13 @@ mod tests {
         let mut reg = Registry::new();
         register_builtins(&mut reg);
         assert!(reg.get("agents").is_some());
+    }
+
+    #[test]
+    fn register_builtins_includes_git() {
+        let mut reg = Registry::new();
+        register_builtins(&mut reg);
+        assert!(reg.get("git").is_some());
     }
 
     #[test]

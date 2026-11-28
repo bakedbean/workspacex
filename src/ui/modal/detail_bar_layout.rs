@@ -41,8 +41,8 @@ const COLUMN_HINTS: &[Hint] = &[
     ("a", "add"),
     ("d", "remove"),
     ("HJKL", "shift"),
-    ("<>", "swap column"),
-    ("n/X", "add/del column"),
+    ("<>", "swap"),
+    ("n/X", "+/- column"),
     ("r", "reset"),
     ("esc", "close"),
 ];
@@ -117,7 +117,7 @@ pub fn render_detail_bar_layout(
 fn label(registry: &Registry, id: &str) -> (String, bool) {
     match registry.get(id) {
         Some(m) => (m.title().to_string(), true),
-        None => (format!("? {id}"), false),
+        None => (format!("[unknown: {id}]"), false),
     }
 }
 
@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn unknown_module_ids_stay_visible() {
         let out = draw(&editor(&[&["seshun_summary"]]));
-        assert!(out.contains("? seshun_summary"), "{out}");
+        assert!(out.contains("[unknown: seshun_summary]"), "{out}");
     }
 
     #[test]

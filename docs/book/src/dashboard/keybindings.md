@@ -59,6 +59,7 @@ Every key in the wsx TUI, grouped by where you press it. Capital letters mean `S
 | `K` / `J` on a repo | Move the repo up / down (saved)                        |
 | `s`                | Repo settings                                           |
 | `,`                | [Global settings](../configuration/settings.md#global-settings-drawer) |
+| `b`                | [Arrange the detail bar's modules](detail-bar.md#arranging-modules) |
 | `F`                | [Hide rules](tags-and-hiding.md#hiding-workspaces) for the repo |
 | `H`                | [Remote hosts](../integrations/shared-workspaces.md)    |
 | `p`                | Toggle the [digest](project-manager-digest.md)          |
@@ -79,7 +80,7 @@ Every key in the wsx TUI, grouped by where you press it. Capital letters mean `S
 Panels open in a drawer at the bottom of the screen.
 
 - A panel's key opens it and replaces the open panel. Pressing the open panel's key again closes it. A key with nothing to open (`?` on a repo header) leaves the panel alone.
-- While a panel takes text (tag editor, name-color filter, name fields, a `/` filter), keys type. In the process list `K` kills; in the updates panel `s` splits.
+- While a panel takes text (tag editor, name-color filter, name fields, a `/` filter), keys type. In the process list `K` kills; in the updates panel `s` splits; in the layout editor `H` and `K` move modules.
 - `Ctrl-x` chords that open panels work from any panel. Progress cards for remote work ignore panel keys until they finish or you press `esc`.
 
 ## Dialogs

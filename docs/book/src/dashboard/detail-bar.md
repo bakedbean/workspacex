@@ -13,6 +13,7 @@ The bar holds 1–4 equal-width columns, called containers. Each container stack
 | `processes`       | [Tracked processes](process-tracking.md) in the worktree      |
 | `recent_files`    | Files the agent edited recently, with line counts             |
 | `agents`          | Claude subagents running in the workspace, and what each is doing |
+| `git`             | Commits ahead of the base branch, unpushed and uncommitted counts, and a bar per recent commit |
 
 `session_summary` falls back to the session's first prompt when the agent hasn't written a recap. Scroll a container with the mouse wheel.
 
@@ -29,6 +30,16 @@ The bar holds 1–4 equal-width columns, called containers. Each container stack
 wsx reads this from the files Claude Code keeps beside each session's transcript, so it updates with the dashboard's 2-second poll and needs no setup. A subagent drops off when Claude marks it finished, or when the Claude session it belongs to exits. One whose transcript hasn't changed in 15 minutes shows `quiet 20m · ` (in the warn color) ahead of what it last did: it may be waiting on a slow build or command, or its session may have died without wsx seeing it exit. After 2 hours of silence it's taken for abandoned and dropped. Other agent kinds don't report subagents.
 
 The activity line shows what the subagent last ran or looked up, such as a Bash command's description (or the command itself), a search pattern, a URL or a web search query, just as the dashboard already shows the main agent's current command.
+
+`git` isn't in the default layout either. It shows the branch's git state the way the [repo focus view](repo-focus.md) does:
+
+```text
+↑4 vs main  ⇡2 unpushed
+3 mod 1 untr
+▂▅▁▃█▂▄ +184 −22
+```
+
+The first line counts the commits the base branch lacks, then where the branch stands against its upstream: `⇡` unpushed and `⇣` behind, or `not pushed` for a branch with commits but no upstream and no PR. The second counts modified and untracked files, or says `clean`. The last draws a bar per recent commit (up to eight, oldest on the left), as tall as the lines it changed on a log scale. A bar is green when the commit added at least as much as it removed and red otherwise. The bars end with the branch's line totals against the base branch. The counts against the base branch need the repo's `base_branch` set, and they refresh every 10 seconds.
 
 ## Arranging modules
 

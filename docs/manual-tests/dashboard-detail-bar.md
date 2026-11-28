@@ -60,10 +60,18 @@ wsx
 9. **Layout editor.** With a workspace selected, press `b`. Expected:
    a drawer titled `Detail bar layout — global` shows the containers
    side by side. Press `l`, then `a`. Expected: the module menu lists
-   all five modules, `RECENT CHAT` marked `[x]` and `SESSION SUMMARY`
+   all six modules, `RECENT CHAT` marked `[x]` and `SESSION SUMMARY`
    marked `in 1`. Walk to `AGENTS` and press Enter. Expected: AGENTS
    is marked `[x]` and appears in the bar's second column. Press Esc,
    move onto AGENTS, and press `d`. Expected: it leaves the drawer and
    the bar. Press `n`, then `X`. Expected: a fourth column appears in
    the drawer and the bar, then goes away. Press `r`, then `b`.
    Expected: the default layout, and the drawer closes.
+
+10. **Git module.** Select a workspace whose branch has commits ahead
+    of the repo's base branch and an uncommitted edit. Press `b`, then
+    `a`, walk to `GIT`, and press Enter, then Esc twice. Expected: a
+    GIT section shows `↑N vs <base>` (plus `⇡N unpushed` if the branch
+    is pushed and has local commits), `N mod`, and a row of commit bars
+    ending in `+X −Y`. These match the counts and bars that workspace's
+    tall row shows in the repo focus view (`f` on its repo).

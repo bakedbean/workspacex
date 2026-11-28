@@ -1,0 +1,253 @@
+//! Writes from the detail-bar layout editor (`b` on the dashboard).
+//!
+//! The editor changes one `containers` list: the selected repo's own
+//! override when it has one, else the global `detail_bar_config`. Every
+//! edit is saved immediately, so the bar behind the drawer follows along.
+
+use super::App;
+use crate::config::detail_bar_config::{DetailBarConfig, DetailBarOverride};
+use crate::config::detail_bar_layout::Containers;
+use crate::data::store::RepoId;
+use crate::error::{Error, Result};
+
+/// Which stored layout the editor writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutScope {
+    Global,
+    /// A repo whose `detail_bar_config` override sets `containers`.
+    Repo(RepoId),
+}
+
+/// How a container edit reshapes the dragged column widths, so a
+/// column keeps its size when its neighbours change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WidthsEdit {
+    Keep,
+    /// A container was inserted at this index.
+    Insert(usize),
+    /// The container at this index was removed.
+    Remove(usize),
+    /// These two containers traded places.
+    Swap(usize, usize),
+}
+
+/// The layout the editor should open on for `repo` (the selection's
+/// repo, if any), and where it is stored.
+pub(crate) fn layout_for(app: &App, repo: Option<RepoId>) -> (LayoutScope, Containers) {
+    if let Some(repo) = repo.and_then(|id| app.repos.iter().find(|r| r.id == id))
+        && repo_override(repo.detail_bar_config.as_deref())
+            .containers
+            .is_some()
+    {
+        let cfg = crate::config::detail_bar_config::resolve(repo, &app.store);
+        return (LayoutScope::Repo(repo.id), cfg.containers);
+    }
+    let cfg = crate::config::detail_bar_config::resolve_global_only(&app.store);
+    (LayoutScope::Global, cfg.containers)
+}
+
+/// Store `containers` in `scope`, and reshape the saved column widths
+/// by `widths`. The other fields of the stored config are kept.
+pub(crate) fn save_layout(
+    app: &mut App,
+    scope: LayoutScope,
+    containers: &Containers,
+    widths: WidthsEdit,
+) -> Result<()> {
+    let json = |e: serde_json::Error| Error::UserInput(format!("detail_bar_config: {e}"));
+    match scope {
+        LayoutScope::Global => {
+            let mut cfg = app
+                .store
+                .get_setting("detail_bar_config")?
+                .and_then(|s| serde_json::from_str::<DetailBarConfig>(&s).ok())
+                .unwrap_or_default();
+            cfg.containers = containers.clone();
+            cfg.sanitize();
+            let raw = serde_json::to_string_pretty(&cfg).map_err(json)?;
+            app.store.set_setting("detail_bar_config", &raw)?;
+        }
+        LayoutScope::Repo(id) => {
+            let current = app
+                .repos
+                .iter()
+                .find(|r| r.id == id)
+                .and_then(|r| r.detail_bar_config.clone());
+            let mut ovr = repo_override(current.as_deref());
+            ovr.containers = Some(containers.clone());
+            let raw = serde_json::to_string_pretty(&ovr).map_err(json)?;
+            app.store.set_repo_detail_bar_config(id, Some(&raw))?;
+            app.repos = app.store.repos()?;
+        }
+    }
+    reshape_widths(app, widths, containers.len())
+}
+
+/// A repo's stored override; malformed JSON reads as empty, as the
+/// renderer treats it.
+fn repo_override(raw: Option<&str>) -> DetailBarOverride {
+    raw.and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default()
+}
+
+/// Apply `edit` to the dragged widths when they still describe the
+/// layout before it; widths that already don't match are left alone
+/// (the bar shares evenly for them anyway).
+fn reshape_widths(app: &mut App, edit: WidthsEdit, new_len: usize) -> Result<()> {
+    let Some(mut widths) = app.dashboard.detail_widths.clone() else {
+        return Ok(());
+    };
+    let old_len = match edit {
+        WidthsEdit::Keep | WidthsEdit::Swap(..) => new_len,
+        WidthsEdit::Insert(_) => new_len - 1,
+        WidthsEdit::Remove(_) => new_len + 1,
+    };
+    if widths.len() != old_len {
+        return Ok(());
+    }
+    match edit {
+        WidthsEdit::Keep => return Ok(()),
+        WidthsEdit::Insert(at) => {
+            let avg =
+                widths.iter().map(|&w| u32::from(w)).sum::<u32>() / widths.len().max(1) as u32;
+            widths.insert(at.min(widths.len()), (avg as u16).max(1));
+        }
+        WidthsEdit::Remove(at) => {
+            widths.remove(at);
+        }
+        WidthsEdit::Swap(a, b) => widths.swap(a, b),
+    }
+    let setting = DetailBarConfig::WIDTHS_SETTING;
+    if widths.is_empty() {
+        app.store.delete_setting(setting)?;
+        app.dashboard.detail_widths = None;
+    } else {
+        app.store
+            .set_setting(setting, &DetailBarConfig::format_widths(&widths))?;
+        app.dashboard.detail_widths = Some(widths);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::store::Store;
+    use std::path::PathBuf;
+
+    fn app() -> (App, RepoId) {
+        let store = Store::open_in_memory().unwrap();
+        let rid = store
+            .add_repo(std::path::Path::new("/tmp/r"), "repo", "")
+            .unwrap();
+        (
+            App::new(store, PathBuf::from("/tmp/wsx-test")).unwrap(),
+            rid,
+        )
+    }
+
+    fn layout(spec: &[&[&str]]) -> Containers {
+        spec.iter()
+            .map(|c| c.iter().map(|s| s.to_string()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn opens_on_global_default_without_overrides() {
+        let (app, rid) = app();
+        let (scope, containers) = layout_for(&app, Some(rid));
+        assert_eq!(scope, LayoutScope::Global);
+        assert_eq!(containers, DetailBarConfig::default().containers);
+    }
+
+    #[test]
+    fn repo_override_without_containers_still_edits_global() {
+        let (mut app, rid) = app();
+        app.store
+            .set_repo_detail_bar_config(rid, Some(r#"{"visible": false}"#))
+            .unwrap();
+        app.refresh().unwrap();
+        assert_eq!(layout_for(&app, Some(rid)).0, LayoutScope::Global);
+    }
+
+    #[test]
+    fn global_save_keeps_other_fields() {
+        let (mut app, _) = app();
+        app.store
+            .set_setting("detail_bar_config", r#"{"bottom_rule": false}"#)
+            .unwrap();
+        let l = layout(&[&["agents"], &[]]);
+        save_layout(&mut app, LayoutScope::Global, &l, WidthsEdit::Keep).unwrap();
+        let cfg = crate::config::detail_bar_config::resolve_global_only(&app.store);
+        assert_eq!(cfg.containers, l);
+        assert!(!cfg.bottom_rule);
+    }
+
+    #[test]
+    fn repo_save_writes_only_the_override() {
+        let (mut app, rid) = app();
+        app.store
+            .set_repo_detail_bar_config(
+                rid,
+                Some(r#"{"containers": [["processes"]], "visible": false}"#),
+            )
+            .unwrap();
+        app.refresh().unwrap();
+        let (scope, containers) = layout_for(&app, Some(rid));
+        assert_eq!(scope, LayoutScope::Repo(rid));
+        assert_eq!(containers, layout(&[&["processes"]]));
+
+        let l = layout(&[&["processes", "agents"]]);
+        save_layout(&mut app, scope, &l, WidthsEdit::Keep).unwrap();
+        let repo = app.repos.iter().find(|r| r.id == rid).unwrap();
+        let ovr: DetailBarOverride =
+            serde_json::from_str(repo.detail_bar_config.as_deref().unwrap()).unwrap();
+        assert_eq!(ovr.containers, Some(l));
+        assert_eq!(ovr.visible, Some(false));
+        assert!(
+            app.store
+                .get_setting("detail_bar_config")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn container_edits_reshape_matching_widths() {
+        let (mut app, _) = app();
+        app.dashboard.detail_widths = Some(vec![30, 10, 20]);
+        let four = layout(&[&[], &[], &[], &[]]);
+        save_layout(&mut app, LayoutScope::Global, &four, WidthsEdit::Insert(1)).unwrap();
+        assert_eq!(app.dashboard.detail_widths, Some(vec![30, 20, 10, 20]));
+
+        let mut three = four.clone();
+        three.pop();
+        save_layout(&mut app, LayoutScope::Global, &three, WidthsEdit::Remove(0)).unwrap();
+        assert_eq!(app.dashboard.detail_widths, Some(vec![20, 10, 20]));
+
+        save_layout(
+            &mut app,
+            LayoutScope::Global,
+            &three,
+            WidthsEdit::Swap(0, 1),
+        )
+        .unwrap();
+        assert_eq!(app.dashboard.detail_widths, Some(vec![10, 20, 20]));
+        assert_eq!(
+            app.store
+                .get_setting(DetailBarConfig::WIDTHS_SETTING)
+                .unwrap()
+                .as_deref(),
+            Some("10,20,20")
+        );
+    }
+
+    #[test]
+    fn stale_widths_are_left_alone() {
+        let (mut app, _) = app();
+        app.dashboard.detail_widths = Some(vec![1, 2]);
+        let l = layout(&[&[], &[], &[], &[]]);
+        save_layout(&mut app, LayoutScope::Global, &l, WidthsEdit::Insert(0)).unwrap();
+        assert_eq!(app.dashboard.detail_widths, Some(vec![1, 2]));
+    }
+}

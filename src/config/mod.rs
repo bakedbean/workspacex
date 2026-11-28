@@ -5,6 +5,7 @@
 //! global + per-repo JSON.
 
 pub mod detail_bar_config;
+pub mod detail_bar_layout;
 pub mod name_color;
 pub mod settings;
 pub mod theme_file;

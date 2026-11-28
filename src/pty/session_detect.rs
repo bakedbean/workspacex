@@ -32,6 +32,8 @@ pub(crate) struct SessionSnapshot {
     codex: Option<String>,
     /// omp session JSONL file names.
     omp: std::collections::HashSet<String>,
+    /// agy's last conversation id for this cwd.
+    agy: Option<String>,
 }
 
 impl SessionSnapshot {
@@ -48,6 +50,11 @@ impl SessionSnapshot {
     /// True if `name` is one of the omp sessions that predate this worktree.
     fn has_omp(&self, name: &str) -> bool {
         self.omp.contains(name)
+    }
+
+    /// True if `id` is the agy conversation that predates this worktree.
+    fn is_agy(&self, id: &str) -> bool {
+        self.agy.as_deref() == Some(id)
     }
 
     /// True if `rollout` is the Codex rollout that predates this worktree.
@@ -439,6 +446,9 @@ pub fn write_worktree_sessions(worktree: &Path) -> crate::error::Result<()> {
     if let Some(rollout) = crate::activity::codex_events::locate_session_file(worktree) {
         out.push_str(&format!("codex:{}\n", rollout.display()));
     }
+    if let Some(id) = agy_last_conversation(worktree) {
+        out.push_str(&format!("agy:{id}\n"));
+    }
     let path = gitdir.join(WORKTREE_SESSIONS_MARKER);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -465,6 +475,8 @@ fn read_worktree_sessions(worktree: &Path) -> Option<SessionSnapshot> {
             snap.omp.insert(name.to_string());
         } else if let Some(path) = line.strip_prefix("codex:") {
             snap.codex = Some(path.to_string());
+        } else if let Some(id) = line.strip_prefix("agy:") {
+            snap.agy = Some(id.to_string());
         }
     }
     Some(snap)
@@ -689,7 +701,45 @@ pub fn has_prior_session_for(worktree: &Path, agent: AgentKind) -> bool {
         AgentKind::Hermes => has_prior_hermes_session(worktree),
         AgentKind::Codex => has_prior_codex_session(worktree),
         AgentKind::Omp => has_prior_omp_session(worktree),
+        AgentKind::Agy => has_prior_agy_session(worktree),
     }
+}
+
+/// agy's CLI state directory (`~/.gemini/antigravity-cli`).
+fn agy_state_dir() -> Option<std::path::PathBuf> {
+    Some(dirs::home_dir()?.join(".gemini/antigravity-cli"))
+}
+
+/// True if agy has conversation `id` on disk
+/// (`~/.gemini/antigravity-cli/conversations/<id>.db`). The guard before
+/// `--conversation <id>`, so a vanished conversation spawns fresh instead.
+pub fn agy_conversation_exists(id: &str) -> bool {
+    plausible_session_id(id)
+        && agy_state_dir()
+            .is_some_and(|d| d.join("conversations").join(format!("{id}.db")).is_file())
+}
+
+/// The conversation `agy -c` would resume in `worktree`: agy keeps a
+/// cwd → last-conversation map in `cache/last_conversations.json`. Keys are
+/// the cwd as agy saw it, so both the given and canonical forms are tried.
+fn agy_last_conversation(worktree: &Path) -> Option<String> {
+    let path = agy_state_dir()?.join("cache/last_conversations.json");
+    let map: std::collections::HashMap<String, String> =
+        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let canonical = std::fs::canonicalize(worktree).ok();
+    [Some(worktree.to_path_buf()), canonical]
+        .into_iter()
+        .flatten()
+        .find_map(|p| map.get(p.to_string_lossy().as_ref()).cloned())
+}
+
+/// True if agy has a conversation for this worktree that belongs to the
+/// *current* occupant of the path — the same path-reuse gate as Codex.
+pub fn has_prior_agy_session(worktree: &Path) -> bool {
+    let Some(id) = agy_last_conversation(worktree) else {
+        return false;
+    };
+    agy_conversation_exists(&id) && read_worktree_sessions(worktree).is_none_or(|s| !s.is_agy(&id))
 }
 
 /// True if Codex has a recorded session whose `cwd` matches this worktree and
@@ -1273,6 +1323,53 @@ mod tests {
             body.contains("omp:1770000000_abc.jsonl"),
             "snapshot must name omp sessions: {body:?}"
         );
+    }
+
+    /// Seed agy's cwd → conversation map and the conversation's db file.
+    fn seed_agy_conversation(home: &std::path::Path, worktree: &std::path::Path, id: &str) {
+        let state = home.join(".gemini/antigravity-cli");
+        std::fs::create_dir_all(state.join("cache")).unwrap();
+        std::fs::create_dir_all(state.join("conversations")).unwrap();
+        let abs = std::fs::canonicalize(worktree).unwrap();
+        let map = serde_json::json!({ abs.to_string_lossy(): id });
+        std::fs::write(state.join("cache/last_conversations.json"), map.to_string()).unwrap();
+        std::fs::write(state.join(format!("conversations/{id}.db")), "").unwrap();
+    }
+
+    #[test]
+    fn has_prior_agy_session_needs_mapped_conversation_on_disk() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        assert!(!has_prior_agy_session(work.path()));
+
+        seed_agy_conversation(home.path(), work.path(), "c-1");
+        assert!(has_prior_agy_session(work.path()));
+        assert!(agy_conversation_exists("c-1"));
+        assert!(!agy_conversation_exists("../c-1"));
+
+        std::fs::remove_file(
+            home.path()
+                .join(".gemini/antigravity-cli/conversations/c-1.db"),
+        )
+        .unwrap();
+        assert!(!has_prior_agy_session(work.path()), "db gone: spawn fresh");
+    }
+
+    #[test]
+    fn agy_conversation_from_a_previous_occupant_is_not_resumed() {
+        let home = tempfile::TempDir::new().unwrap();
+        let work = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(work.path().join(".git/info")).unwrap();
+        let mut env = EnvGuard::new();
+        env.set("HOME", home.path());
+        seed_agy_conversation(home.path(), work.path(), "old");
+        write_worktree_sessions(work.path()).unwrap();
+        assert!(!has_prior_agy_session(work.path()));
+
+        seed_agy_conversation(home.path(), work.path(), "new");
+        assert!(has_prior_agy_session(work.path()));
     }
 
     /// Write a Codex rollout under `$HOME/.codex/sessions` whose embedded cwd

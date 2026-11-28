@@ -16,21 +16,22 @@ A workspace created from inside another workspace inherits its agent kind. See [
 | `hermes`           | [hermes-agent](https://github.com/nousresearch/hermes-agent)                     | `~/.hermes/config.yaml`   |
 | `codex`            | OpenAI Codex                                                                     | `~/.codex/config.toml`    |
 | `omp`              | [oh-my-pi](https://github.com/can1357/oh-my-pi) (`@oh-my-pi/pi-coding-agent`)    | `~/.omp/agent/config.yml` |
+| `agy`              | Google Antigravity CLI                                                           | `~/.gemini/`              |
 
 wsx runs the binary of the same name from `PATH`. Override the path with `WSX_<AGENT>_BIN`, and the model with the agent's model variables. See [Environment variables](../reference/environment-variables.md).
 
 ## Capabilities
 
-| Capability                             | claude | pi  | hermes | codex | omp |
-| -------------------------------------- | :----: | :-: | :----: | :---: | :-: |
-| wsx instructions and auto-rename       | ✓      | ✓   | ✓      | ✓     | ✓   |
-| [Related repos](../integrations/related-repos.md) as extra dirs | ✓ | – | – | – | ✓ |
-| Automatic status from the harness      | ✓      | –   | –      | ✓     | –   |
-| Each agent resumes its own session     | ✓      | ✓   | –      | ✓     | ✓   |
-| Yolo mode (`--yolo`)                   | ✓      | –   | ✓      | ✓     | ✓   |
-| [MCP inheritance](../integrations/mcp-inheritance.md) | ✓ | – | – | – | – |
-| [Remote control](../integrations/remote-access.md)   | ✓ | – | – | – | – |
-| `~/.claude/skills` and `~/.claude/commands` | ✓  | skills | – | commands | ✓ |
+| Capability                             | claude | pi  | hermes | codex | omp | agy |
+| -------------------------------------- | :----: | :-: | :----: | :---: | :-: | :-: |
+| wsx instructions and auto-rename       | ✓      | ✓   | ✓      | ✓     | ✓   | ✓   |
+| [Related repos](../integrations/related-repos.md) as extra dirs | ✓ | – | – | – | ✓ | ✓ |
+| Automatic status from the harness      | ✓      | –   | –      | ✓     | –   | ✓   |
+| Each agent resumes its own session     | ✓      | ✓   | –      | ✓     | ✓   | ✓   |
+| Yolo mode (`--yolo`)                   | ✓      | –   | ✓      | ✓     | ✓   | ✓   |
+| [MCP inheritance](../integrations/mcp-inheritance.md) | ✓ | – | – | – | – | – |
+| [Remote control](../integrations/remote-access.md)   | ✓ | – | – | – | – | – |
+| `~/.claude/skills` and `~/.claude/commands` | ✓  | skills | – | commands | ✓ | – |
 
 - "wsx instructions" is the [process doctrine](status-and-recap.md#what-agents-are-told), the auto-rename prompt, and the repo's custom instructions.
 - Agents without automatic status still report through `wsx status set`. See [Status and recap](status-and-recap.md).
@@ -54,7 +55,7 @@ wsx runs the binary of the same name from `PATH`. Override the path with `WSX_<A
 
 - Hermes has no flag for extra instructions, so wsx writes them into a `<!-- BEGIN wsx-managed -->` block at the end of the worktree's `AGENTS.md` on each start.
   - When wsx creates `AGENTS.md`, it copies the repo's `CLAUDE.md` into it.
-  - An untracked `AGENTS.md` is added to `.git/info/exclude`.
+  - An untracked `AGENTS.md` is added to the main repo's `.git/info/exclude`. Git reads only that one, so the entry hides an untracked `AGENTS.md` in every worktree of the repo, including the main checkout.
   - A tracked `AGENTS.md` shows as modified while the block is present.
 - On resume, wsx picks the newest Hermes session started since the workspace's first Hermes spawn. If two worktrees start Hermes within a few seconds, it can pick the wrong one.
 - Added Hermes agents always start fresh.
@@ -84,3 +85,17 @@ wsx runs the binary of the same name from `PATH`. Override the path with `WSX_<A
   - It enables every skill and command under `~/.claude`, not only wsx's.
   - Your `~/.omp/agent/config.yml` is never edited.
 - Pinned chips that name a bundled skill are sent as `/skill:<name>`. See [Agent skills](skills.md#pinning-skills-as-chips).
+
+## agy
+
+Tested with agy 1.5.18. Install agy and sign in once before using it in wsx.
+
+- wsx passes `--settings` with the worktree and its related repos in `trustedWorkspaces`, so agy's folder-trust prompt doesn't block the session. That setting lasts only for the session, and your `~/.gemini/antigravity-cli/settings.json` is never edited.
+- agy has no flag for extra instructions, so wsx writes them to `.agents/rules/wsx.md` as an always-on rule on each start, and deletes the file when there is nothing to write.
+  - agy reads `AGENTS.md` and `GEMINI.md` but not `CLAUDE.md`. In a repo that has only a `CLAUDE.md`, the rule includes it by path.
+  - The file is added to `.git/info/exclude`.
+- Status comes from agy hooks. wsx adds a `wsx-status` entry to `.agents/hooks.json` next to any hooks the repo already has, and adds the file to `.git/info/exclude`. A tracked `hooks.json` shows as modified. A `hooks.json` that isn't valid JSON is left alone, and status then comes only from `wsx status set`.
+- Each agy agent resumes its own conversation with `--conversation <id>`.
+- Yolo passes `--dangerously-skip-permissions`.
+- `WSX_AGY_MODEL` sets the model for new conversations.
+- agy doesn't load `~/.claude/skills`, and the detail bar shows no chat for agy.

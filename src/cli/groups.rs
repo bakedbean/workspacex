@@ -79,7 +79,7 @@ pub static GROUPS: &[GroupInfo] = &[
             },
             CmdInfo {
                 usage: "add <kind>",
-                blurb: "Attach an agent (claude|pi|hermes|codex|omp)",
+                blurb: "Attach an agent (claude|pi|hermes|codex|omp|agy)",
             },
             CmdInfo {
                 usage: "remove <label>",

@@ -29,6 +29,8 @@ pub fn locate_session_file_for(kind: AgentKind, worktree: &Path) -> Option<PathB
         AgentKind::Hermes => hermes_events::locate_session_file(worktree),
         AgentKind::Codex => codex_events::locate_session_file(worktree),
         AgentKind::Omp => omp_events::locate_session_file(worktree),
+        // agy's transcript is not tailed yet: RECENT CHAT stays empty for it.
+        AgentKind::Agy => None,
     }
 }
 
@@ -50,8 +52,9 @@ pub(crate) fn locate_instance_session_file(
             AgentKind::Pi => pi_session_file(worktree, id),
             AgentKind::Codex => codex_session_file(id),
             AgentKind::Omp => omp_session_exists(id).then(|| PathBuf::from(id)),
-            // Hermes has no per-instance session identity in the roster.
-            AgentKind::Hermes => None,
+            // Hermes has no per-instance session identity in the roster; agy
+            // records one but its transcript is not tailed.
+            AgentKind::Hermes | AgentKind::Agy => None,
         };
     }
     if same_kind_count != 1 {
@@ -73,6 +76,11 @@ pub fn tail_session_for(
         AgentKind::Hermes => hermes_events::tail_session(path, offset),
         AgentKind::Codex => codex_events::tail_session(path, offset).map_err(Into::into),
         AgentKind::Omp => omp_events::tail_session(path, offset).map_err(Into::into),
+        AgentKind::Agy => Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "agy transcripts are not tailed",
+        )
+        .into()),
     }
 }
 
@@ -121,7 +129,7 @@ mod tests {
             AgentKind::Omp => omp_events::session_dir(worktree)
                 .unwrap()
                 .join(format!("2026-09-13T10-00-00_{id}.jsonl")),
-            AgentKind::Hermes => unreachable!("Hermes uses SQLite"),
+            AgentKind::Hermes | AgentKind::Agy => unreachable!("no JSONL transcript"),
         };
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let meta = serde_json::json!({

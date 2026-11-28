@@ -329,7 +329,7 @@ claude = "\uec82"
 codex  = "\uec81"
 ```
 
-Keys must be `claude`, `pi`, `hermes`, `codex` or `omp`. Entries merge over the bundled default. An empty entry (`pi = ""`) shows no glyph. The same glyphs appear as `$icon` in `agents` pills and as `$icon_<kind>` in modules.
+Keys must be `claude`, `pi`, `hermes`, `codex`, `omp` or `agy`. Entries merge over the bundled default. An empty entry (`pi = ""`) shows no glyph. The same glyphs appear as `$icon` in `agents` pills and as `$icon_<kind>` in modules.
 
 ### Grading items by position
 
@@ -431,8 +431,8 @@ right_format = "$tokens(  $funnel)(  $usage)"
 | `msgs_queued` | agent-to-agent messages not yet delivered |
 | `workspaces` `repos` | totals (always rendered) |
 | `tokens_total` | sum of the latest context size across every agent, primary and peers |
-| `tokens_claude` `tokens_pi` `tokens_hermes` `tokens_codex` `tokens_omp` | the same, per agent kind (`hermes` reports none) |
-| `icon_claude` `icon_pi` `icon_hermes` `icon_codex` `icon_omp` | the kind's glyph from `[agent_bar.symbols]`; like literal text, it never keeps a `( … )` group alive alone |
+| `tokens_claude` `tokens_pi` `tokens_hermes` `tokens_codex` `tokens_omp` `tokens_agy` | the same, per agent kind (`hermes` and `agy` report none) |
+| `icon_claude` `icon_pi` `icon_hermes` `icon_codex` `icon_omp` `icon_agy` | the kind's glyph from `[agent_bar.symbols]`; like literal text, it never keeps a `( … )` group alive alone |
 
 ## A powerline example
 

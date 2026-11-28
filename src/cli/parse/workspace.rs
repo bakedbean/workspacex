@@ -40,7 +40,7 @@ pub(in crate::cli) fn parse_workspace(it: &mut Args) -> Result<CliAction> {
             let repo = it.next().ok_or_else(|| Error::Usage {
                 group: None,
                 msg:
-                    "workspace create <repo> [--name <slug>] [--yolo] [--shared] [--start [--json]] [--agent claude|pi|hermes|codex|omp] [--prompt <text>] [--continues <slug>]"
+                    "workspace create <repo> [--name <slug>] [--yolo] [--shared] [--start [--json]] [--agent claude|pi|hermes|codex|omp|agy] [--prompt <text>] [--continues <slug>]"
                         .into(),
             })?;
             let mut name: Option<String> = None;
@@ -77,14 +77,13 @@ pub(in crate::cli) fn parse_workspace(it: &mut Args) -> Result<CliAction> {
                     "--start" => start = true,
                     "--json" => json = true,
                     "--agent" => {
-                        agent =
-                            Some(
-                                it.next().ok_or_else(|| Error::Usage {
-                                    group: None,
-                                    msg: "--agent needs value (claude, pi, hermes, codex, or omp)"
-                                        .into(),
-                                })?,
-                            );
+                        agent = Some(it.next().ok_or_else(|| {
+                            Error::Usage {
+                                group: None,
+                                msg: "--agent needs value (claude, pi, hermes, codex, omp, or agy)"
+                                    .into(),
+                            }
+                        })?);
                     }
                     other => {
                         return Err(Error::Usage {

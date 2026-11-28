@@ -446,6 +446,10 @@ pub const FLEET_VARS: &[FleetVar] = &[
         doc: "as `tokens_total`, over omp agents only",
     },
     FleetVar {
+        name: "tokens_agy",
+        doc: "as `tokens_total`, over agy agents only (agy reports no usage, so always empty today)",
+    },
+    FleetVar {
         name: "icon_claude",
         doc: "the claude glyph from `[agent_bar.symbols]`, absent when the theme has none; a label, so it never keeps a group alive on its own",
     },
@@ -464,6 +468,10 @@ pub const FLEET_VARS: &[FleetVar] = &[
     FleetVar {
         name: "icon_omp",
         doc: "as `icon_claude`, for omp",
+    },
+    FleetVar {
+        name: "icon_agy",
+        doc: "as `icon_claude`, for agy",
     },
 ];
 

@@ -53,13 +53,9 @@ pub(super) async fn new_workspace(
             return Ok(());
         }
         KeyCode::Tab => {
-            agent = match agent {
-                crate::pty::session::AgentKind::Claude => crate::pty::session::AgentKind::Pi,
-                crate::pty::session::AgentKind::Pi => crate::pty::session::AgentKind::Hermes,
-                crate::pty::session::AgentKind::Hermes => crate::pty::session::AgentKind::Codex,
-                crate::pty::session::AgentKind::Codex => crate::pty::session::AgentKind::Omp,
-                crate::pty::session::AgentKind::Omp => crate::pty::session::AgentKind::Claude,
-            };
+            use crate::pty::session::AgentKind;
+            let i = AgentKind::ALL.iter().position(|a| *a == agent).unwrap_or(0);
+            agent = AgentKind::ALL[(i + 1) % AgentKind::ALL.len()];
         }
         KeyCode::Char('s') if k.modifiers.contains(KeyModifiers::CONTROL) => {
             ws_shared = !ws_shared;

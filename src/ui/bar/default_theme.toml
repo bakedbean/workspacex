@@ -191,7 +191,7 @@ format = "[$label $spark](fg:path)"
 priority = 60
 
 # Agent identity bar; $style carries the agent's color. Variables: $symbol
-# An `[agent_bar.symbols]` table (keys: claude, pi, hermes, codex, omp)
+# An `[agent_bar.symbols]` table (keys: claude, pi, hermes, codex, omp, agy)
 # gives a kind its own glyph; `symbol` covers the kinds without one.
 [agent_bar]
 symbol = "▎"
@@ -311,8 +311,8 @@ priority = 50
 #   $pr_open $pr_conflicted $pr_merged $pr_closed $review_required
 #   $changes_requested $approved $unresolved $mergeable $dirty $msgs_queued
 #   $workspaces $repos $tokens_total $tokens_claude $tokens_pi $tokens_hermes
-#   $tokens_codex $tokens_omp $icon_claude $icon_pi $icon_hermes $icon_codex
-#   $icon_omp
+#   $tokens_codex $tokens_omp $tokens_agy $icon_claude $icon_pi $icon_hermes
+#   $icon_codex $icon_omp $icon_agy
 
 # The delivery funnel: how many workspaces sit at each stage of the
 # pipeline, from working through review to mergeable. Each item carries

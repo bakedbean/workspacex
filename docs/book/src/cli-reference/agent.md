@@ -26,7 +26,7 @@ Lists the workspace's agents with their instance ids and each agent's last statu
 wsx agent add <kind>
 ```
 
-Adds an agent of `<kind>` (`claude`, `pi`, `hermes`, `codex` or `omp`) to the current workspace and prints its label. The dashboard starts it.
+Adds an agent of `<kind>` (`claude`, `pi`, `hermes`, `codex`, `omp` or `agy`) to the current workspace and prints its label. The dashboard starts it.
 
 ## wsx agent remove
 

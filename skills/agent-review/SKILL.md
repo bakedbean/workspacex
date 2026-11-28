@@ -1,6 +1,6 @@
 ---
 name: agent-review
-description: Use in a wsx workspace to spin up a peer review agent that code-reviews the current branch. Takes the reviewer kind (claude|pi|hermes|codex|omp; asks which when omitted); spawns the peer, hands it branch-diff-vs-main context (telling it to run a code-review skill, preferring the repo-local one over its harness built-in), and has it report findings back to you.
+description: Use in a wsx workspace to spin up a peer review agent that code-reviews the current branch. Takes the reviewer kind (claude|pi|hermes|codex|omp|agy; asks which when omitted); spawns the peer, hands it branch-diff-vs-main context (telling it to run a code-review skill, preferring the repo-local one over its harness built-in), and has it report findings back to you.
 ---
 
 # agent-review
@@ -13,10 +13,11 @@ its findings.
 ## Argument
 
 A single optional argument: the reviewer **kind**, one of `claude`, `pi`,
-`hermes`, `codex`, `omp`.
+`hermes`, `codex`, `omp`, `agy`.
 
 - `/agent-review codex` → spawn a `codex` reviewer
 - `/agent-review omp` → spawn an `omp` (oh-my-pi) reviewer
+- `/agent-review agy` → spawn an `agy` (Antigravity CLI) reviewer
 - `/agent-review` → ask which kind (below), then spawn it
 
 When the argument is empty (e.g. the `agent-review` pinned chip was fired and
@@ -24,7 +25,7 @@ submitted without a kind), **ask the user** before doing anything else. Use a
 single-choice prompt if your harness has one (Claude Code: `AskUserQuestion`),
 otherwise ask in plain text:
 
-> Which reviewer kind? `claude` / `pi` / `hermes` / `codex` / `omp`
+> Which reviewer kind? `claude` / `pi` / `hermes` / `codex` / `omp` / `agy`
 
 List `claude` first as the usual choice. Wait for the answer; do not default.
 

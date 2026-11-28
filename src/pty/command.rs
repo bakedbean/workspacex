@@ -1,7 +1,7 @@
 //! Per-agent command construction.
 //!
 //! Builds the `CommandBuilder` for each [`AgentKind`]
-//! (claude/pi/hermes/codex/omp)
+//! (claude/pi/hermes/codex/omp/agy)
 //! from a worktree path + [`SpawnMode`], including rename system-prompt
 //! rendering and the injected-prompt composition shared by the AGENTS.md and
 //! Codex `-c` delivery paths. Pure functions over paths/modes — no `Session`
@@ -821,6 +821,93 @@ pub fn build_omp_command(
     if !parts.is_empty() {
         cmd.arg("--append-system-prompt");
         cmd.arg(parts.join("\n\n"));
+    }
+
+    cmd
+}
+
+/// Build a `CommandBuilder` for Google's Antigravity CLI (`agy`, or whatever
+/// `WSX_AGY_BIN` points to) inside `cwd`. Inherits the current process env.
+///
+/// agy shows a modal "Do you trust this folder?" dialog in any directory not
+/// under a `trustedWorkspaces` entry, and keystrokes injected there are eaten
+/// by the list widget. `--settings` applies settings for this run only (never
+/// saved), so trusting the worktree and its related repos there skips the
+/// dialog without growing the user's persisted trust list.
+///
+/// Instructions (doctrine, rename hint, custom text) are not flags: agy has
+/// no `--append-system-prompt`, so `prepare_agy_workspace` writes them into a
+/// wsx-owned always-on rule file before the spawn.
+pub fn build_agy_command(
+    cwd: &Path,
+    mode: &SpawnMode,
+    _remote: crate::agent::remote_control::RemoteOpts,
+) -> CommandBuilder {
+    let bin = std::env::var("WSX_AGY_BIN").unwrap_or_else(|_| "agy".to_string());
+    let mut cmd = CommandBuilder::new(bin);
+    cmd.cwd(cwd);
+    for (k, v) in std::env::vars() {
+        cmd.env(k, v);
+    }
+
+    let (add_dirs, resume, yolo) = match mode {
+        SpawnMode::Continue {
+            additional_dirs,
+            yolo,
+            resume_session_id,
+            ..
+        } => (additional_dirs, Some(resume_session_id.as_deref()), *yolo),
+        SpawnMode::Fresh {
+            additional_dirs,
+            yolo,
+            ..
+        } => (additional_dirs, None, *yolo),
+    };
+
+    // agy compares trust against its resolved cwd (`/var` -> `/private/var`
+    // on macOS), so a symlinked spelling would leave the dialog up.
+    let trusted: Vec<String> = std::iter::once(cwd)
+        .chain(add_dirs.iter().map(|d| d.as_path()))
+        .map(|p| {
+            std::fs::canonicalize(p)
+                .unwrap_or_else(|_| p.to_path_buf())
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    cmd.arg("--settings");
+    cmd.arg(serde_json::json!({ "trustedWorkspaces": trusted }).to_string());
+
+    for dir in add_dirs {
+        cmd.arg("--add-dir");
+        cmd.arg(dir);
+    }
+
+    match resume {
+        // `-c` resumes the most recent conversation for this cwd, and starts
+        // fresh when there is none, so it is safe on a never-used worktree.
+        Some(Some(id)) => {
+            cmd.arg("--conversation");
+            cmd.arg(id);
+        }
+        Some(None) => {
+            cmd.arg("-c");
+        }
+        None => {
+            // A resumed conversation keeps its own model; only pick one fresh.
+            if let Some(model) = std::env::var("WSX_AGY_MODEL")
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+            {
+                cmd.arg("--model");
+                cmd.arg(model);
+            }
+        }
+    }
+
+    if yolo {
+        cmd.arg("--dangerously-skip-permissions");
     }
 
     cmd
@@ -1710,6 +1797,122 @@ mod tests {
                 result.starts_with("DOCTRINE_MARK"),
                 "doctrine must lead: {result}"
             );
+        }
+    }
+
+    mod agy_build_command {
+        fn agy_argv(mode: &super::SpawnMode) -> Vec<String> {
+            super::build_agy_command(
+                std::path::Path::new("/tmp/wt"),
+                mode,
+                crate::agent::remote_control::RemoteOpts::disabled(),
+            )
+            .get_argv()
+            .iter()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect()
+        }
+
+        fn fresh(yolo: bool, dirs: Vec<std::path::PathBuf>) -> super::SpawnMode {
+            super::SpawnMode::Fresh {
+                rename_ctx: None,
+                custom_instructions: Some("CUSTOM".into()),
+                doctrine: Some("DOCTRINE".into()),
+                additional_dirs: dirs,
+                yolo,
+                pin_session_id: None,
+            }
+        }
+
+        fn cont(resume: Option<&str>) -> super::SpawnMode {
+            super::SpawnMode::Continue {
+                custom_instructions: None,
+                doctrine: None,
+                additional_dirs: vec![],
+                yolo: false,
+                resume_session_id: resume.map(str::to_string),
+            }
+        }
+
+        fn flag_value<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
+            argv.windows(2)
+                .find(|w| w[0] == flag)
+                .map(|w| w[1].as_str())
+        }
+
+        #[test]
+        fn fresh_trusts_worktree_and_related_repos_via_settings() {
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_AGY_BIN", "agy");
+            env.remove("WSX_AGY_MODEL");
+            let argv = agy_argv(&fresh(false, vec!["/repos/other".into()]));
+            let settings: serde_json::Value =
+                serde_json::from_str(flag_value(&argv, "--settings").expect("--settings")).unwrap();
+            assert_eq!(
+                settings,
+                serde_json::json!({"trustedWorkspaces": ["/tmp/wt", "/repos/other"]})
+            );
+            assert_eq!(flag_value(&argv, "--add-dir"), Some("/repos/other"));
+            assert!(!argv.iter().any(|a| a == "-c" || a == "--conversation"));
+            assert!(!argv.iter().any(|a| a == "--dangerously-skip-permissions"));
+            assert!(!argv.iter().any(|a| a == "--model"));
+            // Instructions go to the rule file, never argv.
+            assert!(
+                !argv
+                    .iter()
+                    .any(|a| a.contains("DOCTRINE") || a.contains("CUSTOM"))
+            );
+        }
+
+        #[test]
+        fn trusts_the_resolved_path_of_a_symlinked_worktree() {
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_AGY_BIN", "agy");
+            let tmp = tempfile::tempdir().unwrap();
+            let real = tmp.path().join("real");
+            std::fs::create_dir(&real).unwrap();
+            let link = tmp.path().join("link");
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            let argv: Vec<String> = super::build_agy_command(
+                &link,
+                &fresh(false, vec![]),
+                crate::agent::remote_control::RemoteOpts::disabled(),
+            )
+            .get_argv()
+            .iter()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+            let settings: serde_json::Value =
+                serde_json::from_str(flag_value(&argv, "--settings").unwrap()).unwrap();
+            let want = std::fs::canonicalize(&real).unwrap();
+            assert_eq!(
+                settings,
+                serde_json::json!({"trustedWorkspaces": [want.to_string_lossy()]})
+            );
+        }
+
+        #[test]
+        fn yolo_skips_permissions_and_model_env_applies_to_fresh_only() {
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_AGY_BIN", "agy");
+            env.set("WSX_AGY_MODEL", " neon ");
+            let argv = agy_argv(&fresh(true, vec![]));
+            assert!(argv.iter().any(|a| a == "--dangerously-skip-permissions"));
+            assert_eq!(flag_value(&argv, "--model"), Some("neon"));
+            let argv = agy_argv(&cont(None));
+            assert!(!argv.iter().any(|a| a == "--model"), "{argv:?}");
+        }
+
+        #[test]
+        fn continue_resumes_recorded_conversation_else_cwd_latest() {
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_AGY_BIN", "agy");
+            let argv = agy_argv(&cont(Some("abc-123")));
+            assert_eq!(flag_value(&argv, "--conversation"), Some("abc-123"));
+            assert!(!argv.iter().any(|a| a == "-c"));
+            let argv = agy_argv(&cont(None));
+            assert!(argv.iter().any(|a| a == "-c"), "{argv:?}");
+            assert!(!argv.iter().any(|a| a == "--conversation"));
         }
     }
 

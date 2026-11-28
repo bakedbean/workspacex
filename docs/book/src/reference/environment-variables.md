@@ -17,6 +17,8 @@ Set these in the shell that starts wsx. wsx passes its environment on to the age
 | `WSX_CODEX_MODEL` | Model passed to Codex as `-m`. |
 | `WSX_OMP_BIN` | Path to `omp` (oh-my-pi). Default: `omp` on `PATH`. |
 | `WSX_OMP_MODEL` | Model passed to omp as `--model`. |
+| `WSX_AGY_BIN` | Path to `agy` (Antigravity CLI). Default: `agy` on `PATH`. |
+| `WSX_AGY_MODEL` | Model passed to agy as `--model` on a fresh start. |
 
 See [Coding agents](../agents/coding-agents.md).
 

@@ -89,6 +89,8 @@ pub(crate) fn resolve_spawn_context(
 /// - omp: the session *file path* read from omp's per-terminal breadcrumb
 ///   for this instance's own PTY (`app::session_harvest`), resumed with
 ///   `--resume=<path>`.
+/// - agy: the `conversationId` in its hook payloads (`StatusFromHook`),
+///   resumed with `--conversation <id>`.
 /// - Hermes: never — the id only exists inside the Hermes process.
 ///
 /// The existence check matters: Claude and Codex refuse to start on an
@@ -98,8 +100,8 @@ pub(crate) fn recorded_resume_id(
     worktree: &std::path::Path,
 ) -> Option<String> {
     use crate::pty::session::{
-        AgentKind, claude_session_exists, codex_session_exists, omp_session_exists,
-        pi_session_exists,
+        AgentKind, agy_conversation_exists, claude_session_exists, codex_session_exists,
+        omp_session_exists, pi_session_exists,
     };
     let id = instance.agent_session_id.as_deref()?;
     let on_disk = match instance.agent {
@@ -107,6 +109,7 @@ pub(crate) fn recorded_resume_id(
         AgentKind::Pi => pi_session_exists(worktree, id),
         AgentKind::Codex => codex_session_exists(id),
         AgentKind::Omp => omp_session_exists(id),
+        AgentKind::Agy => agy_conversation_exists(id),
         AgentKind::Hermes => false,
     };
     on_disk.then(|| id.to_string())

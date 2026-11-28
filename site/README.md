@@ -86,7 +86,7 @@ the page is deliberately small-type and dense.
 - Never set text in `--fg-faint` (2.6:1), footer included. Use `--fg-muted` (5:1) or lighter.
 - `.cmd` reserves 56px of right padding for the absolutely-positioned copy button — don't remove it.
 - `.reveal` (+ optional `data-d="1..3"` for stagger) fades an element in on scroll; it is reduced-motion safe, has a 2.6s failsafe that force-reveals everything, and a `<noscript>` rule shows everything when JS is off.
-- Hero copy states supported harnesses (Claude Code, Codex, oh-my-pi, Hermes) — update there, in the footer tagline and in the JSON-LD when that list changes.
+- Hero copy states supported harnesses (Claude Code, Codex, oh-my-pi, Hermes, Antigravity) — update there, in the footer tagline and in the JSON-LD when that list changes.
 - `<head>` carries canonical, favicons, Open Graph / Twitter cards and JSON-LD; keep them when re-applying a design handoff.
 
 ## Accessibility

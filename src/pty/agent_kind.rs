@@ -16,18 +16,21 @@ pub enum AgentKind {
     /// `@earendil-works/pi-coding-agent`, different binaries, both installable
     /// at once.
     Omp,
+    /// Google's Antigravity CLI (`agy`).
+    Agy,
 }
 
 impl AgentKind {
     /// All agent kinds, in stable display order. Add new variants here when
     /// extending the enum — `const` arrays do not get exhaustiveness checking,
     /// so this is the one place the compiler can't catch a drift.
-    pub const ALL: [AgentKind; 5] = [
+    pub const ALL: [AgentKind; 6] = [
         AgentKind::Claude,
         AgentKind::Pi,
         AgentKind::Hermes,
         AgentKind::Codex,
         AgentKind::Omp,
+        AgentKind::Agy,
     ];
 
     pub fn from_str_or_default(s: Option<&str>) -> Self {
@@ -36,6 +39,7 @@ impl AgentKind {
             Some("hermes") => AgentKind::Hermes,
             Some("codex") => AgentKind::Codex,
             Some("omp") => AgentKind::Omp,
+            Some("agy") => AgentKind::Agy,
             _ => AgentKind::Claude,
         }
     }
@@ -47,6 +51,7 @@ impl AgentKind {
             AgentKind::Hermes => "hermes",
             AgentKind::Codex => "codex",
             AgentKind::Omp => "omp",
+            AgentKind::Agy => "agy",
         }
     }
 

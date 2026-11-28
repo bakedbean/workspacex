@@ -254,7 +254,12 @@ pub(crate) const AGY_HOOKS_PATH: &str = ".agents/hooks.json";
 fn write_agy_hooks(cwd: &Path, wsx_bin: &Path) {
     use crate::agent::status::agy::{HOOK_NAME, hook_entry};
     let path = cwd.join(AGY_HOOKS_PATH);
-    let existing = std::fs::read_to_string(&path).ok();
+    // Only a missing file starts empty; an unreadable one is left untouched.
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return,
+    };
     let mut root = match existing.as_deref() {
         None => serde_json::Map::new(),
         Some(text) => match serde_json::from_str::<serde_json::Value>(text) {
@@ -337,6 +342,17 @@ mod tests {
             fs::write(&path, "not json").unwrap();
             write_agy_hooks(tmp.path(), Path::new("/bin/wsx"));
             assert_eq!(fs::read_to_string(&path).unwrap(), "not json");
+        }
+
+        #[test]
+        fn leaves_an_unreadable_hooks_file_alone() {
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join(AGY_HOOKS_PATH);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let bytes = b"{\"lint\": \"\xff\"}";
+            fs::write(&path, bytes).unwrap();
+            write_agy_hooks(tmp.path(), Path::new("/bin/wsx"));
+            assert_eq!(fs::read(&path).unwrap(), bytes);
         }
     }
 

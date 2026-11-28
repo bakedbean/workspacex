@@ -864,9 +864,16 @@ pub fn build_agy_command(
         } => (additional_dirs, None, *yolo),
     };
 
+    // agy compares trust against its resolved cwd (`/var` -> `/private/var`
+    // on macOS), so a symlinked spelling would leave the dialog up.
     let trusted: Vec<String> = std::iter::once(cwd)
         .chain(add_dirs.iter().map(|d| d.as_path()))
-        .map(|p| p.to_string_lossy().into_owned())
+        .map(|p| {
+            std::fs::canonicalize(p)
+                .unwrap_or_else(|_| p.to_path_buf())
+                .to_string_lossy()
+                .into_owned()
+        })
         .collect();
     cmd.arg("--settings");
     cmd.arg(serde_json::json!({ "trustedWorkspaces": trusted }).to_string());
@@ -1854,6 +1861,33 @@ mod tests {
                 !argv
                     .iter()
                     .any(|a| a.contains("DOCTRINE") || a.contains("CUSTOM"))
+            );
+        }
+
+        #[test]
+        fn trusts_the_resolved_path_of_a_symlinked_worktree() {
+            let mut env = super::EnvGuard::new();
+            env.set("WSX_AGY_BIN", "agy");
+            let tmp = tempfile::tempdir().unwrap();
+            let real = tmp.path().join("real");
+            std::fs::create_dir(&real).unwrap();
+            let link = tmp.path().join("link");
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            let argv: Vec<String> = super::build_agy_command(
+                &link,
+                &fresh(false, vec![]),
+                crate::agent::remote_control::RemoteOpts::disabled(),
+            )
+            .get_argv()
+            .iter()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+            let settings: serde_json::Value =
+                serde_json::from_str(flag_value(&argv, "--settings").unwrap()).unwrap();
+            let want = std::fs::canonicalize(&real).unwrap();
+            assert_eq!(
+                settings,
+                serde_json::json!({"trustedWorkspaces": [want.to_string_lossy()]})
             );
         }
 

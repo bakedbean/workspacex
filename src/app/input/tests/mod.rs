@@ -21,6 +21,7 @@ mod ctrl_z_suppression;
 mod dashboard;
 mod detail_bar_column_resize;
 mod detail_bar_focus;
+mod detail_bar_layout;
 mod detail_bar_resize;
 mod detail_scroll;
 mod global_settings;

@@ -13,8 +13,10 @@
 //!   [`pickers`]    name color, workspace tags, usage window, hide rules
 //!   [`prompt_tag`]  the XML prompt-tag picker and body box
 //!   [`file_diff`]   the side panel's full-screen diff viewer
+//!   [`detail_bar_layout`]  the detail bar's module layout editor
 
 pub(super) mod agents;
+pub(super) mod detail_bar_layout;
 pub(in crate::app::input) mod file_diff;
 pub(super) mod panels;
 pub(super) mod pickers;
@@ -121,6 +123,7 @@ pub(in crate::app::input) async fn handle_key_modal(
             panels::repo_settings(app, shared, k, repo_id, selected).await?
         }
         Modal::GlobalSettings { selected } => panels::global_settings(app, k, selected)?,
+        Modal::DetailBarLayout(ed) => detail_bar_layout::keys(app, k, ed),
         Modal::AgentMissing { ws_id, agent, .. } => {
             agents::agent_missing(app, shared, k, ws_id, agent).await?
         }

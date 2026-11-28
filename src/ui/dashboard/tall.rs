@@ -1075,7 +1075,7 @@ pub(crate) fn ahead_label(n: u32, base: Option<&str>) -> String {
 
 /// Pack `parts` onto lines of at most `width` cells, joined by `sep`; a
 /// part wider than a line gets a line of its own.
-pub(crate) fn pack(
+fn pack(
     parts: Vec<Vec<Span<'static>>>,
     sep: &Span<'static>,
     width: usize,

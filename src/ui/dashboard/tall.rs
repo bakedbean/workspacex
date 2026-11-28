@@ -453,12 +453,7 @@ pub fn strip_columns(rows: &[TallRow<'_>], widths: ColumnWidths, width: usize) -
     let ahead = max(&|r| ahead_text(r.detail).map_or(0, |t| display_width(&t)));
     let sync = max(&|r| spans_width(&sync_spans(r.row, r.detail, &theme)));
     let dirty = max(&|r| dirty_text(r.detail).map_or(0, |t| display_width(&t)));
-    let commit_max = rows
-        .iter()
-        .flat_map(|r| r.detail.commit_sizes.iter().flatten())
-        .map(|d| d.added.saturating_add(d.removed))
-        .max()
-        .unwrap_or(0);
+    let commit_max = commit_size_max(rows.iter().flat_map(|r| r.detail.commit_sizes.iter()));
     let bars = max(&|r| r.detail.commit_sizes.len());
     let diff = max(&|r| spans_width(&diff_spans(r.row, r.detail, commit_max, bars, &theme)));
     let age = max(&|r| display_width(&age_text(r.row)));
@@ -547,18 +542,27 @@ fn ahead_text(detail: &WorkspaceDetail) -> Option<String> {
         .map(|n| ahead_label(n, detail.base_branch.as_deref()))
 }
 
+fn sync_spans(row: &RowInputs, detail: &WorkspaceDetail, theme: &Theme) -> Vec<Span<'static>> {
+    sync_cell(row.lifecycle, detail.git, detail.ahead_of_base, theme)
+}
+
 /// Where the branch stands against its remote: `⇡2 unpushed` and `⇣3
 /// behind` against its upstream, or a dim `not pushed` for a branch with
 /// commits but no upstream and no PR (a PR means it was pushed; a merged
 /// branch's upstream is often deleted). Nothing when in sync or unknown.
-fn sync_spans(row: &RowInputs, detail: &WorkspaceDetail, theme: &Theme) -> Vec<Span<'static>> {
+pub(crate) fn sync_cell(
+    lifecycle: Option<crate::git::forge::BranchLifecycle>,
+    git: Option<WorkspaceStatus>,
+    ahead_of_base: Option<u32>,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
     use crate::git::forge::BranchLifecycle;
-    let Some(g) = detail.git else {
+    let Some(g) = git else {
         return Vec::new();
     };
     if !g.upstream {
-        let no_pr = matches!(row.lifecycle, None | Some(BranchLifecycle::NoPr));
-        return if no_pr && detail.ahead_of_base.is_some_and(|n| n > 0) {
+        let no_pr = matches!(lifecycle, None | Some(BranchLifecycle::NoPr));
+        return if no_pr && ahead_of_base.is_some_and(|n| n > 0) {
             vec![Span::styled("not pushed", theme.row_dim_style())]
         } else {
             Vec::new()
@@ -580,9 +584,13 @@ fn sync_spans(row: &RowInputs, detail: &WorkspaceDetail, theme: &Theme) -> Vec<S
     out
 }
 
-/// `3 mod 1 untr`; `None` for a clean or unknown tree.
 fn dirty_text(detail: &WorkspaceDetail) -> Option<String> {
-    let g = detail.git?;
+    dirty_cell(detail.git)
+}
+
+/// `3 mod 1 untr`; `None` for a clean or unknown tree.
+pub(crate) fn dirty_cell(git: Option<WorkspaceStatus>) -> Option<String> {
+    let g = git?;
     let parts: Vec<String> = [(g.modified, "mod"), (g.untracked, "untr")]
         .into_iter()
         .filter(|(n, _)| *n > 0)
@@ -600,8 +608,17 @@ pub fn commit_sizes(commits: &[crate::git::BranchCommit]) -> Vec<Option<DiffStat
     commits.iter().take(DIFF_BARS).map(|c| c.stats).collect()
 }
 
-/// `▂▅▁▃█▂▄  +184 −22`: a bar per recent commit, padded to `bars` cells so
-/// the counts line up, then the branch's totals; nothing without changes.
+/// The largest commit in `sizes`, in lines changed: what `commit_bars`
+/// scales against.
+pub(crate) fn commit_size_max<'s>(sizes: impl IntoIterator<Item = &'s Option<DiffStats>>) -> u32 {
+    sizes
+        .into_iter()
+        .flatten()
+        .map(|d| d.added.saturating_add(d.removed))
+        .max()
+        .unwrap_or(0)
+}
+
 fn diff_spans(
     row: &RowInputs,
     detail: &WorkspaceDetail,
@@ -609,12 +626,25 @@ fn diff_spans(
     bars: usize,
     theme: &Theme,
 ) -> Vec<Span<'static>> {
-    let Some(d) = row.diff.filter(|d| d.added > 0 || d.removed > 0) else {
+    diff_cell(row.diff, &detail.commit_sizes, max, bars, theme)
+}
+
+/// `▂▅▁▃█▂▄  +184 −22`: a bar per recent commit in `sizes` (newest first),
+/// padded to `bars` cells so the counts line up, then the branch's totals
+/// from `diff`; nothing without changes.
+pub(crate) fn diff_cell(
+    diff: Option<DiffStats>,
+    sizes: &[Option<DiffStats>],
+    max: u32,
+    bars: usize,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let Some(d) = diff.filter(|d| d.added > 0 || d.removed > 0) else {
         return Vec::new();
     };
-    let mut out = commit_bars(&detail.commit_sizes, max, theme);
+    let mut out = commit_bars(sizes, max, theme);
     if bars > 0 {
-        let pad = bars.saturating_sub(detail.commit_sizes.len()) + 1;
+        let pad = bars.saturating_sub(sizes.len()) + 1;
         out.push(Span::raw(" ".repeat(pad)));
     }
     out.extend([
@@ -1018,7 +1048,7 @@ fn footer_parts(
 
 /// `↑4 vs main`: commits ahead of the base branch, named without its
 /// `origin/` remote prefix. Falls back to `↑4 base` if the name is unknown.
-fn ahead_label(n: u32, base: Option<&str>) -> String {
+pub(crate) fn ahead_label(n: u32, base: Option<&str>) -> String {
     match base.map(str::trim).filter(|b| !b.is_empty()) {
         Some(b) => format!("↑{n} vs {}", b.strip_prefix("origin/").unwrap_or(b)),
         None => format!("↑{n} base"),

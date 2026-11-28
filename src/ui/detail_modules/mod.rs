@@ -46,6 +46,12 @@ pub trait DetailModule: Send + Sync {
     /// not render their own title.
     fn title(&self) -> &'static str;
 
+    /// One line saying what the module shows, for the layout editor's
+    /// module menu.
+    fn description(&self) -> &'static str {
+        ""
+    }
+
     /// Produce the module's content lines. The container will paint
     /// these via `Paragraph` and slice them by scroll offset. `width`
     /// is the column width the content will be drawn into (use for
@@ -55,6 +61,8 @@ pub trait DetailModule: Send + Sync {
 
 pub struct Registry {
     modules: HashMap<&'static str, Box<dyn DetailModule>>,
+    /// Ids in registration order, so menus list modules stably.
+    order: Vec<&'static str>,
 }
 
 impl std::fmt::Debug for Registry {
@@ -68,20 +76,29 @@ impl Registry {
     pub fn new() -> Self {
         Self {
             modules: HashMap::new(),
+            order: Vec::new(),
         }
     }
 
     pub fn register(&mut self, m: Box<dyn DetailModule>) {
         let id = m.id();
-        self.modules.insert(id, m);
+        if self.modules.insert(id, m).is_none() {
+            self.order.push(id);
+        }
     }
 
     pub fn get(&self, id: &str) -> Option<&dyn DetailModule> {
         self.modules.get(id).map(|b| b.as_ref())
     }
 
+    /// Registered ids, in registration order.
     pub fn ids(&self) -> impl Iterator<Item = &'static str> + '_ {
-        self.modules.keys().copied()
+        self.order.iter().copied()
+    }
+
+    /// Registered modules, in registration order.
+    pub fn modules(&self) -> impl Iterator<Item = &dyn DetailModule> + '_ {
+        self.order.iter().filter_map(|id| self.get(id))
     }
 }
 
@@ -99,13 +116,14 @@ pub mod recent_files;
 pub mod session_summary;
 
 /// Populate `reg` with the built-in modules: session summary, recent
-/// chat, processes, recent files, and agents.
+/// chat, processes, recent files, and agents. This order is the order
+/// the layout editor's module menu lists them in.
 pub fn register_builtins(reg: &mut Registry) {
-    reg.register(Box::new(agents::Agents));
     reg.register(Box::new(session_summary::SessionSummary));
     reg.register(Box::new(recent_chat::RecentChat));
     reg.register(Box::new(processes::Processes));
     reg.register(Box::new(recent_files::RecentFiles));
+    reg.register(Box::new(agents::Agents));
 }
 
 #[cfg(test)]
@@ -237,6 +255,27 @@ mod tests {
         assert!(ids.contains("a"));
         assert!(ids.contains("b"));
         assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
+    fn ids_follow_registration_order() {
+        let mut reg = Registry::new();
+        for (id, title) in [("b", "B"), ("a", "A"), ("c", "C"), ("a", "A2")] {
+            reg.register(Box::new(MockModule { id, title }));
+        }
+        assert_eq!(reg.ids().collect::<Vec<_>>(), vec!["b", "a", "c"]);
+        // Re-registering replaces the module but keeps its slot.
+        assert_eq!(reg.get("a").unwrap().title(), "A2");
+    }
+
+    #[test]
+    fn builtins_all_describe_themselves() {
+        let mut reg = Registry::new();
+        register_builtins(&mut reg);
+        assert_eq!(reg.modules().count(), 5);
+        for m in reg.modules() {
+            assert!(!m.description().is_empty(), "{} has no description", m.id());
+        }
     }
 
     #[test]

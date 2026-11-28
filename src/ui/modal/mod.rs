@@ -11,6 +11,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use std::collections::{HashMap, HashSet};
 
 mod agents_panel;
+mod detail_bar_layout;
 pub mod file_diff;
 mod global_settings;
 mod name_color_picker;
@@ -27,6 +28,7 @@ pub mod workspace_tags;
 
 // Panel renderers called from app::render via `crate::ui::modal::*`.
 pub use agents_panel::render_agents_panel;
+pub use detail_bar_layout::{LayoutEditor, render_detail_bar_layout};
 pub use file_diff::{FileDiffModal, render_file_diff};
 pub use global_settings::render_global_settings;
 pub use name_color_picker::{Dir, move_selection, render_name_color_picker};
@@ -153,6 +155,9 @@ pub enum Modal {
     GlobalSettings {
         selected: usize,
     },
+    /// The `b` detail-bar layout editor: add, arrange, and remove the
+    /// bar's modules. Each edit is saved as it is made.
+    DetailBarLayout(LayoutEditor),
     /// Pick or name an XML tag and type the body to wrap in it; see
     /// `ui::modal::prompt_tag`. Rendered from `draw()` because it lists
     /// the live tag cache.
@@ -347,6 +352,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
             | Modal::ProcessList { .. }
             | Modal::RepoSettings { .. }
             | Modal::GlobalSettings { .. }
+            | Modal::DetailBarLayout(..)
             | Modal::AgentsPanel { .. }
             | Modal::Recap { .. }
             | Modal::FileDiff(..)
@@ -486,6 +492,7 @@ pub fn render(f: &mut Frame, area: Rect, modal: &Modal, theme: &Theme) {
         Modal::ProcessList { .. } => unreachable!("ProcessList must not reach render()"),
         Modal::RepoSettings { .. } => unreachable!("RepoSettings must not reach render()"),
         Modal::GlobalSettings { .. } => unreachable!("GlobalSettings must not reach render()"),
+        Modal::DetailBarLayout(..) => unreachable!("DetailBarLayout must not reach render()"),
         Modal::SetupLog { .. } => unreachable!("SetupLog must not reach render()"),
         Modal::AgentsPanel { .. } => unreachable!("AgentsPanel must not reach render()"),
         Modal::Recap { .. } => unreachable!("Recap must not reach render()"),

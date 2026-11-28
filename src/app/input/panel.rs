@@ -31,6 +31,7 @@ pub(in crate::app::input) enum Panel {
     HideRules,
     RepoSettings,
     GlobalSettings,
+    DetailBarLayout,
     WorkspaceTags,
     NameColor,
     ProcessList,
@@ -61,6 +62,7 @@ const DASHBOARD: &[(Chord, Panel)] = &[
     (Chord::Key('F'), Panel::HideRules),
     (Chord::Key('s'), Panel::RepoSettings),
     (Chord::Key(','), Panel::GlobalSettings),
+    (Chord::Key('b'), Panel::DetailBarLayout),
     (Chord::Key('#'), Panel::WorkspaceTags),
     (Chord::Key('C'), Panel::NameColor),
     (Chord::Key('K'), Panel::ProcessList),
@@ -117,6 +119,7 @@ impl Panel {
                 | (Self::HideRules, Modal::HideRules { .. })
                 | (Self::RepoSettings, Modal::RepoSettings { .. })
                 | (Self::GlobalSettings, Modal::GlobalSettings { .. })
+                | (Self::DetailBarLayout, Modal::DetailBarLayout(_))
                 | (Self::WorkspaceTags, Modal::WorkspaceTags { .. })
                 | (Self::NameColor, Modal::NameColorPicker { .. })
                 | (Self::ProcessList, Modal::ProcessList { .. })
@@ -166,6 +169,23 @@ impl Panel {
             }
             Self::GlobalSettings => {
                 app.modal = Some(Modal::GlobalSettings { selected: 0 });
+            }
+            // Edits the selection's repo override when it sets containers,
+            // else the global layout; works with nothing selected too.
+            Self::DetailBarLayout => {
+                use crate::app::detail_bar_layout::{LayoutScope, layout_for};
+                let (scope, containers) = layout_for(app, app.selected_repo());
+                let label = match scope {
+                    LayoutScope::Global => "global".to_string(),
+                    LayoutScope::Repo(id) => app
+                        .repos
+                        .iter()
+                        .find(|r| r.id == id)
+                        .map_or_else(|| "repo".to_string(), |r| format!("repo {}", r.name)),
+                };
+                app.modal = Some(Modal::DetailBarLayout(crate::ui::modal::LayoutEditor::new(
+                    scope, label, containers,
+                )));
             }
             Self::WorkspaceTags => {
                 if let Some(ws) = on.workspace(app) {
@@ -267,6 +287,8 @@ fn claims(modal: &Modal, c: char) -> bool {
         Modal::UpdatesPanel { .. } => c == 's',
         // `s` switches to a different agent.
         Modal::AgentMissing { .. } => c == 's',
+        // `H`/`K` shift the highlighted module left / up.
+        Modal::DetailBarLayout(_) => matches!(c, 'H' | 'K'),
         _ => false,
     }
 }

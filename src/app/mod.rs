@@ -47,6 +47,7 @@ pub use crate::app::background::{
 pub use crate::app::bell::{BellPattern, alert_decision, fire_bell};
 pub use crate::app::render::draw_for_test;
 
+pub(crate) mod detail_bar_layout;
 pub(crate) mod global_setting;
 pub(crate) mod headless;
 pub(crate) mod reconcile;

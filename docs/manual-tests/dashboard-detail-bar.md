@@ -56,3 +56,14 @@ wsx
 8. **Short terminal.** Resize the terminal height below 18 rows with
    a workspace selected. Expected: the bar is suppressed; only the
    list and footer render.
+
+9. **Layout editor.** With a workspace selected, press `b`. Expected:
+   a drawer titled `Detail bar layout — global` shows the containers
+   side by side. Press `l`, then `a`. Expected: the module menu lists
+   all five modules, `RECENT CHAT` marked `[x]` and `SESSION SUMMARY`
+   marked `in 1`. Walk to `AGENTS` and press Enter. Expected: AGENTS
+   is marked `[x]` and appears in the bar's second column. Press Esc,
+   move onto AGENTS, and press `d`. Expected: it leaves the drawer and
+   the bar. Press `n`, then `X`. Expected: a fourth column appears in
+   the drawer and the bar, then goes away. Press `r`, then `b`.
+   Expected: the default layout, and the drawer closes.

@@ -12,6 +12,9 @@ impl DetailModule for Processes {
     fn title(&self) -> &'static str {
         "PROCESSES"
     }
+    fn description(&self) -> &'static str {
+        "Processes running in the workspace"
+    }
     fn lines(&self, ctx: &DetailContext<'_>, width: u16) -> Vec<ratatui::text::Line<'static>> {
         build_lines(ctx, width)
     }

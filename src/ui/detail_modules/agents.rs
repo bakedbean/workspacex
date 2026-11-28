@@ -29,6 +29,9 @@ impl DetailModule for Agents {
     fn title(&self) -> &'static str {
         "AGENTS"
     }
+    fn description(&self) -> &'static str {
+        "Claude subagents running in the workspace"
+    }
     fn lines(&self, ctx: &DetailContext<'_>, width: u16) -> Vec<Line<'static>> {
         let now_ms = crate::util::time::now_ms();
         let mut out = vec![count_line(ctx.subagents.len(), ctx.theme)];

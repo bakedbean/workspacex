@@ -30,6 +30,29 @@ wsx reads this from the files Claude Code keeps beside each session's transcript
 
 The activity line shows what the subagent last ran or looked up, such as a Bash command's description (or the command itself), a search pattern, a URL or a web search query, just as the dashboard already shows the main agent's current command.
 
+## Arranging modules
+
+Press `b` on the dashboard to open the layout editor. It shows the bar's containers side by side, with the modules each one stacks. Every change is saved as you make it, so the bar updates as you go.
+
+| Key                | Action                                                         |
+| ------------------ | -------------------------------------------------------------- |
+| `←` `→` `↑` `↓` / `h` `l` `k` `j` | Move between containers and modules |
+| `a` / `enter`      | Open the module menu for the focused container                 |
+| `d` / `x`          | Remove the highlighted module                                  |
+| `H` / `L`          | Move the module into the container to the left / right         |
+| `K` / `J`          | Move the module up / down within its container                 |
+| `<` / `>`          | Swap the focused container with the one to its left / right    |
+| `n`                | Add an empty container to the right (up to 4)                  |
+| `X`                | Delete the focused container and its modules (one always stays)|
+| `r`                | Reset to the default layout                                    |
+| `esc` / `b`        | Close                                                          |
+
+The module menu lists every module with a description. `[x]` marks the modules already in the focused container, and `in 2` marks a module that sits in another container. Press `enter` to add the highlighted module to the focused container. If it sits in another container, it moves, since a module shows once. If it's already in the focused container, `enter` takes it out. `d` removes it from wherever it sits. The menu stays open so you can add several modules; `esc` goes back to the containers.
+
+The editor changes the selected repo's override when that override sets `containers` (the title then reads `repo <name>`). Otherwise it changes the global layout. It rewrites only `containers`, so the other fields stay as you wrote them. If the stored JSON doesn't parse, the editor shows an error instead of saving; fix the JSON with `wsx config edit detail_bar_config` or the repo's `s` drawer.
+
+Adding, deleting, or swapping containers keeps the widths you dragged for the others. Those widths live in one `detail_bar_widths` setting shared by every repo, the same setting dragging writes, so an edit in one repo's layout reshapes them for all repos with as many containers. `r` also forgets the dragged widths, so the default layout starts evenly split.
+
 ## Replying
 
 Press `Tab` to focus the reply input, type, and press `enter` to send it to the agent. wsx starts the agent first if it isn't running. `esc` discards the draft.

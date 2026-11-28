@@ -78,3 +78,7 @@ wsx
     on its repo); bar heights may differ, since the focus view scales
     them across every row. Drag the column narrow. Expected: the parts
     wrap onto more lines, and none is cut off.
+    Widen it again. Expected: below the bars, a blank line, then the
+    branch's commits newest first, each `<hash>  <subject>`, matching the
+    side panel's Commits tab (`4`). With more commits than the container
+    is tall, the mouse wheel over it scrolls the list.

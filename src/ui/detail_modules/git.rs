@@ -1,10 +1,11 @@
 //! Git module. The branch's git state as the repo focus view's tall rows
 //! show it: commits ahead of the base branch, where it stands against its
 //! upstream, uncommitted changes, and a bar per recent commit with the
-//! branch's line totals.
+//! branch's line totals. Below them, the branch's commits as the side
+//! panel's Commits tab lists them; the container scrolls a long list.
 //!
-//! The cells come from `crate::ui::dashboard::tall`, so the two views
-//! can't drift apart.
+//! The cells come from `crate::ui::dashboard::tall` and the list from
+//! `crate::ui::dashboard::side_panel`, so the views can't drift apart.
 
 use crate::ui::dashboard::tall;
 use crate::ui::detail_modules::{DetailContext, DetailModule};
@@ -21,7 +22,7 @@ impl DetailModule for Git {
         "GIT"
     }
     fn description(&self) -> &'static str {
-        "Commits ahead, unpushed and uncommitted counts, and a commit-size graph"
+        "Commits ahead, unpushed and uncommitted counts, a commit-size graph, and the commit list"
     }
     fn lines(&self, ctx: &DetailContext<'_>, width: u16) -> Vec<Line<'static>> {
         let theme = ctx.theme;
@@ -67,11 +68,73 @@ impl DetailModule for Git {
             pack(&mut out, parts, " ", width);
         }
 
+        // `a1b2c3d  subject`, newest first, under a blank line.
+        if !ctx.commits.is_empty() {
+            if !out.is_empty() {
+                out.push(Line::default());
+            }
+            out.extend(commit_list(ctx.commits, width, theme));
+            // The list stops at `BRANCH_COMMITS_LIMIT`; say what it left out.
+            let hidden = ctx
+                .ahead_of_base
+                .map_or(0, |a| (a as usize).saturating_sub(ctx.commits.len()));
+            if hidden > 0 {
+                let note = format!(
+                    "{hidden} older commit{} not listed",
+                    if hidden == 1 { "" } else { "s" }
+                );
+                out.push(Line::from(tall::fit_spans(
+                    vec![Span::styled(note, theme.dim_style())],
+                    width,
+                )));
+            }
+        }
+
         if out.is_empty() {
             out.push(Line::from(Span::styled("—", theme.dim_style())));
         }
         out
     }
+}
+
+/// Fewest cells a subject keeps beside its hash before the list stacks.
+const SUBJECT_MIN: usize = 12;
+
+/// The branch's commits, newest first: the side panel's `a1b2c3d  subject`
+/// with the subject wrapping under itself, or, in a column too narrow to
+/// leave the subject `SUBJECT_MIN` cells, each hash on a line of its own
+/// above its subject wrapped at full width.
+fn commit_list(
+    commits: &[crate::git::BranchCommit],
+    width: usize,
+    theme: &crate::ui::theme::Theme,
+) -> Vec<Line<'static>> {
+    let indent = commits
+        .iter()
+        .map(|c| display_width(&c.hash))
+        .max()
+        .unwrap_or(0)
+        + 2;
+    if width >= indent + SUBJECT_MIN {
+        return crate::ui::dashboard::side_panel::commit_lines(commits, width, theme);
+    }
+    let hash_style = ratatui::style::Style::default().fg(theme.code);
+    let mut out = Vec::new();
+    for c in commits {
+        let hash = vec![Span::styled(c.hash.clone(), hash_style)];
+        out.push(Line::from(tall::fit_spans(hash, width)));
+        let subject = if c.subject.is_empty() {
+            "(no subject)"
+        } else {
+            c.subject.as_str()
+        };
+        out.extend(
+            tall::wrap(subject, width)
+                .into_iter()
+                .map(|l| Line::from(Span::raw(l))),
+        );
+    }
+    out
 }
 
 /// Pack `parts` onto lines of at most `width` cells, joined by `sep`, so a
@@ -161,7 +224,17 @@ mod tests {
         // Two bars, oldest (the one-line commit) first, then the totals.
         assert_eq!(display_width(&lines[2]), "▁█ +184 −22".chars().count());
         assert!(lines[2].ends_with(" +184 −22"), "{:?}", lines[2]);
-        assert_eq!(lines.len(), 3);
+        // A blank line, then the commits newest first.
+        // `ahead_of_base` counts 4, so two are left off the list.
+        assert_eq!(
+            lines[3..],
+            [
+                "",
+                "abc1234  subject",
+                "abc1234  subject",
+                "2 older commits not listed"
+            ]
+        );
     }
 
     #[test]
@@ -246,8 +319,64 @@ mod tests {
                 "12 untr",
                 "▄▃█",
                 "+18400 −2200",
+                "",
+                "abc1234",
+                "subject",
+                "abc1234",
+                "subject",
+                "abc1234",
+                "subject",
+                "37 older co…",
             ]
         );
+    }
+
+    /// Wide enough, subjects wrap under themselves so hashes stay in a
+    /// column; past the list's end a note counts the commits left off.
+    #[test]
+    fn commit_list_wraps_subjects_and_counts_unlisted_commits() {
+        let commits: &'static [BranchCommit] = Box::leak(
+            vec![
+                BranchCommit {
+                    hash: "a1b2c3d".into(),
+                    subject: "teach the git module to list commits".into(),
+                    stats: None,
+                },
+                BranchCommit {
+                    hash: "9f8e7d6".into(),
+                    subject: String::new(),
+                    stats: None,
+                },
+            ]
+            .into_boxed_slice(),
+        );
+        let ctx = DetailContext {
+            ahead_of_base: Some(3),
+            commits,
+            ..stub_context()
+        };
+        let lines = text(&Git.lines(&ctx, 30));
+        assert_eq!(
+            lines,
+            vec![
+                "↑3 base",
+                "",
+                "a1b2c3d  teach the git module",
+                "         to list commits",
+                "9f8e7d6  (no subject)",
+                "1 older commit not listed",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_branch_level_with_its_base_lists_no_commits() {
+        let ctx = DetailContext {
+            git_status: Some(WorkspaceStatus::default()),
+            ahead_of_base: Some(0),
+            ..stub_context()
+        };
+        assert_eq!(text(&Git.lines(&ctx, 40)), vec!["↑0 base", "clean"]);
     }
 
     #[test]

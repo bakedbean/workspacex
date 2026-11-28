@@ -13,7 +13,7 @@ The bar holds 1–4 equal-width columns, called containers. Each container stack
 | `processes`       | [Tracked processes](process-tracking.md) in the worktree      |
 | `recent_files`    | Files the agent edited recently, with line counts             |
 | `agents`          | Claude subagents running in the workspace, and what each is doing |
-| `git`             | Commits ahead of the base branch, unpushed and uncommitted counts, and a bar per recent commit |
+| `git`             | Commits ahead of the base branch, unpushed and uncommitted counts, a bar per recent commit, and the commit list |
 
 `session_summary` falls back to the session's first prompt when the agent hasn't written a recap. Scroll a container with the mouse wheel.
 
@@ -31,17 +31,25 @@ wsx reads this from the files Claude Code keeps beside each session's transcript
 
 The activity line shows what the subagent last ran or looked up, such as a Bash command's description (or the command itself), a search pattern, a URL or a web search query, just as the dashboard already shows the main agent's current command.
 
-`git` isn't in the default layout either. It shows the branch's git state the way the [repo focus view](repo-focus.md) does:
+`git` isn't in the default layout either. It shows the branch's git state the way the [repo focus view](repo-focus.md) does, then lists the branch's commits:
 
 ```text
 ↑4 vs main  ⇡2 unpushed
 3 mod 1 untr
-▂▅▁▃█▂▄ +184 −22
+▂▅▁▃ +184 −22
+
+e70c990a  keep the pack helper private
+9267aa1e  wrap the git module in narrow
+          columns
+f0b7c468  document the git module
+2980cd44  add a git detail bar module
 ```
 
 The first line counts the commits the base branch lacks, then where the branch stands against its upstream: `⇡` unpushed and `⇣` behind, or `not pushed` for a branch with commits but no upstream and no PR. The second counts modified and untracked files, or says `clean`. The last draws a bar per recent commit (up to eight, oldest on the left), as tall as the lines it changed on a log scale. The tallest bar is the branch's largest commit, whereas the focus view scales every row against the largest commit on screen, so heights can differ between the two. A bar is green when the commit added at least as much as it removed and red otherwise. The bars end with the branch's line totals against the base branch. In a narrow column, the parts wrap onto more lines rather than being cut off.
 
-The counts against the base branch and the bars need the repo's `base_branch` set, and they refresh every 10 seconds. The upstream and uncommitted counts refresh with the dashboard's 2-second poll.
+Below the bars, the commits the base branch lacks are listed newest first, each short hash followed by the commit's subject, as in the [side panel](side-panel.md)'s Commits tab. A long subject wraps under itself. In a column too narrow for that, each hash gets a line of its own above its subject. The list stops at 200 commits and then says how many older ones it left out. Scroll the container with the mouse wheel to see a long list.
+
+The counts against the base branch, the bars and the commit list need the repo's `base_branch` set, and they refresh every 10 seconds. The upstream and uncommitted counts refresh with the dashboard's 2-second poll.
 
 ## Arranging modules
 

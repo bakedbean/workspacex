@@ -39,7 +39,9 @@ The activity line shows what the subagent last ran or looked up, such as a Bash 
 ▂▅▁▃█▂▄ +184 −22
 ```
 
-The first line counts the commits the base branch lacks, then where the branch stands against its upstream: `⇡` unpushed and `⇣` behind, or `not pushed` for a branch with commits but no upstream and no PR. The second counts modified and untracked files, or says `clean`. The last draws a bar per recent commit (up to eight, oldest on the left), as tall as the lines it changed on a log scale. A bar is green when the commit added at least as much as it removed and red otherwise. The bars end with the branch's line totals against the base branch. The counts against the base branch need the repo's `base_branch` set, and they refresh every 10 seconds.
+The first line counts the commits the base branch lacks, then where the branch stands against its upstream: `⇡` unpushed and `⇣` behind, or `not pushed` for a branch with commits but no upstream and no PR. The second counts modified and untracked files, or says `clean`. The last draws a bar per recent commit (up to eight, oldest on the left), as tall as the lines it changed on a log scale. The tallest bar is the branch's largest commit, whereas the focus view scales every row against the largest commit on screen, so heights can differ between the two. A bar is green when the commit added at least as much as it removed and red otherwise. The bars end with the branch's line totals against the base branch. In a narrow column, the parts wrap onto more lines rather than being cut off.
+
+The counts against the base branch and the bars need the repo's `base_branch` set, and they refresh every 10 seconds. The upstream and uncommitted counts refresh with the dashboard's 2-second poll.
 
 ## Arranging modules
 

@@ -590,13 +590,21 @@ fn dirty_text(detail: &WorkspaceDetail) -> Option<String> {
 
 /// `3 mod 1 untr`; `None` for a clean or unknown tree.
 pub(crate) fn dirty_cell(git: Option<WorkspaceStatus>) -> Option<String> {
-    let g = git?;
-    let parts: Vec<String> = [(g.modified, "mod"), (g.untracked, "untr")]
+    let parts = dirty_parts(git);
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
+/// `dirty_cell`'s counts one by one: `["3 mod", "1 untr"]`; empty for a
+/// clean or unknown tree.
+pub(crate) fn dirty_parts(git: Option<WorkspaceStatus>) -> Vec<String> {
+    let Some(g) = git else {
+        return Vec::new();
+    };
+    [(g.modified, "mod"), (g.untracked, "untr")]
         .into_iter()
         .filter(|(n, _)| *n > 0)
         .map(|(n, l)| format!("{n} {l}"))
-        .collect();
-    (!parts.is_empty()).then(|| parts.join(" "))
+        .collect()
 }
 
 /// Most commits the diff column draws a bar for.
@@ -639,7 +647,7 @@ pub(crate) fn diff_cell(
     bars: usize,
     theme: &Theme,
 ) -> Vec<Span<'static>> {
-    let Some(d) = diff.filter(|d| d.added > 0 || d.removed > 0) else {
+    let Some(totals) = diff_totals(diff, theme) else {
         return Vec::new();
     };
     let mut out = commit_bars(sizes, max, theme);
@@ -647,19 +655,29 @@ pub(crate) fn diff_cell(
         let pad = bars.saturating_sub(sizes.len()) + 1;
         out.push(Span::raw(" ".repeat(pad)));
     }
-    out.extend([
+    out.extend(totals);
+    out
+}
+
+/// `+184 −22`, the branch's line totals; `None` without changes.
+pub(crate) fn diff_totals(diff: Option<DiffStats>, theme: &Theme) -> Option<Vec<Span<'static>>> {
+    let d = diff.filter(|d| d.added > 0 || d.removed > 0)?;
+    Some(vec![
         Span::styled(format!("+{}", d.added), theme.ok_style()),
         Span::raw(" "),
         Span::styled(format!("−{}", d.removed), theme.err_style()),
-    ]);
-    out
+    ])
 }
 
 /// One cell per commit in `sizes` (given newest first), drawn oldest first:
 /// a block as tall as the commit against `max` on a log scale (so a
 /// one-line commit still shows next to a refactor), green when it added
 /// at least as much as it removed, red otherwise, dim `▁` with no lines.
-fn commit_bars(sizes: &[Option<DiffStats>], max: u32, theme: &Theme) -> Vec<Span<'static>> {
+pub(crate) fn commit_bars(
+    sizes: &[Option<DiffStats>],
+    max: u32,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
     let mut out: Vec<Span<'static>> = Vec::new();
     for size in sizes.iter().rev() {
         let (glyph, style) = match size.filter(|d| d.added > 0 || d.removed > 0) {
@@ -943,7 +961,7 @@ fn push_cells(
 }
 
 /// Cut `spans` to `width` cells, ending in `…` when anything was dropped.
-fn fit_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+pub(crate) fn fit_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
     if spans.iter().map(Span::width).sum::<usize>() <= width {
         return spans;
     }
@@ -1057,7 +1075,7 @@ pub(crate) fn ahead_label(n: u32, base: Option<&str>) -> String {
 
 /// Pack `parts` onto lines of at most `width` cells, joined by `sep`; a
 /// part wider than a line gets a line of its own.
-fn pack(
+pub(crate) fn pack(
     parts: Vec<Vec<Span<'static>>>,
     sep: &Span<'static>,
     width: usize,

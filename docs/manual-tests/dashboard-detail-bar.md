@@ -71,7 +71,10 @@ wsx
 10. **Git module.** Select a workspace whose branch has commits ahead
     of the repo's base branch and an uncommitted edit. Press `b`, then
     `a`, walk to `GIT`, and press Enter, then Esc twice. Expected: a
-    GIT section shows `↑N vs <base>` (plus `⇡N unpushed` if the branch
-    is pushed and has local commits), `N mod`, and a row of commit bars
-    ending in `+X −Y`. These match the counts and bars that workspace's
-    tall row shows in the repo focus view (`f` on its repo).
+    GIT section shows `↑N vs <base>`, `N mod`, and a row of commit bars
+    ending in `+X −Y`. If the branch has an upstream and commits not yet
+    pushed to it, `⇡N unpushed` follows the first count. The counts and
+    totals match that workspace's tall row in the repo focus view (`f`
+    on its repo); bar heights may differ, since the focus view scales
+    them across every row. Drag the column narrow. Expected: the parts
+    wrap onto more lines, and none is cut off.

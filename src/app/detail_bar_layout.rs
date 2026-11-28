@@ -61,10 +61,20 @@ pub(crate) fn layout_for(app: &App, repo: Option<RepoId>) -> (LayoutScope, Conta
 /// that differs from what is stored.
 pub(crate) fn stored_layout(app: &App, scope: LayoutScope) -> Containers {
     match scope {
-        LayoutScope::Repo(id) => match app.repos.iter().find(|r| r.id == id) {
-            Some(repo) => crate::config::detail_bar_config::resolve(repo, &app.store).containers,
-            None => crate::config::detail_bar_config::resolve_global_only(&app.store).containers,
-        },
+        // Read the repo from the store, not `app.repos`: the save that
+        // failed may have written the repo and then failed to reload it.
+        LayoutScope::Repo(id) => {
+            let fresh = app.store.repos().ok();
+            let repos = fresh.as_ref().unwrap_or(&app.repos);
+            match repos.iter().find(|r| r.id == id) {
+                Some(repo) => {
+                    crate::config::detail_bar_config::resolve(repo, &app.store).containers
+                }
+                None => {
+                    crate::config::detail_bar_config::resolve_global_only(&app.store).containers
+                }
+            }
+        }
         LayoutScope::Global => {
             crate::config::detail_bar_config::resolve_global_only(&app.store).containers
         }
@@ -87,7 +97,7 @@ pub(crate) fn save_layout(
     match scope {
         LayoutScope::Global => {
             let stored = app.store.get_setting("detail_bar_config")?;
-            let raw = with_containers(
+            let raw = with_containers::<DetailBarConfig>(
                 stored.as_deref(),
                 value,
                 "wsx config edit detail_bar_config",
@@ -100,7 +110,7 @@ pub(crate) fn save_layout(
                 .iter()
                 .find(|r| r.id == id)
                 .and_then(|r| r.detail_bar_config.clone());
-            let raw = with_containers(
+            let raw = with_containers::<DetailBarOverride>(
                 stored.as_deref(),
                 value,
                 "the repo's detail_bar_config (s on the dashboard)",
@@ -115,7 +125,15 @@ pub(crate) fn save_layout(
 /// `stored` (a JSON object, or nothing) with its `containers` key set to
 /// `containers`, pretty-printed. `fix` names where to repair JSON that
 /// isn't an object.
-fn with_containers(stored: Option<&str>, containers: Value, fix: &str) -> Result<String> {
+///
+/// `T` is the typed config the renderer reads this JSON as; the result
+/// must parse as it, or the bar would ignore the edit (a bad known field
+/// elsewhere in the object).
+fn with_containers<T: serde::de::DeserializeOwned>(
+    stored: Option<&str>,
+    containers: Value,
+    fix: &str,
+) -> Result<String> {
     let mut obj = match stored.map(str::trim).filter(|s| !s.is_empty()) {
         None => Map::new(),
         Some(raw) => match serde_json::from_str::<Value>(raw) {
@@ -128,7 +146,13 @@ fn with_containers(stored: Option<&str>, containers: Value, fix: &str) -> Result
         },
     };
     obj.insert("containers".into(), containers);
-    serde_json::to_string_pretty(&Value::Object(obj))
+    let value = Value::Object(obj);
+    if let Err(e) = serde_json::from_value::<T>(value.clone()) {
+        return Err(Error::UserInput(format!(
+            "the stored detail_bar_config is invalid ({e}); fix it with {fix}"
+        )));
+    }
+    serde_json::to_string_pretty(&value)
         .map_err(|e| Error::UserInput(format!("detail_bar_config: {e}")))
 }
 
@@ -341,6 +365,53 @@ mod tests {
             .unwrap();
         app.refresh().unwrap();
         assert!(save_layout(&mut app, LayoutScope::Repo(rid), &l, WidthsEdit::Keep).is_err());
+    }
+
+    #[test]
+    fn invalid_known_fields_are_not_saved_over() {
+        let (mut app, rid) = app();
+        let l = layout(&[&["agents"]]);
+        app.store
+            .set_setting("detail_bar_config", r#"{"visible": "bad"}"#)
+            .unwrap();
+        let err = save_layout(&mut app, LayoutScope::Global, &l, WidthsEdit::Keep).unwrap_err();
+        assert!(err.to_string().contains("invalid"), "{err}");
+        assert_eq!(
+            app.store
+                .get_setting("detail_bar_config")
+                .unwrap()
+                .as_deref(),
+            Some(r#"{"visible": "bad"}"#)
+        );
+
+        let bad = r#"{"containers": [["processes"]], "visible": "bad"}"#;
+        app.store
+            .set_repo_detail_bar_config(rid, Some(bad))
+            .unwrap();
+        app.refresh().unwrap();
+        assert!(save_layout(&mut app, LayoutScope::Repo(rid), &l, WidthsEdit::Keep).is_err());
+        let repo = app
+            .store
+            .repos()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == rid)
+            .unwrap();
+        assert_eq!(repo.detail_bar_config.as_deref(), Some(bad));
+    }
+
+    #[test]
+    fn stored_layout_reads_the_repo_from_the_store() {
+        let (mut app, rid) = app();
+        app.refresh().unwrap();
+        // The store has moved on; the cached `app.repos` hasn't.
+        app.store
+            .set_repo_detail_bar_config(rid, Some(r#"{"containers": [["agents"]]}"#))
+            .unwrap();
+        assert_eq!(
+            stored_layout(&app, LayoutScope::Repo(rid)),
+            layout(&[&["agents"]])
+        );
     }
 
     #[test]
